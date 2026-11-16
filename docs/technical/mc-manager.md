@@ -1,11 +1,12 @@
 # mc manager — the headless session across all programmes
 
-The manager is a headless session of the `manager` role (`canon/roles/manager.md`). It has two tasks: keep the
-area texts curated, and create the next programme while a horizon is open. The runner starts it for both
-(*Automatic turns*, below; the rules are in [mc-run.md](mc-run.md), *The manager's turns*); a person can give
-it one explicit task by hand (*Manual headless tasks*). It is never a conversation: the interactive manager is
-gone, and Martin's conversation is `mc martin` ([mc-martin.md](mc-martin.md)). A horizon is made only by Martin
-in `mc martin`; the manager never makes one, never makes a goal and never performs a reserved act.
+The manager is a headless session of the `manager` role (`canon/roles/manager.md`). Its one automatic task is to
+keep the area texts curated. The runner starts it for that (*Automatic turns*, below; the rules are in
+[mc-run.md](mc-run.md), *The manager's turns*); a person can give it one explicit task by hand (*Manual headless
+tasks*). It is never a conversation: the interactive manager is gone, and Martin's conversation is `mc martin`
+([mc-martin.md](mc-martin.md)). A horizon and a programme are made only by Martin in `mc martin` or by a person;
+the manager never makes either, never makes a goal and never performs a reserved act. It has no horizon turn and
+no repair turn.
 
 ## No interactive entrance
 
@@ -34,32 +35,18 @@ outcome and receipt path. The default wall-clock limit is 30 minutes (`--minutes
 
 ## Automatic turns
 
-The runner starts a manager session in two cases, one at a time under one claim, `manager`
-([mc-run.md](mc-run.md)):
+The runner starts one kind of manager session, under the claim `manager` ([mc-run.md](mc-run.md)):
 
-- **A horizon turn**, when an open horizon has no valid open programme record naming it. The session reads the
-  horizon's playback, the area pages and read checkouts at origin/main of every repository that declares areas,
-  the archived programmes that served the horizon, and the app with `mc shot`. It ends in one of three ways:
-  `mc programs create <name> --end … --horizon <slug> --purpose …`; `mc martin horizon reached <slug>`; or an open
-  text item `horizon:<slug>` made with `mc martin propose`. Report only prerequisites
-  actually read as observed, and identify remaining personal judgement separately.
-  Never infer satisfaction, production use or unmeasured elapsed time from those
-  prerequisites. The runner checks that one holds, without a model;
-  the second failure since the last item opens a desk item of kind `manager`
-  ([mc-martin.md](mc-martin.md)).
 - **A curation turn**, when none started in the last 24 hours and the origin/main of a repository that declares
   areas has moved past what the last curation read. It works in branch worktrees the runner makes from
   origin/main and publishes what it changed with plain `mc publish`, which queues the pull request for the merger,
   whose docs form lands it (never `--no-merge`). A turn that finds nothing to change succeeds; a
   failed one is said in `runner.log` and opens no desk item.
 
-A programme with a record that the runner has archived (its goals done, its write-back
-read OK, its record set to `done`; [mc-run.md](mc-run.md#programme-archive-turn)) no
-longer serves its horizon: the horizon turn follows, when the horizon is open and no
-valid open record names it, and reads that programme among the archived ones.
-
-A horizon turn goes before curation. Both run under the manager role with `MC_HEADLESS=1`; a horizon turn also
-has `MC_HORIZON=<slug>`.
+It runs under the manager role with `MC_HEADLESS=1`. There is no horizon turn and no repair turn: no session of
+the manager creates a programme, and a horizon with no programme waits for Martin. A desk item of kind `manager`
+left by the removed horizon turn closes by source at the next sync, and `runner/manager-turn/horizon/` stays on
+disk as it was, read only for that item's label.
 
 ## What the manager may write
 
@@ -76,14 +63,9 @@ or a paragraph up to the next blank line, containing `Martin` followed by a comm
 where curation may write, not a proof that what it writes is true: whether a statement is a fact stays the
 session's judgement. Other roles are unaffected (`managerGuard` in `src/mc/publish.js`).
 
-The same rule for programmes: `mc programs create` by the manager requires `--purpose` and exactly one of
-`--horizon` and `--area`, refuses a horizon that is not open or already has a valid open record, writes the
-programme's page before its record, and `mc programs record` is refused to it ([mc-plan.md](mc-plan.md)). A
-small fix or other small work may run as a goal without a horizon, marked with an area when possible. The existing
-single-goal carrier (`--area <repo>/<id>`) is storage, not a product planning level: create refuses a second open
-carrier for an identified area and goal new refuses a second live goal in it. The rest wait oldest first. An
-area that cannot responsibly be assigned is unassigned; no global guard is claimed. A change to the user
-promise needs a horizon.
+The manager writes no programme: `mc programs create`, `record` and `state` refuse it with exit 2, as they refuse
+every headless role ([mc-plan.md](mc-plan.md)). Work the manager finds that needs a programme, a repair included,
+is proposed at the desk with `mc martin propose`, and Martin creates it.
 
 ## Decisions and work
 

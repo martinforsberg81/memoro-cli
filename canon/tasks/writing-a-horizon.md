@@ -40,7 +40,7 @@ Name the nearest wrong reading and distinguish it from the intended scope.
 
 ## How work starts from a horizon
 
-A horizon starts no work by itself. Work starts from it as a programme document, an order Martin signs at the desk, and nothing is cut or built before he signs. The basis's not-decided entries are settled in that document, as proposals under Decided by signing, never by a planner. While the desk holds an open `horizon:<slug>` item that stops work, no programme is drafted from the horizon; only when the desk has closed the item is the next programme drafted from it.
+A horizon starts no work by itself. Work starts from it as a programme written with Martin in a session; he sets it ready there, and nothing is cut or built before. The basis's not-decided entries are settled in that document under Decided, never by a planner.
 
 ## Changing the wording
 

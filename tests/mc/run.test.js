@@ -6208,21 +6208,16 @@ test('a plan session goes to the first draft that is free: a held or decision-cl
 const PROG = '/w/programs/prog';
 const TURN_STATE = '/w/runner/programme-turn/prog.json';
 const readCheckout = (repo) => `/w/runner/work/programme-turn-prog/${repo}`;
-/** The signed document a turn cuts: two parts. A record is signed on its bytes (`signed_text`); `cut_text` null is not yet cut. */
-const SIGNED_MD = '# prog\n\n## Parts\n\n### Part 1 — One\n\n### Part 2 — Two\n';
-const SIGNED_AT = `${PROG}/SIGNED.md`;
-const SIGNED_SHA = createHash('sha256').update(SIGNED_MD).digest('hex');
-/** `text` (a record) as a v2 record signed on SIGNED_MD, `changes` applied: a programme a turn can cut. */
-const signedOf = (text, changes = {}) => `${JSON.stringify({ ...JSON.parse(text), version: 2, signed_at: '2026-11-14T11:00:00Z', signed_by: 'martin', signed_text: SIGNED_SHA, cut_text: null, ...changes }, null, 2)}\n`;
-const cutOf = (text) => signedOf(text, { cut_text: SIGNED_SHA });
-const recordWith = (changes) => signedOf(plainText(), changes);
+/** The document a turn cuts: README.md with two parts. */
+const README_MD = '# prog\n\nEnd: Done when it holds.\n\n## Parts\n\n### Part 1 — One\n\n### Part 2 — Two\n';
+const README_AT = `${PROG}/README.md`;
+const recordWith = (changes) => `${JSON.stringify({ ...JSON.parse(plainText()), version: 2, state: 'ready', ...changes }, null, 2)}\n`;
 
 /** A programme `prog` with a record and a README and no goal, as a turn finds it; `goals` are goals it already holds. */
-function programmeFixture({ record = signedOf(plainText()), readme = true, signedDocument = true, goals = {}, ...options } = {}) {
+function programmeFixture({ record = plainText(), readme = true, goals = {}, ...options } = {}) {
   const f = goalFixture(goals, options);
   if (record !== null) f.files[RECORD_AT] = record;
-  if (signedDocument) f.files[SIGNED_AT] = SIGNED_MD;
-  if (readme) f.files[`${PROG}/README.md`] = '# prog\n\nEnd: Done when it holds.\n';
+  if (readme) f.files[README_AT] = typeof readme === 'string' ? readme : README_MD;
   return f;
 }
 /** The desk's items as the runner's fake store reads them out of the fixture's files. */
@@ -6231,10 +6226,10 @@ function wireDesk(f) {
   f.deps.deskItems = { list: items, read: (id) => items().find((item) => item.id === id) ?? null };
   return items;
 }
-/** What a turn's session leaves in the programme: goals as `mc goal new` and `mc goal stage` write them, each naming `parts` of SIGNED.md. */
+/** What a turn's session leaves in the programme: goals as `mc goal new` and `mc goal stage` write them, each naming `parts` of README.md. */
 function writesGoals(f, goals) {
   for (const [name, { stage = 'draft', phase = 1, parts = [1, 2], status = 'ready' }] of Object.entries(goals)) {
-    const documents = parts.length ? [{ label: `Signed design, ${parts.map((part) => `Part ${part}`).join('; ')}`, path: SIGNED_AT }] : [];
+    const documents = parts.length ? [{ label: `Part ${parts.join(', ')}`, path: README_AT }] : [];
     const text = goalJson({ stage, status, phase, repos: ['memoro'], title: name, goal: [], prs: [], documents });
     f.files[`${GOALS}/${name}/GOAL.json`] = stage === 'draft' ? withGoal(text, { success_criteria: [] }) : text;
     f.files[`${GOALS}/${name}/LOG.md`] = '';
@@ -6246,7 +6241,7 @@ const turnState = (f) => JSON.parse(f.files[TURN_STATE]);
 const draftPlans = (f) => planned(f).filter(Boolean);
 const noRunnableTurn = (runner) => runner.nextWork()?.name !== 'programme:prog';
 
-const draftRecordText = () => JSON.stringify({ ...JSON.parse(plainText()), version: 2, state: 'draft', signed_at: null, signed_by: null, signed_text: null, cut_text: null });
+const draftRecordText = () => `${JSON.stringify({ ...JSON.parse(plainText()), version: 2, state: 'draft' }, null, 2)}\n`;
 
 for (const kind of ['plan', 'build', 'review', 'mend']) {
   const waitingFixture = () => {
@@ -6254,7 +6249,7 @@ for (const kind of ['plan', 'build', 'review', 'mend']) {
     f.deps.pendingMerges = () => [];
     return f;
   };
-  test(`programme draft holds ${kind} starts until sign-off without changing goal bytes`, async () => {
+  test(`programme draft holds ${kind} starts until ready without changing goal bytes`, async () => {
     const f = waitingFixture();
     f.files[RECORD_AT] = draftRecordText();
     const before = Object.fromEntries(Object.entries(f.files).filter(([path]) => path.startsWith(GOALS)));
@@ -6263,24 +6258,24 @@ for (const kind of ['plan', 'build', 'review', 'mend']) {
     assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'still draft');
     assert.equal(f.calls.sessions.length, 0, 'no session');
     assert.deepEqual(Object.fromEntries(Object.entries(f.files).filter(([path]) => path.startsWith(GOALS))), before);
-    assert.equal(f.log.filter(line => line.includes('waits for sign-off of prog')).length, 1, 'one wait line');
+    assert.equal(f.log.filter(line => line.includes('prog is draft — no session is started')).length, 1, 'one wait line');
     f.files[RECORD_AT] = plainText();
     assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, 'legacy open remains admitted');
     assert.equal(f.calls.sessions[0].env.MC_ROLE, { plan: 'plan', build: 'build-session:goal', review: 'review-session:goal', mend: 'mend-session' }[kind]);
   });
 
-  test(`programme return during ${kind} admission cancels only the unstarted session`, async () => {
+  test(`programme state draft during ${kind} admission cancels only the unstarted session`, async () => {
     const f = waitingFixture();
     f.files[RECORD_AT] = plainText();
     f.deps.attachDeps = async () => { f.files[RECORD_AT] = draftRecordText(); return { ok: true }; };
     const before = Object.fromEntries(Object.entries(f.files).filter(([path]) => path.startsWith(GOALS)));
     assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
-    assert.equal(f.calls.sessions.length, 0, 'no session after return during allocation');
+    assert.equal(f.calls.sessions.length, 0, 'no session after draft during allocation');
     assert.deepEqual(Object.fromEntries(Object.entries(f.files).filter(([path]) => path.startsWith(GOALS))), before);
   });
 }
 
-test('programme return leaves a running build free to finish and a queued merge free to land', async () => {
+test('programme draft leaves a running build free to finish and a queued merge free to land', async () => {
   const build = goalFixture({ building: {} });
   build.files[RECORD_AT] = plainText();
   build.answer = (call) => { build.files[RECORD_AT] = draftRecordText(); return endsGoal(build)(call); };
@@ -6305,8 +6300,8 @@ test('programme return leaves a running build free to finish and a queued merge 
   assert.match(goalEntries(f, 'queued').at(-1).done, /landed memoro#31/u);
 });
 
-test('programme turn: a signed open programme whose signature is not yet cut gets one turn at the next pick, sequential and stated alike', async () => {
-  for (const [kind, record] of [['sequential', signedOf(plainText())], ['stated', signedOf(statedText())]]) {
+test('programme turn: an open programme whose parts are not yet cut gets one turn at the next pick, sequential and stated alike', async () => {
+  for (const [kind, record] of [['sequential', plainText()], ['stated', statedText()]]) {
     const f = programmeFixture({ record });
     const runner = createRunner({ deps: f.deps });
     assert.equal(runner.nextWork().name, 'programme:prog', `${kind}: the turn is the pick`);
@@ -6325,7 +6320,7 @@ test('programme turn: a signed open programme whose signature is not yet cut get
     assert.equal('MC_GOAL' in call.env, false, `${kind}: no MC_GOAL`);
     assert.ok(call.unsetEnv.includes('MC_GOAL'), `${kind}: an inherited MC_GOAL is removed`);
     assert.equal(call.cwd, PROG, `${kind}: in the programme directory`);
-    assert.match(call.prompt, new RegExp(`${PROG}/SIGNED\\.md`, 'u'), `${kind}: the signed document is what it reads`);
+    assert.match(call.prompt, new RegExp(`${PROG}/README\\.md`, 'u'), `${kind}: README.md is what it reads`);
     assert.deepEqual(seen.currents.map((current) => [current.name, current.kind, current.programme]), [['programme:prog', 'plan', 'prog']], `${kind}: its current record while it runs`);
     assert.equal(seen.claimed, true, `${kind}: its claim while it runs`);
     assert.equal(seen.next, null, `${kind}: no second turn of the programme while it runs`);
@@ -6343,9 +6338,10 @@ test('programme turn: no turn for a programme that is not eligible, and another 
     ['an invalid record', (f) => { f.files[RECORD_AT] = '{ not json'; }],
     ['a record in state done', (f) => { f.files[RECORD_AT] = recordWith({ state: 'done' }); }],
     ['no README.md', (f) => { delete f.files[`${PROG}/README.md`]; }],
-    ['a legacy record that carries no signature', (f) => { f.files[RECORD_AT] = plainText(); }],
+    ['a README.md with no parts', (f) => { f.files[`${PROG}/README.md`] = '# prog\n\nNo parts.\n'; }],
     ['a record in state draft', (f) => { f.files[RECORD_AT] = draftRecordText(); }],
-    ['a record already cut from its signature', (f) => { f.files[RECORD_AT] = cutOf(plainText()); }],
+    ['a record whose goals already cut all parts', (f) => { writesGoals(f, { one: { status: 'Martin', parts: [1, 2] } }); }],
+    ['a goal in goals/ that names no part of README.md', goalAt(`${GOALS}/a-draft/GOAL.json`)],
     ['an open desk item of kind programme', (f) => { wireDesk(f); f.files['/w/martin/items/x/item.json'] = JSON.stringify({ id: 'x', kind: 'programme', reference: 'programme:prog', state: 'for-martin', sort: 'mechanical', reversible: false, due_at: null }); }],
     ['a horizon that is reached', (f) => { f.files[RECORD_AT] = recordWith({ horizon: 'h' }); f.deps.horizon = () => ({ state: 'reached' }); }],
     ['a horizon that is dropped', (f) => { f.files[RECORD_AT] = recordWith({ horizon: 'h' }); f.deps.horizon = () => ({ state: 'dropped' }); }],
@@ -6360,11 +6356,11 @@ test('programme turn: no turn for a programme that is not eligible, and another 
     assert.deepEqual(turnSessions(f), [], `${kind}: no session`);
     assert.equal(f.files[TURN_STATE], undefined, `${kind}: nothing counted`);
   }
-  // Goals do not keep a signature that is not cut from the turn: a draft, a goal with no file and an archived one are all due.
-  for (const [kind, make] of [['a draft in goals/', goalAt(`${GOALS}/a-draft/GOAL.json`)], ['a goal directory with no goal file', (f) => { f.files[`${GOALS}/unreadable/LOG.md`] = ''; }], ['an entry in goals/.archive/', (f) => { f.files[`${GOALS}/.archive/old/LOG.md`] = ''; }], ['a dot-entry', (f) => { f.files[`${GOALS}/.hold.json`] = '{}'; }]]) {
+  // Entries that are no readable goal do not keep uncut parts from the turn: they are all due.
+  for (const [kind, make] of [['a goal directory with no goal file', (f) => { f.files[`${GOALS}/unreadable/LOG.md`] = ''; }], ['an entry in goals/.archive/', (f) => { f.files[`${GOALS}/.archive/old/LOG.md`] = ''; }], ['a dot-entry', (f) => { f.files[`${GOALS}/.hold.json`] = '{}'; }]]) {
     const holding = programmeFixture();
     make(holding);
-    assert.equal(createRunner({ deps: holding.deps }).nextWork().name, 'programme:prog', `${kind}: the turn is due while the signature is not cut`);
+    assert.equal(createRunner({ deps: holding.deps }).nextWork().name, 'programme:prog', `${kind}: the turn is due while parts are not cut`);
   }
   // A horizon that is not open is said once over two passes.
   const reached = programmeFixture({ record: recordWith({ horizon: 'h' }) });
@@ -6387,15 +6383,15 @@ test('programme turn: no turn for a programme that is not eligible, and another 
 
 /** A programme with one ready draft, as a turn leaves it. */
 function draftedProgramme(record) {
-  const f = programmeFixture({ record, goals: { d1: { stage: 'draft' } } });
+  const f = programmeFixture({ record, goals: { d1: { stage: 'draft', parts: [1, 2] } } });
   f.files[`${GOALS}/d1/GOAL.json`] = withGoal(f.files[`${GOALS}/d1/GOAL.json`], { success_criteria: [] });
   return f;
 }
 
 test('programme turn: while a turn is claimed or current no next-draft plan session of its programme starts — at the pick or at its admission — and one does once it has ended', async () => {
-  for (const [kind, record] of [['sequential', signedOf(plainText())], ['stated', signedOf(statedText())]]) {
+  for (const [kind, record] of [['sequential', plainText()], ['stated', statedText()]]) {
     // (a) The claim taken, no current record yet: the pick offers the draft to nobody.
-    const claimed = draftedProgramme(cutOf(record));
+    const claimed = draftedProgramme(record);
     const held = createRunner({ deps: claimed.deps });
     assert.equal(held.nextWork().name, 'goal:prog/d1', `${kind}: without the claim the draft is the pick`);
     held.claims.add('programme:prog');
@@ -6406,7 +6402,7 @@ test('programme turn: while a turn is claimed or current no next-draft plan sess
     assert.equal(held.nextWork().name, 'goal:prog/d1', `${kind}: the claim released, the draft is the pick`);
 
     // (c) The claim taken while a next-draft session is admitted: it yields and launches nothing.
-    const admitted = draftedProgramme(cutOf(record));
+    const admitted = draftedProgramme(record);
     const admitting = createRunner({ deps: admitted.deps });
     admitted.deps.attachDeps = async () => { admitting.claims.add('programme:prog'); return { ok: true }; };
     assert.equal((await admitting.pass({ repo: 'memoro' })).ran, 0, `${kind}: admission`);
@@ -6420,7 +6416,7 @@ test('programme turn: while a turn is claimed or current no next-draft plan sess
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
     f.answer = async (call) => {
-      if (call.env.MC_PROGRAMME) { writesGoals(f, { d1: {} }); await gate; }
+      if (call.env.MC_PROGRAMME) { writesGoals(f, { d1: { parts: [1, 2] } }); await gate; }
       return okSession()(call);
     };
     const turn = runner.pass({ repo: 'memoro', lane: 1, tag: 'memoro#1' });
@@ -6438,16 +6434,15 @@ test('programme turn: while a turn is claimed or current no next-draft plan sess
 });
 
 test('programme turn: a turn that leaves goals writes no failure and no item; the draft it left is next-draft planning\'s, stated programme', async () => {
-  const f = programmeFixture({ record: signedOf(statedText()) });
+  const f = programmeFixture({ record: statedText() });
   const items = wireDesk(f);
   f.answer = (call) => {
-    if (call.env.MC_PROGRAMME) writesGoals(f, { one: { stage: 'build', phase: 1 }, two: { phase: 2 } });
+    if (call.env.MC_PROGRAMME) writesGoals(f, { one: { stage: 'build', phase: 1, parts: [1] }, two: { phase: 2, parts: [2] } });
     return okSession()(call);
   };
   const runner = createRunner({ deps: f.deps });
   assert.equal((await runner.pass({ repo: 'memoro' })).name, 'programme:prog');
-  assert.match(runRows(f.files)[0].note, /2 goals,cut from the signature$/u, 'the note says how many goals the programme holds and that it cut');
-  assert.equal(JSON.parse(f.files[RECORD_AT]).cut_text, SIGNED_SHA, 'cut_text takes the signature the turn launched on');
+  assert.match(runRows(f.files)[0].note, /2 goals,cut$/u, 'the note says how many goals the programme holds and that it cut');
   assert.equal(f.files[TURN_STATE], undefined, 'no failure');
   assert.deepEqual(items(), [], 'no item');
   assert.equal(where(f, 'two'), 'draft · ready', 'the draft left is not set Martin');
@@ -6458,15 +6453,15 @@ test('programme turn: a turn that leaves goals writes no failure and no item; th
 });
 
 test('programme turn: a turn that leaves goals writes no failure and no item; the draft it left waits for the sequential trigger', async () => {
-  const f = programmeFixture({ record: signedOf(plainText()) });
+  const f = programmeFixture({ record: plainText() });
   const items = wireDesk(f);
   f.answer = (call) => {
-    if (call.env.MC_PROGRAMME) writesGoals(f, { one: { stage: 'build', phase: 1 }, two: { phase: 2 } });
+    if (call.env.MC_PROGRAMME) writesGoals(f, { one: { stage: 'build', phase: 1, parts: [1] }, two: { phase: 2, parts: [2] } });
     return okSession()(call);
   };
   const runner = createRunner({ deps: f.deps });
   assert.equal((await runner.pass({ repo: 'memoro' })).name, 'programme:prog');
-  assert.match(runRows(f.files)[0].note, /2 goals,cut from the signature$/u);
+  assert.match(runRows(f.files)[0].note, /2 goals,cut$/u);
   assert.equal(f.files[TURN_STATE], undefined, 'no failure');
   assert.deepEqual(items(), [], 'no item');
   assert.equal(where(f, 'two'), 'draft · ready');
@@ -6486,7 +6481,7 @@ test('programme turn: the second failure opens a prepared item, a closed one let
   const pass = async () => (await runner.pass({ repo: 'memoro' })).ran;
   assert.equal(await pass(), 1);
   assert.equal(turnState(f).failures.length, 1, 'one failure written');
-  assert.match(turnState(f).failures[0].reason, /^planning session exited 0 without a goal naming every part of the signed document/u);
+  assert.match(turnState(f).failures[0].reason, /^planning session exited 0 without a goal naming every part of README\.md/u);
   assert.deepEqual(items(), [], 'the first failure opens nothing and the next pick may try again');
   assert.equal(await pass(), 1, 'tried again');
   assert.equal(turnState(f).failures.length, 2);
@@ -6524,11 +6519,10 @@ test('programme turn: the second failure opens a prepared item, a closed one let
 /** The record as a turn's session leaves it after `change`: the one write the runner's completion then reads again under the lock. */
 const recordAfter = (f, change) => { f.files[RECORD_AT] = `${JSON.stringify({ ...JSON.parse(f.files[RECORD_AT]), ...change }, null, 2)}\n`; };
 const recordNow = (f) => JSON.parse(f.files[RECORD_AT]);
-const RESIGNED_MD = `${SIGNED_MD}\n### Part 3 — Three\n`;
-const RESIGNED_SHA = createHash('sha256').update(RESIGNED_MD).digest('hex');
+const REVISED_README = `${README_MD}\n### Part 3 — Three\n`;
 
-test('programme turn: goals naming every part cut the signature once — cut_text takes the signature the turn launched on, the next pick does not cut again, and a re-sign is due again', async () => {
-  const f = programmeFixture({ record: signedOf(statedText()) });
+test('programme turn: goals naming every part cut the document — the next pick does not cut again, and a revised README is due again', async () => {
+  const f = programmeFixture({ record: statedText() });
   const items = wireDesk(f);
   f.answer = (call) => {
     if (call.env.MC_PROGRAMME) writesGoals(f, { one: { stage: 'build', phase: 1, parts: [1], status: 'Martin' }, two: { stage: 'build', phase: 2, parts: [2], status: 'Martin' } });
@@ -6536,95 +6530,77 @@ test('programme turn: goals naming every part cut the signature once — cut_tex
   };
   const runner = createRunner({ deps: f.deps });
   assert.equal((await runner.pass({ repo: 'memoro' })).name, 'programme:prog');
-  assert.equal(recordNow(f).cut_text, SIGNED_SHA, 'the cut is the signature it launched on');
-  assert.equal(recordNow(f).signed_text, SIGNED_SHA);
   assert.deepEqual(recordNow(f).phases, { order: 'stated' }, 'the rest of the record is as it was');
   assert.equal(f.files[TURN_STATE], undefined, 'no failure');
   assert.deepEqual(items(), []);
-  assert.match(runRows(f.files)[0].note, /2 goals,cut from the signature$/u);
+  assert.match(runRows(f.files)[0].note, /2 goals,cut$/u);
   assert.ok(noRunnableTurn(runner), 'a cut programme is not offered again');
   await runner.pass({ repo: 'memoro' });
   assert.equal(turnSessions(f).length, 1, 'one turn only');
 
-  // Martin signs again: the new signature is not cut. The goals already name parts 1 and 2: Part 3 is the difference.
-  f.files[SIGNED_AT] = RESIGNED_MD;
-  recordAfter(f, { signed_text: RESIGNED_SHA });
-  assert.equal(runner.nextWork().name, 'programme:prog', 'a re-sign makes the programme due again');
+  // A revised README adds Part 3: the goals already name parts 1 and 2: Part 3 is the difference.
+  f.files[README_AT] = REVISED_README;
+  assert.equal(runner.nextWork().name, 'programme:prog', 'an uncut part makes the programme due again');
   f.answer = okSession();
   await runner.pass({ repo: 'memoro' });
   assert.equal(turnSessions(f).length, 2);
-  assert.equal(recordNow(f).cut_text, SIGNED_SHA, 'part 3 is named by no goal: the earlier cut stands and nothing is cut');
   assert.equal(turnState(f).failures.length, 1, 'and the turn that did not name it is one failure');
   f.answer = (call) => { if (call.env.MC_PROGRAMME) writesGoals(f, { three: { stage: 'build', phase: 3, parts: [3], status: 'Martin' } }); return okSession()(call); };
   await runner.pass({ repo: 'memoro' });
-  assert.equal(recordNow(f).cut_text, RESIGNED_SHA, 'goals for every part of the new signature cut it');
-  assert.ok(noRunnableTurn(runner));
+  assert.ok(noRunnableTurn(runner), 'goals for every part of the revised README cut it');
 });
 
-test('programme turn: a turn that returns the programme to draft is a success — no failure, no item, the earlier cut kept, and no turn while it is draft', async () => {
-  const f = programmeFixture({ record: signedOf(plainText(), { cut_text: 'e'.repeat(64) }) });
+test('programme turn: a programme whose state becomes draft while running is not cut and counts no failure', async () => {
+  const f = programmeFixture();
   const items = wireDesk(f);
   f.answer = (call) => {
     if (call.env.MC_PROGRAMME) {
       writesGoals(f, { one: { parts: [1] } });
-      recordAfter(f, { state: 'draft', signed_at: null, signed_by: null, signed_text: null });
+      recordAfter(f, { version: 2, state: 'draft' });
     }
     return okSession()(call);
   };
   const runner = createRunner({ deps: f.deps });
   assert.equal((await runner.pass({ repo: 'memoro' })).name, 'programme:prog');
-  assert.deepEqual([recordNow(f).state, recordNow(f).cut_text, recordNow(f).signed_text], ['draft', 'e'.repeat(64), null]);
-  assert.equal(f.files[TURN_STATE], undefined, 'a return counts no failure');
+  assert.equal(recordNow(f).state, 'draft');
+  assert.equal(f.files[TURN_STATE], undefined, 'no failure');
   assert.deepEqual(items(), [], 'and opens no item');
-  assert.match(runRows(f.files)[0].note, /returned to draft$/u);
+  assert.match(runRows(f.files)[0].note, /not cut \(record reads draft\)$/u);
   assert.ok(noRunnableTurn(runner), 'a draft is not cut');
 });
 
-test('programme turn: a partial cut writes no cut_text and counts a failure; the next turn cuts the rest and the failure stands alone', async () => {
+test('programme turn: a partial cut counts a failure; the next turn cuts the rest and the failure stands alone', async () => {
   const f = programmeFixture();
   const items = wireDesk(f);
   f.answer = (call) => { if (call.env.MC_PROGRAMME) writesGoals(f, { one: { stage: 'build', phase: 1, parts: [1], status: 'Martin' } }); return okSession()(call); };
   const runner = createRunner({ deps: f.deps });
   await runner.pass({ repo: 'memoro' });
-  assert.equal(recordNow(f).cut_text, null, 'part 2 is named by no goal: nothing is cut');
   assert.equal(turnState(f).failures.length, 1);
-  assert.match(turnState(f).failures[0].reason, /without a goal naming every part of the signed document \(no goal names part 2;/u);
+  assert.match(turnState(f).failures[0].reason, /without a goal naming every part of README\.md \(no goal names part 2;/u);
   assert.deepEqual(items(), [], 'the first failure opens nothing');
   assert.equal(runner.nextWork().name, 'programme:prog', 'and the programme is due again, with its goal kept');
   f.answer = (call) => { if (call.env.MC_PROGRAMME) writesGoals(f, { two: { stage: 'build', phase: 2, parts: [2], status: 'Martin' } }); return okSession()(call); };
   await runner.pass({ repo: 'memoro' });
-  assert.equal(recordNow(f).cut_text, SIGNED_SHA, 'the second turn cuts it');
   assert.equal(turnState(f).failures.length, 1, 'and counts no second failure');
   assert.deepEqual(items(), []);
   assert.ok(noRunnableTurn(runner));
 });
 
-test('programme turn: the completion reads the record again under its lock — a newer signature is not consumed, a settled record is not written, and a phase written meanwhile is kept', async () => {
+test('programme turn: the completion reads the record again under its lock — a settled record is not written, and a phase written meanwhile is kept', async () => {
   const goals = (f) => writesGoals(f, { one: { stage: 'build', phase: 1, parts: [1, 2], status: 'Martin' } });
-  // (a) Signed again while the session ran: the launched signature is not the record's, so nothing is cut and nothing counts.
-  const resigned = programmeFixture();
-  wireDesk(resigned);
-  resigned.answer = (call) => { if (call.env.MC_PROGRAMME) { goals(resigned); resigned.files[SIGNED_AT] = RESIGNED_MD; recordAfter(resigned, { signed_text: RESIGNED_SHA }); } return okSession()(call); };
-  const first = createRunner({ deps: resigned.deps });
-  await first.pass({ repo: 'memoro' });
-  assert.equal(recordNow(resigned).cut_text, null, 'the earlier launch did not cut the newer signature');
-  assert.equal(resigned.files[TURN_STATE], undefined, 'a newer signature is no failure');
-  assert.match(runRows(resigned.files)[0].note, /not cut \(signed_text: a newer signature than the turn read\)/u);
-  assert.equal(first.nextWork().name, 'programme:prog', 'the next pick cuts the new signature');
-  // (b) Done, dropped or gone while it ran: settled, no write, no failure.
-  for (const [kind, change] of [['done', { state: 'done' }], ['dropped', { state: 'dropped', signed_at: null, signed_by: null, signed_text: null }]]) {
+  // (a) Done or dropped while it ran: settled, no write, no failure.
+  for (const [kind, change] of [['done', { state: 'done' }], ['dropped', { state: 'done' }]]) {
     const f = programmeFixture();
     f.answer = (call) => { if (call.env.MC_PROGRAMME) { goals(f); recordAfter(f, change); } return okSession()(call); };
     await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
     assert.equal(recordNow(f).state, change.state, kind);
-    assert.equal(recordNow(f).cut_text, null, `${kind}: nothing is cut`);
     assert.equal(f.files[TURN_STATE], undefined, `${kind}: no failure`);
   }
-  // (c) A phase stated meanwhile (another writer under the same lock) is read fresh and kept.
+  // (b) A phase stated meanwhile (another writer under the same lock) is read fresh and kept.
   const phased = programmeFixture();
   phased.answer = (call) => { if (call.env.MC_PROGRAMME) { goals(phased); recordAfter(phased, { phases: { order: 'stated', after: { 2: [1] } } }); } return okSession()(call); };
   await createRunner({ deps: phased.deps }).pass({ repo: 'memoro' });
-  assert.deepEqual([recordNow(phased).cut_text, recordNow(phased).phases], [SIGNED_SHA, { order: 'stated', after: { 2: [1] } }]);
+  assert.deepEqual(recordNow(phased).phases, { order: 'stated', after: { 2: [1] } });
 });
 
 test('programme turn: a quota, an offline and a refused-login ending write no failure, and a missing state file reads as none', async () => {
@@ -6806,28 +6782,23 @@ test('programme turn: another failure to add a read checkout is a setup failure,
   assert.equal(offline.calls.git.some((call) => call[1] === 'worktree'), false, 'no checkout made when a fetch failed');
 });
 
-/* ------------------------------------------------------------ the manager's horizon and curation turns */
+/* ------------------------------------------------------------ the manager's curation turn */
 
 const AREAS_FILE = JSON.stringify({ schema_version: 1, areas: [{ id: 'system', name: 'The system', covers: 'x', standards: [], paths: [], questions: [], page: 'docs/technical/areas/system.md' }] });
-const MANAGER_STATE = '/w/runner/manager-turn/horizon/h1.json';
 const CURATION_STATE = '/w/runner/manager-turn/curation.json';
-const horizonCheckout = (repo) => `/w/runner/work/manager-horizon-h1/${repo}`;
 const curationSeed = (started, bases = { memoro: 'a1', 'memoro-cli': 'b1' }) => JSON.stringify({ schema: 'mc-manager-turn', version: 1, kind: 'curation', started, bases });
 
 /**
- * A runner with the manager's turns in view: `horizons` open in the fixture's `world`, both repositories declaring the
- * source area `system`, origin/main of each at the commit `world.heads` names, and the desk's items read out of the
- * fixture's files. Nothing else is due: no goal and no programme. With a horizon open the curation turn is held back
- * by a recent start (`seedCuration`), so the horizon turn is the only one in view.
+ * A runner with the manager's curation turn in view: both repositories declaring the source area `system`, origin/main
+ * of each at the commit `world.heads` names, and the desk's items read out of the fixture's files. Nothing else is due:
+ * no goal and no programme. `seedCuration` holds the turn back by a recent start.
  */
-function managerFixture({ horizons = ['h1'], declaring = ['memoro', 'memoro-cli'], now = '2026-11-15T09:00:00Z', seedCuration = horizons.length > 0, ...options } = {}) {
+function managerFixture({ declaring = ['memoro', 'memoro-cli'], now = '2026-11-15T09:00:00Z', seedCuration = false, ...options } = {}) {
   const f = goalFixture({}, { now, ...options });
   const items = wireDesk(f);
-  const world = { horizons: Object.fromEntries(horizons.map((slug) => [slug, 'open'])), heads: { memoro: 'a1', 'memoro-cli': 'b1' }, ahead: {}, dirty: [], published: [], addFails: {} };
+  const world = { heads: { memoro: 'a1', 'memoro-cli': 'b1' }, ahead: {}, dirty: [], published: [], addFails: {} };
   f.world = world;
   if (seedCuration) f.files[CURATION_STATE] = curationSeed('2026-11-25T00:00:00Z');
-  f.deps.horizons = () => Object.entries(world.horizons).filter(([, state]) => state === 'open').map(([slug]) => ({ slug, state: 'open' }));
-  f.deps.horizon = (slug) => (slug in world.horizons ? { state: world.horizons[slug] } : null);
   const base = f.deps.git;
   const repoOf = (path) => String(path).split('/').at(-1);
   f.deps.git = (cwd, args) => {
@@ -6858,176 +6829,8 @@ function managerFixture({ horizons = ['h1'], declaring = ['memoro', 'memoro-cli'
 const managerSessions = (f) => f.calls.sessions.filter((call) => call.env.MC_ROLE === 'manager');
 const managerRows = (f) => runRows(f.files).filter((row) => row.kind === 'manager');
 /** What a horizon session leaves: a programme record naming `slug`, as `mc programs create` writes it. */
-const createsProgramme = (f, slug = 'h1') => { f.files['/w/programs/next/PROGRAMME.json'] = recordWith({ horizon: slug }); };
-const deskItem = (f, id, fields) => {
-  const item = { schema: 'mc-desk-item', version: 1, id, source_at: '2026-11-15T09:00:00Z', opened_at: '2026-11-15T09:00:00Z', state: 'for-martin', sort: 'mechanical', reversible: null, due_at: null, outcome: null, ...fields };
-  f.files[`/w/martin/items/${id}/item.json`] = JSON.stringify(item);
-};
-
-test('manager turn: an open horizon with no record naming it gets one headless manager session in read checkouts at origin/main, large class, one run row', async () => {
-  const { f } = managerFixture();
-  const runner = createRunner({ deps: f.deps });
-  assert.equal(runner.nextWork().name, 'manager');
-  const seen = {};
-  f.answer = (call) => {
-    seen.currents = Object.entries(f.files).filter(([path]) => path.startsWith('/w/runner/current-')).map(([, text]) => JSON.parse(text));
-    seen.claimed = runner.claims.has('manager');
-    seen.next = runner.nextWork()?.name ?? null;
-    seen.checkouts = ['memoro', 'memoro-cli'].map((repo) => f.dirs.has(horizonCheckout(repo)));
-    createsProgramme(f);
-    return okSession()(call);
-  };
-  const result = await runner.pass({ repo: 'memoro' });
-  assert.deepEqual([result.ran, result.name], [1, 'manager']);
-  const [call, ...rest] = f.calls.sessions;
-  assert.equal(rest.length, 0, 'one session');
-  assert.deepEqual([call.env.MC_ROLE, call.env.MC_HEADLESS, call.env.MC_HORIZON], ['manager', '1', 'h1']);
-  for (const name of ['MC_GOAL', 'MC_PROGRAMME']) assert.ok(call.unsetEnv.includes(name), `${name} is removed`);
-  assert.equal(call.unsetEnv.includes('MC_HORIZON'), false);
-  for (const text of ['/horizons/h1/playback.md', horizonCheckout('memoro'), horizonCheckout('memoro-cli'), 'mc shot', 'mc programs create <name> --end', 'mc martin horizon reached h1', 'horizon:h1']) assert.ok(call.prompt.includes(text), text);
-  assert.deepEqual(seen.currents.map((current) => [current.name, current.kind, current.class]), [['manager', 'manager', 'large']]);
-  assert.equal(seen.claimed, true);
-  assert.notEqual(seen.next, 'manager', 'no second manager turn while it runs');
-  assert.deepEqual(seen.checkouts, [true, true], 'the checkouts stand while it runs');
-  assert.deepEqual(['memoro', 'memoro-cli'].map((repo) => f.dirs.has(horizonCheckout(repo))), [false, false], 'removed after it');
-  for (const repo of ['memoro', 'memoro-cli']) assert.ok(f.calls.git.some((git) => git.join(' ') === `/home/${repo} worktree add -q --detach ${horizonCheckout(repo)} origin/main`), `${repo}: detached at origin/main`);
-  assert.equal(runner.claims.has('manager'), false);
-  assert.equal(f.files[MANAGER_STATE], undefined, 'the record is the success: no failure written');
-  assert.deepEqual(managerRows(f).map((row) => [row.name, row.kind]), [['manager:h1', 'manager']]);
-  assert.notEqual(runner.nextWork()?.name, 'manager', 'a valid open record names h1: nothing is due');
-});
-
-test('manager turn: no turn while a record names the horizon, an item holds it, its state is unreadable or a record is invalid — those two said once', async () => {
-  const table = [
-    ['a valid open record names it', (f) => createsProgramme(f)],
-    ['an open text item horizon:h1', (f) => deskItem(f, 't1', { kind: 'text', reference: 'text:t1', text: 'horizon:h1' })],
-    ['an open manager item manager:h1', (f) => deskItem(f, 'm1', { kind: 'manager', reference: 'manager:h1', state: 'prepared' })],
-    ['an unreadable state file', (f) => { f.files[MANAGER_STATE] = '{ not json'; }],
-    ['an invalid record', (f) => { f.files['/w/programs/broken/PROGRAMME.json'] = '{ x'; }],
-    ['the horizon is no longer open', (f, world) => { world.horizons.h1 = 'reached'; }],
-  ];
-  for (const [kind, arrange] of table) {
-    const { f, world } = managerFixture();
-    arrange(f, world);
-    const runner = createRunner({ deps: f.deps });
-    assert.notEqual(runner.nextWork()?.name, 'manager', kind);
-    await runner.pass({ repo: 'memoro' });
-    await runner.pass({ repo: 'memoro' });
-    assert.deepEqual(managerSessions(f), [], kind);
-    const said = f.log.filter((line) => /runner\/manager-turn\/horizon\/h1\.json is unreadable|the record of broken is invalid/u.test(line));
-    assert.equal(said.length, ['an unreadable state file', 'an invalid record'].includes(kind) ? 1 : 0, `${kind}: said once, or not at all`);
-  }
-  // An invalid record holds the horizon turn of every horizon.
-  const invalid = managerFixture({ horizons: ['h1', 'h2'] });
-  invalid.f.files['/w/programs/broken/PROGRAMME.json'] = '{ x';
-  assert.notEqual(createRunner({ deps: invalid.f.deps }).nextWork()?.name, 'manager');
-  // An unreadable state of the first horizon leaves the second its turn.
-  const second = managerFixture({ horizons: ['h1', 'h2'] });
-  second.f.files[MANAGER_STATE] = '{ not json';
-  const runner = createRunner({ deps: second.f.deps });
-  assert.equal(runner.nextWork().name, 'manager');
-  await runner.pass({ repo: 'memoro' });
-  assert.equal(managerSessions(second.f)[0].env.MC_HORIZON, 'h2');
-});
-
-test('manager turn: each of the three endings is a success — a record, the horizon reached, an open text item — and counts nothing', async () => {
-  for (const [kind, ends] of [
-    ['a programme', (f) => createsProgramme(f)],
-    ['the horizon reached', (f) => { f.world.horizons.h1 = 'reached'; }],
-    ['a text item', (f) => deskItem(f, 't1', { kind: 'text', reference: 'text:t1', text: 'horizon:h1' })],
-  ]) {
-    const { f, items } = managerFixture();
-    f.answer = (call) => { ends(f); return okSession()(call); };
-    assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1, kind);
-    assert.equal(f.files[MANAGER_STATE], undefined, `${kind}: no failure`);
-    assert.equal(items().filter((item) => item.kind === 'manager').length, 0, kind);
-    assert.match(managerRows(f)[0].note, /,(programme|reached|text)$/u, kind);
-  }
-});
-
-test('manager turn: a session that ends in none of them is a failure — the second opens a prepared item, a closed one lets the turn start again, two more open a for-martin brief', async () => {
-  const { f, items } = managerFixture();
-  let clock = Date.parse('2026-11-15T09:00:00Z');
-  f.deps.now = () => new Date(clock += 60_000);
-  const runner = createRunner({ deps: f.deps });
-  const pass = async () => (await runner.pass({ repo: 'memoro' })).ran;
-  const state = () => JSON.parse(f.files[MANAGER_STATE]);
-  const managerItems = () => items().filter((item) => item.kind === 'manager');
-  assert.equal(await pass(), 1);
-  assert.equal(state().failures.length, 1);
-  assert.match(state().failures[0].reason, /^horizon session exited 0: the session ended with no open programme record naming h1/u);
-  assert.deepEqual(managerItems(), [], 'the first failure opens nothing');
-  assert.equal(await pass(), 1);
-  const [first] = managerItems();
-  assert.deepEqual([first.reference, first.state, first.sort, first.reversible, first.due_at], ['manager:h1', 'prepared', 'mechanical', null, null]);
-  const dir = itemDirectory(first, f.deps.env);
-  for (const failure of state().failures) { assert.ok(f.files[`${dir}/prepared.md`].includes(failure.reason)); assert.ok(f.files[`${dir}/prepared.md`].includes(failure.log)); }
-  assert.notEqual(runner.nextWork()?.name, 'manager', 'no turn while the item is open');
-  await pass();
-  assert.equal(managerSessions(f).length, 2, 'the open item holds the turn');
-  f.files[`${dir}/item.json`] = JSON.stringify({ ...first, state: 'closed', outcome: { by: 'decision', at: '2026-11-15T10:00:00Z' } });
-  assert.equal(runner.nextWork().name, 'manager', 'closed: due again');
-  assert.equal(await pass(), 1);
-  assert.equal(managerItems().length, 1, 'one failure since the item opens nothing');
-  assert.equal(await pass(), 1);
-  const second = managerItems().find((item) => item.id !== first.id);
-  assert.deepEqual([second.state, second.reversible], ['for-martin', false]);
-  assert.match(f.files[`${itemDirectory(second, f.deps.env)}/brief.md`], /^## Vad det gäller\n/u);
-  assert.notEqual(runner.nextWork()?.name, 'manager');
-});
-
-test('manager turn: a quota, an offline and a refused-login ending count nothing', async () => {
-  for (const [kind, ending] of [['quota', REFUSED_429], ['offline', UNREACHABLE], ['login', apiEndedSession('Not logged in · Please run /login', { api_error_status: null })]]) {
-    const { f, items } = managerFixture();
-    f.answer = ending;
-    await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
-    assert.equal(managerSessions(f).length, 1, kind);
-    assert.equal(f.files[MANAGER_STATE], undefined, `${kind}: no failure written`);
-    assert.deepEqual(items(), [], kind);
-  }
-});
-
-test('manager turn: a read checkout that holds work and a failed add count, a failing fetch counts nothing, and no session starts on any of them', async () => {
-  const { f, world } = managerFixture();
-  const kept = horizonCheckout('memoro-cli');
-  f.dirs.add(kept); world.dirty = ['memoro-cli'];
-  const runner = createRunner({ deps: f.deps });
-  await runner.pass({ repo: 'memoro' });
-  assert.deepEqual(managerSessions(f), []);
-  assert.deepEqual(JSON.parse(f.files[MANAGER_STATE]).failures.map((failure) => failure.reason), [`read checkout retained: ${kept}`]);
-  await runner.pass({ repo: 'memoro' });
-  assert.equal(f.log.filter((line) => line.includes(`read checkout retained: ${kept}`) && line.includes('no session started')).length, 1, 'said once');
-  assert.equal(f.calls.git.some((call) => call.includes(kept) && ['reset', 'clean', 'checkout'].includes(call[1])), false, 'a retained checkout is never touched');
-  assert.equal(f.calls.git.some((call) => call[1] === 'worktree' && call.includes(kept)), false);
-  assert.ok(f.dirs.has(kept));
-
-  const add = managerFixture();
-  add.world.addFails = { 'memoro-cli': 'invalid reference: origin/main' };
-  await createRunner({ deps: add.f.deps }).pass({ repo: 'memoro' });
-  assert.deepEqual(JSON.parse(add.f.files[MANAGER_STATE]).failures.map((failure) => failure.reason), ['setup: fatal: invalid reference: origin/main']);
-  assert.equal(add.f.dirs.has(horizonCheckout('memoro')), false, 'the checkout made before it is taken down again');
-
-  const offline = managerFixture({ fetchFails: ['memoro-cli'] });
-  await createRunner({ deps: offline.f.deps }).pass({ repo: 'memoro' });
-  assert.deepEqual(managerSessions(offline.f), []);
-  assert.equal(offline.f.files[MANAGER_STATE], undefined, 'a fetch that fails counts nothing');
-});
-
-test('manager turn: the due rule is read again after admission — a record made meanwhile leaves no session', async () => {
-  const { f } = managerFixture();
-  const runner = createRunner({ deps: f.deps });
-  // `launch` is asked after the pick and before admission: the record appears there.
-  const launch = f.deps.launch;
-  f.deps.launch = (tool) => { createsProgramme(f); return launch(tool); };
-  const result = await runner.pass({ repo: 'memoro' });
-  assert.equal(result.ran, 0);
-  assert.deepEqual(managerSessions(f), []);
-  assert.match(f.log.join('\n'), /manager:h1: the horizon changed during admission/u);
-  assert.equal(f.files[MANAGER_STATE], undefined);
-});
-
 test('curation turn: due at once with no state, in a worktree per declaring repository from origin/main, the cadence and the bases written, nothing opened on the desk', async () => {
-  const { f, items, world } = managerFixture({ horizons: [] });
+  const { f, items, world } = managerFixture();
   let clock = Date.parse('2026-11-15T09:00:00Z');
   f.deps.now = () => new Date(clock);
   const runner = createRunner({ deps: f.deps });
@@ -7059,7 +6862,7 @@ test('curation turn: due at once with no state, in a worktree per declaring repo
 });
 
 test('curation turn: a failed turn waits for the cadence and opens no item; a provider ending gives the cadence back; a published or empty worktree is removed, another kept and said once', async () => {
-  const failed = managerFixture({ horizons: [] });
+  const failed = managerFixture();
   failed.f.answer = () => ({ status: 1, stdout: '', stderr: 'boom', timedOut: false });
   const runner = createRunner({ deps: failed.f.deps });
   await runner.pass({ repo: 'memoro' });
@@ -7071,7 +6874,7 @@ test('curation turn: a failed turn waits for the cadence and opens no item; a pr
   assert.notEqual(runner.nextWork()?.name, 'manager', 'bounded by the cadence');
 
   // A setup failure that is not the network's starts no session, spends the cadence and is said once, not every pick.
-  const setup = managerFixture({ horizons: [] });
+  const setup = managerFixture();
   setup.world.addFails = { 'memoro-cli': 'a branch named manager/curation-x already exists' };
   const setupRunner = createRunner({ deps: setup.f.deps });
   await setupRunner.pass({ repo: 'memoro' });
@@ -7082,13 +6885,13 @@ test('curation turn: a failed turn waits for the cadence and opens no item; a pr
   assert.equal(setup.f.log.filter((line) => /manager:curation: no session started — setup:/u.test(line)).length, 1, 'said once');
   assert.deepEqual(setup.items(), []);
 
-  const quota = managerFixture({ horizons: [] });
+  const quota = managerFixture();
   quota.f.answer = REFUSED_429;
   await createRunner({ deps: quota.f.deps }).pass({ repo: 'memoro' });
   assert.equal(JSON.parse(quota.f.files[CURATION_STATE]).started, null, 'a provider ending gives the cadence back');
 
   // memoro's branch is published, memoro-cli's holds a commit that is not.
-  const trees = managerFixture({ horizons: [] });
+  const trees = managerFixture();
   trees.world.ahead = { memoro: 1, 'memoro-cli': 1 };
   trees.world.published = ['memoro'];
   await createRunner({ deps: trees.f.deps }).pass({ repo: 'memoro' });
@@ -7100,14 +6903,14 @@ test('curation turn: a failed turn waits for the cadence and opens no item; a pr
   assert.deepEqual(trees.items(), []);
 
   // Nothing to change: both empty, both removed, and it is a success.
-  const empty = managerFixture({ horizons: [] });
+  const empty = managerFixture();
   await createRunner({ deps: empty.f.deps }).pass({ repo: 'memoro' });
   assert.match(managerRows(empty.f)[0].note, /,curated$/u);
   assert.deepEqual([...empty.f.dirs].filter((dir) => /^\/w\/runner\/work\/manager-curation\/[^/]+\/[^/]+$/u.test(dir)), []);
 });
 
-test('curation turn: an unreadable state starts no turn and is said once; a horizon turn goes before a curation turn and the two share one claim', async () => {
-  const { f } = managerFixture({ horizons: [] });
+test('curation turn: an unreadable state starts no turn and is said once; the turn holds one claim and runs one session', async () => {
+  const { f } = managerFixture();
   f.files[CURATION_STATE] = '{ not json';
   const runner = createRunner({ deps: f.deps });
   assert.notEqual(runner.nextWork()?.name, 'manager');
@@ -7116,16 +6919,15 @@ test('curation turn: an unreadable state starts no turn and is said once; a hori
   assert.equal(f.log.filter((line) => /runner\/manager-turn\/curation\.json is unreadable/u.test(line)).length, 1);
   assert.equal(f.files[CURATION_STATE], '{ not json');
 
-  const both = managerFixture({ seedCuration: false });
-  const second = createRunner({ deps: both.f.deps });
+  const due = managerFixture();
+  const second = createRunner({ deps: due.f.deps });
   assert.equal(second.nextWork().name, 'manager');
-  both.f.answer = (call) => { if (call.env.MC_HORIZON) createsProgramme(both.f); return okSession()(call); };
   second.claims.add('manager');
   assert.notEqual(second.nextWork()?.name, 'manager', 'one claim: never side by side');
   second.claims.delete('manager');
   await second.pass({ repo: 'memoro' });
   await second.pass({ repo: 'memoro' });
-  assert.deepEqual(managerSessions(both.f).map((call) => call.env.MC_HORIZON ?? null), ['h1', null], 'the horizon first, curation after');
+  assert.deepEqual(managerSessions(due.f).map((call) => call.env.MC_HORIZON ?? null), [null], 'one curation session, then the cadence holds it');
 });
 
 /* ------------------------------------------------------------ the programme archive turn */
@@ -7144,8 +6946,8 @@ const writeBack = (verdict, line = archiveLine, sha = SHA) => `read: memoro ${sh
  * need: read checkouts that answer a commit, an archive that moves the record to ARCHIVED_TO as `archiveProgramme` does,
  * and a reader that writes `body`. `archived` is each archive call with what the fence said.
  */
-function archiveFixture({ body = writeBack('OK'), record = plainText(), archiveRc = 0, dropped = false, ...options } = {}) {
-  const f = programmeFixture({ record, ...options });
+function archiveFixture({ body = writeBack('OK'), record = plainText(), archiveRc = 0, dropped = false, readme = '# prog\n\nEnd: Done when it holds.\n', ...options } = {}) {
+  const f = programmeFixture({ record, readme, ...options });
   servedCheckouts(f);
   const git = f.deps.git;
   f.deps.git = (cwd, args) => (String(cwd).startsWith('/w/runner/work/archive-turn-') && args.join(' ') === 'rev-parse HEAD' ? { ok: true, stdout: `${SHA}\n` } : git(cwd, args));

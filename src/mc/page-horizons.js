@@ -81,7 +81,7 @@ const plainWidth = (parts) => parts.reduce((sum, part) => sum + width(part.text)
 export function programmeRow(c, wide, group, facts, { digits = 2, extra = [], nameWidth = 0 } = {}) {
   const parts = []; // the facts, each with the rank at which it is dropped: higher goes first
   const add = (rank, text, styles = []) => text && parts.push({ rank, text, styles });
-  if (group.record_state === 'draft') add(4, group.sign_off_waiting ? 'waits for sign-off' : 'draft');
+  if (group.record_state === 'draft') add(4, 'draft');
   else if (facts.unfinished && facts.current != null) add(4, `phase ${facts.current}${facts.last != null ? ` of ${facts.last}` : ''}`);
   if (facts.unfinished) {
     const counts = stageOrder(facts.stages).map(([stage, n]) => ({ text: `${n} ${stage}`, styles: STAGE_TONE[stage] || ['grey'] }));

@@ -1,7 +1,7 @@
 /**
  * A programme's record: `PROGRAMME.json` directly in its directory under the
  * programmes home. It says which horizon the programme serves, when it is
- * done and whether its document is signed. A programme without the file is a
+ * done and its state (draft, ready, done). A programme without the file is a
  * programme as it always was.
  *
  * Written by the programme verbs (the pre-tool
@@ -12,7 +12,7 @@
  */
 import { linkSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { writeFileAtomic } from './atomic-write.js';
 import { canonRoot } from './canon.js';
 import { NAME_RE } from './plan-schema.js';
@@ -22,27 +22,44 @@ import { realLock } from './runner-lock.js';
 export const RECORD_FILE = 'PROGRAMME.json';
 export const RECORD_SCHEMA = 'mc-programme';
 export const RECORD_VERSION = 2;
-export const RECORD_STATES = Object.freeze(['draft', 'open', 'done', 'dropped']);
+export const RECORD_STATES = Object.freeze(['draft', 'ready', 'done']);
 export const RECORD_AUTHORS = Object.freeze(['person', 'martin', 'manager']);
 const V1_KEYS = Object.freeze(['schema', 'version', 'horizon', 'area', 'end', 'state', 'created', 'created_by', 'phases']);
-const SIGNATURE_KEYS = Object.freeze(['signed_at', 'signed_by', 'signed_text']);
-const KEYS = Object.freeze([...V1_KEYS, ...SIGNATURE_KEYS, 'cut_text', 'legacy']);
-const UNSIGNED = Object.freeze({ signed_at: null, signed_by: null, signed_text: null, cut_text: null });
+/**
+ * The fields the removed signing wrote into version 2 records on disk: every one of them starts with `signed_` or
+ * `cut_` (the signing instant, its author and the hashes of the signed and cut text), and `legacy`. A record that
+ * carries them still reads, and they are ignored; no code writes or reads their values. They are matched by this
+ * rule rather than listed by name, so that no source names a field that is gone.
+ */
+const REMOVED_KEY = /^(?:signed_|cut_)[a-z_]+$|^legacy$/u;
+const DISK_STATES = Object.freeze(['draft', 'ready', 'done', 'open', 'dropped']);
+
 /** The one value of `area`: `<repo>/<id>`, an area a repository declares; the programme repairs that area's text and serves no horizon. */
 export const AREA_RE = /^[a-z0-9][a-z0-9-]{0,63}\/[a-z][a-z0-9-]*$/u;
 /** The one value of `phases.order`: the programme's phases wait for what the record says and for nothing else. */
 export const PHASES_ORDER = 'stated';
 const PHASE_NUMBER = /^[1-9]\d*$/u;
 const INSTANT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/u;
-const SIGNED_INSTANT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/u;
-const SHA256 = /^[a-f0-9]{64}$/u;
 const isInstant = (value) => typeof value === 'string' && INSTANT.test(value) && Number.isFinite(Date.parse(value));
-const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const instant = (date) => date.toISOString().replace(/\.\d+Z$/u, 'Z');
 
 /** Reading old records is not a migration. Only an actual write persists this representation. */
-function normalized(record) {
-  return record.version === 1 ? { ...record, version: RECORD_VERSION, ...UNSIGNED, legacy: true } : record;
+export function normalized(record) {
+  const state = record.state === 'open' ? 'ready'
+    : record.state === 'dropped' ? 'done'
+    : record.state;
+  const out = {
+    schema: record.schema,
+    version: RECORD_VERSION,
+    horizon: record.horizon ?? null,
+    ...(record.area ? { area: record.area } : {}),
+    end: record.end,
+    state,
+    created: record.created,
+    created_by: record.created_by,
+    ...(record.phases ? { phases: record.phases } : {}),
+  };
+  return out;
 }
 
 /**
@@ -96,8 +113,9 @@ function phasesProblems(value) {
 export function validateRecord(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return ['the record must be a JSON object'];
   const problems = [];
-  const keys = value.version === 1 ? V1_KEYS : KEYS;
-  for (const key of Object.keys(value)) if (!keys.includes(key)) problems.push(`${key}: unknown key`);
+  for (const key of Object.keys(value)) {
+    if (!V1_KEYS.includes(key) && (value.version === 1 || !REMOVED_KEY.test(key))) problems.push(`${key}: unknown key`);
+  }
   if (value.schema !== RECORD_SCHEMA) problems.push(`schema: must be "${RECORD_SCHEMA}"`);
   if (value.version !== 1 && value.version !== RECORD_VERSION) problems.push(`version: must be 1 or ${RECORD_VERSION}`);
   if (value.horizon !== null && !(typeof value.horizon === 'string' && NAME_RE.test(value.horizon))) problems.push('horizon: a slug (lower-case letters, digits and hyphens), or null');
@@ -106,26 +124,11 @@ export function validateRecord(value) {
     if (value.horizon !== null) problems.push('area: allowed only with horizon null — a programme serves a horizon or repairs an area, not both');
   }
   if (typeof value.end !== 'string' || !value.end.trim()) problems.push('end: a non-empty sentence saying when the programme is done');
-  const states = value.version === 1 ? ['open', 'done'] : RECORD_STATES;
-  if (!states.includes(value.state)) problems.push(`state: one of ${states.join(', ')}`);
+  const states = value.version === 1 ? ['open', 'done'] : DISK_STATES;
+  if (!states.includes(value.state)) problems.push(`state: one of ${RECORD_STATES.join(', ')}`);
   if (!isInstant(value.created)) problems.push('created: an ISO instant in UTC to the second');
   if (!RECORD_AUTHORS.includes(value.created_by)) problems.push(`created_by: one of ${RECORD_AUTHORS.join(', ')}`);
   if (value.phases !== undefined) problems.push(...phasesProblems(value.phases));
-  if (value.version === RECORD_VERSION) {
-    if (value.legacy !== undefined && typeof value.legacy !== 'boolean') problems.push('legacy: a boolean when present');
-    if (value.signed_at !== null && !(typeof value.signed_at === 'string' && SIGNED_INSTANT.test(value.signed_at) && Number.isFinite(Date.parse(value.signed_at)))) problems.push('signed_at: an ISO instant in UTC, or null');
-    if (value.signed_by !== null && value.signed_by !== 'martin') problems.push('signed_by: martin, or null');
-    for (const key of ['signed_text', 'cut_text']) {
-      if (value[key] !== null && !(typeof value[key] === 'string' && SHA256.test(value[key]))) problems.push(`${key}: a sha256 hex digest, or null`);
-    }
-    const empty = SIGNATURE_KEYS.every((key) => value[key] === null);
-    const full = SIGNATURE_KEYS.every((key) => value[key] !== null && value[key] !== undefined);
-    if (value.state === 'draft' || value.state === 'dropped') {
-      if (!empty) problems.push('signed_at/signed_by/signed_text: must be null in draft and dropped');
-    } else if (value.state === 'open' || value.state === 'done') {
-      if (!(full || (empty && (value.area || value.legacy === true)))) problems.push('signed_at/signed_by/signed_text: required together in open and done, except an unsigned area repair or legacy record');
-    }
-  }
   return problems;
 }
 
@@ -137,10 +140,9 @@ export function newRecord({ horizon = null, area = null, end, createdBy, now = n
     horizon,
     ...(area ? { area } : {}),
     end,
-    state: area ? 'open' : 'draft',
+    state: 'draft',
     created: instant(now),
     created_by: createdBy,
-    ...UNSIGNED,
     ...(stated ? { phases: { order: PHASES_ORDER } } : {}),
   };
 }
@@ -164,14 +166,18 @@ export function readRecord(dir, { read = (path) => readFileSync(path, 'utf8') } 
 }
 
 /** The record as `mc programs list --json` and `show --json` give it: null, its facts, or its problems. */
-export function recordView(read, { dir } = {}) {
+export function recordView(read) {
   if (read.status === 'valid') {
     const { horizon, end, state, created, created_by: createdBy } = read.record;
-    const { signed_at, signed_by, signed_text, cut_text, legacy } = read.record;
-    return { horizon, ...(read.record.area ? { area: read.record.area } : {}), end, state, created, created_by: createdBy,
-      signed_at, signed_by, signed_text, cut_text, ...(legacy !== undefined ? { legacy } : {}),
-      ...(dir && signed_text ? { designs_changed: designsChanged(dir) } : {}),
-      ...(read.record.phases ? { phases: read.record.phases } : {}) };
+    return {
+      horizon,
+      ...(read.record.area ? { area: read.record.area } : {}),
+      end,
+      state,
+      created,
+      created_by: createdBy,
+      ...(read.record.phases ? { phases: read.record.phases } : {}),
+    };
   }
   return read.status === 'invalid' ? { problems: read.problems } : null;
 }
@@ -216,89 +222,13 @@ export function changePhases(dir, change, options = {}) {
 }
 
 /**
- * The one other change to a record that is there: its `state`. The runner sets it to `done` once it has archived a
- * programme (archive-turn.js); `writeRecord` stays create-only. Validated and written whole and atomically (`write`), every
- * other key as it was, in its place; a record already in that state is not written again. An invalid record or none is never
- * touched. Returns `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
+ * The change to a record's `state`: draft, ready or done.
+ * Validated and written whole and atomically (`write`), every other key as it was, in its place;
+ * a record already in that state is not written again. An invalid record or none is never touched.
+ * Returns `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
  */
 export function setRecordState(dir, state, options = {}) {
   return replaceRecord(dir, (record) => ({ ...record, state }), options, 'programme-state');
-}
-
-/** Stable file order and the bytes of every design, including nested files. Missing designs is an empty list. */
-function designHashes(dir) {
-  const entries = [];
-  const visit = (path, prefix) => {
-    for (const entry of readdirSync(path, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name, 'en'))) {
-      const name = `${prefix}${entry.name}`;
-      if (entry.isDirectory()) visit(join(path, entry.name), `${name}/`);
-      else entries.push({ path: name, sha256: sha256(readFileSync(join(path, entry.name))) });
-    }
-  };
-  const designs = join(dir, 'designs');
-  try { visit(designs, 'designs/'); } catch (error) {
-    // Only the absent root is optional; a missing/unreadable entry is not an empty design set.
-    if (error.code !== 'ENOENT' || error.path !== designs) throw error;
-  }
-  return entries;
-}
-
-/** Compare the complete signed inventory, so additions and removals also count as drift. */
-function designsChanged(dir) {
-  try {
-    const signed = readFileSync(join(dir, 'SIGNED.md'), 'utf8');
-    const marker = '\n## Signed designs\n\n';
-    const start = signed.lastIndexOf(marker);
-    if (start < 0) return true;
-    const current = designHashes(dir).map((file) => `${file.sha256}  ${file.path}\n`).join('');
-    return signed.slice(start + marker.length) !== current;
-  } catch { return true; }
-}
-
-/** Capture the working document and design hashes before opening the record. The command supplies reading/structure checks. */
-export function signRecord(dir, { at = new Date(), check = () => [], ...options } = {}) {
-  let signed;
-  return replaceRecord(dir, (record) => {
-    const text = readFileSync(join(dir, 'README.md'), 'utf8');
-    const problems = check({ record, text });
-    if (problems.length) return { problems };
-    const designs = designHashes(dir);
-    signed = `${text}${text.endsWith('\n') ? '' : '\n'}\n## Signed designs\n\n${designs.map((file) => `${file.sha256}  ${file.path}\n`).join('')}`;
-    const { legacy, ...rest } = record;
-    return { ...rest, state: 'open', signed_at: instant(at), signed_by: 'martin', signed_text: sha256(signed) };
-  }, options, 'programme-sign', {
-    state: 'draft',
-    beforeWrite: (write) => write(join(dir, 'SIGNED.md'), signed),
-  });
-}
-
-/** Keep the previous signed copy and consumed signature: a re-sign must be cut again. */
-export function returnRecord(dir, options = {}) {
-  return replaceRecord(dir, (record) => ({ ...record, state: 'draft', signed_at: null, signed_by: null, signed_text: null }), options, 'programme-return', { state: 'open' });
-}
-
-/**
- * The planning turn's one completion write: `cut_text` takes `signed`, the signature the turn launched on, and nothing
- * else changes. Under the strict lock, on a fresh read: a record no longer `open` is `returned` (draft) or `settled`
- * (done, dropped), a signature other than `signed` is `resigned` (a newer sign-off is never consumed by an older turn),
- * an unsigned legacy or area record is `settled`, and `check({ record })` returning problems is `incomplete`. Each leaves
- * the record as it was. Returns `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
- */
-export function cutRecord(dir, { signed, check = () => [], ...options } = {}) {
-  return replaceRecord(dir, (record) => {
-    if (record.state === 'draft') return { status: 'returned', problems: ['state: the programme was returned to draft'] };
-    if (record.state !== 'open') return { status: 'settled', problems: [`state: reads ${record.state}`] };
-    if (record.legacy === true || record.signed_text === null) return { status: 'settled', problems: ['the record carries no signature to cut from'] };
-    if (record.signed_text !== signed) return { status: 'resigned', problems: ['signed_text: a newer signature than the turn read'] };
-    const problems = check({ record });
-    if (problems.length) return { status: 'incomplete', problems };
-    return { ...record, cut_text: signed };
-  }, options, 'programme-cut');
-}
-
-/** Shelving and its reason belong to the command; this writer never moves or deletes a directory. */
-export function dropRecord(dir, options = {}) {
-  return replaceRecord(dir, (record) => ({ ...record, state: 'dropped' }), options, 'programme-drop', { state: 'draft' });
 }
 
 /** Fresh read, validation and atomic replacement share the runner's strict lock. Create stays create-only. */
@@ -325,56 +255,6 @@ export function recordPageTemplate({ canon = canonRoot(), area = null } = {}) {
   let source;
   try { source = readFileSync(join(canon, 'tasks', 'references', area ? 'repair-page.md' : 'programme-document.md'), 'utf8'); } catch { return null; }
   return source.match(/^```markdown\r?\n([\s\S]*?)\r?\n```/mu)?.[1] ?? null;
-}
-
-const DOCUMENT_HEADINGS = Object.freeze(['What it is for', 'End', 'Why', 'What runs today', 'Parts', 'Order', 'Decided by signing', 'Not built', 'Read before sign-off', 'Where things are']);
-const PART_LABELS = Object.freeze(['Closes', 'Solution', 'Design', 'Proved by', 'Not in this part']);
-
-/** Structure only: code does not judge prose, design quality, or whether a proposal is good enough. */
-export function documentProblems(text) {
-  // Quoted examples inside fences cannot stand in for the document's own headings/entries.
-  const lines = text.replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[^\n]*(?:\n|$)/gmu, '').split(/\r?\n/u);
-  const problems = [];
-  const title = lines.findIndex((line) => line.trim());
-  if (title < 0 || !/^# \S/u.test(lines[title])) problems.push('title: missing nonempty # <programme> title');
-  const firstSection = lines.findIndex((line) => /^## /u.test(line));
-  const preamble = lines.slice(title + 1, firstSection < 0 ? lines.length : firstSection);
-  const repos = preamble.findIndex((line) => /^Repositories:/u.test(line));
-  if (repos < 0 || !preamble[repos].slice('Repositories:'.length).trim()) problems.push('Repositories: missing nonempty repository line before What it is for');
-  if (!preamble.slice(0, repos < 0 ? preamble.length : repos).some((line) => line.trim() && !/^#/u.test(line))) problems.push('scope: missing paragraph after title and before Repositories:');
-  let previous = firstSection - 1;
-  for (const heading of DOCUMENT_HEADINGS) {
-    const start = lines.indexOf(`## ${heading}`);
-    if (start < 0 || start <= previous) {
-      problems.push(`## ${heading}: missing or out of order`);
-      continue;
-    }
-    previous = start;
-    let end = lines.findIndex((line, at) => at > start && /^## /u.test(line));
-    if (end < 0) end = lines.length;
-    const body = lines.slice(start + 1, end);
-    if (!body.some((line) => line.trim() && !/^#/u.test(line))) problems.push(`## ${heading}: empty entry`);
-    if (heading !== 'Parts') continue;
-    const parts = body.flatMap((line, at) => (/^### Part [1-9]\d*\s+—\s+\S/u.test(line) ? [at] : []));
-    if (!parts.length) problems.push('## Parts: missing ### Part n — <name>');
-    for (const [index, at] of parts.entries()) {
-      const part = body.slice(at + 1, parts[index + 1] ?? body.length);
-      let last = -1;
-      for (const label of PART_LABELS) {
-        const position = part.findIndex((line) => new RegExp(`^${label}\\b`, 'u').test(line));
-        if (position < 0 || position <= last) {
-          problems.push(`${body[at]}: ${label} missing or out of order`);
-          continue;
-        }
-        last = position;
-        let next = part.findIndex((line, n) => n > position && PART_LABELS.some((other) => new RegExp(`^${other}\\b`, 'u').test(line)));
-        if (next < 0) next = part.length;
-        const content = [part[position].slice(label.length).replace(/^[\s:,—-]+/u, ''), ...part.slice(position + 1, next)];
-        if (!content.some((line) => line.trim())) problems.push(`${body[at]}: ${label} empty entry`);
-      }
-    }
-  }
-  return problems;
 }
 
 /** `text` with the body of its `## heading` section replaced; unchanged when there is no such section. */

@@ -402,18 +402,17 @@ test('a main-red repair that reaches Martin again after an answer is a new desk 
 
 /* ---- a programme item: the programme planning turn's */
 
-const SIGNED_MD = '# prog\n\n## Parts\n\n### Part 1 — One\n\n### Part 2 — Two\n';
-const SIGNED_SHA = createHash('sha256').update(SIGNED_MD).digest('hex');
-const PROGRAMME_RECORD = JSON.stringify({ schema: 'mc-programme', version: 2, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person', signed_at: '2026-11-14T11:00:00Z', signed_by: 'martin', signed_text: SIGNED_SHA, cut_text: null });
-/** A goal of `prog` that names `parts` of its SIGNED.md, as the turn's session writes it. */
+const README_MD = '# prog\n\n## Parts\n\n### Part 1 — One\n\n### Part 2 — Two\n';
+const PROGRAMME_RECORD = JSON.stringify({ schema: 'mc-programme', version: 2, horizon: null, end: 'Done when it holds.', state: 'ready', created: '2026-11-14T10:20:30Z', created_by: 'person' });
+/** A goal of `prog` that names `parts` of its README.md, as the turn's session writes it. */
 function namesParts(f, name, parts) {
   const dir = join(f.home, 'prog', 'goals', name); mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'GOAL.json'), goalJson({ status: 'ready', documents: [{ label: `Signed design, ${parts.map((part) => `Part ${part}`).join('; ')}`, path: join(f.home, 'prog', 'SIGNED.md') }] }));
+  writeFileSync(join(dir, 'GOAL.json'), goalJson({ status: 'ready', documents: [{ label: `Design, ${parts.map((part) => `Part ${part}`).join('; ')}`, path: join(f.home, 'prog', 'README.md') }] }));
 }
 /** A programme `prog` with a record and a page, and the prepared item its planning turn opened. */
 function programmeItem(f, fields = {}) {
   const dir = join(f.home, 'prog'); mkdirSync(join(dir, 'goals'), { recursive: true });
-  writeFileSync(join(dir, 'PROGRAMME.json'), PROGRAMME_RECORD); writeFileSync(join(dir, 'README.md'), '# prog\n'); writeFileSync(join(dir, 'SIGNED.md'), SIGNED_MD);
+  writeFileSync(join(dir, 'PROGRAMME.json'), PROGRAMME_RECORD); writeFileSync(join(dir, 'README.md'), README_MD);
   const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('programme', 'programme:prog', stamp), kind: 'programme', reference: 'programme:prog', source_at: stamp, opened_at: stamp, state: 'prepared', sort: 'mechanical', reversible: null, due_at: null, outcome: null, ...fields };
   writeDeskItem(item, { env: f.env });
   return item;
@@ -427,7 +426,7 @@ function syncProgramme(f) {
   return { item, issues };
 }
 
-test('a programme item closes by source when goals name every part of the signed document, its record no longer reads valid, open and signed, or its directory is gone', () => {
+test('a programme item closes by source when goals name every part of its README.md, its record no longer reads valid and ready, or its directory is gone', () => {
   const open = fixture(); programmeItem(open);
   assert.equal(syncProgramme(open).item.state, 'prepared', 'a programme with no goal keeps its item open');
   writeFileSync(join(open.home, 'prog', 'goals', '.hold.json'), '{}');
@@ -440,13 +439,13 @@ test('a programme item closes by source when goals name every part of the signed
   assert.equal(syncProgramme(partial).item.state, 'prepared', 'goals naming no part, or part 1 only, leave the item open');
   namesParts(partial, 'two', [2]);
   const held = syncProgramme(partial).item;
-  assert.deepEqual([held.state, held.outcome.by, held.outcome.summary], ['closed', 'source', 'Goals now name every part of the signed document.']);
+  assert.deepEqual([held.state, held.outcome.by, held.outcome.summary], ['closed', 'source', 'Goals now name every part of the programme document.']);
 
   const changed = fixture(); programmeItem(changed); namesParts(changed, 'all', [1, 2]);
-  writeFileSync(join(changed.home, 'prog', 'SIGNED.md'), `${SIGNED_MD}\nEdited after the signature.\n`);
-  assert.equal(syncProgramme(changed).item.state, 'prepared', 'a SIGNED.md that no longer matches the signature closes nothing');
+  writeFileSync(join(changed.home, 'prog', 'README.md'), `${README_MD}\n### Part 3 — Three\n`);
+  assert.equal(syncProgramme(changed).item.state, 'prepared', 'a README.md with an uncut part closes nothing');
 
-  for (const [kind, record] of [['legacy', JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), version: 1, signed_at: undefined, signed_by: undefined, signed_text: undefined, cut_text: undefined })], ['draft', JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), state: 'draft', signed_at: null, signed_by: null, signed_text: null })]]) {
+  for (const [kind, record] of [['draft', JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), state: 'draft' })]]) {
     const f = fixture(); programmeItem(f); writeFileSync(join(f.home, 'prog', 'PROGRAMME.json'), record);
     assert.equal(syncProgramme(f).item.state, 'closed', `${kind}: a record the turn can no longer cut from closes it`);
   }
@@ -454,7 +453,7 @@ test('a programme item closes by source when goals name every part of the signed
   for (const [kind, record] of [['done', JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), state: 'done' })], ['invalid', '{ not json']]) {
     const f = fixture(); programmeItem(f); writeFileSync(join(f.home, 'prog', 'PROGRAMME.json'), record);
     const closed = syncProgramme(f).item;
-    assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.summary], ['closed', 'source', 'The programme record no longer reads valid and open.'], kind);
+    assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.summary], ['closed', 'source', 'The programme record no longer reads valid and ready.'], kind);
   }
 
   const gone = fixture(); programmeItem(gone); rmSync(join(gone.home, 'prog'), { recursive: true, force: true });
@@ -497,63 +496,23 @@ test('a text item is labelled by its text, a sync neither closes nor opens anoth
   assert.deepEqual([readDeskItem(old.id, { env: f.env }).sort, readDeskItem(old.id, { env: f.env }).due_at], ['product', '2026-11-16T10:00:00Z']);
 });
 
-/* ---- a manager item: the manager's horizon turn's */
+/* ---- a manager item: left by the removed horizon turn */
 
-const OPEN_RECORD = (horizon) => JSON.stringify({ schema: 'mc-programme', version: 1, horizon, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'manager' });
 const horizonStateAt = (f, slug = 'h-one') => join(f.env.MC_WORK_ROOT, 'runner', 'manager-turn', 'horizon', `${slug}.json`);
 const horizonStateText = (...reasons) => JSON.stringify({ schema: 'mc-manager-turn', version: 1, kind: 'horizon', horizon: 'h-one', failures: reasons.map((reason, index) => ({ at: `2026-11-14T10:0${index}:00Z`, reason, log: null })), items: [] });
-/** The `for-martin` item the horizon turn opens at its second failure, and a store that holds the horizon `h-one` as `state`. */
+/** A `prepared` manager item as the removed horizon turn opened it at its second failure. */
 function managerItem(f, fields = {}) {
   const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('manager', 'manager:h-one', stamp), kind: 'manager', reference: 'manager:h-one', source_at: stamp, opened_at: stamp, state: 'prepared', sort: 'mechanical', reversible: null, due_at: null, outcome: null, ...fields };
   writeDeskItem(item, { env: f.env });
   return item;
 }
-function syncManager(f, state = 'open') {
-  const issues = [];
-  const horizon = (slug) => (slug === 'h-one' && state ? { slug, state } : null);
-  const item = syncDeskItems({ env: f.env, home: f.home, now: () => new Date(stamp), read: fixtureRead, horizon, reportIssue: (issue) => issues.push(issue) }).find((one) => one.reference === 'manager:h-one');
-  return { item, issues };
-}
 
-test('a manager item stays open while its horizon is open, no valid open record names it and no text item holds it', () => {
-  const f = fixture(); managerItem(f);
-  mkdirSync(join(f.home, 'other'), { recursive: true }); writeFileSync(join(f.home, 'other', 'PROGRAMME.json'), OPEN_RECORD('h-two'));
-  assert.equal(syncManager(f).item.state, 'prepared');
-  assert.equal(deskItemId('manager', 'manager:h-one', stamp).length, 24, 'a manager item has the id of any kind');
-});
-
-test('a manager item closes by source when the horizon is no longer open, a valid open record names it, or the text item horizon:<slug> is open', () => {
-  const gone = fixture(); managerItem(gone);
-  for (const state of ['closed', null]) {
-    const closed = syncManager(gone, state).item;
-    assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.summary], ['closed', 'source', 'The horizon h-one is no longer open.'], String(state));
-    managerItem(gone, { state: 'prepared', outcome: null });
-  }
-
-  const named = fixture(); managerItem(named);
-  mkdirSync(join(named.home, 'serves'), { recursive: true }); writeFileSync(join(named.home, 'serves', 'PROGRAMME.json'), OPEN_RECORD('h-one'));
-  assert.deepEqual([syncManager(named).item.state, syncManager(named).item.outcome.summary], ['closed', 'An open programme now serves the horizon.']);
-
-  const invalid = fixture(); managerItem(invalid);
-  mkdirSync(join(invalid.home, 'broken'), { recursive: true }); writeFileSync(join(invalid.home, 'broken', 'PROGRAMME.json'), '{ not json');
-  assert.equal(syncManager(invalid).item.state, 'prepared', 'a record that is not valid names nothing');
-
-  const text = fixture(); managerItem(text);
-  const at = '2026-11-14T10:00:00.000Z';
-  const held = { schema: 'mc-desk-item', version: 1, id: deskItemId('text', 'text:horizon:h-one', at), kind: 'text', reference: 'text:horizon:h-one', text: 'horizon:h-one', goal: null, source_at: at, opened_at: at, state: 'for-martin', sort: 'text', reversible: null, due_at: null, outcome: null };
-  writeDeskItem(held, { env: text.env });
-  const closed = syncManager(text).item;
-  assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.summary], ['closed', 'source', 'The text item horizon:h-one is open.']);
-});
-
-test('a manager item whose horizon state file cannot be read stays open, and the sync reports the file', () => {
+test('a manager item left by the removed horizon turn closes by source, its state file left as it was', () => {
   const f = fixture(); managerItem(f);
   mkdirSync(join(f.env.MC_WORK_ROOT, 'runner', 'manager-turn', 'horizon'), { recursive: true }); writeFileSync(horizonStateAt(f), '{ not json');
-  const { item, issues } = syncManager(f, 'closed');
-  assert.equal(item.state, 'prepared', 'not closed on a source that could not be read, though the horizon is not open');
-  const reported = issues.filter((issue) => issue.path === horizonStateAt(f));
-  assert.equal(reported.length, 1);
-  assert.match(reported[0].error, /not JSON/u);
+  const item = syncDeskItems({ env: f.env, home: f.home, now: () => new Date(stamp), read: fixtureRead, reportIssue: () => {} }).find((one) => one.reference === 'manager:h-one');
+  assert.deepEqual([item.state, item.outcome.by, item.outcome.summary], ['closed', 'source', "The manager's horizon turn is removed."]);
+  assert.equal(readFileSync(horizonStateAt(f), 'utf8'), '{ not json', 'nothing on disk is rewritten');
 });
 
 test('a manager item is labelled by the reason of the last failure in its horizon state', () => {

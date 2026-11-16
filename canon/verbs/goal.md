@@ -15,8 +15,8 @@ its check, and each worktree's state.
   (a blank line parts paragraphs), `mc goal item add|set|remove <p>/<g> problem|premise|decision|change|preserve|risk|out-of-scope …`
   (it prints the item's id, B, P, D, C, V, R or X and a number, never given
   twice), `mc goal obligation set|remove <p>/<g> <area> …` (an area is `<repo>/<id>` where the repository declares areas; `mc goal areas <repo>|<p>/<g> [--at <rev>]` lists them),
-  `mc goal document add <p>/<g> --label "…" --path "…"` (a goal cut from a signed
-  programme names its part by adding the programme's SIGNED.md with the label
+  `mc goal document add <p>/<g> --label "…" --path "…"` (a goal cut from a
+  programme names its part by adding the programme's README.md with the label
   `Part <n>`, several as `Part 1; Part 2`), `mc goal criterion add
   <p>/<g> --criterion "…" --check "…"`, and `--evidence "…"`
   on `criterion add|set`. A build, review or mend
@@ -96,14 +96,13 @@ its check, and each worktree's state.
   runner starts no delivery session on `draft · ready`, no session on `Martin`, or a build session
   on a goal with no criterion, and the merger does not land a goal with one
   unmet.
-- **Programme readers.** `mc programs review <programme>` commissions a
-  document reading before sign-off. Its reader writes only
-  PROGRAMME-REVIEW.md and a token-bound verdict; it cannot mutate goals or sign.
-- **Programme sign-off.** `new` refuses draft/dropped records (exit 1), naming
+- **Programme readers.** `mc programs review <programme>` commissions an
+  advisory document reading; only Martin's interactive session calls it, and
+  nothing reads its report. Its reader writes only PROGRAMME-REVIEW.md; it cannot mutate goals.
+- **Programme state.** `new` refuses draft records (exit 1), naming
   `mc programs show <programme>`. Headless creation without a record refuses
   (exit 1): a goal there is made at the desk. Both happen before fetch/write.
-  Signed open, legacy and repair programmes retain their other admission rules;
-  interactive recordless creation remains available.
+  A programme Martin has set ready enables goal new.
 
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
   fast|medium|large --title "…" ` makes one, always in draft: GOAL.json and

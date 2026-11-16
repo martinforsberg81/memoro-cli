@@ -1508,10 +1508,6 @@ export function horizonsSection({ programmes, found = () => ({ status: 'none' })
     try { readdirSync(horizonsDir(env)); } catch (cause) { if (cause?.code !== 'ENOENT') error = cause.message || String(cause); }
   } catch (cause) { error = cause.message || String(cause); }
   const held = new Map(read.horizons.map((item) => [item.slug, item]));
-  // Read an existing item only. Creating or scheduling sign-off items belongs to a later step.
-  let waiting = new Set();
-  try { waiting = new Set(listDeskItems({ env }).filter((item) => item.kind === 'sign-off' && item.state !== 'closed').map((item) => item.reference)); }
-  catch { /* An unreadable item store does not hide the programme's draft state. */ }
   const groups = programmes?.programmes || [];
   let number = programmes?.count ?? 0;
   for (const group of groups) {
@@ -1526,7 +1522,6 @@ export function horizonsSection({ programmes, found = () => ({ status: 'none' })
         group.record_state = record.record.state;
       }
     } catch { named = null; }
-    group.sign_off_waiting = waiting.has(`sign-off:${group.programme}`);
     group.horizon = named;
     group.horizon_state = named === null ? null : held.get(named)?.state ?? 'not held';
   }

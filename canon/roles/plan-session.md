@@ -73,54 +73,39 @@ launch indefinitely without progress.
 ## The headless programme turn
 
 When `MC_HEADLESS=1` and `MC_PROGRAMME` names a programme but `MC_GOAL` is not
-set, you are the programme's one planning turn: its record is `open` and signed,
-and `SIGNED.md` is the document Martin signed, not yet cut from. The launch
-prompt gives the programme directory, the horizon command when the record names
+set, you are the programme's one planning turn: its record is `ready`, and
+`README.md` is the programme document. The turn cuts goals from README.md of
+the ready programme.
+The launch prompt gives the programme directory, the horizon command when the record names
 a horizon, and read checkouts of the served repositories, detached at
-origin/main. Read `SIGNED.md` and `mc programs show <programme>`; open code only
-to name the files a part already implies. `README.md` is the working copy and
-not your source. Change nothing in the checkouts, commit nothing and create no
-branch.
+origin/main. Read `README.md` and `mc programs show <programme>`; open code only
+to name the files a part already implies. Change nothing in the checkouts,
+commit nothing and create no branch.
 
-The turn is short: the signed document is the plan, and you only carry it over.
+The turn is short: the programme document is the plan, and you only carry it over.
 Cut one goal per part, in the Order's sequence as phases. The goal's outcome is
 the part's Closes, its change the part's Solution, its intended result the
 part's Design, one criterion per Proved by line with one check each, and the
-goal names its part: a document whose path is `SIGNED.md` of this programme,
+goal names its part: a document whose path is `README.md` of this programme,
 labelled `Part <n>`. You add nothing the part does not say: no investigation,
 no solution, design or decision of your own about what is delivered or how it
-looks, no proposal, and no extra items
-beyond what the verbs require. The builder settles the construction. Where
-goals exist from an earlier cut, a part unchanged since then keeps its goals;
-for a changed part a goal not yet in build is rewritten, and a goal already
-built gets a new goal for the difference. Move each goal to
+looks, no proposal, and no extra items beyond what the verbs require. The builder
+settles the construction. Where goals exist from an earlier cut, a part unchanged
+since then keeps its goals; for a changed part a goal not yet in build is rewritten,
+and a goal already built gets a new goal for the difference. Move each goal to
 `build` in its phase as soon as it is complete.
 
-Before anything else read Martin's sign line in the programme's `LOG.md` and
-`PROGRAMME-REVIEW.md`. What he routed there to the planner and the builder is
-yours: settle it in the goals inside the signed document, and record in the
-goal's LOG.md which finding it answers. So is construction within the document's
-direction, such as the exact text of a line in the established
-`mc: <what> — <the call that works>` form, or reusing an existing line. Neither
-is a choice left open.
-
 Where a part leaves open a choice of what is delivered or how it looks, which
-the document neither shows nor routes, do not make it: run `mc programs return
-<programme> --reason "<the part and the choice>"`, then leave the return at the
-desk with `mc martin propose --text <programme>/SIGNED.md --file <brief>`, the
-brief in the desk's three parts (what the document says, what is missing, what
-was found), and end. The record is `draft` again; that is a success and the
-programme waits for Martin's next sign-off. A
-question that is not such a choice goes through goal-bound `mc ask` on the draft
+the document neither shows nor routes, do not make it: leave it at the desk with
+`mc martin propose --text <programme>/README.md --file <brief>`, the brief in the
+desk's three parts (what the document says, what is missing, what was found), and
+end. A question that is not such a choice goes through goal-bound `mc ask` on the draft
 that needs it: jev, then a reader, answers it, and the other drafts go on. Do not
 implement a goal or process proposals.
 
-The turn ends when you stop. It succeeds when a goal names every part of the
-signed document: the runner then records the signature you read as cut and does
-not cut it twice. It also succeeds when the record is `draft` again: nothing is
-recorded as cut, and the programme is cut after Martin's next sign-off. Any
-other ending counts as a failure. Drafts left unfinished are planned by the
-next-draft sessions that follow and are not set to Martin.
+The turn ends when you stop. It succeeds when goals name every part of
+README.md. Any other ending counts as a failure. Drafts left unfinished are planned by
+the next-draft sessions that follow and are not set to Martin.
 
 Read the code and relevant `docs/technical/` contracts, programme README and design first. Apply the rules that already answer a question; what is left follows `tasks/asking-martin.md`. A technical gap within existing direction is resolved by planning and recorded. After an answer, amend the canonical standard and affected programme/goal contracts consistently.
 

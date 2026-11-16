@@ -320,8 +320,8 @@ function newGoal(args, flags, ctx) {
   }
   if (!ctx.list(home).includes(programme)) { stderr.write(`mc: no programme ${programme} under ${home}\n`); return 1; }
   const record = readRecord(join(home, programme), { read: ctx.read });
-  if (record.status === 'valid' && ['draft', 'dropped'].includes(record.record.state)) {
-    stderr.write(`mc: ${programme} is not signed off — mc programs show ${programme}\n`); return 1;
+  if (record.status === 'valid' && record.record.state === 'draft') {
+    stderr.write(`mc: ${programme} is draft — mc programs show ${programme}\n`); return 1;
   }
   if (record.status === 'none' && ctx.env.MC_HEADLESS === '1') {
     stderr.write(`mc: ${programme} has no record — a goal here is made at the desk\n`); return 1;
@@ -1853,7 +1853,7 @@ export function refusedMove({ from, to = null, status = null, env }) {
   if (to === 'finish') return 'finish is no longer a goal stage to move to — use mc goal stage build for a rejected review';
   if (env.MC_ROLE === 'desk-prepare') return 'desk-prepare cannot write goals';
   if (env.MC_ROLE === 'ask-reader') return 'an ask-reader session reads (mc goal show, list, areas) and answers with mc ask answer; it changes no goal and asks no one';
-  if (env.MC_ROLE === 'programme-review') return 'a programme-review session reads and writes only PROGRAMME-REVIEW.md, then records its verdict with mc programs review <programme> verdict ok|not-ok; it changes no goal and asks no one';
+  if (env.MC_ROLE === 'programme-review') return 'a programme-review session reads and writes only PROGRAMME-REVIEW.md; it changes no goal and asks no one';
   if (['martin', 'decision'].includes(env.MC_ROLE)) {
     if (env.MC_ROLE === 'martin' && env.MC_HEADLESS === '1') return 'the Martin role is interactive-only; unattended sessions cannot use Martin authority';
     if (to === 'done') return 'Martin does not mark a goal done administratively — preserve the normal review, publish and merger handoff';

@@ -36,16 +36,10 @@ Measured, with the baselines of 2026-11-14 (programme `mc`):
 - Sessions have one way to ask for advice, `mc ask`, not several (Martin, 2026-11-15; programme `reach`).
 - The only questions directed to Martin are those about a reformulation of an aim, and about strategy and design at that level (Martin, 2026-11-15; programme `mc`).
 - A programme with a record is bounded: it is done when its goals are done and its write-back reads OK, and the system then archives it (Martin, 2026-11-15; programme `horizon`).
-- A programme record has four states, `draft`, `open`, `done` and `dropped`. Every new programme but a repair starts as a draft, with a horizon or without, whoever creates it, and no goal is cut from a programme document Martin has not signed off (Martin, 2026-11-15; programme `programme-sign-off`).
-- Repairs (`--area`) are exempt from sign-off: one goal against an area text (Martin, 2026-11-15; programme `programme-sign-off`).
-- The programmes open on 2026-11-15 are not flipped: they stay open as legacy records and come to sign-off one by one at the desk; the finished ones are archived as before, without sign-off (Martin, 2026-11-15; programme `programme-sign-off`).
-- What is signed is a copy, `SIGNED.md`, with the hashes of the design files. `README.md` stays the working page where sessions record decisions; the build and the reviews are held to the copy. Changing what is signed means return, review and sign again (Martin, 2026-11-15; programme `programme-sign-off`).
-- A headless session cannot make a goal in a programme without a record (Martin, 2026-11-15; programme `programme-sign-off`).
-- A programme in draft starts no new plan, build, review or mend session; a session already running finishes and a goal already in merge is merged (Martin, 2026-11-15; programme `programme-sign-off`).
-- A programme document has the eleven headings of its template, and each part has the five entries Closes, Solution, Design, Proved by and Not in this part. Sign-off checks their presence and order, never the document's quality (Martin, 2026-11-15; programme `programme-sign-off`).
-- The independent reading of a programme document is `mc programs review`, called inside the session, with eight questions and no cap on readings. `sign` needs an OK reading of the current text, or a NOT OK reading and a stated reason; never no reading (Martin, 2026-11-15; programme `programme-sign-off`).
-- Only Martin, interactively, signs a programme; no other role and no clock. Saying no to a whole draft drops the programme (Martin, 2026-11-15; programme `programme-sign-off`).
-- The planner cuts goals from the signed parts and decides nothing; a choice left open returns the programme to a draft. A programme is cut once per sign-off (Martin, 2026-11-15; programme `programme-sign-off`).
+- A programme record has three states, `draft`, `ready` and `done`. A programme is created only by a person or by Martin's interactive session (`mc martin`); create makes a draft record, and Martin sets the state with `mc programs state <programme> draft|ready` (Martin, 2026-11-16; programme `plain-programmes`).
+- A programme in draft starts no new plan, build, review or mend session; planning and build take nothing from a draft programme (Martin, 2026-11-16; programme `plain-programmes`).
+- `mc programs review` is advisory: Martin's interactive session calls it when he wants, it writes PROGRAMME-REVIEW.md beside the programme, and nothing reads the report (Martin, 2026-11-16; programme `plain-programmes`).
+- The planner cuts goals from README.md of a ready programme (Martin, 2026-11-16; programme `plain-programmes`).
 - A horizon has a basis file, and what is not designed is settled in a programme document (Martin, 2026-11-15; programme `programme-sign-off`).
 
 ## Store

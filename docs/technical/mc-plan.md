@@ -59,50 +59,30 @@ following keys; `area`, `phases` and `legacy` are optional, and no others are ac
 | `horizon` | the slug of the horizon served, or `null` |
 | `area` | optional: `<repo>/<id>`, an area a repository declares; allowed only with `horizon` `null` |
 | `end` | one non-empty sentence saying when the programme is done |
-| `state` | `draft`, `open`, `done` or `dropped` |
+| `state` | `draft`, `ready` or `done` |
 | `created` | an ISO instant in UTC to the second |
-| `created_by` | `person`, `martin` or `manager` |
-| `signed_at` | ISO instant in UTC, or `null` |
-| `signed_by` | `"martin"`, or `null` |
-| `signed_text` | sha256 hex digest of `SIGNED.md`, or `null` |
-| `cut_text` | signature consumed by the last complete goal cut, or `null` |
-| `legacy` | optional boolean; `true` exempts an existing record from sign-off |
+| `created_by` | `person` or `martin` |
 | `phases` | optional: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}` |
 
-`draft` means the document is being written or waiting for sign-off; `open`
-means goals may be cut and built; `done` means archived; `dropped` means the
-draft was declined. The three `signed_*` keys are null in draft/dropped and
-set together in open/done. Area repairs and `legacy: true` records may instead
-have all three null in open/done; a partial signature is never valid. `cut_text`
-may stay set after a return. Every new record is draft, with or without a
-horizon and for every author, except an area repair, which is open and unsigned.
+`draft` means not finished; planning and build take nothing from it (`mc goal new`
+is refused, the planning turn does not run, no session starts on its goals).
+`ready` means goals may be cut and built; `done` means archived.
+Every new record is draft.
 
-Reading a version 1 open/done record normalizes it in memory to version 2,
-`legacy: true` and four null signature/cut keys. It does not change disk bytes
-or state. Only an actual write persists that upgrade; a no-op phase/state call
-does not migrate. `writeRecord` remains create-only even for old input. Old
-processes reject version 2 records as invalid, not understand their sign-off
-semantics; use normal installed-code/runner handover before relying on new
-gates. In particular an old goal-new caller has no new sign-off guard.
+Reading an older record normalizes it in memory: `open` reads as `ready`, `dropped`
+as `done`, and removed fields are ignored. It does not change disk bytes or state.
+Only an actual write upgrades a record to version 2.
 
-The record module's transition writers take the strict runner lock around a
-fresh read and replacement: `signRecord` requires draft, reads README, runs
-the caller's structure/current-reading check on those exact bytes, appends a
-`## Signed designs` block listing every nested design file with sha256, writes
-`SIGNED.md`, then opens the record with Martin/time and the signed-copy hash,
-removing legacy. It retains phases and cut_text. A failed check/validation
-writes neither file. `returnRecord` requires open, nulls signed_* and keeps
-cut_text and the old signed copy until a re-sign replaces it. `dropRecord`
-requires draft and records dropped, without moving or deleting any material;
-reason logging and shelving belong to the command. Neither writer invents a
-reading or grants caller authority.
+A programme, a repair programme included, is created only by a person or by
+Martin's interactive session (`mc martin`); every headless role, the manager
+included, is refused (exit 2). Martin sets the state with
+`mc programs state <programme> draft|ready`.
 
 A record cannot name both a horizon and an area. An area carrier is existing
 storage for one small goal without a horizon, not an extra product planning
 level. Small work includes a single fix; a user-promise change needs a horizon.
-The create guard refuses a second open carrier for an identified area and goal
-creation refuses a second live goal in it. Other work waits oldest first. If no
-area can responsibly be assigned, say unassigned; no global guard covers it.
+The create guard refuses a second ready carrier for an identified area and goal
+creation refuses a second live goal in it. Other work waits oldest first.
 
 `phases` says how the programme's phases run. A record without it is a
 sequential programme: a phase starts when every lower phase is finished. With
@@ -116,9 +96,9 @@ it and what is shown are in [mc-goals.md](mc-goals.md#phases). A `phases` of
 another form is a problem, so the record is invalid.
 
 The record is also what lets the runner plan the programme with nobody present:
-a programme with a valid, signed, non-legacy `open` record, a `README.md` and a
-signature not yet cut gets one headless planning turn that cuts its phases and
-goals from the signed document
+a programme with a valid `ready` record and a `README.md`
+gets one headless planning turn that cuts its phases and
+goals from README.md
 ([mc-run.md](mc-run.md#programme-planning-turn)). A programme with no record, or
 with an invalid one, is never started that way; `mc plan` stays the person's
 entrance.
@@ -126,13 +106,13 @@ entrance.
 The slug is not checked against the desk's horizons: mc stores what it is
 given. Its reader says `none`, `valid` or `invalid` with the problems; a
 record is validated before every write. Creation never replaces a file that
-is there (a temporary file linked into place). All existing-record writers (phase, state, sign, return and drop)
+is there (a temporary file linked into place). All existing-record writers (phase, state)
 take the shared runner lock with `strict: true` around a fresh read, validation
 and atomic replacement, retaining the other fields. They refuse rather than
 write without that lock; archive destination bookkeeping takes its own lock
 separately, never wrapping the record writer in a nested acquisition.
 `state` is read by the programme
-planning turn and the manager's horizon turn (a turn starts only for `open`),
+planning turn (a turn starts only for `ready`),
 and by the archive turn, and the list and the page show it. Only the runner
 sets it to `done` (`setRecordState`), once it has archived the programme
 ([mc-run.md](mc-run.md#programme-archive-turn)); `mc plan <programme> --archive`
@@ -143,12 +123,8 @@ archives a programme of either kind, as in
 mc programs create <programme> --end "…" [--horizon <slug> | --area <repo>/<id>] [--purpose "…"] [--from-proposal <path>]
 mc programs record <programme> --end "…" [--horizon <slug>]
 mc programs show <programme> [--json]
-mc programs sign <programme> [--reason "…"]
-mc programs return <programme> --reason "…"
-mc programs drop <programme> --reason "…"
-mc programs model
+mc programs state <programme> draft|ready
 mc programs review <programme>
-mc programs review <programme> verdict ok|not-ok
 mc programs after <programme> <phase> <phase>… | --none
 ```
 
@@ -161,9 +137,9 @@ Martin role, the manager and the plan role may call it, the last two also
 unattended. Its form and refusals are in [mc-goals.md](mc-goals.md#stated-order).
 
 `create` makes `~/mc/programs/<programme>/` with `PROGRAMME.json` (state
-`draft` (or `open` for an area repair), created now), `README.md` from its template, and empty `goals/`,
+`draft`, an area repair included, created now), `README.md` from its template, and empty `goals/`,
 `proposals/archive/` and `evidence/`, so `mc goal new <programme>/<goal>`
-is available after sign-off (immediately for an area repair). It refuses a name that exists (exit 1) and, when the page
+is available once Martin sets the programme `ready`. It refuses a name that exists (exit 1) and, when the page
 template cannot be read, makes nothing. `record` gives an existing directory
 without a record its record and touches nothing else; it refuses a directory
 that is missing or already has a record (exit 1). Both refuse a bad name, a
@@ -185,11 +161,9 @@ exits 1, and a word that is not a programme name exits 2.
 
 Who may write is decided from the environment alone: `MC_ROLE` through
 `normalizeSessionRole`, else `MC_GOAL` alone is a build session, else a person.
-A person, the interactive Martin role and the manager may create and record,
-and `created_by` says which (`person`, `martin`, `manager`). The manager
-differs in three ways ([mc-manager.md](mc-manager.md)): `create` needs `--purpose`
-and exactly one of `--horizon` and `--area`; a `--horizon` must be open and have
-no valid open record naming it; and `record` is refused to it. The page is
+Only a person and the interactive Martin role may create and record, and
+`created_by` says which (`person`, `martin`); every headless role, the manager
+included, is refused (exit 2). The page is
 written before the record, so the runner never offers a programme whose page
 is not whole. Every other role
 and a build session get exit 2 with the role named; the Martin role with
@@ -197,91 +171,28 @@ and a build session get exit 2 with the role named; the Martin role with
 named. `show` and `list` have no guard. The pre-tool hook refuses a direct
 write of the file (`programme-file`, [mc-hooks.md](mc-hooks.md)).
 
-### Sign-off and independent programme reading
+### Programme state and advisory reading
 
-`sign` is interactive-Martin-only: exactly `MC_ROLE=martin` and
-`MC_HEADLESS` not `1`. Every other caller, including a bare shell, exits 2
-with `mc: only Martin at the desk signs a programme`, before effects. A bad
-request also exits 2. It exits 1 unless the record is draft, the complete
-[document structure](../../canon/tasks/references/programme-document.md) is present, and an independent
-reading of the programme exists. Each structural refusal names
-its heading/entry/Repositories line; this is not a prose-quality judgement.
-No reading refuses even with `--reason`, naming `mc programs review
-<programme>`. A reading of an earlier text counts (Martin, 2026-11-16: edits
-made with him at the desk need no new reading); the LOG.md line then says
-`(the reading read an earlier text; the edits since were made at the desk)`.
-NOT OK needs nonempty `--reason`; OK does not. A successful sign prints
-`<programme>: signed — goals may be cut` and appends Martin/time and any
-override reason to programme LOG.md.
-The record writer checks the current reading inside its strict lock before
-writing either sign-off file; normal record writes retain their other fields.
+`mc programs state <programme> draft|ready` is available only to interactive Martin:
+exactly `MC_ROLE=martin` and `MC_HEADLESS` not `1`. Every other caller exits 2
+before effects. It sets `draft` or `ready` without condition on the document,
+the directory or any reading.
 
-`return <programme> --reason "…"` is available only to interactive Martin or
-`MC_ROLE=plan` with that exact `MC_PROGRAMME` and no `MC_GOAL` (the programme
-planning turn, not a goal session). It requires open, clears signed_* but
-retains cut_text and SIGNED.md, appends time/role/reason to RETURNED.md, and
-prints `<programme>: returned to draft — <reason>`. `drop` is interactive
-Martin only and requires draft. It writes dropped and appends the reason,
-then uses the archive's collision-avoiding whole-directory shelving into
-`archive/programs/<programme>` (then `-2`, `-3`, …). It does not release a
-worktree or hold, delete restricted data, move proposals separately, or
-remove dirty/unpushed material: the complete directory is retained. A failed
-move reports the retained location and leaves the dropped record/reason in
-place. Malformed/unauthorized calls exit 2 without effects; wrong state or a
-failed write/move exits 1. No sign-off desk item is created by either verb.
-
-`model` prints the SIGNED.md path with the latest signed_at among valid live
-and archived records that still have that file; legacy unsigned copies do
-not qualify. No signature exits 1 with `mc: no programme document is signed
-yet`. `show` and list expose signature time/author and legacy (`legacy: not
-signed`); their record JSON includes the signature/cut keys. For a signed
-record they compare the complete current designs inventory with the signed
-hash block: changed, new or removed files print `designs changed since
-sign-off` (JSON `designs_changed`). Reads never update a record or signature.
-
-`review` is an in-session call, not a runner lane or scheduled turn. A manager,
-interactive desk, interactive programme plan without MC_GOAL, or a person can
-call it; other roles and headless Martin/plan are refused (2) before effects.
-The Repositories line names known repository names (comma/space separated,
-optional terminal full stop); unknown names or no entries refuse (2), never
-turning document text into arbitrary filesystem paths. Read exports are the
-existing `git archive origin/main` mechanism, without repository metadata.
-Cleanup proves the owned export directory's device/inode/birthtime and retains
-and reports a replacement directory or symlink rather than deleting it.
-
-`src/mc/programme-review.js` provides reader selection, adapter/capability and billing
-routing, token/launch mechanics, session launch and report/verdict checks for
-programme review. It removes the draft's author from the review catalogue
-when another can run (`--avoid` names the author when given, else the caller's
-tool/model; the author is read last otherwise; the catalogue first retains
-priority only if still present), with the same capacity/API-reserve and fallback rules. No provider
-command or extra routing policy is added. Programme review has a
-30-minute timeout and no reading cap, including a third call on the same text.
-
+`mc programs review <programme>` is an in-session call, not a runner lane or scheduled turn.
+It is advice: Martin's interactive session calls it when he wants, it writes its report
+beside the programme as `PROGRAMME-REVIEW.md`, and nothing reads the report: it gates
+nothing, is bound to no version of the text, is never required and never goes stale.
+It records no verdict or currency.
 The child has MC_ROLE=programme-review, MC_PROGRAMME and its own
-MC_PROGRAMME_REVIEW_TOKEN, not the caller's goal/session/review identity. The
-one in-flight `.programme-review-launch.json` holds only the token's sha256,
-programme/role, README hash, caller model and pid/start. Its verdict verb accepts
-only this role/programme/token while the launch is live; it rejects changed
-README bytes, an earlier report, conflicting verdict or missing findings count.
-The reader writes PROGRAMME-REVIEW.md with line one OK or NOT OK, line two
-`findings: <n>`, then findings naming part/entry/narrowest fix. The verdict binds
-the report hash too. On completion a strict-lock fresh-text check writes
-`.programme-review.json`: verdict, judged README sha256 (`hash`), ISO time
-(`at`), findings count, report sha256, tool/model and author. The report and
-metadata must still agree for sign to accept the current reading. No raw token
-is persisted. Calls print verdict/path and exit 0 for OK, 1 for NOT OK, 2 for
-refusal, timeout or no valid verdict (including changed judged files). Launch
-bookkeeping is removed; paid sessions retain the existing run-row accounting.
-Only report/metadata persist as the reading; no sign-off desk item is made here.
-The role's eight questions are owned by `canon/roles/programme-review.md`.
-It is a reader, with no goal mutation, sign-off or mc ask authority.
+MC_PROGRAMME_REVIEW_TOKEN.
+The reader writes PROGRAMME-REVIEW.md with line one `findings: <n>`, then findings naming
+part/entry/narrowest fix. Paid sessions retain the existing run-row accounting.
 
 `mc programs list` and the page's PROGRAMMES read the directory names that
 hold a `PROGRAMME.json`, valid or not, so a recorded programme is listed (and
 counted as dormant) before its first goal. `--json` adds a `record` key to
 each programme: `null`, `{ horizon, end, state, created, created_by }` or
-`{ problems }`, and `phases` inside `record` as the record holds it. The text line gains a last cell, `record open · horizon <slug>`
+`{ problems }`, and `phases` inside `record` as the record holds it. The text line gains a last cell, `record ready · horizon <slug>`
 (`no horizon` without one) or `record invalid`; a programme without a record
 keeps its seven cells.
 
@@ -289,13 +200,6 @@ The complete record template is the first markdown fence of
 `canon/tasks/references/programme-document.md`; area repairs use the unchanged
 short template in `repair-page.md`. The older recordless page is
 `programme-readme.md`. `create` fills name, end, horizon/area and purpose.
-The document reference owns the eleven ordered nonempty entries and five
-ordered label-start entries of every numbered part. `documentProblems` checks
-title/scope/Repositories, headings, part presence and labels, ignoring fenced
-examples, never prose or design quality. Labels may continue freely on their
-first line and in paragraphs/lists. Decisions is optional; sessions keep
-working decisions in README, not the signed copy. A new draft copies the
-model's form, never content. `mc plan` writes
 the no-record page only when no README exists. `mc programs show` prints the
 `area` line and `--json` the key.
 

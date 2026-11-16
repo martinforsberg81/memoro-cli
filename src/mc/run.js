@@ -83,7 +83,7 @@ import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
 import { readRecord } from './programme-record.js';
-import { RUNNER_DISK, RUNNER_MEMORY, archivedProgramsHome, planAreaName, programsHome, restrictedProgrammeDir, runnerDir, runnerScratchDir, workRoot } from './paths.js';
+import { RUNNER_DISK, RUNNER_MEMORY, planAreaName, programsHome, restrictedProgrammeDir, runnerDir, runnerScratchDir, workRoot } from './paths.js';
 import { archiveGoal, finalizeDroppedGoal, goalArchiveDue } from './goal-archive.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
@@ -106,8 +106,8 @@ import { drainDeskPreparation } from './desk-prepare.js';
 import { deskBudget } from './desk-budget.js';
 import { itemDirectory, listDeskItems, readDeskItem, syncDeskItems } from './desk-items.js';
 import { decisionEligible, decisionFailure, decisionPrompt, decisionUnfinished } from './desk-decision.js';
-import { readHorizon, readHorizons } from './desk-horizons.js';
-import { MANAGER_CLAIM, archivedFor, areaPages, areaRepositories, curationDue, curationPrompt, curationState, curationWorktreesDir, headOf, horizonDue, horizonOutcome, horizonPrompt, proposalBacklog, readCurationState, curationStatePath, recordHorizonFailure, removeHorizonCheckouts, setUpCurationWorktrees, setUpHorizonCheckouts, settleCurationWorktrees } from './manager-pulse.js';
+import { readHorizon } from './desk-horizons.js';
+import { MANAGER_CLAIM, areaPages, areaRepositories, curationDue, curationPrompt, curationState, curationWorktreesDir, headOf, proposalBacklog, readCurationState, curationStatePath, setUpCurationWorktrees, settleCurationWorktrees } from './manager-pulse.js';
 import { ARCHIVE_CHECKOUTS_PREFIX, FAILURES_TO_ITEM, WRITE_BACK_FILE, archiveDue, archiveName, archiveOnOk, archiveReadPrompt, archiveCheckInPrompt, archiveReference, finishDestination, keepReading, openRestrictedItem, parseWriteBack, readArchiveState, recordArchiveFailure, statedProgrammes } from './archive-turn.js';
 import { archiveProgramme } from './archive-programme.js';
 import { runDocsMerge } from './docs-merge.js';
@@ -605,8 +605,6 @@ export function realDeps(env = process.env) {
     })),
     deskItems: { list: () => listDeskItems({ env }), read: id => readDeskItem(id, { env }) },
     horizon: slug => readHorizon(slug, { env }),
-    // The open horizons in position order, for the manager's horizon turn.
-    horizons: () => readHorizons({ env, state: 'open' }).horizons,
     // A file's modification time in milliseconds, for the curation prompt's backlog.
     modified: (path) => { try { return statSync(path).mtimeMs; } catch { return 0; } },
     attachDeps: (worktree) => attachRepoDepsAsync(worktree),
@@ -1873,7 +1871,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const roleName = GOAL_ROLES.plan;
     const role = deps.role(roleName);
     if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
-    // The programme turn carries a signed document over into goals: simple work, on the plan list (Martin, 2026-11-16).
+    // The programme turn carries README.md over into goals: simple work, on the plan list (Martin, 2026-11-16).
     const route = routeClass('plan');
     if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
     const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
@@ -1944,14 +1942,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const count = goalCount({ home: programsHome(deps.env), programme, list: deps.list });
       // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
       const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
-      // The signature this turn read is the only one it may consume: the record is read again under its lock (finishTurn).
-      const ended = finishTurn({ programme, home: programsHome(deps.env), signed: due.record.signed_text, list: deps.list, read: deps.read, write: deps.write, lock, root });
+      const ended = finishTurn({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, write: deps.write, lock, root });
       let note = `${read.note},${count} goal${count === 1 ? '' : 's'}`;
-      if (ended.kind === 'cut') note = `${note},cut from the signature`;
-      else if (ended.kind === 'returned') note = `${note},returned to draft`;
-      else if (ended.kind === 'resigned' || ended.kind === 'settled') note = `${note},not cut (${ended.problems.join('; ')})`;
+      if (ended.kind === 'cut') note = `${note},cut`;
+      else if (ended.kind === 'settled') note = `${note},not cut (${ended.problems.join('; ')})`;
       else if (!providerEnding) {
-        const reason = `planning session exited ${result.status ?? 1} without a goal naming every part of the signed document (${ended.problems.join('; ')}; ${read.note})`;
+        const reason = `planning session exited ${result.status ?? 1} without a goal naming every part of README.md (${ended.problems.join('; ')}; ${read.note})`;
         countTurnFailure(programme, reason, `${out}.jsonl`);
         note = reason;
       }
@@ -2205,7 +2201,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function sayManager(notices) {
     const now = new Set(notices.map((notice) => notice.key));
     for (const notice of notices) if (managerSaid.get(notice.key) !== notice.text) { say(notice.text); managerSaid.set(notice.key, notice.text); }
-    for (const key of [...managerSaid.keys()]) if (!now.has(key) && (key === 'records' || key.startsWith('state:') || key === 'curation')) managerSaid.delete(key);
+    for (const key of [...managerSaid.keys()]) if (!now.has(key)) managerSaid.delete(key);
   }
   /** The repositories that declare areas and the commit each one's origin/main is at, read at most once a minute. */
   let areaMemo = null;
@@ -2216,11 +2212,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     areaMemo = { at: t, repos: found.repos, problems: found.problems };
     return areaMemo;
   }
-  /** What the manager would run now: the horizon turn first, then the curation turn (D4, D7); null when neither is due. */
+  /** What the manager would run now: the curation turn (D7), or null when it is not due. */
   function managerDue() {
-    const horizon = horizonDue({ root, home: programsHome(deps.env), list: deps.list, read: deps.read, horizons: deps.horizons?.() ?? [], items: turnItems() });
-    const notices = [...horizon.notices];
-    if (horizon.slug) { sayManager(notices); return { kind: 'horizon', slug: horizon.slug }; }
+    const notices = [];
     const state = readCurationState({ root, read: deps.read });
     const curation = curationDue({ state, now: deps.now(), repos: () => areaRepos().repos, heads: () => Object.fromEntries(areaRepos().repos.map((repo) => [repo.name, headOf({ git: deps.git, repo })])) });
     if (curation.notice) notices.push({ key: 'curation', text: curation.notice });
@@ -2250,23 +2244,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return outcome === 'ran' ? { ran: 1, name, goal: false } : { ran: 0, reason: outcome };
     } finally { claims.delete(name); claimRepos.delete(name); }
   }
-  /** A failure of a horizon turn, counted under the lock (D12); one that cannot be written is said, never a missing run row. */
-  function countManagerFailure(slug, reason, log) {
-    try {
-      const failed = recordHorizonFailure({ root, slug, reason, log, at: stamp(), env: deps.env, read: deps.read, write: deps.write, writeJson, lock, itemDirectory });
-      if (failed.item) say(`manager:${slug}: the horizon turn failed ${failed.count} times — desk item ${failed.item.id} (${failed.item.state}) opened`);
-      return failed;
-    } catch (error) { say(`manager:${slug}: the failure was not counted — ${error.message || String(error)}`); return null; }
-  }
   /**
-   * One manager turn, a horizon turn or a curation turn: one headless session of the manager role with nobody
-   * present, large class, one runs.tsv row. What differs is what it stands in (read checkouts at origin/main, or
-   * branch worktrees made from it), what it is told, and what the runner checks afterwards without a model.
+   * One manager curation turn: one headless session of the manager role with nobody present, large class, one
+   * runs.tsv row, in branch worktrees made from origin/main of every repository that declares areas.
    */
   async function runManager(item, { lane }) {
     const { name, repo: repoName, managerTurn: turn } = item;
-    const horizonTurn = turn.kind === 'horizon';
-    const turnLabel = horizonTurn ? `manager:${turn.slug}` : 'manager:curation';
+    const turnLabel = 'manager:curation';
     const roleName = 'manager';
     const role = deps.role(roleName);
     if (!role?.overlay) { say(`${turnLabel}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
@@ -2278,7 +2262,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const slot = await waitForSlot(name, { repo: repoName, lane });
     if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${turnLabel}`); return 'stop'; }
     if (slot !== 'ok') { say(`${turnLabel}: UPDATE while waiting for a lane — starting no session, skip`); return 'skipped:update'; }
-    let admission; let scratch; let marker; let result; let set = null; let areaSet = []; let worktrees = null;
+    let admission; let scratch; let marker; let result; let areaSet = []; let worktrees = null;
     let before = null;
     const currentPath = paths.currentFor(repoName, lane);
     try {
@@ -2287,56 +2271,40 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
       if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
       if (offlineHeld()) { say(`${turnLabel}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
-      // Read again after admission: a record made, a horizon closed or an item opened meanwhile leaves nothing to do (D4).
+      // Read again after admission: a curation started meanwhile leaves nothing to do (D7).
       const again = managerDue();
-      if (!again || again.kind !== turn.kind || (horizonTurn && again.slug !== turn.slug)) {
-        say(`${turnLabel}: the ${horizonTurn ? 'horizon' : 'curation'} changed during admission — the turn is deferred`);
-        return horizonTurn ? 'skipped:horizon-changed' : 'skipped:curation-changed';
+      if (!again || again.kind !== turn.kind) {
+        say(`${turnLabel}: the curation changed during admission — the turn is deferred`);
+        return 'skipped:curation-changed';
       }
       const declaring = areaRepos();
       for (const problem of declaring.problems) say(`${turnLabel}: ${problem}`);
       const stampText = stamp().replace(/[-:]/gu, '');
-      let cwd; let prompt; let checkouts = {};
-      if (horizonTurn) {
-        set = setUpHorizonCheckouts({ git: deps.git, root, slug: turn.slug, repos: declaring.repos, exists: deps.exists });
-        if (!set.ok) {
-          const refused = set;
-          set = null;
-          // A fetch that fails is the network's, not the horizon's: nothing is counted.
-          if (refused.fetch) { say(`${turnLabel}: ${refused.reason} — skip`); return 'skipped:fetch'; }
-          if (!retainedSaid.has(refused.reason)) { retainedSaid.add(refused.reason); say(`${turnLabel}: no session started — ${refused.reason}`); }
-          countManagerFailure(turn.slug, refused.reason, null);
-          return 'skipped:setup';
-        }
-        checkouts = set.paths;
-        prompt = horizonPrompt({ slug: turn.slug, env: deps.env, pages: areaPages({ repos: declaring.repos, checkouts }),
-          archivedProgrammes: archivedFor({ archived: archivedProgramsHome(deps.env), slug: turn.slug, list: deps.list, read: deps.read }), checkouts });
-      } else {
-        before = again.state.status === 'valid' ? again.state.state : null;
-        worktrees = setUpCurationWorktrees({ git: deps.git, root, stamp: stampText, repos: declaring.repos });
-        if (!worktrees.ok) {
-          // A fetch that fails is the network's: nothing is spent, and the next pick tries again. Any other setup
-          // failure is the turn's: it is said in runner.log, the cadence starts from now so it is said once a day at
-          // most, the bases stay what the last success read, and no desk item opens (D7).
-          say(`${turnLabel}: no session started — ${worktrees.reason}${worktrees.fetch ? '' : '; the next turn waits for the cadence'}`);
-          if (worktrees.fetch) return 'skipped:fetch';
-          writeJson(curationStatePath(root), curationState({ started: stamp(), bases: before?.bases ?? {} }));
-          return 'skipped:setup';
-        }
-        areaSet = declaring.repos;
-        const backlog = proposalBacklog({ root, home: programsHome(deps.env), list: deps.list, modified: deps.modified ?? (() => 0) });
-        prompt = curationPrompt({ paths: worktrees.paths, branches: worktrees.branches, pages: areaPages({ repos: declaring.repos, checkouts: worktrees.paths }), backlog, moved: turn.moved });
-        cwd = curationWorktreesDir(root, stampText);
-        // The turn has started: the cadence runs from now, and the bases stay what the last success read.
+      let cwd; let prompt;
+      before = again.state.status === 'valid' ? again.state.state : null;
+      worktrees = setUpCurationWorktrees({ git: deps.git, root, stamp: stampText, repos: declaring.repos });
+      if (!worktrees.ok) {
+        // A fetch that fails is the network's: nothing is spent, and the next pick tries again. Any other setup
+        // failure is the turn's: it is said in runner.log, the cadence starts from now so it is said once a day at
+        // most, the bases stay what the last success read, and no desk item opens (D7).
+        say(`${turnLabel}: no session started — ${worktrees.reason}${worktrees.fetch ? '' : '; the next turn waits for the cadence'}`);
+        if (worktrees.fetch) return 'skipped:fetch';
         writeJson(curationStatePath(root), curationState({ started: stamp(), bases: before?.bases ?? {} }));
+        return 'skipped:setup';
       }
+      areaSet = declaring.repos;
+      const backlog = proposalBacklog({ root, home: programsHome(deps.env), list: deps.list, modified: deps.modified ?? (() => 0) });
+      prompt = curationPrompt({ paths: worktrees.paths, branches: worktrees.branches, pages: areaPages({ repos: declaring.repos, checkouts: worktrees.paths }), backlog, moved: turn.moved });
+      cwd = curationWorktreesDir(root, stampText);
+      // The turn has started: the cadence runs from now, and the bases stay what the last success read.
+      writeJson(curationStatePath(root), curationState({ started: stamp(), bases: before?.bases ?? {} }));
       const rechecked = await admission.recheck?.();
       if (rechecked && !rechecked.admitted) return 'skipped:disk';
       if (stopRequested()) return 'stop';
       if (updateRequested()) return 'skipped:update';
       const instructions = instructionsFor(launch.id, role.overlay);
       const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
-      const stem = `manager-${horizonTurn ? turn.slug : 'curation'}-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;
+      const stem = `manager-curation-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;
       const out = join(paths.log, stem);
       scratch = join(paths.scratch, stem);
       cwd = cwd ?? scratch;
@@ -2348,7 +2316,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
         role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
       writeJson(currentPath, current);
-      say(`${turnLabel}: ${horizonTurn ? 'horizon turn' : 'curation turn'} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · large list: ${route.basis} (${route.why})`);
+      say(`${turnLabel}: curation turn starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · large list: ${route.basis} (${route.why})`);
       const t0 = deps.now().getTime();
       const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
       try {
@@ -2356,8 +2324,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
           ...watchFor(launch, settings, { prompt, name, checkInText: managerCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). The manager role is what the publish guard reads.
-          env: { MC_HEADLESS: '1', MC_ROLE: roleName, ...(horizonTurn ? { MC_HORIZON: turn.slug } : {}), MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch },
-          unsetEnv: [...(horizonTurn ? [] : ['MC_HORIZON']), 'MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', ...dropEnv(launch)] });
+          env: { MC_HEADLESS: '1', MC_ROLE: roleName, MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch },
+          unsetEnv: ['MC_HORIZON', 'MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', ...dropEnv(launch)] });
         admission.release?.();
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
@@ -2368,18 +2336,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       recordRefusal({ name, launch, route }, read, picked.billing);
       refuseProvider(read, launch, picked.billing);
       const seconds = Math.round((deps.now().getTime() - t0) / 1000);
-      // An ending the provider caused says nothing about the horizon or the area texts: a quota, an unreachable API, or a refused login counts for nothing.
+      // An ending the provider caused says nothing about the area texts: a quota, an unreachable API, or a refused login counts for nothing.
       const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
       let note = read.note;
-      if (horizonTurn) {
-        const outcome = horizonOutcome({ slug: turn.slug, home: programsHome(deps.env), list: deps.list, read: deps.read, horizon: deps.horizon?.(turn.slug) ?? null, items: turnItems() });
-        if (outcome.ok) note = `${read.note},${outcome.how}`;
-        else if (!providerEnding) {
-          const reason = `horizon session exited ${result.status ?? 1}: ${outcome.reason} (${read.note})`;
-          countManagerFailure(turn.slug, reason, `${out}.jsonl`);
-          note = reason;
-        }
-      } else if (providerEnding) {
+      if (providerEnding) {
         // Nothing was read of the area texts: the cadence is given back.
         writeJson(curationStatePath(root), curationState({ started: before?.started ?? null, bases: before?.bases ?? {} }));
       } else if (result.status === 0 && !result.timedOut) {
@@ -2398,10 +2358,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         if (scratch) { writeJson(join(scratch, SCRATCH_MARKER), { ...marker, ended: stamp(), exit: result?.status ?? null }); await reclaimSessionExports(scratch, name); }
       } finally {
         try {
-          if (set?.ok) {
-            const kept = removeHorizonCheckouts({ git: deps.git, root, slug: turn.slug, repos: areaRepos().repos, exists: deps.exists });
-            for (const path of kept) say(`${turnLabel}: read checkout ${path} holds work and was kept`);
-          }
           if (worktrees?.ok) {
             const settled = settleCurationWorktrees({ git: deps.git, repos: areaSet, paths: worktrees.paths, branches: worktrees.branches });
             for (const keep of settled.kept) if (!retainedSaid.has(keep.path)) { retainedSaid.add(keep.path); say(`${turnLabel}: worktree ${keep.path} was kept — ${keep.why}`); }
@@ -2740,9 +2696,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const name = goalName(goal);
     const programme = readRecord(join(programsHome(deps.env), goal.programme), { read: deps.read });
     if (programme.status === 'valid' && programme.record.state === 'draft') {
-      const key = `sign-off:${goal.programme}`;
+      const key = `draft:${goal.programme}`;
       if (holdsSaid.get(name) !== key) {
-        say(`${name}: waits for sign-off of ${goal.programme} — no session is started`);
+        say(`${name}: ${goal.programme} is draft — no session is started`);
         holdsSaid.set(name, key);
       }
       return true;

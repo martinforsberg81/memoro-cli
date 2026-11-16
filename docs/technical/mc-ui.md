@@ -164,10 +164,8 @@ it (coloured by kind) and the flags for a goal waiting on Martin (`⚑`), blocke
 (`⊘`) or needing attention (`!`). On a narrow terminal the least telling facts
 go first (priority, done, the phase), the name last. A row draws no goal and no
 phase list: those are in the programme's view and in `a`.
-For a draft the phase position instead says `draft`, or `waits for sign-off`
-when an existing open `sign-off:<programme>` desk item of kind `sign-off`
-is present. Closing/removing the item restores `draft`. This is a read only:
-the page creates no desk item. Both texts have the phase's existing narrow-width
+For a draft the phase position instead says `draft`. This is a read only:
+the page creates no desk item. The text has the phase's existing narrow-width
 rank. A draft with no goals is still listed under its horizon.
 
 **Numbers.** Goals keep the numbers 1..N. The programmes are N+1..N+M in name
@@ -188,10 +186,9 @@ names>], error }`, `error` being the reason the store could not be listed, else
 null. Each programme in `programmes.programmes` gains `number`, `horizon` (the
 slug its valid record names, else null) and `horizon_state` (`open`, `reached`,
 `dropped`, `not held` for a slug the store holds no horizon for, or null),
-`record_state` (a valid record's state, otherwise null) and `sign_off_waiting`
-(whether that existing item is open).
+and `record_state` (a valid record's state, otherwise null).
 In a draft programme an unfinished goal's line in its own view says
-`waits for sign-off of <programme>`, derived from the group's record state
+`<programme> is draft`, derived from the group's record state
 without changing the goal-row JSON contract. This does not cancel a running
 session or stop queued merges.
 

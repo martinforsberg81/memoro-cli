@@ -2,10 +2,10 @@
 
 The complete document of a programme with a record, except an area repair
 ([repair page](repair-page.md)). `mc programs create` fills in the name, End,
-horizon and purpose in the first fenced block below. Start a draft from the
-signed document `mc programs model` names: copy its headings and part form,
-never its content. [Designing a programme](../designing-a-programme.md) owns
-the design procedure. A programme without a record has [the older page](programme-readme.md).
+horizon and purpose in the first fenced block below. A programme is written with
+Martin in a session, he sets it ready there, and the planner cuts goals from its
+README. [Designing a programme](../designing-a-programme.md) owns the design
+procedure. A programme without a record has [the older page](programme-readme.md).
 
 ```markdown
 # <programme> — <one line on what this programme delivers>
@@ -53,7 +53,7 @@ Not in this part: <The nearest thing a builder might add.>
 
 <Steps, prerequisites and shared files.>
 
-## Decided by signing
+## Decided
 
 <Every choice this document makes that Martin could have made otherwise,
 one line each.>
@@ -62,9 +62,9 @@ one line each.>
 
 <What this programme excludes.>
 
-## Read before sign-off
+## Read
 
-<What the writer read and did not read, and the programme review's verdict.>
+<What the writer read and did not read, and what an advisory reading found.>
 
 ## Where things are
 
@@ -72,21 +72,15 @@ one line each.>
 
 ## Decisions
 
-<After sign-off, sessions record programme decisions here. Cross-programme
+<Once the programme is ready, sessions record programme decisions here. Cross-programme
 rules belong in docs/technical/; point there instead of repeating them.>
 ```
 
-The eleven required entries are title/scope/Repositories followed by What it
-is for, End, Why, What runs today, Parts, Order, Decided by signing, Not built,
-Read before sign-off and Where things are, in that order, all nonempty.
-Repeat `### Part n — <name>` for each piece of work. Each part has five ordered
-label-start entries: Closes, Solution, Design, Proved by, Not in this part.
-Their first lines begin with those labels; what follows a label on the line
-is free, and its content may continue as paragraphs or lists. Code checks
-structure, not prose quality: the independent reading and Martin judge what
-it says. The document binds what the user gets, how it looks and how one
-sees that it works; the construction is the planner's and the builder's
-([writing a programme document](../writing-a-programme-document.md)).
+Repeat `### Part n — <name>` for each piece of work: the planner cuts one or
+more goals per part, each naming its part. Code checks none of these headings;
+Martin judges what the document says. The document binds what the user gets,
+how it looks and how one sees that it works; the construction is the planner's
+and the builder's ([writing a programme document](../writing-a-programme-document.md)).
 
 Each thing Martin decides is shown, as one picture or as its text; an order
 has at most ten pictures, in the light theme. A state a Solution mentions (a
@@ -101,16 +95,9 @@ whether it stays, is reworded (show the new text) or goes. A Solution that says
 document comes to the desk, the writer goes through every Solution sentence that
 changes what a user sees and checks that Design shows or says it.
 
-Findings of the independent reading are either fixed in the document before
-it is signed or routed by Martin when he signs, and his sign line in LOG.md
-says where. A finding he routes to the planner and the builder is theirs to
-settle inside the signed document: it is never a reason to return the
-programme. The planner returns a signed programme only for a choice of what is
-delivered or how it looks that the document neither shows nor routes, and the
-return reaches the desk as a text item on the document.
+Findings of an advisory reading are settled in the document with Martin before
+it is set ready.
 
-`## Decisions` is optional and belongs to the working README after sign-off,
-not the held signed copy. When a goal lands, its functionality goes to
-`docs/technical/` and its section leaves README; `SIGNED.md` remains the held
-source for build and review. Changing signed scope requires return, a current
-reading and a new sign-off, not an edit to the signed copy.
+`## Decisions` is optional and belongs to the working README.
+When a goal lands, its functionality goes to `docs/technical/` and its section
+leaves README.

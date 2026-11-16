@@ -1,10 +1,10 @@
 /**
- * Programme review: independent reading of a programme's README before sign-off
- * (docs/technical/mc-plan.md, "Sign-off and independent programme reading").
+ * Programme review: an advisory, independent reading of a programme's README.md
+ * (docs/technical/mc-plan.md, "Programme state and advisory reading").
  *
  * One fresh headless session in the role `programme-review`, launched on exports of the
- * named repositories at origin/main, which writes PROGRAMME-REVIEW.md and records its verdict
- * with `mc programs review <programme> verdict ok|not-ok`.
+ * named repositories at origin/main, which writes PROGRAMME-REVIEW.md beside the programme.
+ * The report is advice: it records no verdict, and no state, goal or turn reads it.
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, rmSync, statSync } from 'node:fs';
@@ -35,7 +35,6 @@ const verdictWord = (verdict) => (verdict === 'ok' ? 'OK' : 'NOT OK');
 
 export const PROGRAMME_REVIEW_ROLE = 'programme-review';
 export const PROGRAMME_REVIEW_FILE = 'PROGRAMME-REVIEW.md';
-export const PROGRAMME_REVIEW_RECORD = '.programme-review.json';
 export const PROGRAMME_REVIEW_LAUNCH = '.programme-review-launch.json';
 export const PROGRAMME_REVIEW_LIMIT_MS = 30 * 60_000;
 
@@ -207,6 +206,9 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
   if (claimed.refused) return refuse(claimed.refused);
 
   const before = Object.fromEntries(names.map((file) => [file, read(join(target.dir, file))]));
+  // A report an earlier reading left is not this reading's: it counts only if the session wrote it after the launch.
+  const earlierReport = policy.advisory ? read(join(target.dir, reviewFile)) : null;
+  const modified = deps.mtime ?? ((file) => { try { return statSync(file).mtimeMs; } catch { return null; } });
   const discard = deps.discard ?? realDiscard;
   let made = false;
   let identity = null;
@@ -257,7 +259,23 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
   let code;
   if (note) { stderr.write(`mc: ${kind} ${target.name}: no reading — ${note}\n`); code = invalidExit; }
   else if (changed.length) { note = `${changed.join(', ')} changed during the reading`; stderr.write(`mc: ${kind} ${target.name}: no reading stored — ${note}\n`); code = invalidExit; }
-  else if (result?.timedOut || !verdict || invalidLaunch) { note = result?.timedOut ? `the reading exceeded ${limitWords}` : `the session ended without a verdict (exit ${result?.status ?? 1})`; stderr.write(`mc: ${kind} ${target.name}: no reading stored — ${note}\n`); code = invalidExit; }
+  else if (policy.advisory) {
+    const report = read(join(target.dir, reviewFile));
+    const written = report !== null && (report !== earlierReport || (modified(join(target.dir, reviewFile)) ?? -Infinity) >= started.getTime());
+    if (result?.timedOut) {
+      note = `the reading exceeded ${limitWords}`;
+      stderr.write(`mc: ${kind} ${target.name}: no reading — ${note}\n`);
+      code = invalidExit;
+    } else if (!written) {
+      note = `the session ended without writing ${reviewFile}${report === null ? '' : ' — the one on disk is an earlier reading\'s'}`;
+      stderr.write(`mc: ${kind} ${target.name}: no reading stored — ${note}\n`);
+      code = 1;
+    } else {
+      const path = join(target.dir, reviewFile);
+      stdout.write(`mc: ${kind} ${target.name}: review written — ${path}\n`);
+      code = 0;
+    }
+  } else if (result?.timedOut || !verdict || invalidLaunch) { note = result?.timedOut ? `the reading exceeded ${limitWords}` : `the session ended without a verdict (exit ${result?.status ?? 1})`; stderr.write(`mc: ${kind} ${target.name}: no reading stored — ${note}\n`); code = invalidExit; }
   else {
     const at = now();
     const problem = policy.store({ verdict, hash, round, candidate, author, at, launch });
@@ -312,24 +330,6 @@ export function readerVerdict({ target, word, ctx, deps = {}, policy }) {
   return 0;
 }
 
-export function programmeReport(text) {
-  if (typeof text !== 'string') return null;
-  const [verdict, count] = text.split(/\r?\n/u);
-  const findings = /^findings: (\d+)$/u.exec(count ?? '');
-  if (!['OK', 'NOT OK'].includes(verdict) || !findings || !Number.isSafeInteger(Number(findings[1]))) return null;
-  return { verdict: verdict === 'OK' ? 'ok' : 'not-ok', findings: Number(findings[1]) };
-}
-
-export function currentProgrammeReading(dir, text, read = readTextOrNull, { anyText = false } = {}) {
-  const meta = jsonOrNull(read(join(dir, PROGRAMME_REVIEW_RECORD)));
-  const report = read(join(dir, PROGRAMME_REVIEW_FILE));
-  const parsed = programmeReport(report);
-  if (anyText && meta) meta.earlier = meta.hash !== sha256(text);
-  if (!meta || !parsed || (!anyText && meta.hash !== sha256(text)) || meta.report_sha256 !== sha256(report)
-    || meta.verdict !== parsed.verdict || meta.findings !== parsed.findings || !Number.isFinite(Date.parse(meta.at))) return null;
-  return meta;
-}
-
 export function programmeRepositories(text, known) {
   const line = text.replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[^\n]*(?:\n|$)/gmu, '').split(/\r?\n/u).find((one) => /^Repositories:/u.test(one));
   const words = line?.slice('Repositories:'.length).trim().replace(/\.$/u, '').split(/[\s,]+/u).filter(Boolean) ?? [];
@@ -344,51 +344,25 @@ export function programmeRepositories(text, known) {
 }
 
 export async function programmeReviewCall({ target, ctx, text, repos, deps = {} }) {
-  const { read, write, env, stderr } = ctx;
+  const { read, env, stderr } = ctx;
   if (text === null) { stderr.write(`mc: programme-review ${target.name}: README.md is missing\n`); return 2; }
   const hash = sha256(text);
   const check = () => read(join(target.dir, 'README.md')) !== text ? 'README.md changed during the reading — read its current text again' : null;
   return readerCall({ target, ctx, deps, policy: {
     kind: PROGRAMME_REVIEW_ROLE, role: PROGRAMME_REVIEW_ROLE, launchFile: PROGRAMME_REVIEW_LAUNCH,
     reviewFile: PROGRAMME_REVIEW_FILE, limitMs: PROGRAMME_REVIEW_LIMIT_MS, limitWords: 'thirty minutes', invalidExit: 2,
-    hash, round: 1, author: authorOf(env, null), bound: true,
+    hash, round: 1, author: authorOf(env, null), bound: true, advisory: true,
     checkoutName: `mc-programme-review-${target.name}`, identity: { MC_PROGRAMME: target.name },
     tokenEnv: 'MC_PROGRAMME_REVIEW_TOKEN', runName: `programme:${target.name}`, repos,
-    names: ['README.md', 'PROGRAMME.json', 'SIGNED.md', 'RETURNED.md'], check,
+    names: ['README.md', 'PROGRAMME.json'], check,
     prompt: (checkout) => [
       `Read the programme ${target.name}. Its directory is ${target.dir}.`,
       `Judge README.md (sha256 ${hash}), not a goal. Read the horizon's playback and basis, the cited standards/code, the places it did not read, and the pictures.`,
       'The repositories are read-only exports at origin/main (no repository metadata):',
       ...repos.map(({ repo }) => `${repo}: ${join(checkout, repo)}`),
-      `Write only ${join(target.dir, PROGRAMME_REVIEW_FILE)}: line one OK or NOT OK; line two findings: <n>; then each finding with its part, entry and narrowest fix.`,
-      `Your last act is mc programs review ${target.name} verdict ok|not-ok, matching line one.`,
+      `Write only ${join(target.dir, PROGRAMME_REVIEW_FILE)}: line one findings: <n>; then each finding with its part, entry and narrowest fix.`,
       'README.md follows:', text,
     ].join('\n\n'),
-    store: ({ verdict, at, candidate, author, launch }) => ctx.lock(workRoot(env), () => {
-      const changed = check();
-      if (changed) return changed;
-      const report = read(join(target.dir, PROGRAMME_REVIEW_FILE));
-      const parsed = programmeReport(report);
-      if (!parsed || parsed.verdict !== verdict || launch.report_sha256 !== sha256(report)) return 'PROGRAMME-REVIEW.md needs matching verdict and findings: <n> on its first two lines';
-      write(join(target.dir, PROGRAMME_REVIEW_RECORD), `${JSON.stringify({ verdict, hash, at: at.toISOString(), findings: parsed.findings,
-        report_sha256: sha256(report), tool: candidate.tool, model: candidate.model, author }, null, 2)}\n`);
-      return null;
-    }, { strict: true, name: 'programme-review-store' }),
-  } });
-}
-
-export function programmeVerdictVerb({ target, word, ctx, deps = {} }) {
-  return readerVerdict({ target, word, ctx, deps, policy: {
-    kind: PROGRAMME_REVIEW_ROLE, role: PROGRAMME_REVIEW_ROLE, launchFile: PROGRAMME_REVIEW_LAUNCH,
-    reviewFile: PROGRAMME_REVIEW_FILE, tokenEnv: 'MC_PROGRAMME_REVIEW_TOKEN', identityKey: 'MC_PROGRAMME', identityLabel: 'programme',
-    limitMs: PROGRAMME_REVIEW_LIMIT_MS, limitWords: 'thirty minutes',
-    record: (text) => ({ report_sha256: sha256(text) }),
-    check: ({ launch, text }) => {
-      if (launch.binding !== target.name || launch.role !== PROGRAMME_REVIEW_ROLE) return 'the launch is not for this programme reading';
-      const current = ctx.read(join(target.dir, 'README.md'));
-      if (current === null || launch.hash !== sha256(current)) return 'README.md changed during the reading — read its current text again';
-      if (!programmeReport(text)) return 'PROGRAMME-REVIEW.md needs findings: <n> on line two';
-      return null;
-    },
+    store: () => null,
   } });
 }

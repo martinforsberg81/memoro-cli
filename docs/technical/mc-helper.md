@@ -425,8 +425,9 @@ No session turns a proposal into work on its own, with one bounded exception.
 
 - **The manager's curation turn** ([mc-manager.md](mc-manager.md)) — its prompt
   lists the waiting proposals of `~/mc/proposals/` and every programme's
-  `proposals/`, oldest first. A proposal that reports a defect against an area
-  text, in an area with no repair in flight, may become that area's repair
+  `proposals/`, oldest first. It creates no programme: a proposal that reports a
+  defect against an area text, in an area with no repair in flight, is put to
+  Martin with `mc martin propose`, and Martin creates that area's repair
   programme (`mc programs create … --area … --from-proposal`); the others wait.
 - **Martin**, at `mc martin` or in `mc plan`, has one become a goal, or
   archived to `~/mc/proposals/archive/`. The proposals the desk files and the eye's are

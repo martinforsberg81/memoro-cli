@@ -170,9 +170,9 @@ written, and a write that would make one is refused with the field named.
   draft: the runner starts no session on a goal in `build` with no criterion,
   and it cannot go to review.
 - `documents` — `[{ label, path }]` (`validateDocuments`). A document whose path
-  is its programme's `SIGNED.md` and whose label carries explicit `Part <n>`
+  is its programme's `README.md` and whose label carries explicit `Part <n>`
   references (`Part 1`, `Parts 1 and 2`, `Part 1; Part 2`; no range) names those
-  parts of the signed document: the programme turn's coverage reads them from
+  parts of the programme document: the programme turn's coverage reads them from
   parsed live and archived goals, with no stage excluded (*Programme planning
   turn* in [mc-run.md](mc-run.md#programme-planning-turn)). A path that
   resolves to another file counts for nothing. The goal file has no other form
@@ -452,11 +452,11 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 
 - **`new <p>/<g> --repo <r>[,<r>] --class fast|medium|large --title "…" [--phase <n>] [--stage draft] [--structure 1|2]`** — makes a
   goal, refused unless its flags are valid and its names are new.
-  Before fetching or writing, draft/dropped programme records refuse (exit 1):
-  `mc: <programme> is not signed off — mc programs show <programme>`.
+  Before fetching or writing, a draft programme record refuses (exit 1):
+  `mc: <programme> is draft — mc programs show <programme>`.
   Without a record, `MC_HEADLESS=1` refuses (exit 1): `mc: <programme> has no
   record — a goal here is made at the desk`; interactive recordless creation
-  remains available. Signed open, legacy open and area repairs are admitted
+  remains available. Ready programmes (an old `open` record reads ready), area repairs included, are admitted
   subject to the existing guards, including one live goal per repair area. It writes
   version 2 (numbered parts) unless given `--structure 1`, which writes version 1
   (goal and contract prose); it prints one hint for the version it wrote. It is in
@@ -1021,7 +1021,7 @@ headless plan also ran (`no_goals_remaining`, `daily_proposals`) are
 disabled: their instructions were too poor to use (Martin, 2026-11-07), and
 `programme-plan.js` and `MC_PLAN_REASON` remain removed. The proposal and daily
 turns stay disabled. Next-draft planning below uses the existing goal-session
-mechanism instead, and a signed open programme not yet cut is planned by the
+mechanism instead, and a ready programme whose README.md parts no goal names yet is planned by the
 programme planning turn ([mc-run.md](mc-run.md#programme-planning-turn)).
 
 ## What a build session does
@@ -1466,5 +1466,5 @@ proposal backlog in the headless planning turn. A completed session leaving
 refusals/offline failures keep their existing retries. Broader programme design
 and proposal intake remain interactive. This restores neither the no-draft
 nor the daily-proposal turn: a programme is planned by that turn only when its
-record is valid, open and signed, and its signature uncut (*Programme planning turn* in [mc-run.md](mc-run.md#programme-planning-turn)),
+record is valid and ready and its README.md has a part no goal names (*Programme planning turn* in [mc-run.md](mc-run.md#programme-planning-turn)),
 and while that turn is claimed or current no next draft is planned in it.

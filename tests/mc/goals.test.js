@@ -940,12 +940,8 @@ test('renumberPhases keeps each stated dependency on the phase it was stated for
   assert.deepEqual(JSON.parse(io.store[RECORD_PATH]), {
     ...PROG_RECORD,
     version: 2,
+    state: 'ready',
     phases: { order: 'stated', after: { 2: [1], 3: [1, 2] } },
-    signed_at: null,
-    signed_by: null,
-    signed_text: null,
-    cut_text: null,
-    legacy: true,
   });
 });
 

@@ -53,12 +53,12 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
    A change to what users see is judged at element level: take `mc shot`
    yourself in each viewport the goal names and compare it with the intended
    result — layout, spacing, alignment, typography, states, overflow, empty and
-   error states. Where the goal's part of the programme's SIGNED.md has a
-   design, the intended result is that signed picture or text block: compare
-   your build with the signed pictures of its part, and shoot the states, the
+   error states. Where the goal's part of the programme's README.md has a
+   picture or text block, the intended result is that picture or text block:
+   compare your build with the pictures of its part, and shoot the states, the
    phone and the dark theme yourself as evidence that they follow the app's
-   components and tokens; REVIEW.md names those shots, and each signed text
-   block with the output compared with it.
+   components and tokens; REVIEW.md names those shots, and each text block with
+   the output compared with it.
    A visible deviation from the intent is not OK; it goes to
    build with the screenshots named in REVIEW.md. Save each screenshot you judge
    with `--out` under `shots/` in the goal's directory, under a name not already

@@ -69,11 +69,10 @@ describe('mc programs after: states, replaces and removes', () => {
       assert.equal(code, 0, out);
       assert.equal(out, 'mc: prog · phase 3 · after phase 1, 2\n');
       assert.deepEqual(recordOf(a.home).phases, { order: 'stated', after: { 3: [1, 2] } });
-      assert.deepEqual(Object.keys(recordOf(a.home)), [...Object.keys(STATED), 'signed_at', 'signed_by', 'signed_text', 'cut_text', 'legacy']);
-      for (const key of Object.keys(RECORD).filter((key) => key !== 'version')) assert.deepEqual(recordOf(a.home)[key], RECORD[key], key);
+      assert.deepEqual(Object.keys(recordOf(a.home)), Object.keys(STATED));
+      for (const key of Object.keys(RECORD).filter((key) => key !== 'version' && key !== 'state')) assert.deepEqual(recordOf(a.home)[key], RECORD[key], key);
+      assert.equal(recordOf(a.home).state, 'ready', 'open normalizes to ready');
       assert.equal(recordOf(a.home).version, 2, 'an actual write upgrades the old record');
-      assert.equal(recordOf(a.home).legacy, true);
-      for (const key of ['signed_at', 'signed_by', 'signed_text', 'cut_text']) assert.equal(recordOf(a.home)[key], null, key);
       assert.deepEqual(WITHOUT_RECORD(snapshot(a.root)), WITHOUT_RECORD(before));
 
       const shown = await call(['show', 'prog'], a.env);
