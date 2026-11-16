@@ -204,12 +204,15 @@ write of the file (`programme-file`, [mc-hooks.md](mc-hooks.md)).
 with `mc: only Martin at the desk signs a programme`, before effects. A bad
 request also exits 2. It exits 1 unless the record is draft, the complete
 [document structure](../../canon/tasks/references/programme-document.md) is present, and an independent
-reading judges the exact current README bytes. Each structural refusal names
+reading of the programme exists. Each structural refusal names
 its heading/entry/Repositories line; this is not a prose-quality judgement.
-No reading or a stale reading refuses even with `--reason`, naming
-`mc programs review <programme>`. Current NOT OK needs nonempty `--reason`;
-current OK does not. A successful sign prints `<programme>: signed — goals may
-be cut` and appends Martin/time and any override reason to programme LOG.md.
+No reading refuses even with `--reason`, naming `mc programs review
+<programme>`. A reading of an earlier text counts (Martin, 2026-11-16: edits
+made with him at the desk need no new reading); the LOG.md line then says
+`(the reading read an earlier text; the edits since were made at the desk)`.
+NOT OK needs nonempty `--reason`; OK does not. A successful sign prints
+`<programme>: signed — goals may be cut` and appends Martin/time and any
+override reason to programme LOG.md.
 The record writer checks the current reading inside its strict lock before
 writing either sign-off file; normal record writes retain their other fields.
 
