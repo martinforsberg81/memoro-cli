@@ -87,6 +87,6 @@ lists both, oldest first.
 `tests/mc/commands/manager.test.js` covers the refusal of the interactive entrance and the explicit headless
 dispatch, validation and failure exits. `manager-turn.test.js` exercises both providers' real argument builders
 with a replaced process boundary, fresh invocation isolation, environment identity and result receipts.
-`manager-pulse.test.js` and the manager and curation cases of `run.test.js` cover the two turns' due rules, state,
+`manager-pulse.test.js` and the manager and curation cases of `run.test.js` cover the curation turn's due rule, state,
 endings, failure items and worktrees without a model, a clock or a network; `publish.test.js` covers the
 guard. This document claims no live session measurement.

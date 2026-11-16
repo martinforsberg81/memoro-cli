@@ -10,7 +10,7 @@
  * - `build` for a goal in build;
  * - `plan` for one next draft in a programme with no delivery left, and `archive` (the same rank) for the write-back
  *   reading of a programme with a record whose goals are all finished;
- * - `manager` for the unattended manager's horizon or curation turn, last of all.
+ * - `manager` for the unattended manager's curation turn, last of all.
  *
  * Goals are gated before picking: `goalWork` uses `goalSession`, the goal's
  * first repository, and `phaseOpen` (goals in the lowest unfinished valid
