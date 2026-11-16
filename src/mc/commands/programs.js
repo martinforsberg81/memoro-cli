@@ -347,7 +347,7 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
 /** `state`: sets a programme's state to draft or ready. Interactive Martin only. */
 function stateVerb({ positional }, { env, stdout, stderr, lock }) {
   if (env.MC_ROLE !== 'martin' || env.MC_HEADLESS === '1') {
-    stderr.write('mc: only Martin at the desk sets a programme state\n');
+    stderr.write('mc: only Martin at the desk sets a programme state — mc martin opens the desk\n');
     return 2;
   }
   const [name, targetState] = positional;
@@ -440,13 +440,9 @@ function afterVerb({ positional, flags }, { env, stdout, stderr, read, lock }) {
   return 0;
 }
 
-/** The desk and document authors may commission a reading, never goal delivery or other readers. */
+/** Only Martin at the desk commissions a programme reading: no headless role, the manager included, and no other session. */
 function reviewAuthor(env) {
-  const role = normalizeSessionRole(env.MC_ROLE);
-  if (role === 'manager') return true;
-  if (role === 'martin') return env.MC_HEADLESS !== '1';
-  if (role === PLAN_ROLE) return env.MC_HEADLESS !== '1' && !env.MC_GOAL;
-  return !role && !env.MC_GOAL && env.MC_HEADLESS !== '1';
+  return Boolean(env.MC_ROLE) && normalizeSessionRole(env.MC_ROLE) === 'martin' && env.MC_HEADLESS !== '1';
 }
 
 async function reviewVerb({ positional: [name] }, deps) {
@@ -454,7 +450,7 @@ async function reviewVerb({ positional: [name] }, deps) {
   const target = { name, dir: join(programsHome(env), name) };
   const ctx = { env, stdout, stderr, read: readTextOrNull, write: writeFileAtomic, remove: unlinkSync,
     lock: deps.lock ?? realLock, now: deps.now ?? (() => new Date()), alive: deps.alive };
-  if (!reviewAuthor(env)) { stderr.write('mc: only the manager, the interactive desk or programme plan, or a person calls a programme reading\n'); return 2; }
+  if (!reviewAuthor(env)) { stderr.write('mc: only Martin at the desk calls a programme reading — mc martin opens the desk\n'); return 2; }
   const text = ctx.read(join(target.dir, 'README.md'));
   if (text === null) { stderr.write(`mc: ${name} has no README.md to read\n`); return 2; }
   const known = (deps.known ?? (() => knownRepositories(env)))().map((path) => ({ repo: repoNameOf(path), path }));

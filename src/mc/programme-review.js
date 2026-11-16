@@ -1,10 +1,10 @@
 /**
- * Programme review: independent reading of a programme's README before sign-off
- * (docs/technical/mc-plan.md, "Sign-off and independent programme reading").
+ * Programme review: an advisory, independent reading of a programme's README.md
+ * (docs/technical/mc-plan.md, "Programme reading").
  *
  * One fresh headless session in the role `programme-review`, launched on exports of the
- * named repositories at origin/main, which writes PROGRAMME-REVIEW.md and records its verdict
- * with `mc programs review <programme> verdict ok|not-ok`.
+ * named repositories at origin/main, which writes PROGRAMME-REVIEW.md beside the programme.
+ * The report is advice: it records no verdict, and no state, goal or turn reads it.
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, rmSync, statSync } from 'node:fs';
@@ -206,6 +206,9 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
   if (claimed.refused) return refuse(claimed.refused);
 
   const before = Object.fromEntries(names.map((file) => [file, read(join(target.dir, file))]));
+  // A report an earlier reading left is not this reading's: it counts only if the session wrote it after the launch.
+  const earlierReport = policy.advisory ? read(join(target.dir, reviewFile)) : null;
+  const modified = deps.mtime ?? ((file) => { try { return statSync(file).mtimeMs; } catch { return null; } });
   const discard = deps.discard ?? realDiscard;
   let made = false;
   let identity = null;
@@ -258,12 +261,13 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
   else if (changed.length) { note = `${changed.join(', ')} changed during the reading`; stderr.write(`mc: ${kind} ${target.name}: no reading stored — ${note}\n`); code = invalidExit; }
   else if (policy.advisory) {
     const report = read(join(target.dir, reviewFile));
+    const written = report !== null && (report !== earlierReport || (modified(join(target.dir, reviewFile)) ?? -Infinity) >= started.getTime());
     if (result?.timedOut) {
       note = `the reading exceeded ${limitWords}`;
       stderr.write(`mc: ${kind} ${target.name}: no reading — ${note}\n`);
       code = invalidExit;
-    } else if (report === null) {
-      note = `the session ended without writing ${reviewFile}`;
+    } else if (!written) {
+      note = `the session ended without writing ${reviewFile}${report === null ? '' : ' — the one on disk is an earlier reading\'s'}`;
       stderr.write(`mc: ${kind} ${target.name}: no reading stored — ${note}\n`);
       code = 1;
     } else {

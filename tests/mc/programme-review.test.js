@@ -62,7 +62,7 @@ function programmeSetup(t) {
   const page = recordPageTemplate().replace(/^Repositories:.*$/mu, 'Repositories: memoro-cli, memoro.');
   writeFileSync(join(dir, 'README.md'), page);
   writeRecord(dir, newRecord({ end: 'The promised result runs.', createdBy: 'manager', now: NOW }));
-  const env = { ...shared.baseEnv, MC_ROLE: 'manager', MC_PROGRAMME: 'p', MC_HEADLESS: '1', MC_SESSION_STARTED: 'old', MC_SCRATCH: '/old/scratch' };
+  const env = { ...shared.baseEnv, MC_ROLE: 'martin', MC_PROGRAMME: 'p', MC_SESSION_STARTED: 'old', MC_SCRATCH: '/old/scratch' };
   const known = ['/known/memoro-cli.git', '/known/memoro'];
   const checkout = join(shared.tmp, 'mc-programme-review-p-fixture');
   const deps = { ...shared.deps, checkout: ({ repos, dir: into }) => {
@@ -120,19 +120,19 @@ test('programme review: caller authority and repository declarations refuse befo
     { MC_ROLE: 'desk-prepare' }, { MC_ROLE: 'decision' }, { MC_ROLE: 'programme-review' },
     { MC_ROLE: 'martin', MC_HEADLESS: '1' }, { MC_ROLE: 'plan', MC_HEADLESS: '1' },
     { MC_ROLE: 'plan', MC_HEADLESS: undefined, MC_GOAL: 'p/g' },
+    // Only Martin at the desk: the manager, the interactive plan and a person are refused too.
+    { MC_ROLE: 'manager', MC_HEADLESS: '1' }, { MC_ROLE: 'manager', MC_HEADLESS: undefined }, { MC_ROLE: 'plan', MC_HEADLESS: undefined, MC_GOAL: undefined },
+    { MC_ROLE: undefined, MC_HEADLESS: undefined, MC_GOAL: undefined },
   ]) {
     const f = programmeSetup(t), before = f.files();
     const result = await f.call(['review', 'p'], { identity: { ...f.env, ...identity }, extra: { session: f.reads() } });
     assert.equal(result.code, 2, JSON.stringify(identity));
+    assert.match(result.err, /only Martin at the desk calls a programme reading/u, JSON.stringify(identity));
     assert.deepEqual(f.files(), before);
     assert.deepEqual(readdirSync(f.tmp), []);
   }
-  for (const identity of [
-    { MC_ROLE: 'manager', MC_HEADLESS: '1' }, { MC_ROLE: 'martin' }, { MC_ROLE: 'plan' }, { MC_ROLE: undefined },
-  ]) {
-    const f = programmeSetup(t);
-    assert.equal((await f.call(['review', 'p'], { identity: { ...f.env, MC_HEADLESS: undefined, MC_GOAL: undefined, ...identity }, extra: { session: f.reads() } })).code, 0);
-  }
+  const desk = programmeSetup(t);
+  assert.equal((await desk.call(['review', 'p'], { identity: desk.martin, extra: { session: desk.reads() } })).code, 0);
   for (const line of ['', 'Repositories:', 'Repositories: /private/repository', 'Repositories: unknown.']) {
     const f = programmeSetup(t);
     writeFileSync(join(f.dir, 'README.md'), f.page.replace(/^Repositories:.*$/mu, line));
@@ -149,6 +149,21 @@ test('programme review: session that ends without writing report exits 1', async
   const result = await f.call(['review', 'p'], { extra: { session: async () => DONE } });
   assert.equal(result.code, 1);
   assert.match(result.err, /no reading stored — the session ended without writing PROGRAMME-REVIEW.md/u);
+});
+
+test('programme review: a report an earlier reading left is not this reading\'s — the call exits 1 and leaves it as it was', async (t) => {
+  const f = programmeSetup(t);
+  const earlier = 'findings: 2\n\nAn earlier reading.\n';
+  writeFileSync(join(f.dir, PROGRAMME_REVIEW_FILE), earlier);
+  const result = await f.call(['review', 'p'], { extra: { session: async () => DONE, mtime: () => NOW.getTime() - 3_600_000 } });
+  assert.equal(result.code, 1, result.out);
+  assert.match(result.err, /no reading stored — the session ended without writing PROGRAMME-REVIEW.md — the one on disk is an earlier reading's/u);
+  assert.doesNotMatch(result.out, /review written/u);
+  assert.equal(readFileSync(join(f.dir, PROGRAMME_REVIEW_FILE), 'utf8'), earlier, 'nothing is removed or rewritten');
+  // The same session writing the report again, after the launch, is this reading's.
+  const again = await f.call(['review', 'p'], { extra: { session: f.reads(), mtime: () => AFTER_START } });
+  assert.equal(again.code, 0, again.err);
+  assert.match(again.out, /review written/u);
 });
 
 test('programme review: timeout or unavailable routing exits 2', async (t) => {

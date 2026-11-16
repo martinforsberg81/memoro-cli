@@ -2268,7 +2268,7 @@ describe('collectPage', () => {
     const group = json.programmes.programmes.find(group => group.programme === 'draft-programme');
     assert.equal(group.record_state, 'draft');
     assert.deepEqual(group.goals, []);
-    assert.equal(group.sign_off_waiting, false);
+    assert.equal('sign_off_waiting' in group, false, 'no sign-off field');
     assert.deepEqual(json.horizons.open[0].programmes, ['draft-programme']);
     for (const columns of [160, 80]) {
       const lines = renderPageLines(data, { columns, now: NOW, overview: true });
@@ -2303,7 +2303,7 @@ describe('collectPage', () => {
   });
 
   it('gives draft text the phase position and narrow-width rank', () => {
-    const group = { programme: 'x'.repeat(60), number: 1, record_state: 'draft', sign_off_waiting: false, current_phase: 1, goals: [{ stage: 'build', phase: 1 }] };
+    const group = { programme: 'x'.repeat(60), number: 1, record_state: 'draft', current_phase: 1, goals: [{ stage: 'build', phase: 1 }] };
     const facts = programmeFacts(group);
     const draw = columns => programmeRow(text => text, columns, group, facts);
     assert.match(draw(160), /draft · 1 build/u);

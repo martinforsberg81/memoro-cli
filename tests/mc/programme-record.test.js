@@ -228,6 +228,39 @@ describe('mc programs create and state', () => {
       assert.match(draftGoal2.err, /mc: alpha is draft — mc programs show alpha/u);
     } finally { a.done(); }
   });
+
+  it('sets state and admits goal new the same with or without a PROGRAMME-REVIEW.md report on disk, and leaves the report as it was', async () => {
+    for (const report of [null, 'NOT OK\n\nfindings: 3\n', 'OK\n\nfindings: 0\n', 'findings: 1\n\nPart 1 — narrow it.\n']) {
+      const label = report === null ? 'no report' : JSON.stringify(report.split('\n', 1)[0]);
+      const a = area();
+      try {
+        await call(['create', 'alpha', '--end', 'e'], a.env);
+        const reportAt = join(a.home, 'alpha', 'PROGRAMME-REVIEW.md');
+        if (report !== null) writeFileSync(reportAt, report);
+        const callGoal = async (name) => {
+          const out = [];
+          const err = [];
+          const code = await goal(['new', `alpha/${name}`, '--repo', 'memoro-cli', '--class', 'fast', '--title', name], {
+            home: a.home, env: a.env, now: () => NOW, known: () => ['/home/m/memoro-cli.git'],
+            git: (cwd, args) => (args[0] === 'show-ref' ? { ok: false, stdout: '', stderr: '' } : { ok: true, stdout: '', stderr: '' }),
+            stdout: { write: (text) => out.push(text) }, stderr: { write: (text) => err.push(text) },
+          });
+          return { code, err: err.join('') };
+        };
+        const draft = await callGoal('first');
+        assert.deepEqual([draft.code, /mc: alpha is draft — mc programs show alpha/u.test(draft.err)], [1, true], `${label}: goal new refused while draft`);
+        const ready = await call(['state', 'alpha', 'ready'], { ...a.env, MC_ROLE: 'martin' });
+        assert.equal(ready.code, 0, `${label}: ${ready.err}`);
+        assert.equal(recordOf(a.home, 'alpha').state, 'ready', label);
+        const made = await callGoal('first');
+        assert.equal(made.code, 0, `${label}: ${made.err}`);
+        assert.ok(existsSync(join(a.home, 'alpha', 'goals', 'first', 'GOAL.json')), label);
+        assert.equal((await call(['state', 'alpha', 'draft'], { ...a.env, MC_ROLE: 'martin' })).code, 0, label);
+        assert.equal((await callGoal('second')).code, 1, `${label}: refused again once draft`);
+        assert.equal(report === null ? existsSync(reportAt) : readFileSync(reportAt, 'utf8'), report === null ? false : report, `${label}: the report is neither read into a gate nor changed`);
+      } finally { a.done(); }
+    }
+  });
 });
 
 describe('mc programs record and show', () => {

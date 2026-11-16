@@ -1522,7 +1522,6 @@ export function horizonsSection({ programmes, found = () => ({ status: 'none' })
         group.record_state = record.record.state;
       }
     } catch { named = null; }
-    group.sign_off_waiting = false;
     group.horizon = named;
     group.horizon_state = named === null ? null : held.get(named)?.state ?? 'not held';
   }
