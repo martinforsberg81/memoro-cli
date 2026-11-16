@@ -17,13 +17,16 @@ import { ageWords } from './page-cache.js';
 import { deskLines } from './page-desk.js';
 import { clipCell, kindTone, stateTone } from './page-grid.js';
 import { horizonsFoldable, horizonsLines } from './page-horizons.js';
-import { detail } from './page-operations.js';
+import { detail, frameTop, panelEnd } from './page-operations.js';
 import { attentionGoals, notArchived } from './page-programmes.js';
 import { sessionGoal } from './page-activity.js';
 import { clip, width } from './status-render.js';
 
-/** The overview is at most this many lines at every width the page draws; the menu's key block and prompt are not counted. */
-export const OVERVIEW_ROWS = 50;
+/**
+ * The overview is at most this many lines at every width the page draws; the menu's key block and prompt are not counted.
+ * 50 rows of content, as before the frames, and the three bottom rules the frames of HORIZONS, IN FLIGHT and NEEDS ATTENTION add.
+ */
+export const OVERVIEW_ROWS = 53;
 
 /** Needs attention keeps this many rows before it folds the rest. */
 export const ATTENTION_KEPT = 5;
@@ -176,7 +179,7 @@ function flightRow(c, wide, row, columns) {
 function flightLines(lines, c, wide, rows, folded) {
   const all = [...rows.desk, ...rows.interactive, ...rows.runner];
   const count = all.length;
-  lines.push(`  ${c('IN FLIGHT', 'bold', 'cyan')}  ${c(count ? `${count} session${count === 1 ? '' : 's'}` : 'nothing running', 'grey')}`);
+  lines.push(frameTop(c, wide, 'IN FLIGHT', count ? `${count} session${count === 1 ? '' : 's'}` : 'nothing running'));
   if (!count) return;
   const columns = {
     kind: Math.max(...all.map((row) => row.kind.length)),
@@ -186,6 +189,7 @@ function flightLines(lines, c, wide, rows, folded) {
   const drawn = [...rows.desk, ...rows.interactive, ...rows.runner.slice(0, rows.runner.length - folded)];
   for (const row of drawn) lines.push(flightRow(c, wide, row, columns));
   if (folded) lines.push(`    ${c(`▸ ${folded} more session${folded === 1 ? '' : 's'} — a shows ${folded === 1 ? 'it' : 'them'}`, 'grey')}`);
+  panelEnd(lines, c, wide);
 }
 
 /* --------------------------------------------------------- Needs attention */
@@ -289,13 +293,14 @@ export function attentionItems(data, sessions = data.runner?.sessions || []) {
 
 function attentionLines(lines, c, wide, items, folded) {
   if (!items.length) return;
-  lines.push(`  ${c('NEEDS ATTENTION', 'bold', 'cyan')}  ${c(String(items.length), 'grey')}`);
+  lines.push(frameTop(c, wide, 'NEEDS ATTENTION', String(items.length)));
   for (const item of items.slice(0, items.length - folded)) {
     const label = clipCell(item.label, Math.max(12, Math.floor(wide / 3)));
     const room = wide - 4 - width(label) - 2;
     lines.push(`    ${c(label, 'bold')}  ${c(clipCell(item.text, Math.max(8, room)), ...item.tone)}`);
   }
   if (folded) lines.push(`    ${c(`▸ ${folded} more need${folded === 1 ? 's' : ''} attention — a shows ${folded === 1 ? 'it' : 'them'}`, 'grey')}`);
+  panelEnd(lines, c, wide);
 }
 
 /* ------------------------------------------------------- Merge and deploy */
@@ -332,7 +337,8 @@ export function mergeDeployRows(data) {
 
 function mergeDeployLines(lines, c, wide, rows) {
   for (const row of rows) {
-    lines.push(`  ${c(row.label, 'bold', ...row.tone)}  ${c(clipCell(row.text, Math.max(8, wide - 4 - row.label.length)), 'bold')}`);
+    // A frame with nothing beyond its title and facts: its top rule alone.
+    lines.push(frameTop(c, wide, row.label, [{ text: row.text, styles: ['bold'] }]));
   }
 }
 

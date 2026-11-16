@@ -46,9 +46,9 @@
  */
 import { toolShortName } from '../adapters/index.js';
 import { activityLines, sessionGoal } from './page-activity.js';
-import { deployLines, devLines, detail, mergesLines, panelHeading, panelEnd } from './page-operations.js';
+import { deployLines, devLines, detail, frameEnd, frameTop, mergesLines, panelHeading, panelEnd } from './page-operations.js';
 import { programmeTreeLines } from './page-programmes.js';
-import { overviewLines, warningLines } from './page-overview.js';
+import { headerRows, overviewLines, warningLines } from './page-overview.js';
 import { deskLines } from './page-desk.js';
 import { ageWords } from './page-cache.js';
 import { drainLine, stopLine } from './run-control.js';
@@ -156,23 +156,6 @@ function trailing(parts, separator = ' · ') {
 
 /* ------------------------------------------------------------------ pieces */
 
-/**
- * A heading: the section's name, its counts, and the verb that expands it
- * pushed to the right margin. The verb goes first when the width runs out —
- * it is a reminder, and the counts are the answer.
- */
-function heading(lines, c, wide, title, counts, verb) {
-  // The width is measured on the plain text and the colour applied after:
-  // clipping a string that already carries escape sequences cuts them in half.
-  const parts = counts == null ? [] : (Array.isArray(counts) ? counts : [{ text: counts, styles: ['grey'] }]);
-  const room = wide - 2 - title.length - (verb ? verb.length + 2 : 0);
-  const shown = parts.length ? paint(c, parts, Math.max(12, room - 2)) : '';
-  const left = `  ${c(title, 'bold', 'cyan')}${shown ? `  ${shown}` : ''}`;
-  if (!verb) { lines.push(left); return; }
-  const gap = wide - width(left) - verb.length;
-  lines.push(gap > 2 ? `${left}${' '.repeat(gap)}${c(verb, 'grey')}` : left);
-}
-
 /** One line of prose, indented and cut to the terminal. */
 function say(lines, c, wide, indent, text, tone = ['grey']) {
   const styles = [].concat(tone);
@@ -240,7 +223,7 @@ function runnerLines(lines, c, wide, runner, expand) {
     // runner is idle; older than that it is history, and history is grey.
     const at = Date.parse(now.quota.last);
     const recent = Number.isFinite(at) && now.at_ms - at < QUOTA_FRESH_MS;
-    say(lines, c, wide, 2, `quota: ${now.quota.count} answer(s) in the last 24 h, last ${when(now.quota.last)}`,
+    say(lines, c, wide, 4, `quota: ${now.quota.count} answer(s) in the last 24 h, last ${when(now.quota.last)}`,
       recent ? 'yellow' : 'grey');
   }
 }
@@ -311,7 +294,7 @@ function dayLine(lines, c, wide, day) {
   // What is not a session, and the cost, give way on a narrow terminal — the
   // cost's basis first, then the cost, then `other` — so the counts keep their
   // colours rather than being clipped grey.
-  const room = wide - 2;
+  const room = wide - 4;
   const used = () => parts.reduce((n, part) => n + part.text.length, 0);
   const other = kinds.other ? `other ${kinds.other}` : null;
   const priced = [cost && `${cost} list (${day.model}, ${day.prices_dated})`, cost && `${cost} list`].filter(Boolean);
@@ -320,7 +303,7 @@ function dayLine(lines, c, wide, day) {
     [other],
   ].map((group) => group.filter(Boolean)).find((group) => used() + group.reduce((n, text) => n + 3 + text.length, 0) <= room) || [];
   for (const text of tail) parts.push(dot, { text, styles: ['grey'] });
-  lines.push(`  ${paint(c, parts, room)}`);
+  lines.push(`    ${paint(c, parts, room)}`);
 }
 
 /** A painted cell, padded to its column with spaces that carry no colour. */
@@ -392,18 +375,19 @@ function maintenanceLines(lines, c, wide, sessions, intake, checks, expand) {
  */
 function strayLines(lines, c, wide, strays) {
   if (!strays?.length) return;
-  const room = wide - 7;
-  lines.push(`       ${c('not an area mc knows', 'yellow')}`);
+  const room = wide - 4;
+  lines.push(frameTop(c, wide, 'not an area mc knows', `${strays.length}`));
   for (const stray of strays) {
     const facts = stray.kind === 'directory' || !stray.kind
       ? [stray.checkout ? 'checkout yes' : 'checkout no', ...(stray.checkout ? [`${stray.uncommitted} uncommitted`] : [])]
       : [stray.kind === 'tmux' ? 'tmux session' : `${stray.verb ? `mc ${stray.verb}` : 'a session'} with no programme`,
         openFor(stray.age_seconds), ...(stray.pid ? [`pid ${stray.pid}`] : [])];
-    lines.push(`       ${paint(c, fitting([
+    lines.push(`    ${paint(c, fitting([
       { text: pad(clip(stray.name, 21), 22), styles: ['bold'] },
       { text: facts.join(' · '), styles: ['grey'] },
     ], room), room)}`);
   }
+  panelEnd(lines, c, wide);
 }
 
 /** The words for whose a pull request is, on a PULL REQUESTS row. */
@@ -481,14 +465,15 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
     ['NOBODY\'S', (pr) => pr.owner.kind === 'none', () => 'no worktree holds it'],
   ];
   const age = prs?.age_seconds;
-  heading(lines, c, wide, 'PULL REQUESTS', prs?.fetched
+  // The list's own frame, its top rule alone; each group is a frame under it.
+  lines.push(frameTop(c, wide, 'PULL REQUESTS', prs?.fetched
     ? `${items.length} open${age != null && age >= 15 * 60 ? ` · as of ${ageWords(age)} ago` : ''}`
-    : 'not asked yet', null);
+    : 'not asked yet'));
   for (const [title, mine, whose] of groups) {
     const own = items.filter(mine);
     if (!own.length) continue;
     lines.push('');
-    heading(lines, c, wide, title, `${own.length}`, null);
+    lines.push(frameTop(c, wide, title, `${own.length}`));
     // Whose it is leads here — it is what the list is sorted by — and the
     // title is what gives way; the page's own rows put the title first.
     const width = Math.min(40, Math.max(...own.map((pr) => whose(pr).length)));
@@ -497,7 +482,7 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
       const mark = pr.merging ? c(MARK.running, 'green')
         : pr.merge_red ? c(MARK.red, 'red', 'bold') : c(nobody ? MARK.waiting : MARK.quiet, nobody ? 'yellow' : 'grey');
       const where = pad(clip(pr.repo || '—', LANE_REPO - 1), LANE_REPO);
-      const left = `  ${mark} ${c(where, 'grey')} ${cell(c, `#${pr.number}`, PR_NUMBER, PR_TONE)} `
+      const left = `    ${mark} ${c(where, 'grey')} ${cell(c, `#${pr.number}`, PR_NUMBER, PR_TONE)} `
         + `${cell(c, clip(whose(pr), width), width, nobody ? ['yellow'] : [])}  `;
       const right = pr.merging
         ? paint(c, [{ text: pr.merging === 'landing' ? 'landing now' : 'queued for merge', styles: ['green'] }])
@@ -505,6 +490,7 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
         : paint(c, [{ text: pr.quiet_seconds == null ? '' : `quiet ${ageWords(pr.quiet_seconds)}`, styles: pr.quiet_seconds >= PR_QUIET_S ? ['yellow'] : ['grey'] }]);
       lines.push(row(c, wide, left, `${pr.draft ? 'draft: ' : ''}${pr.title || pr.branch || ''}`, right || null));
     }
+    panelEnd(lines, c, wide);
   }
   lines.push('');
   return lines;
@@ -538,8 +524,8 @@ function programmeLine(c, wide, group, expand, numbered = false) {
   const metadata = expand ? ` · ${group.goals?.length || 0} goal${group.goals?.length === 1 ? '' : 's'}${group.proposals ? ` · ${group.proposals} proposal${group.proposals === 1 ? '' : 's'}` : ''}` : '';
   // The goals done or dropped and still under `goals/`: the count `a` shows.
   const done = group.finished ?? (group.goals || []).filter((goal) => ['done', 'dropped'].includes(goal.stage)).length;
-  const label = clipCell(`${numbered && group.number != null ? `${group.number} ` : ''}${group.programme}${group.priority ? ` · priority ${group.priority}` : ''}${done ? ` · ${done} done` : ''}${group.record_invalid ? ' · record invalid' : ''}${metadata}`, wide - 8);
-  return `  ${c('┌─ ', 'cyan')}${c(label, 'bold')}${c(` ${'─'.repeat(Math.max(0, wide - width(label) - 7))}┐`, 'cyan')}`;
+  const facts = `${group.priority ? `priority ${group.priority}` : ''}${done ? `${group.priority ? ' · ' : ''}${done} done` : ''}${group.record_invalid ? `${group.priority || done ? ' · ' : ''}record invalid` : ''}${metadata}`.replace(/^ · /u, '');
+  return frameTop(c, wide, `${numbered && group.number != null ? `${group.number} ` : ''}${group.programme}`, facts);
 }
 
 function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []) {
@@ -551,16 +537,8 @@ function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []
   const asleep = groups.filter((group) => group.dormant);
   const dormant = programmes.dormant ?? asleep.length;
   const active = programmes.active ?? groups.length - dormant;
-  heading(lines, c, wide, 'PROGRAMMES', expand ? `${active} active · ${dormant} dormant · ${programmes.count} goals` : null, 'p  plan a programme');
-  let summary = [];
-  for (const part of statuses) {
-    if (summary.length && summary.reduce((n, item) => n + item.text.length, 0) + summary.length * 3 + part.text.length > wide - 2) {
-      lines.push(`  ${paint(c, between(summary, ' · '))}`);
-      summary = [];
-    }
-    summary.push(part);
-  }
-  if (summary.length) lines.push(`  ${paint(c, between(summary, ' · '))}`);
+  // PROGRAMMES is a frame of its own, its top rule alone: the counts and the key, then each programme's frame.
+  lines.push(frameTop(c, wide, 'PROGRAMMES', [...(expand ? [{ text: `${active} active · ${dormant} dormant · ${programmes.count} goals`, styles: ['grey'] }] : []), ...statuses], 'p  plan a programme'));
 
   // The dormant programmes — no goal — are this one line and not a
   // heading each: on 2026-11-02 they were 27 of 41 headings, every one saying
@@ -571,7 +549,7 @@ function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []
   // Expanded (`a`), every programme is drawn and the line is not needed.
   if (!expand && asleep.length) {
     const hidden = asleep.filter((group) => !(group.planning_sessions?.length || group.sessions?.length));
-    if (hidden.length) say(lines, c, wide, 2, `▸ ${hidden.length} dormant`);
+    if (hidden.length) lines.push(frameTop(c, wide, `${hidden.length} dormant programme${hidden.length === 1 ? '' : 's'}`));
   }
 
   let alone = false;
@@ -584,7 +562,7 @@ function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []
     alone = !body.length;
     if (alone) continue;
     lines.push(...body);
-    lines.push(`  ${c('└' + '─'.repeat(wide - 4) + '┘', 'cyan')}`);
+    panelEnd(lines, c, wide);
   }
   // A last programme drawn as its heading alone has no border under it: a blank
   // line keeps what follows (unassigned activity, strays) from reading as its rows.
@@ -610,7 +588,7 @@ function programmeViewLines(lines, c, wide, group, expand, runnerSessions) {
   lines.push(programmeLine(c, wide, group, expand, true));
   if (!body.length) { lines.push(''); return; }
   lines.push(...body);
-  lines.push(`  ${c('└' + '─'.repeat(wide - 4) + '┘', 'cyan')}`);
+  panelEnd(lines, c, wide);
 }
 
 /** The runner's sessions no programme's goal or plan explains, then what mc has no kind for. */
@@ -622,11 +600,12 @@ function unassignedLines(lines, c, wide, programmes, expand, runnerSessions = []
   const programmePlans = new Set(groups.flatMap((group) => group.planning_sessions || []).map(identity));
   const unmatched = runnerSessions.filter((session) => !known.has(sessionGoal(session)) && !programmePlans.has(identity(session)));
   if (unmatched.length) {
-    say(lines, c, wide, 4, 'UNASSIGNED ACTIVITY', ['yellow']);
+    lines.push(frameTop(c, wide, 'UNASSIGNED ACTIVITY', `${unmatched.length} session${unmatched.length === 1 ? '' : 's'}`));
     for (const session of unmatched) {
-      lines.push(...activityLines(c, wide, session, { indent: 6, expand, named: true }));
-      for (const pr of session.prs || []) detail(lines, c, wide, 8, `${pr.repo || session.repo || 'unknown'}#${pr.number}`, PR_TONE);
+      lines.push(...activityLines(c, wide, session, { indent: 4, expand, named: true }));
+      for (const pr of session.prs || []) detail(lines, c, wide, 6, `${pr.repo || session.repo || 'unknown'}#${pr.number}`, PR_TONE);
     }
+    panelEnd(lines, c, wide);
   }
   strayLines(lines, c, wide, programmes.strays);
 }
@@ -686,7 +665,7 @@ function mcLine(lines, c, wide, mc, caches, version) {
         styles: ['yellow', 'bold'],
       }
       : { text: info.behind === 0 ? 'up to date' : '', styles: ['grey'] };
-  const room = Math.max(12, wide - 2 - 'MC'.length - 2);
+  const room = Math.max(12, wide - 4 - 'MC'.length - 2);
   // The state before the bookkeeping, and in a short form when the long one
   // does not fit: it is the only part of the line that can ask for anything.
   const short = asked ? 'draining' :(info.behind ? 'update available' : state.text);
@@ -704,12 +683,13 @@ function mcLine(lines, c, wide, mc, caches, version) {
   ];
   const long = trailing([...lead, state]);
   const fits = long.reduce((n, part) => n + part.text.length, 0) <= room;
-  heading(lines, c, wide, 'MC', fitting(trailing([
+  const shown = paint(c, fitting(trailing([
     ...lead,
     fits ? state : { ...state, text: short },
     { text: info.hooks ? `hooks: ${info.hooks} · mc hook install` : '', styles: ['yellow'] },
     ...rest,
-  ]), room), null);
+  ]), room - 2), Math.max(12, room - 2));
+  lines.push(`    ${c('MC', 'bold')}${shown ? `  ${shown}` : ''}`);
 }
 
 /**
@@ -731,7 +711,7 @@ function dockerLine(lines, c, wide, docker) {
   if (docker.idle_stop_seconds > 0) parts.push(`idle stop in ${Math.ceil(docker.idle_stop_seconds / 60)} min`);
   else if (docker.idle_stop_seconds === 0) parts.push('idle stop due');
   if (docker.as_of_seconds > 3600) parts.push(`as of ${ageWords(docker.as_of_seconds)}`);
-  say(lines, c, wide, 2, parts.join(' · '));
+  say(lines, c, wide, 4, parts.join(' · '));
 }
 
 /** The stages drawn as frames, in the order work moves through them. */
@@ -750,16 +730,13 @@ export function sparkline(counts = []) {
  * Hero frame: what mc is, and what came out of it in the last 24 hours
  * (`data.landed`, landed.js). Where work stands now is the pipeline below it.
  */
-function headerLines(lines, c, raw, wide, data, version) {
-  const room = wide - 6;
-  const frame = (text) => lines.push(`  ${c('│', 'grey')} ${text}${' '.repeat(Math.max(0, room - width(text)))} ${c('│', 'grey')}`);
-  const rule = (left, right) => lines.push(`  ${c(left + '─'.repeat(wide - 4) + right, 'grey')}`);
-  lines.push('');
-  rule('┌', '┐');
-  const brand = `MC${version ? `  ${version}` : ''}`;
-  // The page's one entrance: the desk. The manager runs headless and has none (D10).
-  const action = 'd  mc martin';
-  frame(`${c(brand, 'bold')}${' '.repeat(Math.max(2, room - brand.length - action.length))}${c(action, 'cyan')}`);
+function headerLines(lines, c, raw, wide, data, version, { header = false } = {}) {
+  const room = wide - 4;
+  const frame = (text) => lines.push(`    ${text}`);
+  // The surfaces that open on the figures (`o`, a programme's view) are headed by the overview's own header rows.
+  if (header) lines.push(...headerRows(c, wide, data, version), '');
+  else lines.push('');
+  panelHeading(lines, c, wide, 'FIGURES 24 h');
   // Wrap complete fields so every count survives a narrow terminal.
   const summary = (parts) => {
     let row = [];
@@ -815,8 +792,10 @@ function headerLines(lines, c, raw, wide, data, version) {
     { text: desk ? `${desk.sessions} interactive sessions${deskNote(desk)}` : '', styles: ['grey'] },
     { text: landedPlan.plan_sessions ? `headless plan ${money(landedPlan.plan_cost) || '$0'} (${landedPlan.plan_sessions})` : '', styles: ['grey'] },
   ]);
-  rule('└', '┘');
+  panelEnd(lines, c, wide);
+  panelHeading(lines, c, wide, 'PIPELINE');
   pipelineLines(lines, c, raw, wide, data);
+  panelEnd(lines, c, wide);
   lines.push('');
 }
 
@@ -918,7 +897,7 @@ function stageBox(c, raw, item) {
  */
 function pipelineLines(lines, c, raw, wide, data) {
   const boxes = pipelineStages(data).map((item) => stageBox(c, raw, item));
-  const room = wide - 2;
+  const room = wide - 4;
   const fits = (rows, arrow) => rows.every((group) => group.reduce((n, box) => n + box.width, 0)
     + arrow.length * (group.length - 1) <= room);
   let rows = [boxes];
@@ -935,10 +914,10 @@ function pipelineLines(lines, c, raw, wide, data) {
   const along = (group, pick, sep) => group.map((box, index) => (index ? sep : '') + pick(box)).join('');
   for (const group of rows) {
     // Only the count row carries the arrows; the other rows keep their place.
-    lines.push(`  ${along(group, (box) => box.top, blank)}`);
-    lines.push(`  ${along(group, (box) => box.counts, raw(arrow, 'grey'))}`);
-    lines.push(`  ${along(group, (box) => box.marks, blank)}`);
-    lines.push(`  ${along(group, (box) => box.bottom, blank)}`);
+    lines.push(`    ${along(group, (box) => box.top, blank)}`);
+    lines.push(`    ${along(group, (box) => box.counts, raw(arrow, 'grey'))}`);
+    lines.push(`    ${along(group, (box) => box.marks, blank)}`);
+    lines.push(`    ${along(group, (box) => box.bottom, blank)}`);
   }
 }
 
@@ -978,23 +957,25 @@ function operationsBody(lines, c, wide, data, { expand, version, at }) {
   deployLines(lines, c, wide, runner.production, expand);
   panelEnd(lines, c, wide);
   lines.push('');
+  const devTop = lines.length;
   devLines(lines, c, wide, data.dev, expand);
-  panelEnd(lines, c, wide);
+  frameEnd(lines, c, wide, devTop);
   lines.push('');
   maintenanceLines(lines, c, wide, sessions, data.intake, data.checks, expand);
   lines.push('');
-  lines.push(`  ${c('── SYSTEM ' + '─'.repeat(wide - 12), 'grey')}`);
+  panelHeading(lines, c, wide, 'SYSTEM');
   mcLine(lines, c, wide, data.mc, data.caches, version);
   runnerLines(lines, c, wide, { ...runner, at_ms: at }, expand);
   dockerLine(lines, c, wide, data.docker);
-  if (data.billing) detail(lines, c, wide, 2, `BILLING  ${data.billing}`);
-  detail(lines, c, wide, 2, `PROVIDER PRIORITY  ${data.providerPriority || 'auto'}`);
+  if (data.billing) detail(lines, c, wide, 4, `BILLING  ${data.billing}`);
+  detail(lines, c, wide, 4, `PROVIDER PRIORITY  ${data.providerPriority || 'auto'}`);
   for (const note of data.notes || []) {
     // How old the PR cache is was the page's last line, every time, and it was
     // never what anybody came for; `mc --json` has it under `caches`.
     if (/^PRs from cache|^no PR cache yet/u.test(note)) continue;
-    say(lines, c, wide, 2, `note: ${note}`);
+    say(lines, c, wide, 4, `note: ${note}`);
   }
+  panelEnd(lines, c, wide);
 }
 
 /**
@@ -1017,7 +998,7 @@ export function renderPageLines(data, {
   const body = { expand, version, at };
 
   if (operations) {
-    headerLines(lines, c, paintText, wide, data, version);
+    headerLines(lines, c, paintText, wide, data, version, { header: true });
     warningLines(lines, c, wide, data);
     operationsBody(lines, c, wide, data, body);
     return lines;
@@ -1025,7 +1006,7 @@ export function renderPageLines(data, {
   // `view` is a programme's name: that programme's block alone, nothing below it. A name that is no longer listed is the overview.
   const open = view == null ? null : (data.programmes?.programmes || []).find((group) => group.programme === view);
   if (open) {
-    headerLines(lines, c, paintText, wide, data, version);
+    headerLines(lines, c, paintText, wide, data, version, { header: true });
     deskLines(lines, c, wide, data.desk);
     managerFrames(lines, c, wide, data, expand);
     warningLines(lines, c, wide, data);

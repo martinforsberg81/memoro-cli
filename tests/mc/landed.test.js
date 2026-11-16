@@ -147,7 +147,7 @@ const NOTHING = { intake: { proposals: 0 }, programmes: { programmes: [] }, runn
 
 /** The pipeline's rows, from the first box's top border: `rows` lines, painted as drawn. */
 const pipelineOf = (lines, rows) => {
-  const at = lines.findIndex((line) => line.replace(/\x1b\[[0-9;]*m/gu, '').startsWith('  ┌─ proposals '));
+  const at = lines.findIndex((line) => line.replace(/\x1b\[[0-9;]*m/gu, '').startsWith('    ┌─ proposals '));
   assert.ok(at >= 0, 'the pipeline is drawn');
   return lines.slice(at, at + rows);
 };
@@ -157,32 +157,32 @@ describe('the pipeline drawn', () => {
 
   it('is one row of boxes with the wide arrow at 160 columns, each box as wide as its content', () => {
     assert.deepEqual(pipelineOf(at(160), 4), [
-      '  ┌─ proposals ─┐     ┌─ draft ─┐     ┌─ build ──┐     ┌─ review ─┐     ┌─ finish ─┐     ┌─ merge ─┐',
-      '  │     148     │ ──▶ │   21    │ ──▶ │  51 ⚑3   │ ──▶ │    1     │ ──▶ │    0     │ ──▶ │    0    │',
-      '  │             │     │   ●●●   │     │ ●●●●●●●● │     │    ●     │     │          │     │         │',
-      '  └─────────────┘     └─────────┘     └──────────┘     └──────────┘     └──────────┘     └─────────┘',
+      '    ┌─ proposals ─┐     ┌─ draft ─┐     ┌─ build ──┐     ┌─ review ─┐     ┌─ finish ─┐     ┌─ merge ─┐',
+      '    │     148     │ ──▶ │   21    │ ──▶ │  51 ⚑3   │ ──▶ │    1     │ ──▶ │    0     │ ──▶ │    0    │',
+      '    │             │     │   ●●●   │     │ ●●●●●●●● │     │    ●     │     │          │     │         │',
+      '    └─────────────┘     └─────────┘     └──────────┘     └──────────┘     └──────────┘     └─────────┘',
     ]);
   });
 
   it('falls back to the narrow arrow at 100 columns, still one row', () => {
     assert.deepEqual(pipelineOf(at(100), 4), [
-      '  ┌─ proposals ─┐   ┌─ draft ─┐   ┌─ build ──┐   ┌─ review ─┐   ┌─ finish ─┐   ┌─ merge ─┐',
-      '  │     148     │ ▶ │   21    │ ▶ │  51 ⚑3   │ ▶ │    1     │ ▶ │    0     │ ▶ │    0    │',
-      '  │             │   │   ●●●   │   │ ●●●●●●●● │   │    ●     │   │          │   │         │',
-      '  └─────────────┘   └─────────┘   └──────────┘   └──────────┘   └──────────┘   └─────────┘',
+      '    ┌─ proposals ─┐   ┌─ draft ─┐   ┌─ build ──┐   ┌─ review ─┐   ┌─ finish ─┐   ┌─ merge ─┐',
+      '    │     148     │ ▶ │   21    │ ▶ │  51 ⚑3   │ ▶ │    1     │ ▶ │    0     │ ▶ │    0    │',
+      '    │             │   │   ●●●   │   │ ●●●●●●●● │   │    ●     │   │          │   │         │',
+      '    └─────────────┘   └─────────┘   └──────────┘   └──────────┘   └──────────┘   └─────────┘',
     ]);
   });
 
   it('is three and three on two rows, each keeping its arrows, at 72 columns', () => {
     assert.deepEqual(pipelineOf(at(72), 8), [
-      '  ┌─ proposals ─┐     ┌─ draft ─┐     ┌─ build ──┐',
-      '  │     148     │ ──▶ │   21    │ ──▶ │  51 ⚑3   │',
-      '  │             │     │   ●●●   │     │ ●●●●●●●● │',
-      '  └─────────────┘     └─────────┘     └──────────┘',
-      '  ┌─ review ─┐     ┌─ finish ─┐     ┌─ merge ─┐',
-      '  │    1     │ ──▶ │    0     │ ──▶ │    0    │',
-      '  │    ●     │     │          │     │         │',
-      '  └──────────┘     └──────────┘     └─────────┘',
+      '    ┌─ proposals ─┐     ┌─ draft ─┐     ┌─ build ──┐',
+      '    │     148     │ ──▶ │   21    │ ──▶ │  51 ⚑3   │',
+      '    │             │     │   ●●●   │     │ ●●●●●●●● │',
+      '    └─────────────┘     └─────────┘     └──────────┘',
+      '    ┌─ review ─┐     ┌─ finish ─┐     ┌─ merge ─┐',
+      '    │    1     │ ──▶ │    0     │ ──▶ │    0    │',
+      '    │    ●     │     │          │     │         │',
+      '    └──────────┘     └──────────┘     └─────────┘',
     ]);
   });
 
@@ -201,9 +201,9 @@ describe('the pipeline drawn', () => {
 
   it('draws an empty pipeline: each box its name and a grey zero, no marks', () => {
     const [top, counts, marks] = pipelineOf(renderPageLines(NOTHING, { columns: 160, now: NOW }), 3);
-    assert.equal(top, '  ┌─ proposals ─┐     ┌─ draft ─┐     ┌─ build ─┐     ┌─ review ─┐     ┌─ finish ─┐     ┌─ merge ─┐');
-    assert.equal(counts, '  │      0      │ ──▶ │    0    │ ──▶ │    0    │ ──▶ │    0     │ ──▶ │    0     │ ──▶ │    0    │');
-    assert.equal(marks, '  │             │     │         │     │         │     │          │     │          │     │         │');
+    assert.equal(top, '    ┌─ proposals ─┐     ┌─ draft ─┐     ┌─ build ─┐     ┌─ review ─┐     ┌─ finish ─┐     ┌─ merge ─┐');
+    assert.equal(counts, '    │      0      │ ──▶ │    0    │ ──▶ │    0    │ ──▶ │    0     │ ──▶ │    0     │ ──▶ │    0    │');
+    assert.equal(marks, '    │             │     │         │     │         │     │          │     │          │     │         │');
   });
 
   it('paints each border and its marks in the stage colour, an empty stage grey, the name bold, the count bold or grey', () => {

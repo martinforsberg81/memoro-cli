@@ -74,12 +74,19 @@ function pageData(over = {}) {
   };
 }
 
-/** The DEV section's lines: its heading to the blank line after it. */
+/**
+ * The DEV section's lines: its top rule and its rows, without the bottom rule. A frame with rows must close with a
+ * bottom rule and a frame without must not; both are asserted here, so every test that reads the block holds it.
+ */
 function devBlock(lines) {
   const at = lines.findIndex((line) => /^ {2}┌─ DEV /u.test(plain(line)));
   assert.ok(at >= 0, `a DEV heading:\n${lines.map(plain).join('\n')}`);
   const end = lines.findIndex((line, index) => index > at && plain(line) === '');
-  return lines.slice(at, end).filter(line => !plain(line).startsWith('  └'));
+  const block = lines.slice(at, end);
+  const closed = /^ {2}└─+┘$/u.test(plain(block.at(-1)));
+  const body = closed ? block.slice(0, -1) : block;
+  assert.equal(closed, body.length > 1, `a bottom rule exactly when DEV has rows:\n${block.map(plain).join('\n')}`);
+  return body;
 }
 
 /** The escapes a run of text is painted with, as `yellow`, `grey`, … */
@@ -99,10 +106,10 @@ describe('DEV — the dev servers and who holds each', () => {
     const data = pageData({ dev: pool({ planPid: 502 }) });
     const lines = renderPageLines(data, { columns: 120, now: NOW });
     const block = devBlock(lines).map(plain);
-    assert.match(block[1], /3 running · 2 leased/u);
+    assert.match(block[0], /^ {2}┌─ DEV {2}3 running · 2 leased ─+ mc dev list ┐$/u, 'the counts are facts in the top rule');
     assert.deepEqual(block.filter((line) => /MAIN|SLOT/u.test(line)).map((line) => line.trim()),
       ['MAIN  :8787    idle     shot     · pid 12787', 'SLOT  :8920    leased   BUILD   mc/no-work · pid 12920', 'SLOT  :8930    leased   plan    mc · pid 12930']);
-    assert.equal(block.length, 5, 'heading, summary and one row per server; no repository heading');
+    assert.equal(block.length, 4, 'the top rule and one row per server; no repository heading');
     assert.doesNotMatch(block.join('\n'), /holder gone|goal\/no-work/u);
     const expanded = devBlock(renderPageLines(data, { columns: 120, now: NOW, expand: true })).join('\n');
     assert.match(expanded, /goal\/no-work/u);
@@ -113,11 +120,10 @@ describe('DEV — the dev servers and who holds each', () => {
 
   it('says none running in readable secondary text when there is no server', () => {
     const lines = renderPageLines(pageData({ dev: devSection({ now: NOW }) }), { columns: 100, now: NOW, colour: true });
-    const [head, summary, ...rest] = devBlock(lines);
-    assert.match(plain(head), /^ {2}┌─ DEV ─+ mc dev list ┐$/u);
-    assert.equal(plain(summary), '    none running');
-    assert.deepEqual(toneOf(summary, 'none running'), ['37']);
-    assert.deepEqual(rest, []);
+    const [head, ...rest] = devBlock(lines);
+    assert.match(plain(head), /^ {2}┌─ DEV {2}none running ─+ mc dev list ┐$/u);
+    assert.deepEqual(toneOf(head, 'none running'), ['37']);
+    assert.deepEqual(rest, [], 'a frame with nothing beyond its title is its top rule alone');
   });
 
   it('says holder gone, in yellow, for a server whose session has ended — and not for a bare mc shot', () => {
@@ -131,14 +137,14 @@ describe('DEV — the dev servers and who holds each', () => {
     assert.match(plain(row), /holder gone/u);
     assert.deepEqual(toneOf(row, 'holder gone'), ['yellow']);
     assert.doesNotMatch(plain(block.find((line) => plain(line).includes(':8787'))), /holder gone/u);
-    assert.match(plain(block[1]), /3 running · 1 leased/u);
+    assert.match(plain(block[0]), /3 running · 1 leased/u);
   });
 
   it('draws the waiters as one yellow row naming who is first', () => {
     const dev = pool({ queue: QUEUE });
     assert.deepEqual(dev.queue.map((one) => one.name), ['BUILD hero-detail-objects', 'REVIEW mc/email']);
     const block = devBlock(renderPageLines(pageData({ dev }), { columns: 100, now: NOW, colour: true }));
-    assert.match(plain(block[1]), /3 running · 1 leased · 2 queued/u);
+    assert.match(plain(block[0]), /3 running · 1 leased · 2 queued/u);
     const last = block.at(-1);
     assert.equal(plain(last).trim(), 'REVIEW mc/email · waited 60s');
     assert.ok(block.some((line) => plain(line).includes('BUILD hero-detail-objects · waited 3 min')));
