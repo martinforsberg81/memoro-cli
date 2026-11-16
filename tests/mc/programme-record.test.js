@@ -14,7 +14,7 @@ import { describe, it } from 'node:test';
 import { run as goal } from '../../src/mc/commands/goal.js';
 import { listingText, programmesListing, recordWriter, run as programs } from '../../src/mc/commands/programs.js';
 import { readProgrammes } from '../../src/mc/page-collect.js';
-import { changePhases, documentProblems, dropRecord, newRecord, readRecord, recordedProgrammes, recordPage, recordPageTemplate, RECORD_FILE, returnRecord, setRecordState, signRecord, validateRecord, writeRecord } from '../../src/mc/programme-record.js';
+import { changePhases, cutRecord, documentProblems, dropRecord, newRecord, readRecord, recordedProgrammes, recordPage, recordPageTemplate, RECORD_FILE, returnRecord, setRecordState, signRecord, validateRecord, writeRecord } from '../../src/mc/programme-record.js';
 import { lockPath, realLock } from '../../src/mc/runner-lock.js';
 import { goalJson } from './_helpers/goal-file.js';
 
@@ -832,6 +832,45 @@ describe('signed record transitions', () => {
       assert.equal(readFileSync(join(a.dir, 'dirty-work'), 'utf8'), 'unpublished');
       assert.equal(readFileSync(join(a.dir, 'SIGNED.md'), 'utf8'), 'retained old copy');
     } finally { a.done(); }
+  });
+
+  it('cuts: cut_text takes the signature the turn launched on, under the strict lock, and only a record still open on that signature takes it', () => {
+    const a = fixture(SIGNED);
+    try {
+      const events = [];
+      const locked = { ...a.options, lock: (root, fn, options) => { events.push(['lock', options.strict]); return a.options.lock ? a.options.lock(root, fn, options) : fn(); } };
+      const cut = cutRecord(a.dir, { ...locked, signed: SIGNED.signed_text });
+      assert.deepEqual([cut.ok, cut.changed], [true, true]);
+      assert.deepEqual(events, [['lock', true]]);
+      assert.deepEqual(recordOf(a.home, 'p'), { ...SIGNED, cut_text: SIGNED.signed_text });
+      assert.equal(cutRecord(a.dir, { ...a.options, signed: SIGNED.signed_text }).changed, false, 'a second cut writes nothing');
+    } finally { a.done(); }
+    for (const [kind, record, status] of [
+      ['a signature that is no longer the one launched on', { ...SIGNED, signed_text: 'c'.repeat(64) }, 'resigned'],
+      ['a draft', { ...DRAFT, cut_text: SIGNED.cut_text }, 'returned'],
+      ['a dropped record', { ...DRAFT, state: 'dropped' }, 'settled'],
+      ['a done record', { ...SIGNED, state: 'done' }, 'settled'],
+      ['a legacy record', LEGACY, 'settled'],
+    ]) {
+      const b = fixture(record);
+      try {
+        const before = readFileSync(b.file, 'utf8');
+        const result = cutRecord(b.dir, { ...b.options, signed: SIGNED.signed_text });
+        assert.deepEqual([result.ok, result.status], [false, status], kind);
+        assert.ok(result.problems.length, kind);
+        assert.equal(readFileSync(b.file, 'utf8'), before, `${kind}: nothing written`);
+      } finally { b.done(); }
+    }
+    const c = fixture(SIGNED);
+    try {
+      const before = readFileSync(c.file, 'utf8');
+      const refused = cutRecord(c.dir, { ...c.options, signed: SIGNED.signed_text, check: () => ['no goal names part 2'] });
+      assert.deepEqual([refused.ok, refused.status, refused.problems], [false, 'incomplete', ['no goal names part 2']]);
+      assert.equal(readFileSync(c.file, 'utf8'), before, 'a check that finds a problem writes nothing');
+      const seen = [];
+      cutRecord(c.dir, { ...c.options, signed: SIGNED.signed_text, check: ({ record }) => { seen.push(record.cut_text); return []; } });
+      assert.deepEqual(seen, [SIGNED.cut_text], 'the check reads the record fresh under the lock');
+    } finally { c.done(); }
   });
 
   const transitions = [

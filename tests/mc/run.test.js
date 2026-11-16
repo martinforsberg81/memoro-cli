@@ -6139,9 +6139,9 @@ function wireDesk(f) {
 }
 /** What a turn's session leaves in the programme: goals as `mc goal new` and `mc goal stage` write them, each naming `parts` of SIGNED.md. */
 function writesGoals(f, goals) {
-  for (const [name, { stage = 'draft', phase = 1, parts = [1, 2] }] of Object.entries(goals)) {
+  for (const [name, { stage = 'draft', phase = 1, parts = [1, 2], status = 'ready' }] of Object.entries(goals)) {
     const documents = parts.length ? [{ label: `Signed design, ${parts.map((part) => `Part ${part}`).join('; ')}`, path: SIGNED_AT }] : [];
-    const text = goalJson({ stage, status: 'ready', phase, repos: ['memoro'], title: name, goal: [], prs: [], documents });
+    const text = goalJson({ stage, status, phase, repos: ['memoro'], title: name, goal: [], prs: [], documents });
     f.files[`${GOALS}/${name}/GOAL.json`] = stage === 'draft' ? withGoal(text, { success_criteria: [] }) : text;
     f.files[`${GOALS}/${name}/LOG.md`] = '';
     f.dirs.add(`${GOALS}/${name}/memoro`);
@@ -6425,6 +6425,112 @@ test('programme turn: the second failure opens a prepared item, a closed one let
   assert.equal(turnState(f).items.length, 2);
   assert.ok(noRunnableTurn(runner), 'and no turn while that is open');
   assert.equal(await pass(), 0);
+});
+
+/** The record as a turn's session leaves it after `change`: the one write the runner's completion then reads again under the lock. */
+const recordAfter = (f, change) => { f.files[RECORD_AT] = `${JSON.stringify({ ...JSON.parse(f.files[RECORD_AT]), ...change }, null, 2)}\n`; };
+const recordNow = (f) => JSON.parse(f.files[RECORD_AT]);
+const RESIGNED_MD = `${SIGNED_MD}\n### Part 3 — Three\n`;
+const RESIGNED_SHA = createHash('sha256').update(RESIGNED_MD).digest('hex');
+
+test('programme turn: goals naming every part cut the signature once — cut_text takes the signature the turn launched on, the next pick does not cut again, and a re-sign is due again', async () => {
+  const f = programmeFixture({ record: signedOf(statedText()) });
+  const items = wireDesk(f);
+  f.answer = (call) => {
+    if (call.env.MC_PROGRAMME) writesGoals(f, { one: { stage: 'build', phase: 1, parts: [1], status: 'Martin' }, two: { stage: 'build', phase: 2, parts: [2], status: 'Martin' } });
+    return okSession()(call);
+  };
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).name, 'programme:prog');
+  assert.equal(recordNow(f).cut_text, SIGNED_SHA, 'the cut is the signature it launched on');
+  assert.equal(recordNow(f).signed_text, SIGNED_SHA);
+  assert.deepEqual(recordNow(f).phases, { order: 'stated' }, 'the rest of the record is as it was');
+  assert.equal(f.files[TURN_STATE], undefined, 'no failure');
+  assert.deepEqual(items(), []);
+  assert.match(runRows(f.files)[0].note, /2 goals,cut from the signature$/u);
+  assert.ok(noRunnableTurn(runner), 'a cut programme is not offered again');
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(turnSessions(f).length, 1, 'one turn only');
+
+  // Martin signs again: the new signature is not cut. The goals already name parts 1 and 2: Part 3 is the difference.
+  f.files[SIGNED_AT] = RESIGNED_MD;
+  recordAfter(f, { signed_text: RESIGNED_SHA });
+  assert.equal(runner.nextWork().name, 'programme:prog', 'a re-sign makes the programme due again');
+  f.answer = okSession();
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(turnSessions(f).length, 2);
+  assert.equal(recordNow(f).cut_text, SIGNED_SHA, 'part 3 is named by no goal: the earlier cut stands and nothing is cut');
+  assert.equal(turnState(f).failures.length, 1, 'and the turn that did not name it is one failure');
+  f.answer = (call) => { if (call.env.MC_PROGRAMME) writesGoals(f, { three: { stage: 'build', phase: 3, parts: [3], status: 'Martin' } }); return okSession()(call); };
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(recordNow(f).cut_text, RESIGNED_SHA, 'goals for every part of the new signature cut it');
+  assert.ok(noRunnableTurn(runner));
+});
+
+test('programme turn: a turn that returns the programme to draft is a success — no failure, no item, the earlier cut kept, and no turn while it is draft', async () => {
+  const f = programmeFixture({ record: signedOf(plainText(), { cut_text: 'e'.repeat(64) }) });
+  const items = wireDesk(f);
+  f.answer = (call) => {
+    if (call.env.MC_PROGRAMME) {
+      writesGoals(f, { one: { parts: [1] } });
+      recordAfter(f, { state: 'draft', signed_at: null, signed_by: null, signed_text: null });
+    }
+    return okSession()(call);
+  };
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).name, 'programme:prog');
+  assert.deepEqual([recordNow(f).state, recordNow(f).cut_text, recordNow(f).signed_text], ['draft', 'e'.repeat(64), null]);
+  assert.equal(f.files[TURN_STATE], undefined, 'a return counts no failure');
+  assert.deepEqual(items(), [], 'and opens no item');
+  assert.match(runRows(f.files)[0].note, /returned to draft$/u);
+  assert.ok(noRunnableTurn(runner), 'a draft is not cut');
+});
+
+test('programme turn: a partial cut writes no cut_text and counts a failure; the next turn cuts the rest and the failure stands alone', async () => {
+  const f = programmeFixture();
+  const items = wireDesk(f);
+  f.answer = (call) => { if (call.env.MC_PROGRAMME) writesGoals(f, { one: { stage: 'build', phase: 1, parts: [1], status: 'Martin' } }); return okSession()(call); };
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(recordNow(f).cut_text, null, 'part 2 is named by no goal: nothing is cut');
+  assert.equal(turnState(f).failures.length, 1);
+  assert.match(turnState(f).failures[0].reason, /without a goal naming every part of the signed document \(no goal names part 2;/u);
+  assert.deepEqual(items(), [], 'the first failure opens nothing');
+  assert.equal(runner.nextWork().name, 'programme:prog', 'and the programme is due again, with its goal kept');
+  f.answer = (call) => { if (call.env.MC_PROGRAMME) writesGoals(f, { two: { stage: 'build', phase: 2, parts: [2], status: 'Martin' } }); return okSession()(call); };
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(recordNow(f).cut_text, SIGNED_SHA, 'the second turn cuts it');
+  assert.equal(turnState(f).failures.length, 1, 'and counts no second failure');
+  assert.deepEqual(items(), []);
+  assert.ok(noRunnableTurn(runner));
+});
+
+test('programme turn: the completion reads the record again under its lock — a newer signature is not consumed, a settled record is not written, and a phase written meanwhile is kept', async () => {
+  const goals = (f) => writesGoals(f, { one: { stage: 'build', phase: 1, parts: [1, 2], status: 'Martin' } });
+  // (a) Signed again while the session ran: the launched signature is not the record's, so nothing is cut and nothing counts.
+  const resigned = programmeFixture();
+  wireDesk(resigned);
+  resigned.answer = (call) => { if (call.env.MC_PROGRAMME) { goals(resigned); resigned.files[SIGNED_AT] = RESIGNED_MD; recordAfter(resigned, { signed_text: RESIGNED_SHA }); } return okSession()(call); };
+  const first = createRunner({ deps: resigned.deps });
+  await first.pass({ repo: 'memoro' });
+  assert.equal(recordNow(resigned).cut_text, null, 'the earlier launch did not cut the newer signature');
+  assert.equal(resigned.files[TURN_STATE], undefined, 'a newer signature is no failure');
+  assert.match(runRows(resigned.files)[0].note, /not cut \(signed_text: a newer signature than the turn read\)/u);
+  assert.equal(first.nextWork().name, 'programme:prog', 'the next pick cuts the new signature');
+  // (b) Done, dropped or gone while it ran: settled, no write, no failure.
+  for (const [kind, change] of [['done', { state: 'done' }], ['dropped', { state: 'dropped', signed_at: null, signed_by: null, signed_text: null }]]) {
+    const f = programmeFixture();
+    f.answer = (call) => { if (call.env.MC_PROGRAMME) { goals(f); recordAfter(f, change); } return okSession()(call); };
+    await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+    assert.equal(recordNow(f).state, change.state, kind);
+    assert.equal(recordNow(f).cut_text, null, `${kind}: nothing is cut`);
+    assert.equal(f.files[TURN_STATE], undefined, `${kind}: no failure`);
+  }
+  // (c) A phase stated meanwhile (another writer under the same lock) is read fresh and kept.
+  const phased = programmeFixture();
+  phased.answer = (call) => { if (call.env.MC_PROGRAMME) { goals(phased); recordAfter(phased, { phases: { order: 'stated', after: { 2: [1] } } }); } return okSession()(call); };
+  await createRunner({ deps: phased.deps }).pass({ repo: 'memoro' });
+  assert.deepEqual([recordNow(phased).cut_text, recordNow(phased).phases], [SIGNED_SHA, { order: 'stated', after: { 2: [1] } }]);
 });
 
 test('programme turn: a quota, an offline and a refused-login ending write no failure, and a missing state file reads as none', async () => {
