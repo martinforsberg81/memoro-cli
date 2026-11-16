@@ -22,6 +22,9 @@ out unless the thing ordered rests on it. Keep it short enough that he reads all
   layer. It can land by itself, and it keeps its number.
 - What Martin or the desk does beside the build stands under Order.
 - Three to eight parts.
+- At most 1,500 words. What runs today is written as a user meets it, from
+  the app and the standards; code is read only for a fact the order depends
+  on. If it does not fit, it is two orders, or construction has come in.
 
 ## A part
 
@@ -30,10 +33,16 @@ out unless the thing ordered rests on it. Keep it short enough that he reads all
   every case that is not the plain one: nothing to show, too much, a failure,
   a second visit, the phone. Then only the construction the order rests on:
   what must be reused, what must not change, a limit that binds.
-- **Design.** What the user gets and how one sees that it works. One picture for each
-  thing Martin decides, in the light theme (how dark looks follows memoro
-  docs/technical/design-tokens.md). States are said in words by the app component they
-  follow. At most ten pictures and about 1,500 words across the document.
+- **Design.** What the user gets and how one sees that it works. One picture
+  for each thing Martin decides: the new thing as it will look, at one width,
+  in the light theme. A second picture only where the phone is a choice of its
+  own. No picture in the dark theme: how dark looks follows memoro
+  `docs/technical/design-tokens.md`. States (failed, empty, working, cut, a
+  second visit) are said in words by the app component they follow, and are
+  not pictured. Where a part reuses a component as it is, the design names the
+  component and shows one picture of where it stands. A surface of text is
+  shown as its text. "Nothing a user sees" where that is so. At most ten
+  pictures and about 1,500 words across the document.
 - **Proved by.** What a user would notice if it were built wrong.
 - **Not in this part.** The nearest thing someone would expect and does not get.
 

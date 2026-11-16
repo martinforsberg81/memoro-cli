@@ -111,7 +111,7 @@ describe('mc programs create and state', () => {
       assert.ok(existsSync(join(a.home, 'alpha', 'proposals', 'archive')));
       assert.deepEqual(recordOf(a.home, 'alpha'), { ...DRAFT, end: 'Alpha is done when it holds.', created: '2026-11-14T10:20:30Z', phases: { order: 'stated' } });
       const page = readFileSync(join(a.home, 'alpha', 'README.md'), 'utf8');
-      assert.deepEqual([...page.matchAll(/^#+ .+$/gmu)].map(([line]) => line).slice(1), ['## What it is for', '## End', '## Why', '## What runs today', '## Parts', '### Part 1 — <name>', '## Order', '## Decided by signing', '## Not built', '## Read before sign-off', '## Where things are', '## Decisions']);
+      assert.deepEqual([...page.matchAll(/^#+ .+$/gmu)].map(([line]) => line).slice(1), ['## What it is for', '## End', '## Why', '## What runs today', '## Parts', '### Part 1 — <name>', '## Order', '## Decided', '## Not built', '## Read', '## Where things are', '## Decisions']);
       assert.match(page, /^# alpha — /u);
       assert.match(page, /## End\n\nAlpha is done when it holds\./u);
       assert.match(page, /Serves the horizon `mc-autonomy`/u);

@@ -53,7 +53,7 @@ Not in this part: <The nearest thing a builder might add.>
 
 <Steps, prerequisites and shared files.>
 
-## Decided by signing
+## Decided
 
 <Every choice this document makes that Martin could have made otherwise,
 one line each.>
@@ -62,9 +62,9 @@ one line each.>
 
 <What this programme excludes.>
 
-## Read before sign-off
+## Read
 
-<What the writer read and did not read, and the programme review's verdict.>
+<What the writer read and did not read, and what an advisory reading found.>
 
 ## Where things are
 
@@ -72,32 +72,28 @@ one line each.>
 
 ## Decisions
 
-<After sign-off, sessions record programme decisions here. Cross-programme
+<Once the programme is ready, sessions record programme decisions here. Cross-programme
 rules belong in docs/technical/; point there instead of repeating them.>
 ```
 
-The eleven required entries are title/scope/Repositories followed by What it
-is for, End, Why, What runs today, Parts, Order, Decided by signing, Not built,
-Read before sign-off and Where things are, in that order, all nonempty.
-Repeat `### Part n — <name>` for each piece of work. Each part has five ordered
-label-start entries: Closes, Solution, Design, Proved by, Not in this part.
-Their first lines begin with those labels; what follows a label on the line
-is free, and its content may continue as paragraphs or lists. Code checks
-structure, not prose quality: the independent reading and Martin judge what
-it says. The document binds what the user gets, how it looks and how one
-sees that it works; the construction is the planner's and the builder's
-([writing a programme document](../writing-a-programme-document.md)).
+Repeat `### Part n — <name>` for each piece of work: the planner cuts one or
+more goals per part, each naming its part. Code checks none of these headings;
+Martin judges what the document says. The document binds what the user gets,
+how it looks and how one sees that it works; the construction is the planner's
+and the builder's ([writing a programme document](../writing-a-programme-document.md)).
 
-Every state a user meets is shown, not only named. A state a Solution
-mentions (a refusal, an error, a wait, a notice, an empty result) has its
-picture or its literal text in Design. A terminal line is written out whole in
+Each thing Martin decides is shown, as one picture or as its text; an order
+has at most ten pictures, in the light theme. A state a Solution mentions (a
+refusal, an error, a wait, a notice, an empty result) is said in Design as a
+rule in words that names the app's existing component it follows, or as its
+literal text; it is not pictured. A terminal line is written out whole in
 the established form, `mc: <what is wrong> — <the call that works>`, with its
 exit code. Where an existing line is used again, quote it and say it is reused;
 where a change makes an existing line fire for a new cause or read wrong, say
 whether it stays, is reworded (show the new text) or goes. A Solution that says
 "refused", "says so" or "a line" without the line is not finished. Before the
 document comes to the desk, the writer goes through every Solution sentence that
-changes what a user sees and checks that Design shows it.
+changes what a user sees and checks that Design shows or says it.
 
 Findings of an advisory reading are settled in the document with Martin before
 it is set ready.

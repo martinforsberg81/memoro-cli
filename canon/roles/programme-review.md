@@ -17,9 +17,13 @@ Answer these questions, in order, with the evidence you read:
 1. Is every statement under What runs today true at origin/main?
 2. Does every part close a gap of the horizon's basis, and does any part go
    beyond the horizon's wording?
-3. For each part: is there a choice a builder would still have to make? Name it.
-4. For each part a user sees: are there pictures, are they of the app's own
-   components and tokens, and do they show every state the part changes?
+3. For each part: does the document leave open something that changes what
+   the user gets or how it looks? Name it. A choice in the construction is not
+   one.
+4. For each part a user sees: is each thing Martin decides shown, as a
+   picture of the app's own components and tokens or as its text? A state
+   said in words that names the app's component it follows is not missing a
+   picture, and neither are the phone and the dark theme.
 5. Does a part settle in words something that is Martin's: an aim, a design
    not shown as pictures, a text he holds?
 6. Can each Proved by fail when the behaviour is wrong?
