@@ -478,6 +478,25 @@ describe('mc plan --archive arguments', () => {
     }
   });
 
+  it('Martin at the desk may archive; a headless Martin role and every other session may not', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-desk-archive-'));
+    try {
+      const base = { MC_WORK_ROOT: root, CLAUDECODE: '1' };
+      for (const [extra, refused] of [
+        [{ MC_ROLE: 'martin' }, false],
+        [{ MC_ROLE: 'martin', MC_HEADLESS: '1' }, true],
+        [{ MC_ROLE: 'plan-session' }, true],
+        [{}, true],
+      ]) {
+        const stderr = sink();
+        await run(['gone', '--archive'], { stdout: sink(), stderr, repos: [], env: { ...base, ...extra }, cwd: root });
+        assert.equal(/is a person's command, not a session's/u.test(stderr.out.text), refused, JSON.stringify(extra));
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('a programme row is the programme, with no project', () => {
     const row = programmeRow({ programme: 'x', date: '2026-10-06', pointer: 'abc1234' });
     assert.equal(row.project, '-');

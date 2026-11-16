@@ -747,6 +747,7 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc plan <programme> --archive\n",
     "--resume lists compatible conversations; --resume <id> selects an ID or unique prefix.\n",
     "Person only: opens or resumes an interactive plan session. Never run inside a session.\n",
+    "--archive opens no session: a person runs it, and the interactive Martin role on his word at the desk.\n",
     "--bg leaves a Claude session running for the Claude app and returns at once; without it the terminal attaches. A Codex or agy session runs in the terminal that starts it.\n",
     "Already planning? Use mc goal new, mc goal set and mc goal criterion add.\n",
     "\n",

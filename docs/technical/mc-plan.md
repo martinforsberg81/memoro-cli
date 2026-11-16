@@ -328,8 +328,9 @@ The catalog's first review candidate is read first whenever it can run; the auth
 
 ## Archiving a programme
 
-`mc plan <programme> --archive` is a person's act, and the only way to archive a
-programme without a record. The runner archives finished goals, and it archives
+`mc plan <programme> --archive` is a person's act, or the interactive Martin
+role's on his word at the desk (no other session and no headless role may call
+it), and the only way to archive a programme without a record. The runner archives finished goals, and it archives
 the programme above them only when the programme has a valid record: once every
 goal is done or dropped, a write-back reading is OK and no restricted data is
 held, it calls the same `archiveProgramme` itself and sets the record's `state`
