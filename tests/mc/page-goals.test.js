@@ -64,7 +64,7 @@ const goalLineOf = (lines, name) => lines.find((line) => new RegExp(`^ +\\d+ ${n
 
 /** The PROGRAMMES section's lines, from its heading to the end of the page. */
 function programmesOf(lines) {
-  const head = lines.findIndex((line) => plain(line).startsWith('  PROGRAMMES'));
+  const head = lines.findIndex((line) => /^ {2}┌─ PROGRAMMES/u.test(plain(line)));
   assert.ok(head >= 0, 'PROGRAMMES is drawn');
   return lines.slice(head);
 }

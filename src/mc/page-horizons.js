@@ -12,6 +12,7 @@
  * The module draws with its own small pieces and imports nothing from page-render.js, which imports it.
  */
 import { PR_TONE, STAGE_TONE, clipCell, kindTone } from './page-grid.js';
+import { frameEnd, frameTop } from './page-operations.js';
 import { attentionGoals } from './page-programmes.js';
 import { sessionGoal } from './page-activity.js';
 import { clip, width } from './status-render.js';
@@ -19,7 +20,7 @@ import { clip, width } from './status-render.js';
 /** At most this many marks of one kind on a row; more are drawn `●×n`, as the pipeline draws them. */
 const MARK_CAP = 8;
 const FINISHED = ['done', 'dropped'];
-const INDENT = 4;
+const INDENT = 6;
 
 const finished = (goal) => FINISHED.includes(goal.stage);
 
@@ -140,12 +141,6 @@ export function programmeRow(c, wide, group, facts, { digits = 2, extra = [], na
   return width(text) > wide ? clip(text.replace(/\u001b\[[0-9;]*m/gu, ''), wide) : text;
 }
 
-const sectionHeading = (lines, c, wide, counts) => {
-  const left = `  ${c('HORIZONS', 'bold', 'cyan')}`;
-  const shown = counts ? `  ${c(clip(counts, Math.max(8, wide - 12)), 'grey')}` : '';
-  lines.push(`${left}${shown}`);
-};
-
 /** What a row under `Serving no horizon` adds: the slug the record names, and why it is not an open horizon. */
 const extraFor = (group) => (group.horizon ? [{ text: `${group.horizon} (${group.horizon_state})`, styles: ['yellow'] }] : []);
 
@@ -183,9 +178,10 @@ export function horizonsLines(lines, c, wide, data, { expand = false, sessions =
 
   const open = horizons.open || [];
   const underway = groups.filter((group) => facts.get(group.programme).underway).length;
-  sectionHeading(lines, c, wide, `${open.length} open horizon${open.length === 1 ? '' : 's'} · ${underway} programme${underway === 1 ? '' : 's'} under way`);
-  if (horizons.error) lines.push(`  ${c(clip(`horizons unreadable — ${horizons.error}`, wide - 2), 'red')}`);
-  if (horizons.unreadable?.length) lines.push(`  ${c(clip(`${horizons.unreadable.length} horizon record${horizons.unreadable.length === 1 ? '' : 's'} cannot be read: ${horizons.unreadable.join(', ')}`, wide - 2), 'red')}`);
+  const top = lines.length;
+  lines.push(frameTop(c, wide, 'HORIZONS', `${open.length} open horizon${open.length === 1 ? '' : 's'} · ${underway} programme${underway === 1 ? '' : 's'} under way`));
+  if (horizons.error) lines.push(`    ${c(clip(`horizons unreadable — ${horizons.error}`, wide - 4), 'red')}`);
+  if (horizons.unreadable?.length) lines.push(`    ${c(clip(`${horizons.unreadable.length} horizon record${horizons.unreadable.length === 1 ? '' : 's'} cannot be read: ${horizons.unreadable.join(', ')}`, wide - 4), 'red')}`);
 
   const rows = (names, extra = () => []) => names.map((name) => byName.get(name)).filter(Boolean)
     .filter((group) => shown(group.programme))
@@ -203,7 +199,7 @@ export function horizonsLines(lines, c, wide, data, { expand = false, sessions =
     const title = horizon.title || horizon.slug;
     const place = horizon.position != null ? `${horizon.position}  ` : '';
     const slug = horizon.title && horizon.title !== horizon.slug ? `  ${horizon.slug}` : '';
-    lines.push(`  ${c(`${place}${clip(title, Math.max(8, wide - 4 - place.length - slug.length))}`, 'bold')}${slug ? c(clip(slug, Math.max(0, wide - 6 - width(title) - place.length)), 'grey') : ''}`);
+    lines.push(`    ${c(`${place}${clip(title, Math.max(8, wide - 6 - place.length - slug.length))}`, 'bold')}${slug ? c(clip(slug, Math.max(0, wide - 8 - width(title) - place.length)), 'grey') : ''}`);
     const named = (horizon.programmes || []).filter((name) => byName.has(name) && shown(name));
     const take = folded.get(horizon) || 0;
     if (named.length) rows(named.slice(0, named.length - take));
@@ -214,11 +210,13 @@ export function horizonsLines(lines, c, wide, data, { expand = false, sessions =
   const noneShown = none.filter(shown);
   if (noneShown.length) {
     const take = expand ? 0 : Math.min(fold.none || 0, noneShown.length);
-    lines.push(`  ${c('Serving no horizon', 'bold')}`);
+    lines.push(`    ${c('Serving no horizon', 'bold')}`);
     rows(noneShown.slice(0, noneShown.length - take), extraFor);
     if (take) lines.push(`${' '.repeat(INDENT)}${c(`▸ ${take} more not serving a horizon — a shows ${take === 1 ? 'it' : 'them'}`, 'grey')}`);
   }
+  frameEnd(lines, c, wide, top);
   const nothing = expand ? 0 : groups.filter((group) => !shown(group.programme)).length;
-  if (nothing) lines.push(`  ${c(`▸ ${nothing} with nothing under way`, 'grey')}`);
+  // One folded frame, its top rule alone.
+  if (nothing) lines.push(frameTop(c, wide, `${nothing} programme${nothing === 1 ? '' : 's'} with nothing under way`, '', ''));
   lines.push('');
 }
