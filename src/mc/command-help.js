@@ -676,8 +676,8 @@ export const COMMAND_USAGE = Object.freeze({
     "Runs one explicit manager task in a fresh conversation, always; --new is implicit. Default limit: 30 minutes.\n",
     "Prints outcome and result log path. This manual run neither holds nor is held by the runner's own manager turns.\n",
     "The interactive manager is gone: mc manager without --headless, in every form (--new, --resume, --bg, --local), and\n",
-    "mc brief exit 2; talk to the desk with mc martin. The runner starts the manager by itself in two turns: one while an\n",
-    "open horizon has no open programme, and a daily curation of the area texts (docs/technical/mc-manager.md).\n",
+    "mc brief exit 2; talk to the desk with mc martin. The runner starts the manager by itself in one turn only, a daily\n",
+    "curation of the area texts (docs/technical/mc-manager.md). It creates no programme: a horizon with no programme waits for Martin.\n",
   ].join(''),
   martin: [
     "usage — mc martin [--local] [--new] [--resume [<id>]] [--codex|--claude|--agy] [--model <model>] [--bg]\n",
