@@ -32,8 +32,10 @@
  *    flight is not started again; a run that ends starts nothing after it.
  *  - **A run that stopped on a commit waits for main to move.** What stopped
  *    because of the machine rather than the tree is tried again after
- *    `FULL_RUN_RETRY_MS`. A run the runner itself cut short (STOP, UPDATE) is
- *    due again at once, for the runner that comes next.
+ *    `FULL_RUN_RETRY_MS`. A run the runner itself cut short (STOP) is due
+ *    again at once, for the runner that comes next. An UPDATE does not cut a
+ *    run short: the predecessor finishes the run it measures, and a run that
+ *    only waits for another or follows it is dropped by the handover signal.
  *
  * ## Beside the merge lane
  *
@@ -232,7 +234,7 @@ export function runOfReport(repo, report, { startedAt = Date.now(), clock = () =
 export async function fullRun(repo, {
   root = mcHome(), env = process.env, say = () => {}, narrate = say, round = scheduledRound,
   clock = () => Date.now(), signal = null, repair = requestMainRepair,
-  sha = null, claims = {},
+  sha = null, claims = {}, handover = null, onMeasuring = null,
 } = {}) {
   // One full run of a tree at a time, whoever starts it (`full-run-claim.js`):
   // a run already measuring this main — a deploy's, a hand-typed `--full`, the
@@ -242,6 +244,7 @@ export async function fullRun(repo, {
   for (;;) {
     const taken = claimFullRun({ repo: repo.name, sha, verb: 'full run', root, ...claims });
     if (taken.claimed) {
+      onMeasuring?.(taken.claim);
       try {
         return await measure(repo, { root, env, say, narrate, round, clock, signal, repair });
       } finally {
@@ -252,12 +255,14 @@ export async function fullRun(repo, {
       // Another tree of this repository is being measured, in the one
       // checkout a full run has: wait for it, then measure this one.
       say(`${repo.name} — a full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} is using the full-run checkout (pid ${taken.waitFor.pid}); waiting for it before measuring ${sha ? sha.slice(0, 7) : 'main'}`);
-      await awaitClaim(taken.waitFor, { root, ...claims, onWait: (ms) => say(`${repo.name} — still waiting for the full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} (pid ${taken.waitFor.pid}), ${Math.round(ms / 60000)} min so far`) });
+      await awaitClaim(taken.waitFor, { root, ...claims, signal: handover, onWait: (ms) => say(`${repo.name} — still waiting for the full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} (pid ${taken.waitFor.pid}), ${Math.round(ms / 60000)} min so far`) });
+      if (handover?.aborted) return dropped(repo, say);
       continue;
     }
     const other = taken.joined;
     say(`${repo.name} — a full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} is already being measured (pid ${other.pid}, since ${other.started}); following it, not starting a second`);
-    await awaitClaim(other, { root, ...claims, onWait: (ms) => say(`${repo.name} — still following the full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} (pid ${other.pid}), ${Math.round(ms / 60000)} min so far`) });
+    await awaitClaim(other, { root, ...claims, signal: handover, onWait: (ms) => say(`${repo.name} — still following the full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} (pid ${other.pid}), ${Math.round(ms / 60000)} min so far`) });
+    if (handover?.aborted) return dropped(repo, say);
     const last = readNightlyHistory(repo.path, { root }).runs.at(-1);
     if (last && Date.parse(last.at) >= Date.parse(other.started) - 1000) {
       say(`${repo.name} — the run being followed has ended`);
@@ -325,6 +330,16 @@ export function repairFromRun(repo, report, run, { repair = requestMainRepair, s
   }
 }
 
+/**
+ * A run that only waited for another, or followed it, and was dropped by the
+ * handover signal: nothing was claimed or measured, nothing is written, and
+ * nothing is started after it. The next runner asks `fullRunDue` again.
+ */
+function dropped(repo, say) {
+  say(`${repo.name} — the runner is handing over; this run waited for another and is dropped, nothing measured`);
+  return null;
+}
+
 async function measure(repo, {
   root, env, say, narrate, round, clock, signal, repair,
 }) {
@@ -378,20 +393,34 @@ async function measure(repo, {
 export async function fullRunTick({
   root = mcHome(), env = process.env, say = () => {}, narrate = say,
   repos = null, round = scheduledRound, clock = () => Date.now(), head = remoteHead,
-  shouldStop = () => false, running = new Map(), signal = null, repair = requestMainRepair,
-  retryMs = FULL_RUN_RETRY_MS,
+  shouldStop = () => false, running = new Map(), signal = null, handover = null, repair = requestMainRepair,
+  retryMs = FULL_RUN_RETRY_MS, claims = {},
 } = {}) {
   const at = new Date(clock()).toISOString();
   const known = unique(repos || await knownRepos({ env }));
   const started = [];
   const busy = [];
   const waiting = [];
-  const leaving = () => shouldStop() || Boolean(signal?.aborted);
+  const leaving = () => shouldStop() || Boolean(signal?.aborted) || Boolean(handover?.aborted);
 
+  // `running` holds one promise per repository. It carries what the runner
+  // needs to know about the run it holds — `measuring` (it claimed the tree
+  // and measures; false while it only waits for another run or follows it),
+  // `repo`, `sha` and `since` — as properties of the promise.
   const launch = (repo, sha = null) => {
-    const tracked = fullRun(repo, { root, env, say, narrate, round, clock, signal, repair, sha })
-      .then((ran) => [ran])
+    const state = { measuring: false, repo: repo.name, sha, since: null };
+    const tracked = fullRun(repo, {
+      root, env, say, narrate, round, clock, signal, handover, repair, sha, claims,
+      onMeasuring: (claim) => { state.measuring = true; state.sha = claim.sha || sha; state.since = claim.started || null; },
+    })
+      .then((ran) => (ran ? [ran] : []))
       .finally(() => { if (running.get(repo.path) === tracked) running.delete(repo.path); });
+    Object.defineProperties(tracked, {
+      measuring: { get: () => state.measuring },
+      repo: { value: state.repo },
+      sha: { get: () => state.sha },
+      since: { get: () => state.since },
+    });
     running.set(repo.path, tracked);
     return tracked;
   };

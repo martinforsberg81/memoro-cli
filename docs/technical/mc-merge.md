@@ -1604,13 +1604,36 @@ the one way the runner is: no runner, no full run.
   stopped as stalled hands the files it names as in flight to the same door,
   with the stall as their failure; a stall that names no file asks for nothing
   and the next run, when main has moved, measures again.
-- **STOP reaches it.** A chore pass that finds `~/mc/runner/STOP` or `UPDATE`
-  starts no run. Before the runner leaves, the chore loop ends
-  the runs in flight through their round's signal and waits for them
-  (`settleFullRuns`), so no suite outlives the runner; each is written
+- **STOP ends it; an update does not.** A chore pass that finds
+  `~/mc/runner/STOP` or `UPDATE` starts no run. The runner has two signals
+  (`mc-tests/full-run-survives-handover`). The *stop* signal reaches the
+  measuring round and is fired by STOP alone: the chore loop ends every run in
+  flight through it and waits for them (`settleFullRuns`), each is written
   `stopped at gone` and is due again for the runner that comes next. The
-  runner's own `--once` runs no chores and so no full run. `runs.tsv` gets a
-  `kind: nightly` row only for a chore pass that started a run.
+  *handover* signal reaches only a run that waits for another run or follows
+  it, and is fired by the handover and by STOP: such a run is dropped at once,
+  measures nothing, writes nothing and starts nothing after it. A run the
+  runner is *measuring* is not touched by an update: the runner that handed
+  over finishes it as it finishes a session — it takes nothing new and exits
+  when the run has ended — and the run writes its history and hands its reds to
+  the main-red mend as before. The runner that comes next finds the claim the
+  predecessor holds in `full-runs.json`: it follows a run of the same commit
+  and waits for one of another, so no second run measures beside it, and it
+  measures the newer main when the first has ended. A STOP during that drain
+  ends the run and exits with `runner exit on STOP`. The runner's own `--once`
+  runs no chores and so no full run. `runs.tsv` gets a `kind: nightly` row only
+  for a chore pass that started a run.
+- **What the predecessor says it holds.** While a handed-over runner holds a
+  full run, its handover line (`update: handed over to pid N — finishing a full
+  run of <repo> at <7-char sha> since <started>, taking nothing new`), its
+  ten-minute drain line (`update: pid N still waiting on a full run of …`) and
+  the page's MC line (`pid N finishing a full run of <repo> at <sha> since
+  <date> <time>`) name the run beside any sessions, and a runner that holds
+  only a run does not say it finishes 0 steps or 0 sessions. The runner knows
+  its runs from its own map (`fullRunsMeasuring`); the page is another process
+  and reads the claim file, `liveClaims` filtered by the predecessor's pid.
+  `mc run stop --force` reaches such a predecessor by the pid `runner.json`
+  keeps.
 - **Three outcomes stay apart.** A run that found nothing, a run that named
   failures, and a run that produced no suite result at all — the preparation
   failed, the declaration stopped it, the process died, it stalled. The third is

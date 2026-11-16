@@ -834,9 +834,11 @@ flight, as a meter beside the sessions and the merge rounds. One run per
 repository at a time across chore passes (the runner keeps the map). It takes no round lock and no lease and measures in its
 own checkout, so no merge round waits for it, at 2 test lanes
 (`MC_FULL_RUN_LANES`). A `kind: nightly` row goes in `runs.tsv` only for a pass
-that started a run. A chore pass with STOP or UPDATE present starts none, the
-chore loop ends the runs in flight before the runner leaves, and `--once` runs
-no chores and so no full run. The detached scheduler that once did this
+that started a run. A chore pass with STOP or UPDATE present starts none. STOP
+ends the runs in flight before the runner leaves; an UPDATE does not end a run
+the runner is measuring — the runner that handed over finishes it like a
+session and exits after it, while a run that only waits for another or follows
+it is dropped at once — and `--once` runs no chores and so no full run. The detached scheduler that once did this
 (`mc test nightly start`, a pid file) is deleted; `mc test nightly status` says
 where the full runs now come from. See [`mc-merge.md`](mc-merge.md) § *The full
 run nobody asks for*.

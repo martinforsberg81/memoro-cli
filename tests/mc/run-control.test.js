@@ -16,7 +16,7 @@ import { describe, it } from 'node:test';
 
 import { parseRunArgs, usage } from '../../src/mc/commands/run.js';
 import {
-  agentPlist, childEnv, controlPaths, drainLine, drainState, endNow, handOver, processLines, readRunner, requestUpdate, startRunner,
+  agentPlist, childEnv, controlPaths, drainLine, drainState, drainWaiting, endNow, fullRunWords, handOver, processLines, readRunner, requestUpdate, startRunner,
   stopRunner,
 } from '../../src/mc/run-control.js';
 
@@ -779,6 +779,18 @@ describe('mc run stop', () => {
     assert.match(out.lines[1], /and 2 current-\*\.json/u);
   });
 
+  // A predecessor that holds only a full run has no lane file: runner.json's
+  // predecessor pid is what reaches it (mc-tests/full-run-survives-handover).
+  it('--force ends a predecessor that holds only a full run, found by the pid runner.json keeps', async () => {
+    const fx = fixture({ runner: { pid: 200, predecessor: { pid: 100 } }, live: [100, 200] });
+    assert.deepEqual(fx.deps.list(paths.dir).filter((name) => name.startsWith('current-')), [], 'the predecessor has no lane file');
+    const out = await stopRunner({ force: true, root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, true);
+    assert.deepEqual(fx.calls.killed.map(([pid]) => pid).sort(), [100, 200], 'both pids were signalled, the run-only predecessor too');
+    assert.equal(fx.alive.size, 0);
+    assert.match(out.lines.join('\n'), /pid 100 is gone/u);
+  });
+
   it('--force ends both runners of a handover', async () => {
     const fx = fixture({
       runner: { pid: 200, predecessor: { pid: 100 } }, live: [100, 200],
@@ -1076,6 +1088,39 @@ describe('handOver', () => {
     const out = await handOver({ paths, deps: fx.deps, say: fx.say, checkout: '/repo' });
     assert.equal(out.ok, false);
     assert.match(fx.said.at(-1), /stays up and keeps going/u);
+  });
+
+  // mc-tests/full-run-survives-handover: a runner that holds only a full run
+  // says which run, not that it finishes nothing.
+  const RUN = { repo: 'memoro-cli', sha: '1a2b3c4d5e6f7a8b9c0d', since: '2026-11-16T10:00:00.000Z' };
+
+  it('names the full run a runner holds, and does not say it finishes 0 steps', async () => {
+    const fx = runnerFixture();
+    await handOver({ paths, deps: fx.deps, say: fx.say, checkout: '/repo', finishing: 0, runs: [RUN] });
+    const line = fx.said.find((one) => /handed over to pid 9001/u.test(one));
+    assert.match(line, /finishing a full run of memoro-cli at 1a2b3c4 since 2026-11-16T10:00:00\.000Z, taking nothing new/u);
+    assert.doesNotMatch(line, /finishing 0|step\(s\)/u);
+    assert.doesNotMatch(line, /1a2b3c4d/u, 'the short commit, seven characters');
+  });
+
+  it('says both what a runner holds when it holds sessions and a run', async () => {
+    const fx = runnerFixture();
+    await handOver({ paths, deps: fx.deps, say: fx.say, checkout: '/repo', finishing: 2, runs: [RUN] });
+    assert.match(fx.said.find((one) => /handed over/u.test(one)), /finishing 2 step\(s\) in flight and a full run of memoro-cli at 1a2b3c4 since/u);
+  });
+
+  it('a runner holding sessions only says what it said before', async () => {
+    const fx = runnerFixture();
+    await handOver({ paths, deps: fx.deps, say: fx.say, checkout: '/repo', finishing: 1 });
+    assert.match(fx.said.find((one) => /handed over/u.test(one)), /finishing 1 step\(s\) in flight, taking nothing new$/u);
+  });
+
+  it('the drain line names the run a runner is waiting on, with or without sessions', () => {
+    assert.equal(drainWaiting({ inFlight: [], runs: [RUN] }), 'waiting on a full run of memoro-cli at 1a2b3c4 since 2026-11-16T10:00:00.000Z');
+    const both = drainWaiting({ inFlight: [{ name: 'goal:prog/a', lane: 'memoro#1', elapsed_seconds: 60 }], runs: [RUN] });
+    assert.match(both, /^waiting on goal prog\/a .* and a full run of memoro-cli at 1a2b3c4 since/u);
+    assert.equal(drainWaiting({ inFlight: [] }), 'nothing in flight, the handover comes at the next pick');
+    assert.equal(fullRunWords([RUN, { repo: 'memoro', sha: null, since: null }]), 'a full run of memoro-cli at 1a2b3c4 since 2026-11-16T10:00:00.000Z and a full run of memoro at main');
   });
 
   it('removes the UPDATE file first, so one order is one handover', async () => {
