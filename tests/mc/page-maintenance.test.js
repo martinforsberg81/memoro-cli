@@ -242,7 +242,9 @@ describe('the maintenance frame and view', () => {
     assert.ok(text.some((line) => /^ +Authentication +memoro +today +3 aims$/u.test(line)), joined);
     assert.ok(text.some((line) => /^ +The page +memoro-cli +12 days ago +no aim$/u.test(line)), joined);
     assert.ok(text.every((line) => width(line) <= 120));
-    assert.match(joined, /m {2}back/u);
+    // The key says what leaves the view, and the view is the header and the frame: the hero frames are `o`'s.
+    assert.match(text.find((line) => line.includes('┌─ MAINTENANCE')), / h {2}home ┐$/u);
+    assert.doesNotMatch(joined, /FIGURES 24 h|PIPELINE|m {2}back/u);
   });
 
   it('draws the strays beneath their row when something lies outside the programmes', () => {

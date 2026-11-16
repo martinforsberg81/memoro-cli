@@ -310,7 +310,7 @@ function areaLines(lines, c, wide, areas) {
 /** The maintenance view (`m`): every source's row with its detail below it. */
 export function maintenanceView(lines, c, wide, data) {
   const rows = maintenanceRows(data);
-  lines.push(frameTop(c, wide, 'MAINTENANCE', `${rows.length} ${rows.length === 1 ? 'source' : 'sources'}`, 'm  back'));
+  lines.push(frameTop(c, wide, 'MAINTENANCE', `${rows.length} ${rows.length === 1 ? 'source' : 'sources'}`, 'h  home'));
   const indent = 4 + SOURCE_LABEL;
   for (const source of rows) {
     lines.push(sourceRow(c, wide, source));

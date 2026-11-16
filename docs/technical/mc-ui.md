@@ -145,13 +145,15 @@ collected `maintenance` (a page from a mc that did not have it) and with nothing
 programmes the frame is not drawn.
 
 **The maintenance view** (`m` or `manager`, `maintenanceView`, `page-overview.js`) draws the
-header and the same frame with each source's detail below its row: proposals by programme, the
+overview's header rows (`headerRows`), the warnings and the same frame, nothing else (FIGURES 24 h
+and PIPELINE are the operations view's), with each source's detail below its row: proposals by programme, the
 new ones by name; lessons by state (open and in a goal by name); errors, tests and dependencies by
 repository, each with its age; intake by file; areas as a table of name, repository, when its page
 last changed on `origin/main` (`today`, `1 day ago`) and its aims (`3 aims`, `1 aim`, `no aim`); the
 strays' items. The aims are the top-level bullets under the page's `## Aim`; `No aim stated yet.`
 is none. The view draws nothing the sources do not hold and acts on nothing: the verb at the right
-of a row is where the source is handled. `h`, a number or a programme's name leaves it. The operations view's own
+of a row is where the source is handled. `h`, a number or a programme's name leaves it; the frame's key
+reads `h  home`, and `m` again keeps it open. The operations view's own
 MAINTENANCE (proposals, errors) is a different frame and unchanged.
 
 **The desk's sessions** are counted in DESK's title (`<n> desk sessions open`), not

@@ -473,9 +473,10 @@ describe('the menu under the page', () => {
   it('opens the maintenance view on m or manager, and answers b and brief with the refusal and draws the page again', async () => {
     for (const answer of ['m', 'manager']) {
       const calls = [];
-      const session = drive([answer, '1', 'q'], { maintain: (on) => calls.push(`maintain ${on}`), show: (name) => calls.push(`show ${name}`) });
+      // `h`, the key the view's frame names, leaves it for the overview.
+      const session = drive([answer, 'h', '1', 'q'], { maintain: (on) => calls.push(`maintain ${on}`), show: (name) => calls.push(`show ${name}`) });
       assert.equal(await session.run(), 0, answer);
-      assert.deepEqual(calls, ['maintain true'], answer);
+      assert.deepEqual(calls, ['maintain true', 'show null'], answer);
       assert.doesNotMatch(session.written.join(''), /the interactive manager is gone/u, answer);
       assert.deepEqual(session.opened, ['docx-editing-surface/docx-editor'], `${answer}: the page is still there to answer`);
     }

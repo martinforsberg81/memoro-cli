@@ -914,7 +914,8 @@ export function renderPageLines(data, {
   const body = { expand, version, at };
 
   if (maintenance) {
-    headerLines(lines, c, paintText, wide, data, version, { header: true });
+    // The overview's header rows and the warnings, then the frame: FIGURES 24 h and PIPELINE are the operations view's.
+    lines.push(...headerRows(c, wide, data, version), '');
     warningLines(lines, c, wide, data);
     maintenanceView(lines, c, wide, data);
     return lines;
