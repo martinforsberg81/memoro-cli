@@ -31,6 +31,7 @@ import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { nightlyLogPath } from '../../src/mc/nightly.js';
 import { nightlyReading, readNightlyHistory, recordNightlyRun } from '../../src/mc/nightly-history.js';
 import { fullRun, fullRunDue, fullRunTick, loggedTick, repairFromRun, scheduledRound } from '../../src/mc/nightly-loop.js';
+import { readDeployMends, requestDeployRepair } from '../../src/mc/deploy-repair.js';
 import { requestMainRepair } from '../../src/mc/main-repair.js';
 import { awaitClaim, claimFullRun, liveClaims, releaseClaim } from '../../src/mc/full-run-claim.js';
 
@@ -809,6 +810,50 @@ describe('repairFromRun stale report wiring', () => {
     assert.equal(entries[0].tests[0].at, `${file}:99:5`);
     assert.equal(entries[0].tests[0].detail.length, 40);
     assert.deepEqual(entries[0].tests[0].stack, ['async TestContext.<anonymous> (tests/stack.test.js:99:5)']);
+  });
+});
+
+describe('a full run that cannot start is the deploy mend\'s', () => {
+  const repo = { name: 'memoro', path: '/fixture/repo' };
+  const holders = [{ pid: 4711, command: 'secret-tool lookup', cwd: '/work/full/src' }];
+  const stopped = (extra = {}) => ({ stopped_at: 'worktree', reason: 'its checkout is in use by pid 4711', holders, ...extra });
+  const run = { commit: 'abc1234def', started_at: '2026-11-16T04:00:00.000Z', red: [] };
+  const setup = () => {
+    const work = mkdtempSync(join(tmpdir(), 'nightly-fullrun-'));
+    const lock = (_root, fn) => fn();
+    const said = [];
+    const ask = (report, extra = {}) => repairFromRun(repo, report, run, {
+      say: (line) => said.push(line), env: { ...process.env, MC_WORK_ROOT: work }, repair: () => ({ created: [], open: [] }),
+      repairFullRun: (request) => requestDeployRepair({ ...request, root: work, lock }), ...extra });
+    return { work, said, ask, mends: () => readDeployMends({ root: work }), cleanup: () => rmSync(work, { recursive: true, force: true }) };
+  };
+
+  it('queues one deploy-mend request naming the holders and where they stand, and a second stop joins it', () => {
+    const fx = setup();
+    try {
+      fx.ask(stopped());
+      const [request] = fx.mends();
+      assert.equal(request.state, 'queued');
+      assert.equal(request.rows[0].origin, 'full-run');
+      assert.deepEqual(request.rows[0].holders, holders);
+      assert.match(request.rows[0].note, /^full run of memoro cannot start: its checkout is in use by pid 4711/u);
+      assert.ok(fx.said.some((line) => /deploy-mend repair queued/u.test(line)), fx.said.join('\n'));
+
+      fx.ask(stopped());
+      assert.equal(fx.mends().length, 1, 'a second attempt queued a second request');
+      assert.equal(fx.mends()[0].rows.length, 1);
+      assert.ok(fx.said.some((line) => /deploy-mend repair already under way/u.test(line)), fx.said.join('\n'));
+    } finally { fx.cleanup(); }
+  });
+
+  it('only a stop at worktree is asked: a red run, a stalled run and a fetch failure are not', () => {
+    const fx = setup();
+    try {
+      for (const report of [{ stopped_at: 'fetch', reason: 'offline' }, { stopped_at: 'busy', reason: 'a round holds the lane' }, { stopped_at: null }]) fx.ask(report);
+      assert.deepEqual(fx.mends(), []);
+      fx.ask(stopped(), { repairFullRun: null });
+      assert.deepEqual(fx.mends(), [], 'with no deploy-mend door nothing is asked');
+    } finally { fx.cleanup(); }
   });
 });
 
