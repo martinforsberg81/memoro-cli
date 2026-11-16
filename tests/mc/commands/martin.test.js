@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { after, describe, it } from 'node:test';
 
 import { run, get, usage, buildOpening, renderOpening } from '../../../src/mc/commands/martin.js';
@@ -1214,7 +1215,10 @@ describe('mc martin brief with a programme item', () => {
   it('lists a programme planning turn\'s decided item under the programme\'s name, and a for-martin one as stuck, not Martin\'s', async () => {
     const d = openingStore();
     const dir = join(d.home, 'prog'); mkdirSync(join(dir, 'goals'), { recursive: true });
-    writeFileSync(join(dir, 'PROGRAMME.json'), JSON.stringify({ schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' }));
+    // Signed and not cut: the item stays open by source (a legacy or unsigned record would close it).
+    const signedMd = '# prog\n\n## Parts\n\n### Part 1 — One\n';
+    writeFileSync(join(dir, 'SIGNED.md'), signedMd);
+    writeFileSync(join(dir, 'PROGRAMME.json'), JSON.stringify({ schema: 'mc-programme', version: 2, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person', signed_at: '2026-11-14T11:00:00Z', signed_by: 'martin', signed_text: createHash('sha256').update(signedMd).digest('hex'), cut_text: null }));
     writeFileSync(join(dir, 'README.md'), '# prog\n');
     const put = (source_at, fields, text = null) => {
       const record = { schema: 'mc-desk-item', version: 1, id: deskItemId('programme', 'programme:prog', source_at), kind: 'programme', reference: 'programme:prog', source_at, opened_at: source_at, state: 'closed', sort: 'mechanical', reversible: null, due_at: null, outcome: null, ...fields };
