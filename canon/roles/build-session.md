@@ -121,7 +121,8 @@ A session that does write its entry but commits nothing and meets no
 criterion counts too: three such sessions in a row, with every head unchanged,
 stop the goal with `no progress:` and status `Martin`, and no fourth session
 starts. A commit, a criterion met, or any change of stage or status starts the
-count again. A session that cannot make progress because the goal is wrong
+count again. The fifth build session since the goal began building or was last
+set ready after a stop stops it the same way, progress or not. A session that cannot make progress because the goal is wrong
 says so with `mc goal defect`; it does not end quietly.
 
 You never change the goal's text, and never edit `GOAL.json` by hand: the

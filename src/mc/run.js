@@ -72,7 +72,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addBranchWorktree, addGoalWorktree, appendEntry, archiveDirIn, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, WAITS_FOR_MAIN, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addBranchWorktree, addGoalWorktree, appendEntry, archiveDirIn, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, BUILD_SESSION, BUILD_SESSION_LIMIT, BUILD_SESSION_STOP, buildSessionCount, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, WAITS_FOR_MAIN, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainingOwners, drainState, drainWaiting, fullRunWords, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -3201,7 +3201,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * counts neither way. A session with no progress while a main-red repair of one of the goal's repositories is
    * queued, running or published is not counted either: the runner writes `WAITS_FOR_MAIN` and the pick holds the
    * goal until that repair ends (`mainRepairWaits`, `heldForMain`). A goal the session left out of `build · ready` is not
-   * the runner's to judge.
+   * the runner's to judge. Every session judged here leaves one runner entry (`BUILD_SESSION` when there is nothing
+   * else to say), and the `BUILD_SESSION_LIMIT`th since the count began (`buildSessionCount`) is instead the stop
+   * `BUILD_SESSION_STOP`, status `Martin`, whether or not it made progress.
    */
   function afterBuild(goal, name, before) {
     const now = stateNow(goal);
@@ -3209,30 +3211,45 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const after = progressReading(goal);
     const log = parseLog(deps.read(join(goal.dir, LOG_FILE)) ?? '');
     const streak = noProgressStreak(log);
+    const sessions = buildSessionCount(log) + 1;
+    const next = () => [...log].reverse().find((entry) => entry.tool !== 'runner' && entry.next)?.next ?? null;
+    const limited = (lines) => {
+      if (sessions < BUILD_SESSION_LIMIT) return false;
+      goalState(goal, name, { status: 'Martin' }, { comment: [BUILD_SESSION_STOP, ...lines, `Last Next: ${next() ?? 'none recorded'}`].join('\n') });
+      return true;
+    };
     const unread = [...before.unread, ...after.unread];
-    if (unread.length) { goalState(goal, name, {}, { comment: `${NOT_COUNTED}: ${[...new Set(unread)].join('; ')}` }); return; }
+    if (unread.length) {
+      const said = `${NOT_COUNTED}: ${[...new Set(unread)].join('; ')}`;
+      if (!limited([said])) goalState(goal, name, {}, { comment: said });
+      return;
+    }
     const headsText = after.heads.map(({ repo, head }) => `${repo} ${head}`).join(', ');
+    const count = `met ${after.met} of ${after.total} criteria`;
     const progress = after.met > before.met || after.heads.some(({ head }, index) => head !== before.heads[index]?.head);
     if (progress) {
+      if (limited([`Heads: ${headsText}`, `Criteria: ${count}`])) return;
       if (streak > 0) goalState(goal, name, {}, { comment: `${PROGRESS_AGAIN}: met ${after.met} of ${after.total} criteria (${before.met} before), heads ${headsText} — the count of sessions without progress starts again` });
+      else goalState(goal, name, {}, { comment: `${BUILD_SESSION} (${sessions} of ${BUILD_SESSION_LIMIT}): ${count}, heads ${headsText}` });
       return;
     }
     const waits = mainRepairWaits(goal);
     if (waits.length) {
-      goalState(goal, name, {}, { comment: `${WAITS_FOR_MAIN} in ${waits.map(({ repo, ids }) => `${repo} (${ids.join(', ')})`).join('; ')} — no session starts on this goal until it has ended` });
+      const said = `${WAITS_FOR_MAIN} in ${waits.map(({ repo, ids }) => `${repo} (${ids.join(', ')})`).join('; ')}`;
+      if (limited([said, `Heads: ${headsText}`, `Criteria: ${count}`])) return;
+      goalState(goal, name, {}, { comment: `${said} — no session starts on this goal until it has ended` });
       return;
     }
-    const count = `met ${after.met} of ${after.total} criteria`;
     if (streak + 1 < NO_PROGRESS_LIMIT) {
+      if (limited([`Heads: ${headsText}`, `Criteria: ${count}`])) return;
       goalState(goal, name, {}, { comment: `${NO_PROGRESS_SESSION} (${streak + 1} of ${NO_PROGRESS_LIMIT}): ${count}, heads ${headsText} unchanged` });
       return;
     }
-    const next = [...log].reverse().find((entry) => entry.tool !== 'runner' && entry.next)?.next ?? null;
     goalState(goal, name, { status: 'Martin' }, { comment: [
       NO_PROGRESS_STOP,
       `Heads: ${headsText}`,
       `Criteria: ${count}`,
-      `Last Next: ${next ?? 'none recorded'}`,
+      `Last Next: ${next() ?? 'none recorded'}`,
     ].join('\n') });
   }
 

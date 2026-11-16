@@ -64,9 +64,10 @@ its check, and each worktree's state.
   or `--found` it exits 2 and writes nothing; a finished goal, a stage that is
   not the session's own, and a mend session are refused. The desk labels the
   item by that first line (sort `technical`); it amends the goal with the verbs
-  and `mc goal ready`. A build that makes no progress three sessions in a row
-  is stopped by the runner with one `Martin` entry whose comment begins
-  `no progress:` (sort `mechanical`).
+  and `mc goal ready`. A build that makes no progress three sessions in a row,
+  or that has had five build sessions since it began building or was last set
+  ready after a stop, is stopped by the runner with one `Martin` entry whose
+  comment begins `no progress:` (sort `mechanical`).
 - **Taking over a goal interactively.** Always read the goal's current stage,
   its last entry in LOG.md (the blocking reason, or Martin's question, and
   REVIEW.md when present), and the instructions for that stage before acting:

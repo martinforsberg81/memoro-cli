@@ -3998,6 +3998,7 @@ test('three build sessions that meet nothing and commit nothing stop the goal wi
 });
 
 test('a session that commits or meets a criterion, and any change of stage or status, starts the no-progress count again', async () => {
+  // Two goals, each under the five-session cap (BUILD_SESSION_LIMIT): one commits, one meets a criterion.
   const f = noProgressFixture();
   await stuckPass(f, builds(f));
   await stuckPass(f, builds(f));
@@ -4005,19 +4006,52 @@ test('a session that commits or meets a criterion, and any change of stage or st
   assert.equal(stuckEntries(f).at(-1).tool, 'runner');
   assert.match(stuckEntries(f).at(-1).comment, /^progress again: met 0 of 1 criteria \(0 before\), heads memoro head-1 /u);
   await stuckPass(f, builds(f));
-  await stuckPass(f, builds(f, { meet: true }));
-  assert.match(stuckEntries(f).at(-1).comment, /^progress again: met 1 of 1 criteria \(0 before\)/u);
-  await stuckPass(f, builds(f));
-  await stuckPass(f, builds(f));
-  assert.equal(stuckWhere(f), 'build · ready', 'two since the last progress are not three');
+  assert.match(stuckEntries(f).at(-1).comment, /^no progress this session \(1 of 3\)/u);
+  const g = noProgressFixture();
+  await stuckPass(g, builds(g));
+  await stuckPass(g, builds(g, { meet: true }));
+  assert.match(stuckEntries(g).at(-1).comment, /^progress again: met 1 of 1 criteria \(0 before\)/u);
+  await stuckPass(g, builds(g));
+  await stuckPass(g, builds(g));
+  assert.equal(stuckWhere(g), 'build · ready', 'two since the last progress are not three');
   // A change of status between them starts it again: Martin, then ready, by a person.
-  f.files[`${GOALS}/stuck/LOG.md`] += '\n## 2026-08-29T10:00Z · person · build · Martin\n\nComment: looked at it\n\n## 2026-08-29T10:00Z · person · build · ready\n\nComment: amended\n';
-  await stuckPass(f, builds(f));
-  await stuckPass(f, builds(f));
+  g.files[`${GOALS}/stuck/LOG.md`] += '\n## 2026-08-29T10:00Z · person · build · Martin\n\nComment: looked at it\n\n## 2026-08-29T10:00Z · person · build · ready\n\nComment: amended\n';
+  await stuckPass(g, builds(g));
+  await stuckPass(g, builds(g));
+  assert.equal(stuckWhere(g), 'build · ready');
+  assert.equal(noProgressEntries(g).length, 5);
+  await stuckPass(g, builds(g));
+  assert.equal(stuckWhere(g), 'build · Martin', 'the third since the last change stops it');
+  assert.match(stuckEntries(g).at(-1).comment, /^no progress: three build sessions in a row/u);
+});
+
+test('the fifth build session stops a goal that commits every time, and the desk setting it ready starts the count again', async () => {
+  const f = noProgressFixture();
+  for (const n of [1, 2, 3, 4]) {
+    await stuckPass(f, builds(f, { commit: true }));
+    assert.equal(stuckWhere(f), 'build · ready');
+    assert.equal(stuckEntries(f).at(-1).comment, `build session (${n} of 5): met 0 of 1 criteria, heads memoro head-${n}`);
+  }
+  await stuckPass(f, builds(f, { commit: true }));
+  assert.equal(stuckWhere(f), 'build · Martin');
+  const stop = stuckEntries(f).at(-1);
+  assert.deepEqual([stop.tool, stop.stage, stop.status], ['runner', 'build', 'Martin']);
+  assert.deepEqual(stop.comment.split('\n'), [
+    'no progress: five build sessions without the goal leaving build',
+    'Heads: memoro head-5',
+    'Criteria: met 0 of 1 criteria',
+    'Last Next: next 5',
+  ]);
+  const before = f.calls.sessions.length;
+  assert.equal((await stuckPass(f, builds(f, { commit: true }))).ran, 0, 'no sixth session');
+  assert.equal(f.calls.sessions.length, before);
+  const item = { kind: 'goal', reference: 'prog/stuck', source_at: stop.at };
+  assert.equal(deskItemQuestion(item, { home: '/w/programs', read: (path) => f.files[path] ?? null }), 'no progress: five build sessions without the goal leaving build');
+  f.files[`${GOALS}/stuck/LOG.md`] += '\n## 2026-08-29T10:00Z · claude opus · build · ready · by decision\n\nComment: amended\n';
+  f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { status: 'ready' });
+  await stuckPass(f, builds(f, { commit: true }));
   assert.equal(stuckWhere(f), 'build · ready');
-  assert.equal(noProgressEntries(f).length, 7);
-  await stuckPass(f, builds(f));
-  assert.equal(stuckWhere(f), 'build · Martin', 'the third since the last change stops it');
+  assert.match(stuckEntries(f).at(-1).comment, /^build session \(1 of 5\)/u);
 });
 
 test('sessions without a log entry are skipped by the no-progress count, and the no-progress entries are skipped by the three-silent rule', async () => {
@@ -4210,7 +4244,7 @@ test('an unreachable API holds every launch with a growing wait, writes no goal 
   clock = Date.parse('2026-11-07T12:07:00Z');
   f.answer = logsItself(f, 'mute');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(entries().length, 2, 'the ordinary session wrote its own entry');
+  assert.equal(entries().filter((entry) => entry.tool !== 'runner').length, 2, 'the ordinary session wrote its own entry');
   assert.equal(holdLines().filter((line) => /API answers again/u.test(line)).length, 1, 'one line when it clears');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, 'the next tick launches at once');
   assert.equal(f.calls.sessions.length, 5);

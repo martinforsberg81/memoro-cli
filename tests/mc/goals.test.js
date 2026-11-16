@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { noProgressEntry, noProgressStreak, NO_PROGRESS_SESSION, NOT_COUNTED, PROGRESS_AGAIN } from '../../src/mc/goals.js';
+import { BUILD_SESSION, buildSessionCount, noProgressEntry, noProgressStreak, NO_PROGRESS_SESSION, NOT_COUNTED, PROGRESS_AGAIN } from '../../src/mc/goals.js';
 import { appendEntry, backward, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, isRepair, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextDraft, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, rejections, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
 import * as criteria from '../../src/mc/criteria.js';
 import { goalField, goalJson, goalJsonV2, goalMinimalV2, withGoal } from './_helpers/goal-file.js';
@@ -612,6 +612,29 @@ test('noProgressStreak counts the runner\'s no-progress entries since a start, a
   assert.equal(noProgressStreak([none, none, sessionOf(`${PROGRESS_AGAIN}: met 1 of 1 criteria`), none]), 1, 'progress starts the count again');
   assert.equal(noProgressStreak([none, none, logEntry('person', 'build', 'Martin'), logEntry('person', 'build', 'ready'), none]), 1, 'a change of status starts it again');
   assert.equal(noProgressStreak([none, none, logEntry('claude', 'review', 'ready'), none]), 1, 'a change of stage starts it again');
+});
+
+test('buildSessionCount counts the runner\'s judged build sessions since the goal began building or was set ready after a stop, not since a change of stage', () => {
+  const own = logEntry('claude', 'build', 'ready');
+  const judged = [sessionOf(`${BUILD_SESSION} (1 of 5): met 0 of 1 criteria, heads memoro a`), sessionOf(`${NO_PROGRESS_SESSION} (1 of 3): met 0 of 1 criteria`),
+    sessionOf(`${PROGRESS_AGAIN}: met 1 of 1 criteria`), sessionOf(`${NOT_COUNTED}: HEAD of memoro cannot be read`)];
+  const silent = sessionOf('session ended without a log entry (exit 1, 0 s)');
+  const plan = { ...logEntry('claude', 'draft', 'ready'), role: 'plan' };
+  const toBuild = { ...logEntry('claude', 'build', 'ready'), role: 'plan' };
+  assert.equal(buildSessionCount([]), 0);
+  assert.equal(buildSessionCount([plan, toBuild, ...judged.flatMap((entry) => [own, entry]), own, silent]), 4, 'each kind of judged session counts once; silent sessions and sessions\' own entries do not');
+  assert.equal(buildSessionCount([judged[0], plan, toBuild, own, judged[0]]), 1, 'the count begins when the goal began building');
+  const review = { ...logEntry('claude', 'review', 'ready'), role: 'build' };
+  const rejected = { ...logEntry('agy', 'build', 'ready'), role: 'review' };
+  assert.equal(buildSessionCount([toBuild, judged[0], judged[1], review, rejected, judged[0]]), 3, 'back from review is a change of stage, not a new start');
+  const stop = sessionOf('no progress: three build sessions in a row met no criterion and committed nothing');
+  const stopped = { ...stop, status: 'Martin' };
+  const desk = { ...logEntry('claude', 'build', 'ready'), role: 'decision' };
+  assert.equal(buildSessionCount([toBuild, judged[0], judged[1], stopped, desk, judged[0]]), 1, 'set ready after a stop by the desk starts it again');
+  assert.equal(buildSessionCount([toBuild, judged[0], judged[1], stopped, logEntry('person', 'build', 'ready'), judged[0]]), 1, 'and by a person');
+  assert.equal(buildSessionCount([toBuild, judged[0], judged[1], desk, judged[0]]), 3, 'a desk entry that changes no status is no new start');
+  const asked = { ...logEntry('claude', 'build', 'Martin'), role: 'build' };
+  assert.equal(buildSessionCount([toBuild, judged[0], asked, { ...logEntry('claude', 'build', 'ready'), role: 'build' }, judged[0]]), 2, 'a build session setting itself ready is no new start');
 });
 
 test('noProgressEntry is the runner\'s judged or unjudged build session, and no other entry', () => {
