@@ -976,7 +976,8 @@ into `docs/technical/` and the area pages, archives the programme and sets its
 record to `done`, with nobody present; a horizon it served then waits for
 Martin's next programme. Only a programme **with a valid record** is touched: one
 without a record, or with an invalid one, is never read or archived by the
-runner, and `mc plan <p> --archive` stays that programme's person's act
+runner, and `mc plan <p> --archive` stays that programme's person's act, or interactive
+Martin's at the desk
 ([mc-plan.md](mc-plan.md#archiving-a-programme)). The write-back is also judged in
 each goal's own review (`write-back:` line, [mc-goals.md](mc-goals.md#the-verdict)).
 

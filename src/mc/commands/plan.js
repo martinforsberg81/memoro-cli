@@ -101,7 +101,10 @@ export async function run(argv, deps = {}) {
   }
 
   const env = deps.env || process.env;
-  const refusal = planSessionRefusal({ cwd: deps.cwd || process.cwd(), env });
+  // Archiving opens no session, so Martin at the desk may end a programme on
+  // his word; every other session, and the headless Martin role, is refused.
+  const deskArchive = opts.archive && env.MC_ROLE === 'martin' && env.MC_HEADLESS !== '1';
+  const refusal = deskArchive ? null : planSessionRefusal({ cwd: deps.cwd || process.cwd(), env });
   if (refusal) {
     stderr.write(`mc: ${refusal}\n`);
     return 1;
