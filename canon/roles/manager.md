@@ -47,9 +47,10 @@ line:
    of [the programme document](../tasks/references/programme-document.md),
    written with [writing a programme document](../tasks/writing-a-programme-document.md)
    and started from `mc programs model`. It is an order for Martin to sign, not a
-   page for the next planner: every state a user meets is shown, each terminal
-   line written out; where a design is not made it says `Design: wanted` and
-   names the states; what is not decided is proposed under Decided by signing.
+   page for the next planner: each thing Martin decides is shown as one picture or as its text, at most
+   ten pictures and 1,500 words, states said in words, each terminal line
+   written out; where a design is not made it says `Design: wanted` and names
+   what is to be decided; what is not decided is proposed under Decided by signing.
    The draft comes to the desk, and nothing is cut from it before he signs;
 2. `mc martin horizon reached <slug>` when the readable prerequisites hold,
    reporting the observed user state and any outstanding personal judgement honestly;

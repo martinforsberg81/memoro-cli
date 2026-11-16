@@ -88,16 +88,18 @@ it says. The document binds what the user gets, how it looks and how one
 sees that it works; the construction is the planner's and the builder's
 ([writing a programme document](../writing-a-programme-document.md)).
 
-Every state a user meets is shown, not only named. A state a Solution
-mentions (a refusal, an error, a wait, a notice, an empty result) has its
-picture or its literal text in Design. A terminal line is written out whole in
+Each thing Martin decides is shown, as one picture or as its text; an order
+has at most ten pictures, in the light theme. A state a Solution mentions (a
+refusal, an error, a wait, a notice, an empty result) is said in Design as a
+rule in words that names the app's existing component it follows, or as its
+literal text; it is not pictured. A terminal line is written out whole in
 the established form, `mc: <what is wrong> — <the call that works>`, with its
 exit code. Where an existing line is used again, quote it and say it is reused;
 where a change makes an existing line fire for a new cause or read wrong, say
 whether it stays, is reworded (show the new text) or goes. A Solution that says
 "refused", "says so" or "a line" without the line is not finished. Before the
 document comes to the desk, the writer goes through every Solution sentence that
-changes what a user sees and checks that Design shows it.
+changes what a user sees and checks that Design shows or says it.
 
 Findings of the independent reading are either fixed in the document before
 it is signed or routed by Martin when he signs, and his sign line in LOG.md

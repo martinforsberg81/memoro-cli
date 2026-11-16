@@ -32,6 +32,9 @@ level, never its content. The headings are in
   layer. It can land by itself, and it keeps its number.
 - What Martin or the desk does beside the build stands under Order.
 - Three to eight parts.
+- At most 1,500 words. What runs today is written as a user meets it, from
+  the app and the standards; code is read only for a fact the order depends
+  on. If it does not fit, it is two orders, or construction has come in.
 
 ## A part
 
@@ -40,10 +43,16 @@ level, never its content. The headings are in
   every case that is not the plain one: nothing to show, too much, a failure,
   a second visit, the phone. Then only the construction the order rests on:
   what must be reused, what must not change, a limit that binds.
-- **Design.** Everything a user sees, shown as it will be seen and never
-  described: pictures of the app for a graphical surface, the text itself
-  for a surface of text, one for each state, width and theme. "Nothing a
-  user sees" where that is so. What is not shown is not designed.
+- **Design.** One picture for each thing Martin decides: the new thing as it
+  will look, at one width, in the light theme. A second picture only where
+  the phone is a choice of its own. No picture in the dark theme: how dark
+  looks is described in memoro `docs/technical/design-tokens.md` and follows
+  from it. States (failed, empty, working, cut, a second visit) are said as a
+  rule in words, naming the app's existing component they follow, and are not
+  pictured. Where a part reuses a component as it is, the design names the
+  component and shows one picture of where it stands. A surface of text is
+  shown as its text. "Nothing a user sees" where that is so. An order has at
+  most ten pictures.
 - **Proved by.** What a user would notice if it were built wrong.
 - **Not in this part.** The nearest thing someone would expect and does not
   get.
