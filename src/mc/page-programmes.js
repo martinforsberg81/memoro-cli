@@ -47,7 +47,6 @@ function goalLines(lines, c, wide, goal, expand, sessions = [], note = null) {
     lines.push(line(c, wide, 10, count, ['grey']));
   }
   if (goal.hold) lines.push(line(c, wide, 10, `held by ${goal.hold.by ?? '—'} since ${goal.hold.at ?? '—'} — ${goal.hold.reason ?? '—'}`, ['red']));
-  if (goal.programme_wait) lines.push(line(c, wide, 10, goal.programme_wait, ['yellow']));
   if (goal.problems?.length) lines.push(line(c, wide, 10, `GOAL.json: ${goal.problems[0]}`, ['red']));
   else if (note) lines.push(line(c, wide, 10, note, ['red']));
   else if (['blocked', 'Martin'].includes(goal.status)) {
@@ -119,7 +118,7 @@ export function programmeTreeLines(c, wide, group, { expand = false, sessions = 
     lines.push(line(c, wide, 4, `Phase ${phase.number}${phaseWaits(phase, group)}`, ['cyan', 'bold']));
     for (const [index, goal] of visible.entries()) {
       if (index > 0) lines.push('');
-      goalLines(lines, c, wide, goal, expand, owned(goal));
+      goalLines(lines, c, wide, goal, expand, owned(goal), !finished(goal) && group.record_state === 'draft' ? `waits for sign-off of ${group.programme}` : null);
     }
   }
   if (needing.length) {

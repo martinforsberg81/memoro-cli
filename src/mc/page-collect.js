@@ -1166,6 +1166,11 @@ function recordReader(env) {
   return { found, order: (name) => phaseOrder(found(name)) };
 }
 
+/** A programme's phase order from its record under the programmes home, each read once per call of this. */
+function orderReader(env) {
+  return recordReader(env).order;
+}
+
 /**
  * Phase structure and eligibility carried by JSON and drawn by the tree.
  * `order` is the programme's (`phaseOrder`): for a programme whose phases are
@@ -1306,7 +1311,7 @@ export function programmesSection({
  * `order(programme)`: a lower phase still to finish, or a stated phase it waits
  * for, or an invalid record), so the runner does not pick it yet.
  */
-export function goalsOf({ goals = [], currents = [], alive = pidAlive, order = () => SEQUENTIAL, found = () => null } = {}) {
+export function goalsOf({ goals = [], currents = [], alive = pidAlive, order = () => SEQUENTIAL } = {}) {
   return goals.map((goal) => {
     const running = currents.some((current) => current.name === goalName(goal) && alive(current.pid));
     const sessions = goalSessions(goal.log);
@@ -1344,8 +1349,6 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive, order = (
     question: waitsOnPerson(goal) ? (goal.log.at(-1)?.comment ?? null) : null,
     // The hold `mc goal hold` wrote (`{by, tool, at, reason}`), or null.
     hold: readHold(goal.dir),
-    programme_wait: !FINISHED.includes(goal.stage) && found(goal.programme)?.record?.state === 'draft'
-      ? `waits for sign-off of ${goal.programme}` : null,
     problems: goal.problems,
     // Why the runner could not archive this finished goal, from its last
     // `not archived — …` entry after the one that set the stage; null when
@@ -1506,7 +1509,9 @@ export function horizonsSection({ programmes, found = () => ({ status: 'none' })
   } catch (cause) { error = cause.message || String(cause); }
   const held = new Map(read.horizons.map((item) => [item.slug, item]));
   // Read an existing item only. Creating or scheduling sign-off items belongs to a later step.
-  const waiting = new Set(listDeskItems({ env }).filter((item) => item.kind === 'sign-off' && item.state !== 'closed').map((item) => item.reference));
+  let waiting = new Set();
+  try { waiting = new Set(listDeskItems({ env }).filter((item) => item.kind === 'sign-off' && item.state !== 'closed').map((item) => item.reference)); }
+  catch { /* An unreadable item store does not hide the programme's draft state. */ }
   const groups = programmes?.programmes || [];
   let number = programmes?.count ?? 0;
   for (const group of groups) {
@@ -1563,13 +1568,12 @@ export function readProgrammes({
   for (const repo of present) {
     for (const name of programmes(repo)) (homes[name] ||= []).push(repo.name);
   }
-  const records = recordReader(env);
-  const order = records.order;
+  const order = orderReader(env);
   const section = programmesSection({
     planning: sessions.planning,
     planningSessions: sessions.planning_sessions,
     runnerSessions: runnerSection({ currents, now, alive }).sessions,
-    goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive, order, found: records.found }),
+    goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive, order }),
     programmes: [...Object.keys(homes), ...recordedProgrammes(programsHome(env))],
     proposalCounts: readProgrammeProposalCounts(programsHome(env)),
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
@@ -1749,7 +1753,7 @@ export async function collectPage({
     programmeSessions: sessions.programme_sessions,
     runnerSessions: runner.sessions,
     sessionStrays: sessions.strays,
-    goalRows: goalsOf({ goals, currents, alive, order, found: records.found }),
+    goalRows: goalsOf({ goals, currents, alive, order }),
     programmes: [...present.flatMap((repo) => listProgrammes(repo)), ...recordedProgrammes(programsHome(env))],
     proposalCounts: programmeProposals,
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),

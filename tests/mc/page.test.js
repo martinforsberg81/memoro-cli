@@ -2296,7 +2296,7 @@ describe('collectPage', () => {
     fx.record('mc', null, 'draft');
     const data = await fx.collect();
     const group = data.programmes.programmes.find(group => group.programme === 'mc');
-    assert.equal(group.goals[0].programme_wait, 'waits for sign-off of mc');
+    assert.equal(group.record_state, 'draft');
     for (const columns of [160, 80]) {
       const lines = renderPageLines(data, { columns, now: NOW, view: 'mc' });
       assert.ok(lines.some(line => line.includes('waits for sign-off of mc')));
@@ -2306,7 +2306,8 @@ describe('collectPage', () => {
     writeFileSync(recordPath, JSON.stringify({ ...JSON.parse(readFileSync(recordPath, 'utf8')), state: 'open', legacy: true }));
     const signed = await fx.collect();
     const free = signed.programmes.programmes.find(group => group.programme === 'mc');
-    assert.equal(free.goals[0].programme_wait, null);
+    assert.equal(free.record_state, 'open');
+    assert.ok(!renderPageLines(signed, { columns: 80, now: NOW, view: 'mc' }).some(line => line.includes('waits for sign-off of mc')));
     assert.equal(free.goals[0].phase, group.goals[0].phase);
     assert.notEqual(pageKey(data), pageKey(signed), 'sign-off redraws');
   });

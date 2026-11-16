@@ -190,9 +190,10 @@ slug its valid record names, else null) and `horizon_state` (`open`, `reached`,
 `dropped`, `not held` for a slug the store holds no horizon for, or null),
 `record_state` (a valid record's state, otherwise null) and `sign_off_waiting`
 (whether that existing item is open).
-Unfinished goals carry `programme_wait`, `waits for sign-off of <programme>`
-in a draft programme, otherwise null, drawn on the goal's line in its own view.
-It does not cancel a running session or stop queued merges.
+In a draft programme an unfinished goal's line in its own view says
+`waits for sign-off of <programme>`, derived from the group's record state
+without changing the goal-row JSON contract. This does not cancel a running
+session or stop queued merges.
 
 ### PROGRAMMES
 
