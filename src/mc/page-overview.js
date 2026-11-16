@@ -17,6 +17,7 @@ import { ageWords } from './page-cache.js';
 import { deskLines } from './page-desk.js';
 import { clipCell } from './page-grid.js';
 import { horizonsLines, programmeFacts } from './page-horizons.js';
+import { dayWords, howLong, straysReading } from './page-maintenance.js';
 import { detail, frameTop, panelEnd } from './page-operations.js';
 import { sessionGoal } from './page-activity.js';
 import { clip, width } from './status-render.js';
@@ -228,16 +229,101 @@ export function maintenanceItems(data) {
   return items;
 }
 
-function maintenanceLines(lines, c, wide, items) {
-  if (!items.length) return;
-  lines.push(frameTop(c, wide, 'MAINTENANCE', `${items.length} outside the programmes`));
+/** The column the sources' summaries start in: a label, and room for the longest ("Dependencies"). */
+const SOURCE_LABEL = 16;
+const padTo = (text, size) => `${text}${' '.repeat(Math.max(0, size - width(text)))}`;
+
+/**
+ * MAINTENANCE's rows: the collector's sources in their order, the strays always read from the page's own data, so the
+ * rows beneath them are what `maintenanceItems` says now. With no collected sources and nothing outside the programmes
+ * there is no frame.
+ */
+export function maintenanceRows(data) {
+  const given = data.maintenance?.sources;
+  const items = maintenanceItems(data);
+  if (!given && !items.length) return [];
+  const strays = { id: 'strays', label: 'Strays', verb: '', state: 'ok', error: null, ...straysReading({ items }) };
+  return [...(given || []).filter((source) => source.id !== 'strays'), strays];
+}
+
+/** One source's row: its label, what waits, and the verb that handles it at the right. A failed read is red, the whole row. */
+function sourceRow(c, wide, source) {
+  const red = source.state === 'error';
+  const verb = source.verb ? width(source.verb) + 2 : 0;
+  const room = Math.max(8, wide - 4 - SOURCE_LABEL - verb - 2);
+  const summary = clipCell(source.summary || '', room);
+  const label = padTo(clipCell(source.label, SOURCE_LABEL - 1), SOURCE_LABEL);
+  const tone = red ? ['red'] : source.tone?.length ? source.tone : ['grey'];
+  const right = source.verb ? `${' '.repeat(Math.max(0, room - width(summary)))}  ${c(source.verb, 'grey')}` : '';
+  return `    ${c(label, ...(red ? ['red', 'bold'] : ['bold']))}${c(summary, ...tone)}${right}`;
+}
+
+/** What a source holds, drawn below its row at the summary column: strays' items, then the rows the view adds. */
+function itemLines(lines, c, wide, items, indent) {
   for (const item of items) {
     const label = clipCell(item.label, Math.max(12, Math.floor(wide / 3)));
-    const room = wide - 4 - width(label) - 2;
-    lines.push(`    ${c(label, 'bold')}  ${c(clipCell(item.text, Math.max(8, room)), ...item.tone)}`);
-    for (const ref of item.children || []) lines.push(`      ↳ ${c(clipCell(ref, Math.max(8, wide - 8)), ...item.tone)}`);
+    const room = wide - indent - width(label) - 4;
+    lines.push(`${' '.repeat(indent)}${c(label, 'bold')}  ${c(clipCell(item.text, Math.max(8, room)), ...item.tone)}`);
+    for (const ref of item.children || []) lines.push(`${' '.repeat(indent + 2)}↳ ${c(clipCell(ref, Math.max(8, wide - indent - 6)), ...item.tone)}`);
+  }
+}
+
+function maintenanceLines(lines, c, wide, rows) {
+  if (!rows.length) return;
+  lines.push(frameTop(c, wide, 'MAINTENANCE', `${rows.length} ${rows.length === 1 ? 'source' : 'sources'}`));
+  for (const source of rows) {
+    lines.push(sourceRow(c, wide, source));
+    // What is outside the programmes is the facts of its row: each item is drawn beneath it.
+    if (source.id === 'strays') itemLines(lines, c, wide, source.items || [], 6);
   }
   panelEnd(lines, c, wide);
+}
+
+/** A group's cells as the view says them: how many, and how long the oldest has waited. */
+function groupWords(source, group) {
+  if (source.id === 'errors') {
+    return [group.count == null ? 'no baseline' : `${group.count} new`, `${group.critical ?? '?'} critical`, `${group.high ?? '?'} high`,
+      group.age_seconds == null ? 'age unknown' : `collected ${ageWords(group.age_seconds)} ago`].join(' · ');
+  }
+  if (source.id === 'tests') {
+    return group.never ? 'never run' : `${group.red == null ? 'unknown' : group.red ? `${group.red} red` : 'green'} · ${group.short || '?'} · ${ageWords(group.age_seconds)} ago`;
+  }
+  if (source.id === 'deps') {
+    return group.never ? 'never read' : `${group.critical} critical · ${group.high} high · ${group.short || '?'} · read ${ageWords(group.age_seconds)} ago`;
+  }
+  return `${group.count}${group.oldest_seconds != null ? ` · oldest ${howLong(group.oldest_seconds)}` : ''}`;
+}
+
+/** The areas below their row, as the programme's design draws them: name, repository, when it last changed, aims. */
+function areaLines(lines, c, wide, areas) {
+  const indent = 4 + SOURCE_LABEL;
+  const name = Math.min(28, Math.max(...areas.map((area) => width(area.name)), 4) + 2);
+  const repo = Math.max(...areas.map((area) => width(area.repo)), 4) + 2;
+  const when = 12;
+  for (const area of areas) {
+    const aims = area.aims ? `${area.aims} aim${area.aims === 1 ? '' : 's'}` : 'no aim';
+    const changed = area.age_days == null ? 'unknown' : dayWords(area.age_days);
+    lines.push(`${' '.repeat(indent)}${padTo(clipCell(area.name, name - 1), name)}${c(padTo(area.repo, repo), 'grey')}${c(padTo(changed, when), area.age_days === 0 ? 'bold' : 'grey')}${c(aims, area.aims ? 'grey' : 'yellow')}`);
+  }
+}
+
+/** The maintenance view (`m`): every source's row with its detail below it. */
+export function maintenanceView(lines, c, wide, data) {
+  const rows = maintenanceRows(data);
+  lines.push(frameTop(c, wide, 'MAINTENANCE', `${rows.length} ${rows.length === 1 ? 'source' : 'sources'}`, 'h  home'));
+  const indent = 4 + SOURCE_LABEL;
+  for (const source of rows) {
+    lines.push(sourceRow(c, wide, source));
+    if (source.state === 'error') detail(lines, c, wide, indent, source.error || 'unreadable', ['red']);
+    for (const group of source.groups || []) {
+      lines.push(`${' '.repeat(indent)}${c(padTo(clipCell(String(group.label), 24), 26), 'bold')}${c(clipCell(groupWords(source, group), Math.max(8, wide - indent - 28)), 'grey')}`);
+      for (const name of group.items || []) lines.push(`${' '.repeat(indent + 2)}${c(clipCell(name, Math.max(8, wide - indent - 4)), 'grey')}`);
+    }
+    if (source.areas?.length) areaLines(lines, c, wide, source.areas);
+    if (source.id === 'strays') itemLines(lines, c, wide, source.items || [], indent);
+  }
+  panelEnd(lines, c, wide);
+  return lines;
 }
 
 /* ------------------------------------------------------- Merge and deploy */
@@ -309,8 +395,8 @@ export function overviewLines(c, wide, data, { version = '', expand = false, dra
     gap();
   }
 
-  const items = maintenanceItems(data);
-  if (items.length) { maintenanceLines(lines, c, wide, items); gap(); }
+  const rows = maintenanceRows(data);
+  if (rows.length) { maintenanceLines(lines, c, wide, rows); gap(); }
   const merges = mergeDeployRows(data);
   if (merges.length) { mergeDeployLines(lines, c, wide, merges); gap(); }
   if (lines.at(-1) === '') lines.pop();

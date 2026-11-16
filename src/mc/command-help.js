@@ -676,7 +676,9 @@ export const COMMAND_USAGE = Object.freeze({
     "Runs one explicit manager task in a fresh conversation, always; --new is implicit. Default limit: 30 minutes.\n",
     "Prints outcome and result log path. This manual run neither holds nor is held by the runner's own manager turns.\n",
     "The interactive manager is gone: mc manager without --headless, in every form (--new, --resume, --bg, --local), and\n",
-    "mc brief exit 2; talk to the desk with mc martin. The runner starts the manager by itself in one turn only, a daily\n",
+    "mc brief exit 2; talk to the desk with mc martin. At the page, the letter m and the word manager open the maintenance\n",
+    "view (each source and what waits in it; the page's JSON carries it as maintenance), no longer the manager; b and brief at\n",
+    "the page still refuse. The runner starts the manager by itself in one turn only, a daily\n",
     "curation of the area texts (docs/technical/mc-manager.md). It creates no programme: a horizon with no programme waits for Martin.\n",
   ].join(''),
   martin: [
@@ -740,7 +742,7 @@ export const COMMAND_USAGE = Object.freeze({
     "opening, with the first lines of what is now true, and the open ones in order. horizons and horizon\n",
     "show only read.\n",
   ].join(''),
-  brief: "usage — mc brief\n\nRefused, exit 2: the interactive manager it was an alias of is gone. Talk to the desk with mc martin; give the manager one task with mc manager --headless --prompt <text>.\n",
+  brief: "usage — mc brief\n\nRefused, exit 2: the interactive manager it was an alias of is gone (at the page, m and manager open the maintenance view instead). Talk to the desk with mc martin; give the manager one task with mc manager --headless --prompt <text>.\n",
   plan: [
     "usage — mc plan [<programme>] [--local] [--new] [--codex|--claude|--agy] [--model <model>] [--bg]\n",
     "        mc plan <programme> --resume [<id>] [--codex|--claude|--agy] [--model <model>]\n",

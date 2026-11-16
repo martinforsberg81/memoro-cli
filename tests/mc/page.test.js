@@ -181,7 +181,7 @@ describe('SESSIONS', () => {
         assert.match(activity[at + 3], new RegExp(`● · ${kind} · `, 'u'), `${columns}: ${name} draws its ${kind} session`);
       }
       for (const name of ['docx-editor', 'mc-ui'])
-        assert.equal(activity.filter((line) => line.startsWith(`    ${name}  build · open `)).length, 1, name);
+        assert.equal(activity.filter((line) => line.startsWith(`      ${name}  build · open `)).length, 1, name);
     }
   });
 
@@ -335,7 +335,7 @@ describe('SESSIONS', () => {
 
     // The step is on a goal: its activity is drawn under it, with the advisor. One that is on no goal is a MAINTENANCE row.
     const bare = renderPageLines(pageData({ runner }), { columns: 120, now: NOW, expand: true, overview: true }).join('\n');
-    assert.match(bare, /^ {4}docx-editor {2}build · open 10 min · claude · sonnet · on no goal of a programme$/mu);
+    assert.match(bare, /^ {6}docx-editor {2}build · open 10 min · claude · sonnet · on no goal of a programme$/mu);
     for (const session of runner.sessions) session.goal = `p/${session.name}`;
     const programmes = goalsFor('p/docx-editor', 'p/mc-ui');
     const lines = renderPageLines(pageData({ runner, programmes }), { columns: 120, now: NOW, expand: true });
@@ -1742,7 +1742,7 @@ describe('the page', () => {
     const order = ['┌─ assistant-avatar', '┌─ docx-editing-surface', '┌─ mc ', '┌─ 1 programme with nothing under way', '┌─ MAINTENANCE', '┌─ MERGE'].map((head) => home.indexOf(`\n  ${head}`));
     assert.ok(order.every((index, n) => index >= 0 && (n === 0 || index > order[n - 1])), home);
     assert.doesNotMatch(home, /IN FLIGHT|PROGRAMMES|UNASSIGNED ACTIVITY|NEEDS ATTENTION/u);
-    assert.match(home, /^ {4}mc-ui {2}build · open 20 min · claude · opus · on no goal of a programme$/mu);
+    assert.match(home, /^ {6}mc-ui {2}build · open 20 min · claude · opus · on no goal of a programme$/mu);
     assert.match(text, /start takes over now/u);
     // The helper is a desk session: DESK counts it, and `a` draws its box.
     assert.match(renderPage({ ...DATA }, { columns: 120, version: '0.7.11', now: NOW, overview: true, expand: true }), /● · HELPER · 60 min · claude · sonnet/u);
@@ -1750,8 +1750,8 @@ describe('the page', () => {
     // No WORK: every session is a programme's or a desk's, and a tmux session
     // nobody's is a stray in MAINTENANCE (goal mc/no-work).
     assert.doesNotMatch(text, /^ {2}WORK/mu);
-    assert.match(home, /^ {2}┌─ MAINTENANCE {2}2 outside the programmes ─+┐$/mu);
-    assert.match(home, /^ {4}mc-docx-editor\s+not an area mc knows · tmux session · open 60 min$/mu);
+    assert.match(home, /^ {2}┌─ MAINTENANCE {2}1 source ─+┐$/mu);
+    assert.match(home, /^ {6}mc-docx-editor\s+not an area mc knows · tmux session · open 60 min$/mu);
     // Per kind: the two old `step` rows are builds, and the triage row is not a
     // session of the runner's kinds, so it is `other`.
     assert.doesNotMatch(text, /^  NEXT /mu);
@@ -1834,7 +1834,7 @@ describe('the page', () => {
     assert.doesNotMatch(shown[1], /dormant-one|goal\/preview-only/u);
     assert.match(shown[1], /MERGE +memoro · 9 queued/u, 'the queue stays one row when details collapse');
     for (const text of shown) {
-      assert.match(text, /^ {4}mc-ui {2}build · open 20 min/mu, 'live activity never collapses');
+      assert.match(text, /^ {6}mc-ui {2}build · open 20 min/mu, 'live activity never collapses');
     }
     assert.match(shown[0], /stopping since an unknown time/u, 'runner stop is drawn in full on `a`');
     assert.match(shown[1], /New sessions paused — runner stopping/u, 'runner stop remains visible when details collapse');
@@ -3239,7 +3239,7 @@ describe('the palette', () => {
       programmes: programmesSection({ strays: [{ name: 'jobbet', checkout: false, uncommitted: 0 }] }),
     }), { overview: true }).filter((line) => strip(line).includes('jobbet'));
     assert.equal(stray.length, 1);
-    assert.match(strip(stray[0]), /^ {4}jobbet {2}not an area mc knows/u);
+    assert.match(strip(stray[0]), /^ {6}jobbet {2}not an area mc knows/u);
     assert.match(signature(stray[0]), /^bold yellow$/u);
   });
 
@@ -3892,7 +3892,7 @@ describe('the overview: its order, its programmes and what belongs to none', () 
       assert.deepEqual(maintenanceItems(data), []);
       const alone = quiet();
       alone.merges = { ...alone.merges, red: { items: [{ repo: 'memoro', pr: 77, prs: [{ number: 77 }], said: 'Merge conflict' }] } };
-      assert.ok(draw(alone).some((row) => /^ {4}memoro +merge failed — memoro#77/u.test(row)));
+      assert.ok(draw(alone).some((row) => /^ {6}memoro +merge failed — memoro#77/u.test(row)));
     });
 
     it('does not repeat a goal waiting on Martin with a question outside its programme: DESK holds it', () => {
@@ -3916,11 +3916,11 @@ describe('the overview: its order, its programmes and what belongs to none', () 
       };
       data.programmes = { ...data.programmes, strays: [{ name: 'old-area', checkout: true, uncommitted: 2 }] };
       const lines = draw(data);
-      assert.ok(hasFrame(lines, 'MAINTENANCE', '3 outside the programmes'), lines.join('\n'));
-      assert.ok(lines.some((row) => /^ {4}memoro · red-1\.md +main red waits on Martin · #12 — needs a decision/u.test(row)), lines.join('\n'));
+      assert.ok(hasFrame(lines, 'MAINTENANCE', '1 source'), lines.join('\n'));
+      assert.ok(lines.some((row) => /^ {6}memoro · red-1\.md +main red waits on Martin · #12 — needs a decision/u.test(row)), lines.join('\n'));
       assert.ok(!lines.some((row) => /red-2\.md/u.test(row)), 'a repair that is running is not Martin\'s');
-      assert.ok(lines.some((row) => /^ {4}deploy +repair waits on Martin — deploy red — the bundle/u.test(row)));
-      assert.ok(lines.some((row) => /^ {4}old-area +not an area mc knows · checkout yes · 2 uncommitted$/u.test(row)));
+      assert.ok(lines.some((row) => /^ {6}deploy +repair waits on Martin — deploy red — the bundle/u.test(row)));
+      assert.ok(lines.some((row) => /^ {6}old-area +not an area mc knows · checkout yes · 2 uncommitted$/u.test(row)));
     });
 
     it('tells a failed deploy preparation from a failed deploy attempt, each by its own field', () => {
@@ -3942,8 +3942,8 @@ describe('the overview: its order, its programmes and what belongs to none', () 
       data.runner = { ...data.runner, sessions: [{ kind: 'build', goal: 'ghost/none', repo: 'memoro-cli', tool: 'claude', model: 'opus', pid: 4000, started: at(5), elapsed_seconds: 300 }] };
       data.sessions = { ...data.sessions, planning_sessions: { ...data.sessions.planning_sessions, 'programs/ghost': [{ verb: 'plan', area: 'programs/ghost', tool: 'claude', model: 'opus', pid: 4100, started: at(9), age_seconds: 540 }] } };
       const lines = draw(data);
-      assert.ok(lines.some((row) => /^ {4}ghost\/none +build · .* · on no goal of a programme$/u.test(row)), lines.join('\n'));
-      assert.ok(lines.some((row) => /^ {4}programs\/ghost +plan session with no programme · open 9 min/u.test(row)), lines.join('\n'));
+      assert.ok(lines.some((row) => /^ {6}ghost\/none +build · .* · on no goal of a programme$/u.test(row)), lines.join('\n'));
+      assert.ok(lines.some((row) => /^ {6}programs\/ghost +plan session with no programme · open 9 min/u.test(row)), lines.join('\n'));
       assert.ok(!lines.some((row) => /prog-02 +plan session with no programme/u.test(row)));
     });
 
@@ -3956,7 +3956,7 @@ describe('the overview: its order, its programmes and what belongs to none', () 
       ] };
       assert.deepEqual(maintenanceItems(data).map((item) => item.key), ['pr:memoro#7']);
       const lines = draw(data);
-      assert.ok(lines.some((row) => /^ {4}memoro#7 +pull request outside goals · nobody's — A stray fix$/u.test(row)), lines.join('\n'));
+      assert.ok(lines.some((row) => /^ {6}memoro#7 +pull request outside goals · nobody's — A stray fix$/u.test(row)), lines.join('\n'));
     });
   });
 

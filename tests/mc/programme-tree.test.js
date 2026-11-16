@@ -73,7 +73,7 @@ describe('The programmes\' phase tree', () => {
       assert.equal(lines.filter(line => line.includes('pid 402')).length, 1, 'interactive plan stays visible');
       const maintenance = lines.findIndex(line => line.startsWith('  ┌─ MAINTENANCE'));
       assert.ok(maintenance > programmes);
-      assert.ok(lines.slice(maintenance).some(line => /^ {4}inbox\/missing {2}plan · open/u.test(line)), 'goal recovery without a goal is a MAINTENANCE row');
+      assert.ok(lines.slice(maintenance).some(line => /^ {6}inbox\/missing {2}plan · open/u.test(line)), 'goal recovery without a goal is a MAINTENANCE row');
       assert.ok(!lines.some(line => line.includes('plan:inbox') || line.includes('plan:empty')));
       assert.ok(lines.every(line => width(line) <= columns), `${columns} columns`);
     }
@@ -163,7 +163,7 @@ describe('The programmes\' phase tree', () => {
       }
       const unmatched = lines.findIndex((line) => line.startsWith('  ┌─ MAINTENANCE'));
       assert.ok(unmatched > 0);
-      assert.ok(lines.slice(unmatched).some((line) => /^ {4}inbox\/missing-goal {2}/u.test(line)), 'a session on no goal is a MAINTENANCE row');
+      assert.ok(lines.slice(unmatched).some((line) => /^ {6}inbox\/missing-goal {2}/u.test(line)), 'a session on no goal is a MAINTENANCE row');
       assert.equal(lines.filter((line) => line.includes('● · REVIEW')).length, 1);
       assert.ok(lines.every((line) => width(line) <= columns));
     }
@@ -254,7 +254,8 @@ describe('Programmes without finished goals', () => {
     assert.ok(folded >= 0 && maintenance > folded, 'the folded programme is the last, the activity follows it');
     assert.equal(lines[folded + 1], '', 'a blank line between');
     assert.equal(maintenance, folded + 2);
-    assert.ok(lines[maintenance + 1].startsWith('    mend:main-red  mend · open'), 'the session is a row of MAINTENANCE');
+    assert.ok(lines[maintenance + 1].startsWith('    Strays'), 'the strays are the last row of MAINTENANCE');
+    assert.ok(lines[maintenance + 2].startsWith('      mend:main-red  mend · open'), 'the session is a row of MAINTENANCE');
   });
 
   it('keeps a finished goal that is running, or owns a live session, in its phase until the session ends', () => {

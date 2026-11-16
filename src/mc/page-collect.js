@@ -70,6 +70,11 @@ import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { languageState } from './language-runs.js';
 import { HELPER_REPOS, digestDirs, findDigest, intakeDir, proposalsDir } from './helper-collect.js';
 import {
+  areasReading, depsReading, errorsReading, intakeReading, lessonsReading, maintenanceSection, proposalsReading, readAreaPages, readIntakeFiles,
+  readLessons, readProposals, straysReading, testsReading,
+} from './page-maintenance.js';
+import { maintenanceItems } from './page-overview.js';
+import {
   inLine, mergesPath, queueEntries, queueOrder, redEntries,
 } from './merge-queue.js';
 import { readMerger } from './merger.js';
@@ -1622,6 +1627,8 @@ export async function collectPage({
   diskFreeBytes = undefined,
   // The dev-server pool (dev-pool.js): injected so a test names its own main slot.
   pool = (args) => readPool(args),
+  // MAINTENANCE's readers by source id (page-maintenance.js): a test replaces one to make its read fail.
+  maintenanceReaders = {},
 } = {}) {
   const root = workRoot(env);
   // mc's own home — the gate locks, lanes.json, the dependency and nightly
@@ -1756,6 +1763,7 @@ export async function collectPage({
     order,
     strays: readStrays(root, { git }),
   });
+  const nightlyMissing = [];
   const worktrees = Object.fromEntries(present.map((repo) => [
     repo.name, parseWorktrees(git(repo.path, ['worktree', 'list', '--porcelain'])),
   ]));
@@ -1768,7 +1776,7 @@ export async function collectPage({
   let providerPriority = 'auto';
   try { providerPriority = readModels(env).providerPriority; } catch (error) { notes.push(`provider priority unreadable (${error.message})`); }
 
-  return {
+  const page = {
     runner,
     billing: billingStatus({ capacity: readCapacity({ root: join(root, 'runner') }), state: readBillingState({ root: join(root, 'runner') }), now }),
     providerPriority,
@@ -1788,7 +1796,7 @@ export async function collectPage({
     checks: { ...checksSection({
       repos: present.map((repo) => {
         let nightly = null;
-        try { nightly = nightlyReading(repo.path, { root: home }); } catch { notes.push(`${repo.name}: nightly history unreadable`); }
+        try { nightly = nightlyReading(repo.path, { root: home }); } catch { nightlyMissing.push(repo.name); notes.push(`${repo.name}: nightly history unreadable`); }
         return { name: repo.name, nightly, deps: loadSaved(repo.name, home) };
       }),
       now,
@@ -1800,6 +1808,8 @@ export async function collectPage({
     // The interactive sessions' cost, from the tools' own transcripts (desk-cost.js).
     desk_cost: readDeskCost({ root, claudeDir: claudeHome(env), codexDir: codexHome(env), agyDir: agyBrainDir(env), now, read: readText }),
     intake: intakeSection({ runs: parseRuns(tsv), digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), programmeProposals, intakeFiles: directFiles(intakeDir(env)), now }),
+    // MAINTENANCE's one row per source, filled in below once the rest of the page is read (page-maintenance.js).
+    maintenance: null,
     programmes,
     horizons,
     // File reads only, as DEPLOY's are: the page never runs a read.
@@ -1843,6 +1853,20 @@ export async function collectPage({
     },
     notes,
   };
+  page.maintenance = maintenanceSection({
+    readers: {
+      proposals: () => proposalsReading({ ...readProposals({ root: proposalsDir(env), programs: programsHome(env) }), now }),
+      lessons: () => lessonsReading({ lessons: readLessons({ env }), now }),
+      errors: () => errorsReading({ intake: page.intake }),
+      tests: () => testsReading({ checks: page.checks, missing: nightlyMissing }),
+      deps: () => depsReading({ checks: page.checks }),
+      intake: () => intakeReading({ files: readIntakeFiles({ dir: intakeDir(env) }), now }),
+      areas: () => areasReading({ ...readAreaPages({ repos: present }), now }),
+      strays: () => straysReading({ items: maintenanceItems(page) }),
+      ...maintenanceReaders,
+    },
+  });
+  return page;
 }
 
 function readText(path) {

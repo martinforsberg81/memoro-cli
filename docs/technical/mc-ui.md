@@ -95,9 +95,35 @@ session, an open pull request or an item needing attention. The programmes with 
 way are one frame, `<n> programmes with nothing under way`, in its top rule alone with `a  shows them`;
 `a` draws them as frames after the ones under way.
 
-**MAINTENANCE** is drawn when anything belongs to no programme, headed
-`MAINTENANCE  <n> outside the programmes`; one row per item, its label then its text
-(`maintenanceItems`, `page-overview.js`), in this order:
+**MAINTENANCE** is the last frame of the overview, headed `MAINTENANCE  <n> sources`. It has one row
+per source, in this order: user feedback, proposals, lessons, errors, tests, dependencies, intake,
+areas, strays. The sources are a list (`SOURCES`, `page-maintenance.js`) that the frame walks, so a
+new source is one more entry and one more row. A row is its label, what waits, and the verb that
+handles it at the right; the age of the oldest is in what waits. Each source is read by its own
+reader, which `collectPage` wires and `maintenanceSection` calls:
+
+| source | what waits | oldest | verb |
+|---|---|---|---|
+| User feedback | no reader: `no source — memoro's product feedback was retired (migration 0213)` | — | — |
+| Proposals | the files directly in `~/mc/proposals` (the new ones, whose programme is not yet named) and in each `programs/<programme>/proposals/` | the file name's date, else its mtime | `mc plan` |
+| Lessons | `mc martin lessons`' own list: open, in a goal, late (older than 14 days) and landed this week | the oldest open or carried lesson | `mc martin` |
+| Errors | the helper's newest digest of each repository: new errors, critical and high | when the digest was collected | `mc helper --intake` |
+| Tests | the last full test of each repository, from the nightly record | the oldest run | `mc gate` |
+| Dependencies | the last audit of each repository: critical and high | the oldest read | `mc deps` |
+| Intake | the files directly in `~/mc/intake` that are not an errors digest | the oldest file | `~/mc/intake` |
+| Areas | each area page of each repository that declares areas, read at `origin/main`, one page once however many areas name it | the page changed longest ago | — |
+| Strays | what belongs to no programme (`maintenanceItems`, below) | — | — |
+
+A source whose read fails is not dropped: its row is red and says `unreadable — <why>`, whatever
+the reason (the reader throws, returns nothing, or no reader is wired). A reading that has problems
+of its own — a repository whose nightly history cannot be read, an area page git cannot show — is
+red too and keeps what could be read. Every row carries `id`, `state` (`ok`, `error` or `none`),
+`count`, `oldest_seconds`, `summary`, `tone` and `error`, and the reading's detail (`groups`,
+`areas`, `items`) in `mc --json` under `maintenance.sources`.
+
+The strays row is read from the page's own data (`maintenanceItems`, `page-overview.js`), so what
+was always drawn outside the programmes is still drawn: each item is a row beneath the Strays row,
+in this order:
 
 - a failed merge that no goal's pull request carries (`merge failed — repo#N · <why>`);
   a goal's failed merge is drawn under the goal;
@@ -113,9 +139,22 @@ way are one frame, `<n> programmes with nothing under way`, in its top rule alon
 
 A held, blocked, malformed or stopped goal, a finished goal not archived and a goal's
 failed merge are its programme's, drawn in its frame, never here. The live page's key
-reads each item without its age (`fact`), as it reads a session by its identity: an item
-growing older does not reprint the page. The operations view's MAINTENANCE (proposals,
-errors) is a different frame and unchanged.
+reads each source by its state and count, and each stray item without its age (`fact`), as it
+reads a session by its identity: an item growing older does not reprint the page. Without a
+collected `maintenance` (a page from a mc that did not have it) and with nothing outside the
+programmes the frame is not drawn.
+
+**The maintenance view** (`m` or `manager`, `maintenanceView`, `page-overview.js`) draws the
+overview's header rows (`headerRows`), the warnings and the same frame, nothing else (FIGURES 24 h
+and PIPELINE are the operations view's), with each source's detail below its row: proposals by programme, the
+new ones by name; lessons by state (open and in a goal by name); errors, tests and dependencies by
+repository, each with its age; intake by file; areas as a table of name, repository, when its page
+last changed on `origin/main` (`today`, `1 day ago`) and its aims (`3 aims`, `1 aim`, `no aim`); the
+strays' items. The aims are the top-level bullets under the page's `## Aim`; `No aim stated yet.`
+is none. The view draws nothing the sources do not hold and acts on nothing: the verb at the right
+of a row is where the source is handled. `h`, a number or a programme's name leaves it; the frame's key
+reads `h  home`, and `m` again keeps it open. The operations view's own
+MAINTENANCE (proposals, errors) is a different frame and unchanged.
 
 **The desk's sessions** are counted in DESK's title (`<n> desk sessions open`), not
 listed: the martin, manager and helper sessions.
@@ -526,7 +565,7 @@ painted rows occupy the same columns.
 | `h` / `home` | the overview again, from the operations view and from a programme's view; the key line reads `h  home` |
 | `a` / `all` | toggle all folded rows and details across every surface; in the overview, the programmes with nothing under way as frames, then the operations sections expanded: the hero frame with its 24-hour figures and pipeline, each Manager's frame, then the panels |
 | `d` / `desk` | open the desk (`mc martin`), through the injected `deskOrder`, and return its exit code; the key line reads `d  desk` |
-| `m` / `manager` | open Manager (`b` / `brief` remain aliases) |
+| `m` / `manager` | the maintenance view; the key line reads `m  maintenance`; no programme takes `m` or `manager` as a name. `b` / `brief` print the refusal: the interactive manager is gone |
 | `p [<programme>]` | open plan, asking which programme if unnamed |
 | `f` | ask GitHub now and redraw |
 | `r` / `refresh` | collect the current page and redraw immediately |
@@ -560,7 +599,7 @@ retain the last observed step; an unfamiliar step is shown without guessing
 its phase. Like the rest of the page, progress refreshes every 30 seconds or
 immediately with `r`.
 
-The key line reads `<n>  show a goal or open a programme   ·   a  all / collapse   ·   o  operations   ·   h  home   ·   d  desk`.
+The first key line reads `<n>  show a goal or open a programme   ·   a  all / collapse   ·   o  operations   ·   h  home   ·   d  desk`; `m  maintenance` is on the line of `r  refresh`.
 
 The operations view is held by `run()` in its own value, next to the programme's
 view, and not in `page-live.js`: a live frame draws it, as it draws a programme's
@@ -793,7 +832,8 @@ checks that routing without opening a coding tool.
 - `src/mc/page-desk.js`: the DESK section — `readPageDesk`, `deskLines` and `deskKey`.
 - `src/mc/desk-opening.js`: the desk opening's read-only figures (texts, acts, stuck, not ready, decided, cost and `last-open.json`), shared by `mc martin` and the page, and the page's own reader of the ask ledger (`ledgerAsks`), which the opening does not use; it has no sync, lock or writer.
 - `src/mc/page-horizons.js`: the HORIZONS section and the programme headings — `horizonsLines`, `horizonFigures`, `programmeHeading`, `horizonWords`, `programmeFacts`.
-- `src/mc/page-overview.js`: the overview — `headerRows`, `flightRows` (the sessions DESK counts and MAINTENANCE draws), `maintenanceItems` and `maintenanceLines` (MAINTENANCE), `mergeDeployRows` and `overviewLines`, which draws the sections in order.
+- `src/mc/page-overview.js`: the overview — `headerRows`, `flightRows` (the sessions DESK counts and MAINTENANCE draws), `maintenanceItems`, `maintenanceRows`, `maintenanceLines` and `maintenanceView` (MAINTENANCE and its view), `mergeDeployRows` and `overviewLines`, which draws the sections in order.
+- `src/mc/page-maintenance.js`: MAINTENANCE's sources — `SOURCES`, `maintenanceSection` (one row per source, a failed read red) and each source's reading and machine read.
 - `src/mc/page-render.js`, `page-programmes.js`, `page-activity.js`, `page-operations.js` and `page-grid.js`: page composition, work tree, activity, operations, widths and palette.
 - `src/mc/page-cache.js`: the PR cache.
 - `src/mc/dev-pool.js`: DEV's data — `readPool`, the one reader of the dev-server pool, and `devSection`.

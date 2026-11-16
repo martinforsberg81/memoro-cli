@@ -49,7 +49,7 @@ import { activityLines, sessionGoal } from './page-activity.js';
 import { deployLines, devLines, detail, frameEnd, frameTop, mergesLines, panelHeading, panelEnd } from './page-operations.js';
 import { programmeTreeLines } from './page-programmes.js';
 import { programmeFacts, programmeHeading } from './page-horizons.js';
-import { flightRows, headerRows, outsidePrs, overviewLines, ownerWords, warningLines } from './page-overview.js';
+import { flightRows, headerRows, maintenanceView, outsidePrs, overviewLines, ownerWords, warningLines } from './page-overview.js';
 import { deskLines } from './page-desk.js';
 import { ageWords } from './page-cache.js';
 import { drainLine, stopLine } from './run-control.js';
@@ -898,11 +898,11 @@ function operationsBody(lines, c, wide, data, { expand, version, at }) {
  * The whole page, as lines. `data` is exactly what `--json` prints: one key
  * per section, so the two can never say different things.
  *
- * Three pages are drawn from it: the overview (the default, as long as the work; page-overview.js),
+ * Four pages are drawn from it: the overview (the default, as long as the work; page-overview.js), the maintenance view (`maintenance`),
  * the operations view (`operations`: the hero frame and the panels), and a programme's own view (`view`).
  */
 export function renderPageLines(data, {
-  columns = 100, colour = false, version = '', now = new Date(), expand = false, view = null, operations = false,
+  columns = 100, colour = false, version = '', now = new Date(), expand = false, view = null, operations = false, maintenance = false,
 } = {}) {
   const paintText = painter(colour);
   // Secondary information must remain readable on dark terminal palettes.
@@ -913,6 +913,13 @@ export function renderPageLines(data, {
   const runnerSessions = data.runner?.sessions || [];
   const body = { expand, version, at };
 
+  if (maintenance) {
+    // The overview's header rows and the warnings, then the frame: FIGURES 24 h and PIPELINE are the operations view's.
+    lines.push(...headerRows(c, wide, data, version), '');
+    warningLines(lines, c, wide, data);
+    maintenanceView(lines, c, wide, data);
+    return lines;
+  }
   if (operations) {
     headerLines(lines, c, paintText, wide, data, version, { header: true });
     warningLines(lines, c, wide, data);

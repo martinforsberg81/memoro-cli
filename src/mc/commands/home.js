@@ -86,6 +86,8 @@ export async function run(argv, deps = {}) {
   // Whether the operations view is open (`o`): a value of its own rather than a `view`, because a programme's name
   // can never be taken by it and `h` closes it. The live loop's frames draw through this closure and keep it.
   let operations = false;
+  // Whether the maintenance view is open (`m`): the sources' rows with their detail. Held here for the same reason.
+  let maintenance = false;
   // At a terminal the page keeps its own pull requests current: every draw,
   // the live loop's included, asks GitHub when the cache is older than five
   // minutes (page-collect.js, `fresh: 'stale'`). A pipe reads the cache as it
@@ -143,6 +145,7 @@ export async function run(argv, deps = {}) {
         expand,
         view,
         operations,
+        maintenance,
       }),
     };
   };
@@ -162,7 +165,9 @@ export async function run(argv, deps = {}) {
   const reader = typeof deps.reader === 'function' ? deps.reader({ page, first }) : deps.reader || readerFor({ stdout, lines: first.lines, page, key: first.key });
   return menu(first.data, {
     stdout, stderr, env, page, reader, expand: (on) => { expand = on; }, fresh: () => { freshOnce = true; },
-    current: () => latest, show: (name) => { view = name; operations = false; }, operate: (on) => { operations = on; },
+    current: () => latest, show: (name) => { view = name; operations = false; maintenance = false; },
+    operate: (on) => { operations = on; if (on) maintenance = false; },
+    maintain: (on) => { maintenance = on; if (on) operations = false; },
     restart: () => (deps.restartPage || restartPage)({ stdout, env, from: startedOn, to: movedTo }),
   });
 }
@@ -287,8 +292,10 @@ export function pageKey(data) {
     // carries its age too; its `fact` is the row without it.
     maintenanceItems(data || {}).map((item) => (item.key.startsWith('session:') ? item.key : `${item.key}:${item.fact ?? item.text}`)).join(','),
     mergeDeployRows(data || {}).map((row) => `${row.key}:${row.fact ?? row.text}`).join(','),
+    // The sources MAINTENANCE draws: which are read and how many wait, not how long ago they were collected.
+    (data?.maintenance?.sources || []).map((source) => `${source.id}:${source.state}:${source.count ?? ''}`).join(','),
   ].join('/');
-  return [goalKey, activityKey, priorityKey, data?.providerPriority || '', deskKey(data?.desk), horizonKey === '/' ? '' : horizonKey, overviewKey === '//' ? '' : overviewKey].filter(Boolean).join('|');
+  return [goalKey, activityKey, priorityKey, data?.providerPriority || '', deskKey(data?.desk), horizonKey === '/' ? '' : horizonKey, overviewKey === '///' ? '' : overviewKey].filter(Boolean).join('|');
 }
 
 export function parsePageArgs(argv) {
@@ -309,7 +316,7 @@ const KEYS = [
   '  <n>  show a goal or open a programme   ·   a  all / collapse   ·   o  operations   ·   h  home   ·   d  desk',
   `  p  plan a programme   ·   priority <${providerPriorities().join('|')}>   ·   f  fresh from GitHub   ·   q  quit`,
   '  priority <programme>... --set <n>   higher number goes first within a stage',
-  '  r  refresh   ·   c  clear finished goals   ·   deploy  deploy to production',
+  '  r  refresh   ·   m  maintenance   ·   c  clear finished goals   ·   deploy  deploy to production',
   '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',
 ].join('\n');
 
@@ -375,6 +382,8 @@ export async function menu(first, {
   show = () => {},
   // Opens the operations view (`o`) on the caller's closure; `show` closes it.
   operate = () => {},
+  // Opens the maintenance view (`m`) on the caller's closure; `show` closes it.
+  maintain = () => {},
   // Asks the next draw to go to GitHub for the pull requests (`f`).
   fresh = () => {},
   // `mc run <verb>` — a dependency so a test drives the menu without a runner.
@@ -449,8 +458,15 @@ export async function menu(first, {
     }
     // The desk: `mc martin`, whose own opening is what the DESK panel above summarises.
     if (answer === 'd' || answer === 'desk') return (deskOrder || deskVerb)([], { stdout, stderr, env });
-    // The interactive manager is gone (D10): its old letters say what remains, and the page stays.
-    if (['m', 'manager', 'b', 'brief'].includes(answer)) {
+    // The maintenance view: every source of MAINTENANCE with its detail below its row. `m` and `manager` open it, no
+    // longer the manager (gone, D10); no programme is named `m` or `manager`.
+    if (answer === 'm' || answer === 'manager') {
+      maintain(true);
+      data = await redraw();
+      continue;
+    }
+    // The old letters of the interactive manager say what remains, and the page stays.
+    if (['b', 'brief'].includes(answer)) {
       const { MANAGER_GONE } = await import('./manager.js');
       stderr.write(`\n${MANAGER_GONE}\n`);
       data = await redraw();
