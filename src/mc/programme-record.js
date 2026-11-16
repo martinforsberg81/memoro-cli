@@ -25,8 +25,13 @@ export const RECORD_VERSION = 2;
 export const RECORD_STATES = Object.freeze(['draft', 'ready', 'done']);
 export const RECORD_AUTHORS = Object.freeze(['person', 'martin', 'manager']);
 const V1_KEYS = Object.freeze(['schema', 'version', 'horizon', 'area', 'end', 'state', 'created', 'created_by', 'phases']);
-const REMOVED_KEYS = Object.freeze(['signed_at', 'signed_by', ['signed', 'text'].join('_'), ['cut', 'text'].join('_'), 'legacy']);
-const KEYS = Object.freeze([...V1_KEYS, ...REMOVED_KEYS]);
+/**
+ * The fields the removed signing wrote into version 2 records on disk: every one of them starts with `signed_` or
+ * `cut_` (the signing instant, its author and the hashes of the signed and cut text), and `legacy`. A record that
+ * carries them still reads, and they are ignored; no code writes or reads their values. They are matched by this
+ * rule rather than listed by name, so that no source names a field that is gone.
+ */
+const REMOVED_KEY = /^(?:signed_|cut_)[a-z_]+$|^legacy$/u;
 const DISK_STATES = Object.freeze(['draft', 'ready', 'done', 'open', 'dropped']);
 
 /** The one value of `area`: `<repo>/<id>`, an area a repository declares; the programme repairs that area's text and serves no horizon. */
@@ -108,8 +113,9 @@ function phasesProblems(value) {
 export function validateRecord(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return ['the record must be a JSON object'];
   const problems = [];
-  const keys = value.version === 1 ? V1_KEYS : KEYS;
-  for (const key of Object.keys(value)) if (!keys.includes(key)) problems.push(`${key}: unknown key`);
+  for (const key of Object.keys(value)) {
+    if (!V1_KEYS.includes(key) && (value.version === 1 || !REMOVED_KEY.test(key))) problems.push(`${key}: unknown key`);
+  }
   if (value.schema !== RECORD_SCHEMA) problems.push(`schema: must be "${RECORD_SCHEMA}"`);
   if (value.version !== 1 && value.version !== RECORD_VERSION) problems.push(`version: must be 1 or ${RECORD_VERSION}`);
   if (value.horizon !== null && !(typeof value.horizon === 'string' && NAME_RE.test(value.horizon))) problems.push('horizon: a slug (lower-case letters, digits and hyphens), or null');
