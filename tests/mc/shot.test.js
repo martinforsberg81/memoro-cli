@@ -511,6 +511,60 @@ describe('mc shot — design sets', () => {
     assert.doesNotMatch(result.stderr, /mc: timing/u);
   });
 
+  it('stops on each diagnostic failure without opening or claiming the failed rendering', async () => {
+    const cases = [
+      { name: 'action', result: { failed: { step: 1, kind: 'click', selector: '.a', error: 'missing' } }, diagnostic: /failed.*missing/u },
+      { name: 'eval', result: { evaluated: [{ error: 'bad evaluation' }] }, diagnostic: /threw: bad evaluation/u },
+      { name: 'access', result: { access: { requires: 'admin', account: 'new', role: 'user', expected: 'denied', page: 'granted', status: 200, holds: false } }, diagnostic: /gate did not hold/u },
+      { name: 'malformed', result: null },
+    ];
+    for (const test of cases) {
+      const fx = fixture();
+      const dir = join(fx.home, 'designs');
+      const requests = [];
+      const opened = [];
+      const result = await shot(['dev', 'home', '--set', dir, '--state', 'filled', '--open', '--click', '.a'], fx, {
+        runCapture: ({ request }) => {
+          requests.push(request);
+          writeFileSync(request.out, 'picture');
+          if (requests.length === 3 && test.result === null) return { ok: true, result: null };
+          return { ok: true, result: { ok: true, file: request.out, acted: request.actions, ...(requests.length === 3 ? test.result : {}) } };
+        },
+        platform: () => 'linux',
+        spawn: (_command, args) => { opened.push(args[0]); return { on() {}, unref() {} }; },
+      });
+      assert.equal(result.code, 1, test.name);
+      assert.deepEqual(requests.map((r) => r.out.split('/').at(-1)), ['filled-desktop-light.png', 'filled-desktop-dark.png', 'filled-phone-light.png'], test.name);
+      assert.deepEqual(result.stdout.trim().split('\n'), requests.slice(0, 2).map((r) => r.out), test.name);
+      assert.deepEqual(opened, requests.slice(0, 2).map((r) => r.out), test.name);
+      assert.ok(requests.slice(0, 2).every((r) => existsSync(r.out)), test.name);
+      assert.match(result.stderr, /mc: phone-light failed/u, test.name);
+      if (test.diagnostic) assert.match(result.stderr, test.diagnostic, test.name);
+    }
+  });
+
+  it('reports the ordered completed members and failure in partial JSON', async () => {
+    const fx = fixture();
+    const requests = [];
+    const result = await shot(['dev', 'home', '--set', join(fx.home, 'designs'), '--state', 'filled', '--json'], fx, {
+      runCapture: ({ request }) => {
+        requests.push(request);
+        return requests.length === 3
+          ? { ok: true, result: { ok: false, code: 'not-loaded', error: 'loading' } }
+          : { ok: true, result: { ok: true, file: request.out } };
+      },
+    });
+    assert.equal(result.code, 1);
+    const aggregate = JSON.parse(result.stdout);
+    assert.equal(aggregate.ok, false);
+    assert.equal(aggregate.failed, 'phone-light');
+    assert.deepEqual(aggregate.files, requests.slice(0, 2).map((r) => r.out));
+    assert.deepEqual(aggregate.results.map((r) => r.rendering), ['desktop-light', 'desktop-dark', 'phone-light']);
+    assert.equal(aggregate.results[2].result.code, 'not-loaded');
+    assert.ok(aggregate.timing);
+    assert.doesNotMatch(result.stderr, /mc: timing/u);
+  });
+
   it('refuses incompatible or incomplete sets before starting a server or making a directory', async () => {
     const fx = fixture();
     const dir = join(fx.home, 'never');
