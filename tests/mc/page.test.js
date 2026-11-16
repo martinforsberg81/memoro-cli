@@ -18,6 +18,7 @@ import { newRecord, writeRecord } from '../../src/mc/programme-record.js';
 import { modelsPath, readModels } from '../../src/mc/model-config.js';
 import { diskSummary } from '../../src/mc/disk-pressure.js';
 import { deployProgress } from '../../src/mc/deploy-progress.js';
+import { deployMendLine } from '../../src/mc/deploy-repair.js';
 import { claimFullRun } from '../../src/mc/full-run-claim.js';
 import { recordEnd, recordStart } from '../../src/mc/deploys.js';
 import {
@@ -635,6 +636,50 @@ describe('DEPLOY', () => {
     const done = { ...record, stage: 'done', ended: NOW.toISOString(), result: { full: { state: 'green' } } };
     assert.match(strip(line({ preparation: done, alive: () => false })), /PREPARED + b3e65b6 · done, `mc deploy` ships it/u);
     assert.equal(section({ preparation: null }).preparation, null);
+  });
+
+  /**
+   * deploy-gate-red-is-mended: a refusal says what the suite stated and where its whole output is,
+   * a preparation that did not finish says where the suites' output is, and an older row or record
+   * (no note, no path) is drawn as it always was.
+   */
+  it('shows what a refusal said and where the whole output is; an old row and an old record show neither', () => {
+    const path = '/home/martin/mc/runner/deploy-prepare/2026-11-16T04-00/msr-performance.log';
+    const refused = { ...DEPLOYED, started: '2026-08-29T11:00:00Z', ended: '2026-08-29T11:01:00Z', sha: OTHER, outcome: 'refused',
+      stopped_at: 'gate', note: 'suite msr-performance failed (exit 1): mobile-constrained: long task 60 ms, bound 50 ms', output_path: path };
+    const p = section({ attempt: refused });
+    assert.equal(p.attempt.note, refused.note);
+    assert.equal(p.attempt.output_path, path);
+    const text = strip(line({ attempt: refused }));
+    assert.match(text, /suite msr-performance failed \(exit 1\): mobile-constrained: long task 60 ms, bound 50 ms/u);
+    assert.match(text, /whole output: \/home\/martin\/mc\/runner\/deploy-prepare\/2026-11-16T04-00\/msr-performance\.log/u);
+
+    // A note that already carries the path is not followed by it again.
+    const said = strip(line({ attempt: { ...refused, note: `${refused.note}; whole output: ${path}` } }));
+    assert.equal(said.split('whole output:').length - 1, 1, said);
+
+    const old = { ...refused, note: '', output_path: '' };
+    delete old.output_path;
+    const older = strip(line({ attempt: old }));
+    assert.match(older, /ATTEMPT + b3e65b6 · refused/u);
+    assert.doesNotMatch(older, /whole output/u);
+    assert.equal(section({ attempt: old }).attempt.output_path, null);
+
+    const started = new Date(NOW.getTime() - 7 * 60 * 1000).toISOString();
+    const gone = { schema: 'mc-deploy-prepare', sha: OTHER, pid: 5151, started, stage: 'suites', output_dir: '/home/martin/mc/runner/deploy-prepare/2026-11-16T04-00' };
+    assert.match(strip(line({ preparation: gone, alive: () => false })), /whole output of each suite: \/home\/martin\/mc\/runner\/deploy-prepare\/2026-11-16T04-00/u);
+    const record = { ...gone }; delete record.output_dir;
+    const bare = strip(line({ preparation: record, alive: () => false }));
+    assert.match(bare, /PREPARATION INTERRUPTED/u);
+    assert.doesNotMatch(bare, /whole output/u);
+  });
+
+  it('says on the page that the full run cannot start, what held it and that a repair is queued', () => {
+    const entry = { id: 'r1', state: 'queued', rows: [{ started: '2026-11-16T04:00:00.000Z', origin: 'full-run', repo: 'memoro',
+      holders: [{ pid: 4711, command: 'secret-tool lookup', cwd: '/work/full/src' }] }] };
+    const deploy_mend = { error: null, state: entry.state, line: deployMendLine(entry), reason: null, session_log: null };
+    const text = strip(renderPageLines(pageData({ checks: { repos: [], main_mend: [], deploy_mend } }), { columns: 160, version: '0.7.11', now: NOW }).join('\n'));
+    assert.match(text, /full run of memoro cannot start: pid 4711 \(secret-tool lookup\) standing in \/work\/full\/src; repair queued/u);
   });
 
   it('shows a gate round that died without an end as interrupted', () => {
