@@ -248,8 +248,8 @@ function preparedText({ programme, failures, item }) {
 
 /** The brief a later item carries: the turn failed again after a decision pass closed the first. Swedish, as the desk reads it. */
 function briefText({ programme, failures }) {
-  return `## Vad det gäller\nPlaneringspasset för programmet ${programme} slutade igen utan att programmet fick något mål; arbetet kan inte fortsätta automatiskt.\n\n`
-    + `## Alternativ och konsekvenser\n- Undersök underlaget: planeringen kan köras igen när felet är löst.\n- Låt programmet vänta: det får inga mål.\n\n`
+  return `## Vad det gäller\nPlaneringspasset för programmet ${programme} slutade igen utan att målen namngav varje del av det signerade dokumentet; arbetet kan inte fortsätta automatiskt.\n\n`
+    + `## Alternativ och konsekvenser\n- Undersök underlaget: planeringen kan köras igen när felet är löst.\n- Låt programmet vänta: signaturen skärs inte förrän målen täcker varje del.\n\n`
     + `## Rekommendation och skäl\nUndersök underlaget; planeringspasset har misslyckats igen sedan ett tidigare ärende stängts.\n\n`
     + `## Vad som står still\nProgrammet ${programme} väntar på Martin. Felunderlag:\n${failureLines(failures)}\n\n`
     + `## Kan valet ändras efteråt?\nIngen automatisk tillämpning; detta är ett mekaniskt fel som kräver undersökning.\n`;
