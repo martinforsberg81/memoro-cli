@@ -2,7 +2,7 @@
 import { mergeFailureSummary } from './merge-red.js';
 import { deployBar } from './deploy-progress.js';
 import { checkWords } from './deploy-check.js';
-import { width } from './status-render.js';
+import { clip, width } from './status-render.js';
 import { ageWords } from './page-cache.js';
 import { clipCell, duration, stateTone } from './page-grid.js';
 
@@ -21,12 +21,31 @@ export function detail(lines, c, wide, indent, value, tone = ['grey']) {
   }
 }
 
-/** Work panels share the programme frame shape, with orange structural rules. */
+/**
+ * The one frame of the page (docs/technical/mc-ui.md, The frame). Its top rule holds the title and the facts, with the
+ * section's key at the right; rows are indented under it; a bottom rule closes it. A frame with nothing to show beyond
+ * its title is its top rule alone. The rules are orange, as DESK's are; the rounded session frames are the one other
+ * component and are drawn by their own functions.
+ *
+ * `facts` is a string, or parts `{ text, styles }` joined by ` · `. They give way to the width: clipped to what the
+ * rule leaves, grey when clipped.
+ */
+export function frameTop(c, wide, title, facts = '', key = '') {
+  const parts = (Array.isArray(facts) ? facts : [{ text: facts, styles: ['grey'] }]).filter((part) => part && part.text);
+  const hint = key && wide - width(title) - width(key) >= 10 ? ` ${key} ` : '';
+  const room = Math.max(0, wide - 8 - width(title) - width(hint) - 2);
+  const plain = parts.map((part) => part.text).join(' · ');
+  const shown = !plain ? ''
+    : width(plain) > room ? `  ${c(clip(plain, Math.max(1, room)), 'grey')}`
+      : `  ${parts.map((part) => (part.styles?.length ? c(part.text, ...part.styles) : part.text)).join(c(' · ', 'grey'))}`;
+  const used = width(title) + (plain ? 2 + Math.min(width(plain), Math.max(1, room)) : 0);
+  const rule = '─'.repeat(Math.max(0, wide - used - width(hint) - 7));
+  return `  ${c('┌─ ', 'orange')}${c(title, 'bold')}${shown}${c(` ${rule}`, 'orange')}${hint ? c(hint, 'grey') : ''}${c('┐', 'orange')}`;
+}
+
+/** A frame's top rule, pushed. `summary` is its facts; the old name stays for the sections that draw it. */
 export function panelHeading(lines, c, wide, name, summary = '', verb = '') {
-  const hint = verb && wide - name.length - verb.length >= 10 ? ` ${verb} ` : '';
-  const rule = '─'.repeat(Math.max(0, wide - width(name) - width(hint) - 7));
-  lines.push(`  ${c('┌─ ', 'orange')}${c(name, 'bold')}${c(` ${rule}`, 'orange')}${hint ? c(hint, 'grey') : ''}${c('┐', 'orange')}`);
-  if (summary) detail(lines, c, wide, 4, summary);
+  lines.push(frameTop(c, wide, name, summary, verb));
 }
 
 export function panelEnd(lines, c, wide) {

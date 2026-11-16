@@ -37,10 +37,26 @@ puts its warning above everything else, and the runner's pause and not-running
 warnings follow it.
 
 **The operations view** (`o`, below) draws the hero frame, MARTIN QUEUE, MERGE &
-DEPLOY, DEV, MAINTENANCE and SYSTEM, which the overview no longer carries. Orange
-opening and closing rules distinguish its panels from cyan programme boundaries.
-SYSTEM follows a horizontal separator at the bottom, containing MC, runner
-diagnostics, Docker when present and BILLING. There is no separate SESSIONS section.
+DEPLOY, DEV, MAINTENANCE and SYSTEM, which the overview no longer carries. Every
+section is a frame, here and on every surface (below). SYSTEM is the frame at the
+bottom, containing MC, runner diagnostics, Docker when present and BILLING. There
+is no separate SESSIONS section.
+
+**One frame.** Every section on every surface — the overview, `a`, `o` and a
+programme's view — is drawn in the one frame DESK has: a top rule
+`┌─ TITLE  facts ───── key ┐` with the title in bold, the facts after two spaces
+(joined with ` · `) and the key that opens the section at the right, then the rows
+at indent 4, then the bottom rule `└────┘`. Each programme is its own frame, with
+its name as the title and its goal count, priority and proposals as the facts. A
+frame with nothing beyond its title and facts — MERGE and DEPLOY with no detail, the
+folded `<n> programmes with nothing under way` and `<n> dormant programmes`, DEV
+with none running, the PROGRAMMES frame that heads the programme frames — is its top
+rule alone, with no bottom rule. There are no loose headings, no cyan rules and no
+separator before SYSTEM; the page has one style of rule. The rules are orange
+(256-colour SGR 38;5;208); red stays for what is broken. The rounded session
+frames (`╭╮`) and the pipeline's stage boxes are not sections and stay as they
+are. The primitives are `frameTop`, `panelHeading` and `panelEnd`
+(`page-operations.js`).
 
 One `a` / `all` toggles all folded content and details across the page;
 the next press returns to the normal view. In the overview it draws every row with
@@ -50,12 +66,11 @@ the pipeline, each Manager's activity frame with its trigger and pid, then MARTI
 QUEUE, MERGE & DEPLOY, DEV, MAINTENANCE and SYSTEM; in a programme's view it
 expands that programme's block. Current sessions, blockers,
 malformed goals, open PRs, merge failures and process/resource warnings
-remain visible in both modes. Normal headings use spacing and indentation,
-without repeated table headers; programme blocks have opening and closing rules.
+remain visible in both modes. There are no repeated table headers.
 
 ### The overview
 
-**The budget.** The overview is at most `OVERVIEW_ROWS = 50` lines at every width
+**The budget.** The overview is at most `OVERVIEW_ROWS = 53` lines at every width
 the page draws (60–160). The menu's key block and prompt are not counted. A page
 over the budget is folded, one row at a time, in this order (`FOLDS`):
 
@@ -68,10 +83,12 @@ over the budget is folded, one row at a time, in this order (`FOLDS`):
 Every fold row says how many rows it holds and that `a` shows them (`▸ 3 more
 sessions — a shows them`); a fold of one row is drawn as the row it holds. A row
 therefore never disappears without a count. Never folded: the header, DESK, the
-warnings, the MERGE and DEPLOY rows, the section headings, the horizon titles,
-`▸ <n> with nothing under way`, the desk sessions and the interactive sessions.
+warnings, the MERGE and DEPLOY rows, the section frames' top rules, the horizon titles,
+the `<n> programmes with nothing under way` frame, the desk sessions and the interactive sessions.
 When those alone pass the budget the page is drawn whole after everything
-foldable is folded, and is longer than 50 rows. `a` draws no budget.
+foldable is folded, and is longer than 53 rows. (53 is the 50 rows of content the
+page had before the frames, and the three bottom rules that HORIZONS, IN FLIGHT and
+NEEDS ATTENTION add.) `a` draws no budget.
 
 **The header** is at most two rows with no frame, then one blank row. The first
 reads `MC <version> · runner on|off · <n>/<m> lanes · runner ≈$<x> today · deploy
@@ -209,8 +226,8 @@ A programme with a record (`PROGRAMME.json`, [mc-plan.md](mc-plan.md#a-programme
 a goal; a draft counts as under way, other empty records as dormant. A programme without a record appears as before.
 
 `programmesSection` and `goalsOf` (`page-collect.js`) build programme → phase
-→ goal → PR. Each programme is a bounded block with a bold name and cyan
-opening/closing rules. Each phase has its own bold cyan heading. All unfinished
+→ goal → PR. Each programme is a frame (above) with a bold name. Each phase has its own
+bold heading inside it. All unfinished
 phases and goals are visible, including a phase that waits, headed `after phase
 N` (the phase the programme is in, for a sequential programme) or, in a
 programme whose record states its phases, `after phase <m>[, <m>…]` with every
@@ -227,7 +244,7 @@ its phase until the session ends, and `a` draws every finished goal still under
 ([mc-run.md](mc-run.md)), so what remains is usually a goal waiting on a
 refusal. A programme heading carries ` · n done` for its finished goals (`n`
 is `finished` in `--json`); a phase with nothing drawn is not drawn, and a
-programme with nothing to draw is its heading row alone. Under NEEDS ATTENTION,
+programme with nothing to draw is its top rule alone. Under NEEDS ATTENTION,
 in both views: a malformed goal, without an inferred phase; a finished goal the
 runner refused to archive, with the red line `not archived — <why>` (`archive_refused`
 on the goal row in `--json`, from the runner's last such log entry after the
@@ -381,7 +398,7 @@ represented by a programme, running session or merger. Its counts describe
 that group only; `mc prs` still lists every PR. Empty groups disappear.
 The stopped-language-gap warning remains above the work.
 
-A horizontal SYSTEM separator places installed-code/update/draining information,
+The SYSTEM frame places installed-code/update/draining information,
 runner liveness and occupied/configured lanes, resource holds, Docker,
 provider usage and daily statistics below the work. STOP, stale records,
 GitHub failures and quota warnings remain visible; reasons and billing wrap.
@@ -496,7 +513,7 @@ day, grey once landed, and cyan bold otherwise. Primary text uses the
 terminal's own foreground. The page maps the shared palette's `grey`
 bookkeeping tone to standard ANSI white (SGR 37), not dark grey (SGR 90),
 so secondary text stays legible on dark backgrounds. There is no dim text.
-Work-panel rules use orange (256-colour SGR 38;5;208). Other colours still
+Every frame's rules use orange (256-colour SGR 38;5;208). Other colours still
 depend on the terminal palette; NO_COLOR and non-TTY output carry no escapes. Painting
 happens after clipping plain text so no escape sequence is cut. Plain and
 painted rows occupy the same columns.

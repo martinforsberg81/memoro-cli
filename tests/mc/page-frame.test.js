@@ -49,13 +49,13 @@ describe('the difference between two frames', () => {
     const after = frame(10800);
     // Exactly one row of the real page differs: the MC line at the foot.
     const changed = before.reduce((all, line, index) => (line === after[index] ? all : [...all, index]), []);
-    const mcAt = before.findIndex((line) => /^  MC  /u.test(line));
+    const mcAt = before.findIndex((line) => /^ {4}MC  /u.test(line));
     assert.deepEqual(changed, [mcAt]);
 
     // The page, then the four rows the menu prints below it. Removing a
     // section changes the frame's length, not the MC row's distance from it.
     const writes = frameWrites(before, after, { above: before.length + 4 });
-    const updatedAt = after.findIndex((line) => /^  MC  /u.test(line));
+    const updatedAt = after.findIndex((line) => /^ {4}MC  /u.test(line));
     const distance = before.length + 4 - updatedAt;
     assert.equal(writes, `\r\x1b[${distance}A\x1b[2K${after[updatedAt]}\r\x1b[${distance}B`);
 
@@ -121,7 +121,7 @@ describe('the difference between two frames', () => {
     // rows above it can be addressed. The final MC row is five up and is
     // rewritten; row 2 is off the screen, and is not.
     const writes = frameWrites(before, after, { above: before.length + 4, rows: 10 });
-    const updatedAt = after.findIndex((line) => /^  MC  /u.test(line));
+    const updatedAt = after.findIndex((line) => /^ {4}MC  /u.test(line));
     const distance = before.length + 4 - updatedAt;
     assert.equal(writes, `\r\x1b[${distance}A\x1b[2K${after[updatedAt]}\r\x1b[${distance}B`);
     assert.equal(writes.includes(after[2]), false);
