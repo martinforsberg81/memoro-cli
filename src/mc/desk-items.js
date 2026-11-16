@@ -12,8 +12,7 @@ import { realLock } from './runner-lock.js';
 import { cuttable, cutProblems, readTurnState, turnStatePath } from './programme-turn.js';
 import { readRecord } from './programme-record.js';
 import { archiveStatePath, liveGoals, pendingDestination, readArchiveState } from './archive-turn.js';
-import { readHorizon } from './desk-horizons.js';
-import { horizonHeldByItem, horizonStatePath, readHorizonState, scanRecords } from './manager-pulse.js';
+import { readHorizonState } from './manager-pulse.js';
 
 export const ITEM_STATES = ['new', 'prepared', 'for-martin', 'closed'];
 const open = (item) => item.state !== 'closed';
@@ -34,7 +33,7 @@ export function syncDeskItems({ env = process.env, lock = realLock, reportIssue 
   return items;
 }
 
-function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mcHome(env), now = () => new Date(), collect = collectMartinQueue, read = readText, exists = existsSync, list = listDirs, readLedger = readText, readMends = readMainMends, write = writeJsonAtomic, horizon = (slug) => readHorizon(slug, { env }) }) {
+function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mcHome(env), now = () => new Date(), collect = collectMartinQueue, read = readText, exists = existsSync, list = listDirs, readLedger = readText, readMends = readMainMends, write = writeJsonAtomic }) {
   const dir = join(martinDir(env), 'items');
   mkdirSync(dir, { recursive: true });
   const marker = join(dir, '.store.json');
@@ -160,19 +159,9 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
       if (!exists(join(home, programme))) { if (!pendingDestination(turn, { read })) summary = 'The programme directory is gone.'; }
       else if (liveGoals({ home, programme, list }).length) summary = 'The programme now holds a live goal.';
     } else if (item.kind === 'manager') {
-      // A manager item is the horizon turn's: it closes when the horizon is not open, a valid open programme record
-      // names it or a text item horizon:<slug> is open. A state file that cannot be read keeps it open, said.
-      const slug = item.reference.slice('manager:'.length);
-      const turn = readHorizonState({ root, slug, read });
-      if (turn.status === 'unreadable') {
-        const path = horizonStatePath(root, slug);
-        issues.set(path, { path, error: turn.problem });
-        continue;
-      }
-      const found = horizon(slug);
-      if (!found || found.state !== 'open') summary = `The horizon ${slug} is no longer open.`;
-      else if (scanRecords({ home, list, read }).open.some((entry) => entry.record.horizon === slug)) summary = 'An open programme now serves the horizon.';
-      else if (horizonHeldByItem([...existing.values()].filter((other) => other.kind === 'text'), slug)) summary = `The text item horizon:${slug} is open.`;
+      // A manager item was opened by the manager's horizon turn, which is removed: nothing starts that turn again,
+      // so the item closes by source.
+      summary = "The manager's horizon turn is removed.";
     } else {
       const [, repoAndId] = item.reference.split(':'); const slash = repoAndId.indexOf('/'); const repo = repoAndId.slice(0, slash); const id = repoAndId.slice(slash + 1);
       const entries = sourceMends(repo);

@@ -415,7 +415,7 @@ export function programmePlanCheckInPrompt({ minutes, count }) {
 
 /** `checkInPrompt` for the manager's turns (mc-run.md, "Manager turns"): keep to the turn's one task and end in one of its endings. */
 export function managerCheckInPrompt({ minutes, count }) {
-  return `Manager check-in after ${minutes} minutes (${count}). Keep to this turn's one task: for a horizon turn end in exactly one of the three endings; for a curation turn change only what docs/technical/ says is wrong, publish it with plain mc publish, which queues it for the merger, and bring what waits on Martin to the desk. Do not make a horizon or a goal and do not perform a reserved act.`;
+  return `Manager check-in after ${minutes} minutes (${count}). Keep to this curation turn's one task: change only what docs/technical/ says is wrong, publish it with plain mc publish, which queues it for the merger, and bring what waits on Martin to the desk. Do not make a horizon or a goal and do not perform a reserved act.`;
 }
 
 export function goalCheckInPrompt({ minutes, count }) {
