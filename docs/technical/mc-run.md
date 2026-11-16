@@ -184,7 +184,7 @@ order without a model call:
    waits for the desk decision pass, not a delivery session: this includes a
    goal reported by `mc goal defect` and one stopped after three build sessions
    without progress (`no progress:`; *What a build session does* in
-   [mc-goals.md](mc-goals.md)), which start no session until `mc goal ready`. `draft · ready`, `done` and `dropped` do not start a
+   [mc-goals.md](mc-goals.md)), which start no session until `mc goal ready`. A `build · ready` goal whose last entry is the runner's main-red wait (*What a build session does* in [mc-goals.md](mc-goals.md)) is held while a main-red repair of one of its repositories is queued, running or published. `draft · ready`, `done` and `dropped` do not start a
    delivery session. A focused plan session may complete the next draft under the programme rule below, and a recorded open programme that holds no goal gets the programme planning turn (*Programme planning turn*).
 3. Hold any goal whose phase is not open in its programme. The runner reads
    each programme's record at every pick (`programmeOrder`), as it reads
