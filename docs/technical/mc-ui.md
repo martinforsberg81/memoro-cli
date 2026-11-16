@@ -37,8 +37,10 @@ which is what `mc --json` prints. A stopped language run inside an open gap
 puts its warning above everything else, and the runner's pause and not-running
 warnings follow it.
 
-**The operations view** (`o`, below) draws the hero frame, MARTIN QUEUE, MERGE &
-DEPLOY, DEV, MAINTENANCE and SYSTEM, which the overview no longer carries. Every
+**The operations view** (`o`, below) draws FIGURES 24 h, PIPELINE, MERGE & DEPLOY, DEV
+and SYSTEM, which the overview no longer carries, each in its own frame and with no
+header above them: the header rows are the overview's. MARTIN QUEUE and MAINTENANCE are
+not drawn here: DESK and MAINTENANCE are the overview's. Every
 section is a frame, here and on every surface (below). SYSTEM is the frame at the
 bottom, containing MC, runner diagnostics, Docker when present and BILLING. There
 is no separate SESSIONS section.
@@ -62,9 +64,8 @@ One `a` / `all` toggles all folded content and details across the page;
 the next press returns to the normal view. In the overview it draws the programmes
 with nothing under way as frames under the others (each with its number, its horizon and
 its phase, as the ones under way), then the operations sections below MAINTENANCE,
-expanded: the hero frame with its 24-hour figures and the pipeline, each Manager's
-activity frame with its trigger and pid, then MARTIN QUEUE, MERGE & DEPLOY, DEV, the
-operations view's MAINTENANCE (Proposals, Errors) and SYSTEM; in a programme's view it
+expanded: FIGURES 24 h and PIPELINE, each Manager's
+activity frame with its trigger and pid, then MERGE & DEPLOY, DEV and SYSTEM; in a programme's view it
 expands that programme's block. Current sessions, blockers,
 malformed goals, open PRs, merge failures and process/resource warnings
 remain visible in both modes. There are no repeated table headers.
@@ -77,9 +78,8 @@ programmes with nothing under way, below.
 
 **The header** is at most two rows with no frame, then one blank row. The first
 reads `MC <version> · runner on|off · <n>/<m> lanes · runner ≈$<x> today · deploy
-<when>`, with `d  mc martin` at the right edge. The hero frame, the 24-hour figures
-and the pipeline are in the operations view and under `a`. A programme's own view keeps the
-header and the frame it had.
+<when>`, with `d  mc martin` at the right edge. FIGURES 24 h and PIPELINE are in the operations view and under `a`,
+which have no header of their own. A programme's own view keeps the header and the frame it had.
 
 **The programmes.** Below HORIZONS every programme with something under way is drawn as
 `a` has always drawn a programme (a frame with its phases, goals, sessions and pull
@@ -153,8 +153,7 @@ last changed on `origin/main` (`today`, `1 day ago`) and its aims (`3 aims`, `1 
 strays' items. The aims are the top-level bullets under the page's `## Aim`; `No aim stated yet.`
 is none. The view draws nothing the sources do not hold and acts on nothing: the verb at the right
 of a row is where the source is handled. `h`, a number or a programme's name leaves it; the frame's key
-reads `h  home`, and `m` again keeps it open. The operations view's own
-MAINTENANCE (proposals, errors) is a different frame and unchanged.
+reads `h  home`, and `m` again keeps it open. The operations view draws no MAINTENANCE.
 
 **The desk's sessions** are counted in DESK's title (`<n> desk sessions open`), not
 listed: the martin, manager and helper sessions.
@@ -192,7 +191,7 @@ An unreadable part says so in red in its own row and the rest still draws: an
 invalid `last-open.json` and an unreadable ledger on the decided row, `desk.json`
 or `runs.tsv` on the cost row, a failure of the whole read as `desk unreadable —`
 with nothing else. The read never throws, so the page always comes. `⚑n`,
-`status Martin` and the MARTIN QUEUE panels stay as they are.
+and `status Martin` stay as they are; MARTIN QUEUE is no longer drawn (the operations view has none).
 
 `desk` in `--json`: `since`, `last_opened`, `waiting`, `texts` and `acts` (each
 `id`, `kind`, `reference`, `sort`, `source_at`, `waited_minutes`, `blocks`,
@@ -561,9 +560,9 @@ painted rows occupy the same columns.
 | a goal's number | `mc goal show` for that numbered goal, then redraw; from the overview and from a programme's view alike |
 | a programme's number | open that programme alone (its view), then redraw |
 | a programme's exact name | the same; looked up last, so no programme name takes a word of this table, and a number is a goal's before it is a programme's |
-| `o` / `operations` | the operations view: the hero frame, MARTIN QUEUE, MERGE & DEPLOY, DEV, MAINTENANCE and SYSTEM; no programme takes `o` or `operations` as a name; the key line reads `o  operations` |
+| `o` / `operations` | the operations view: FIGURES 24 h, PIPELINE, MERGE & DEPLOY, DEV and SYSTEM, without the header rows; no programme takes `o` or `operations` as a name; the key line reads `o  operations` |
 | `h` / `home` | the overview again, from the operations view and from a programme's view; the key line reads `h  home` |
-| `a` / `all` | toggle all folded rows and details across every surface; in the overview, the programmes with nothing under way as frames, then the operations sections expanded: the hero frame with its 24-hour figures and pipeline, each Manager's frame, then the panels |
+| `a` / `all` | toggle all folded rows and details across every surface; in the overview, the programmes with nothing under way as frames, then the operations sections expanded: FIGURES 24 h and PIPELINE, each Manager's frame, then the panels |
 | `d` / `desk` | open the desk (`mc martin`), through the injected `deskOrder`, and return its exit code; the key line reads `d  desk` |
 | `m` / `manager` | the maintenance view; the key line reads `m  maintenance`; no programme takes `m` or `manager` as a name. `b` / `brief` print the refusal: the interactive manager is gone |
 | `p [<programme>]` | open plan, asking which programme if unnamed |
@@ -852,12 +851,12 @@ menu routing, including `d` and `desk`, the programme's number and name, `h` and
 
 ## The header and the operations view's hero frame
 
-The overview's header is two rows (above); the framed MC header below is the
-top of the operations view and of a programme's view. It says what mc is and what
+The overview's header is two rows (above). FIGURES 24 h below, the hero frame, is the
+top of the operations view and, under the header rows, of a programme's view. It says what mc is and what
 came out of it; the pipeline under it says where work stands now. The overview
 carries neither.
 
-**Hero frame.** Active and dormant programmes, the runner's list-price cost
+**Hero frame** (FIGURES 24 h). Active and dormant programmes, the runner's list-price cost
 today (`runner ≈$…`, its own sessions only), busy lanes of the lanes set, and
 the latest successful deploy in UTC (or `none recorded`). Then the last 24
 hours' outcome, from runs.tsv alone (`landed.js`, `data.landed`):
