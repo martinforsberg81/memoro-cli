@@ -1,6 +1,6 @@
 ---
 name: learning
-model: fable
+model: opus
 tools: claude, codex
 ---
 # Learning — turn the desk's lessons into landed changes

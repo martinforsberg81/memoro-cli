@@ -1,6 +1,6 @@
 ---
 name: ask-reader
-model: fable
+model: opus
 singleton: false
 tools: claude, codex
 ---

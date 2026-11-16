@@ -1,6 +1,6 @@
 ---
 name: decision
-model: fable
+model: opus
 tools: claude, codex
 ---
 # Decision — settle what is not Martin's

@@ -99,16 +99,16 @@ function setup(t, { session, trees = true, secrets = [SECRET] } = {}) {
 
 test('one way to ask: the reader is the decision list without the asker\'s own model, and the whole list when nothing else can run', () => {
   const catalog = { ...DEFAULT_CATALOG, providerPriority: 'auto' };
-  const both = chooseAskReader({ catalog, capacity: capacityOf(0.5, 0.5), now: NOW, asker: { tool: 'claude', model: 'fable' } });
+  const both = chooseAskReader({ catalog, capacity: capacityOf(0.5, 0.5), now: NOW, asker: { tool: 'claude', model: 'opus' } });
   assert.deepEqual([both.ok, both.candidate.tool, both.candidate.model], [true, 'codex', 'gpt-6.1-sol'], 'another model than the asker reads');
   const seen = [];
   const choose = (args) => { seen.push(args.catalog.decision.map((one) => one.model)); return { ok: true, candidate: args.catalog.decision[0] }; };
-  chooseAskReader({ catalog, capacity: capacityOf(0.5, 0.5), now: NOW, asker: { tool: 'claude', model: 'fable' }, choose });
   chooseAskReader({ catalog, capacity: capacityOf(0.5, 0.5), now: NOW, asker: { tool: 'claude', model: 'opus' }, choose });
+  chooseAskReader({ catalog, capacity: capacityOf(0.5, 0.5), now: NOW, asker: { tool: 'claude', model: 'fable' }, choose });
   chooseAskReader({ catalog, capacity: capacityOf(0.5, 0.5), now: NOW, asker: null, choose });
-  assert.deepEqual(seen, [['gpt-6.1-sol'], ['fable', 'gpt-6.1-sol'], ['fable', 'gpt-6.1-sol']], 'the asker is taken out only when it is in the list');
+  assert.deepEqual(seen, [['gpt-6.1-sol'], ['opus', 'gpt-6.1-sol'], ['opus', 'gpt-6.1-sol']], 'the asker is taken out only when it is in the list');
   const empty = [];
-  chooseAskReader({ catalog, capacity: capacityOf(0.5, 0.5), now: NOW, asker: { tool: 'claude', model: 'fable' }, choose: (args) => { empty.push(args.catalog.decision.length); return { ok: false, reason: 'none' }; } });
+  chooseAskReader({ catalog, capacity: capacityOf(0.5, 0.5), now: NOW, asker: { tool: 'claude', model: 'opus' }, choose: (args) => { empty.push(args.catalog.decision.length); return { ok: false, reason: 'none' }; } });
   assert.deepEqual(empty, [1, 2], 'when the others cannot run the whole list is asked');
 });
 
@@ -256,13 +256,13 @@ test('one way to ask: the reader is launched in the copy as the ask-reader role,
   });
   const result = await f.call({ session });
   assert.equal(result.read, true, result.reason);
-  assert.deepEqual([result.read, result.verdict.kind, result.verdict.key, result.tool, result.model], [true, 'continue', 'a', 'claude', 'fable']);
+  assert.deepEqual([result.read, result.verdict.kind, result.verdict.key, result.tool, result.model], [true, 'continue', 'a', 'claude', 'opus']);
   assert.equal(seen.bin, '/fake/claude');
   assert.equal(seen.timeoutMs, LIMIT_MS);
   assert.equal(seen.group, true);
   assert.equal(seen.cwd, join(callDirOf(f.env, ID), 'tree', 'memoro-cli'), 'the reader works in the copy');
   assert.ok(seen.args.includes(join(callDirOf(f.env, ID), 'tree')), 'the copy is the one directory it may read besides its own');
-  assert.deepEqual([seen.env.MC_ROLE, seen.env.MC_HEADLESS, seen.env.MC_TOOL, seen.env.MC_MODEL, seen.env[CALL_ENV], seen.env[TOKEN_ENV]], [ASK_READER_ROLE, '1', 'claude', 'fable', ID, TOKEN]);
+  assert.deepEqual([seen.env.MC_ROLE, seen.env.MC_HEADLESS, seen.env.MC_TOOL, seen.env.MC_MODEL, seen.env[CALL_ENV], seen.env[TOKEN_ENV]], [ASK_READER_ROLE, '1', 'claude', 'opus', ID, TOKEN]);
   for (const key of ['MC_GOAL', 'MC_SCRATCH', 'MC_PROGRAMME', 'MC_REPO']) assert.equal(seen.env[key], undefined, `${key} is the asker's, not the reader's`);
   const launch = JSON.parse(during.launch);
   assert.equal(launch.token_sha256, sha256(TOKEN));
@@ -276,7 +276,7 @@ test('one way to ask: the reader is launched in the copy as the ask-reader role,
   assert.equal(existsSync(callDirOf(f.env, ID)), false, 'the call directory and the copy are removed');
   assert.deepEqual(readdirSync(askDir(f.env)), []);
   const [row] = f.rows;
-  assert.deepEqual([f.rows.length, row.kind, row.cls, row.tool, row.model, row.name, row.exit], [1, 'ask-reader', 'decision', 'claude', 'fable', 'ask:p/g', 0], 'one run row of kind ask-reader');
+  assert.deepEqual([f.rows.length, row.kind, row.cls, row.tool, row.model, row.name, row.exit], [1, 'ask-reader', 'decision', 'claude', 'opus', 'ask:p/g', 0], 'one run row of kind ask-reader');
 });
 
 test('one way to ask: a call without a worktree launches in an empty tree, and a key in the launch file is redacted', async (t) => {
@@ -295,7 +295,7 @@ test('one way to ask: a call without a worktree launches in an empty tree, and a
 test('one way to ask: a reading that ends without a verdict, times out or cannot start is unread, with the reason and nothing launched when no model can run', async (t) => {
   const f = setup(t);
   const none = await f.call({ session: async () => ({ status: 1, stdout: '', stderr: 'boom' }) });
-  assert.deepEqual([none.read, none.tool, none.model], [false, 'claude', 'fable']);
+  assert.deepEqual([none.read, none.tool, none.model], [false, 'claude', 'opus']);
   assert.match(none.reason, /ended without a verdict \(exit 1\)/u);
   assert.equal(existsSync(callDirOf(f.env, ID)), false, 'the call directory is removed');
   assert.equal(f.rows.length, 1, 'a reading that ran is a run row');

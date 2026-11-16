@@ -77,7 +77,7 @@ export const DEFAULT_CATALOG = Object.freeze({
   mend: Object.freeze([candidate('claude', 'sonnet', 'medium'), candidate('codex', 'gpt-6.1-sol', 'medium')]),
   plan: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.1-sol', 'high')]),
   manager: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.1-sol', 'medium')]),
-  decision: Object.freeze([candidate('claude', 'fable', 'high'), candidate('codex', 'gpt-6.1-sol', 'high')]),
+  decision: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.1-sol', 'high')]),
 });
 
 export function modelsPath(env = process.env) {
