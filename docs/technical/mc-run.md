@@ -927,7 +927,7 @@ runner lock and reads the Part headings (`### Part <n> — …` inside
 **Legacy goals.** A goal whose `documents` names no part of `README.md` is
 never rewritten and never cut again: its programme is not due while it is
 there, live or archived (`goalsNamingNoPart`). A goal that names a part of
-another file, such as a `SIGNED.md` a removed version wrote, counts as naming
+another file, such as the signed copy a removed version kept, counts as naming
 none. Nothing on disk is deleted or rewritten by reading it.
 
 `runs.tsv` notes say `cut` or `not cut (<problem>; …)`.

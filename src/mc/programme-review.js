@@ -1,6 +1,6 @@
 /**
  * Programme review: an advisory, independent reading of a programme's README.md
- * (docs/technical/mc-plan.md, "Programme reading").
+ * (docs/technical/mc-plan.md, "Programme state and advisory reading").
  *
  * One fresh headless session in the role `programme-review`, launched on exports of the
  * named repositories at origin/main, which writes PROGRAMME-REVIEW.md beside the programme.
