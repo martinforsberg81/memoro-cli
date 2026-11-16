@@ -359,6 +359,7 @@ export function redTests(tap, files, { cwd = null } = {}) {
     tests.push({
       file, name: block.name, own: block.own, at: placeOf(block, file, relative),
       error: errorLines(shownError(block)), detail: detailLines(shownError(block), block.stack),
+      ...(block.stack.length ? { stack: block.stack.map((line) => line.trim()).filter(Boolean).slice(0, 20) } : {}),
       diagnostic: diagnosticOf(block.error),
     });
   }

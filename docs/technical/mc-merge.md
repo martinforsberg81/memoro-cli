@@ -703,11 +703,15 @@ The full run uses the same entry point, and so does `mc test <repo> --full` type
 No red test becomes a goal; repair goals already in flight finish as goals.
 
 The atomic runner state `~/mc/runner/main-mend/<repo>.json` has version 1 and
-one entry per red file, preserving test names/errors, base, finder (round of
-`<repo>#<pr>`, or the full run) and state: queued, running, published (with PR),
-landed, dropped, or Martin. A queued, running or published file asks for nothing new;
-a Martin entry also holds duplicates until `mc repo mend` answers it. A red after landed or dropped gets a
-fresh entry; a dropped entry is finished, so `mainMendReading` omits it and the
+one entry per red file, preserving each test's name, place, error and the first
+lines of its stack, base, finder (round of `<repo>#<pr>`, or the full run) and
+state: queued, running, published (with PR), landed, dropped, or Martin. A queued,
+running or published file asks for nothing new; a Martin entry also holds
+duplicates until `mc repo mend` answers it. When the merge commit is available,
+a landed entry records it as `landed_commit`. A red measured at a commit that contains the landed repair, or
+after a dropped entry, gets a fresh entry; a red reported at a commit that does
+not contain the landed repair of the same member is the red already repaired and
+opens nothing. A dropped entry is finished, so `mainMendReading` omits it and the
 deploy gate's mend words do not name it. All read-patch-write transitions use the shared strict runner lock.
 Queued files of one repository and finder run together, at merge-failure mend
 priority within the existing lane total. A retry retains its original batch,

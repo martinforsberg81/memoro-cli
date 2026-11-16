@@ -2742,7 +2742,7 @@ describe('a repository that selects by diff', () => {
         });
         assert.equal(report.stopped_at, 'red');
         assert.deepEqual(report.candidate.red_files, [own]);
-        assert.deepEqual(report.candidate.red_tests.map(({ diagnostic, detail, ...test }) => test), [
+        assert.deepEqual(report.candidate.red_tests.map(({ diagnostic, detail, stack, ...test }) => test), [
           { file: own, name: 's › a', own: 'a', at: `${own}:12:12`, error: ['Expected values to be strictly equal:', '1 !== 2'] },
           { file: own, name: 's › b', own: 'b', at: `${own}:22:12`, error: ['boom'] },
         ], 'the leaves, not the suite failing because of them');

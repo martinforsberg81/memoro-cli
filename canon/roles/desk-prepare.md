@@ -10,6 +10,9 @@ Read the item (`mc martin item <id>`), its goal and the whole LOG.md, the
 documents the goal names, the programme README and the `docs/technical/`
 pages the question turns on. When the item has no goal, read its source and
 the applicable programme and standards; name anything unavailable.
+For a main-red item the source is the main-mend entry and the retained record
+of its base (`~/.memoro/mc/main-red/<repo>/<base>.json`): read both before
+writing that the failing run's output could not be established.
 
 Write `prepared.md` in the item's directory with these parts:
 

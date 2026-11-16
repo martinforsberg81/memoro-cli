@@ -63,10 +63,11 @@
  * chore pass every few minutes, a line per pass would push the measurements
  * out of the history.
  */
+import { spawnSync } from 'node:child_process';
 import { tryGit } from './git.js';
 import { mcHome } from './paths.js';
 import { appendNightlyLog } from './nightly.js';
-import { requestMainRepair } from './main-repair.js';
+import { requestMainRepair, shapeMainRedTest } from './main-repair.js';
 import { nightlyReading, readNightlyHistory, recordNightlyRun } from './nightly-history.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
 import { fullRunLanes, runGate } from './repo-gate.js';
@@ -276,7 +277,7 @@ export async function fullRun(repo, {
  * of a run that measured nothing (`run.red` null), of a green one, or of one
  * without a commit.
  */
-export function repairFromRun(repo, report, run, { repair = requestMainRepair, say = () => {} } = {}) {
+export function repairFromRun(repo, report, run, { repair = requestMainRepair, say = () => {}, git = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' }) } = {}) {
   const failedCommands = failedCommandsOf(report);
   // Main's red, repaired as work of its own: the same door a merge round's
   // main red goes through (`merger.js`, `tell`). Only a run that reached its
@@ -286,15 +287,20 @@ export function repairFromRun(repo, report, run, { repair = requestMainRepair, s
   const redTests = report.candidate?.red_tests || [];
   const files = [...new Set([...(report.candidate?.red_files || []), ...redTests.map((test) => test.file)].filter(Boolean))].sort();
   if (repair && Array.isArray(run.red) && run.commit && (files.length || failedCommands.length)) {
-    const tests = redTests.map((test) => ({ file: test.file, name: test.name, error: (test.error || []).slice(0, 12) }));
+    const tests = redTests.map(shapeMainRedTest);
     const asked = repair({ repo: repo.name, base: run.commit, files, tests,
+      contains: (commit, base) => {
+        try { const result = git(repo.path, ['merge-base', '--is-ancestor', commit, base]); return result?.status === 0 ? true : result?.status === 1 ? false : null; }
+        catch { return null; }
+      },
       ...(failedCommands.length ? { commands: failedCommands } : {}) });
     const where = [...files, ...failedCommands.map(command => `command:${command.packageScript}`)].join(', ');
     const created = [].concat(asked?.created || []);
     const open = [].concat(asked?.open || []);
+    for (const stale of asked?.stale_members || []) say(`${stale.file}: reported at ${run.commit}, which does not contain its landed repair ${stale.landed_commit} (#${stale.pr}) — no repair opened`);
     if (created.length) say(`${repo.name}: main is red in ${where} at ${run.commit.slice(0, 7)} — main-red mend queued: ${created.join(', ')}${open.length ? `; already under way: ${open.join(', ')}` : ''}`);
     else if (open.length) say(`${repo.name}: main is red in ${where} — its main-red mend is under way: ${open.join(', ')}`);
-    else say(`${repo.name}: main is red in ${where} — no main-red mend requested: ${asked?.skipped || 'nothing new'}`);
+    else if (!asked?.stale_members?.length) say(`${repo.name}: main is red in ${where} — no main-red mend requested: ${asked?.skipped || 'nothing new'}`);
   }
 
   // A test that never ends is a red test (Martin, 2026-11-14): a run stopped
@@ -304,13 +310,18 @@ export function repairFromRun(repo, report, run, { repair = requestMainRepair, s
   const hung = [...new Set(report.stalled_files || [])].filter(Boolean).sort();
   if (repair && report.stopped_at === 'stalled' && run.commit && hung.length) {
     const error = [`never ended in the full run: ${report.reason || 'stalled'}`];
-    const asked = repair({ repo: repo.name, base: run.commit, files: hung, tests: hung.map((file) => ({ file, name: null, error })) });
+    const asked = repair({ repo: repo.name, base: run.commit, files: hung, tests: hung.map((file) => ({ file, name: null, error })),
+      contains: (commit, base) => {
+        try { const result = git(repo.path, ['merge-base', '--is-ancestor', commit, base]); return result?.status === 0 ? true : result?.status === 1 ? false : null; }
+        catch { return null; }
+      } });
     const where = hung.join(', ');
     const created = [].concat(asked?.created || []);
     const open = [].concat(asked?.open || []);
+    for (const stale of asked?.stale_members || []) say(`${stale.file}: reported at ${run.commit}, which does not contain its landed repair ${stale.landed_commit} (#${stale.pr}) — no repair opened`);
     if (created.length) say(`${repo.name}: a test never ended in ${where} at ${run.commit.slice(0, 7)} — main-red mend queued: ${created.join(', ')}${open.length ? `; already under way: ${open.join(', ')}` : ''}`);
     else if (open.length) say(`${repo.name}: a test never ended in ${where} — its main-red mend is under way: ${open.join(', ')}`);
-    else say(`${repo.name}: a test never ended in ${where} — no main-red mend requested: ${asked?.skipped || 'nothing new'}`);
+    else if (!asked?.stale_members?.length) say(`${repo.name}: a test never ended in ${where} — no main-red mend requested: ${asked?.skipped || 'nothing new'}`);
   }
 }
 

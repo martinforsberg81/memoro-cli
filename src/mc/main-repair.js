@@ -6,7 +6,8 @@ import { writeJsonAtomic } from './atomic-write.js';
 import { readTextOrNull } from './goals.js';
 import { dequeue, mergesPath, parseQueue } from './merge-queue.js';
 import { realLock } from './runner-lock.js';
-import { workRoot } from './paths.js';
+import { mcHome, workRoot } from './paths.js';
+import { mainRedPath } from './selector-miss.js';
 
 /** Final states: a later red of the file is a new entry, and the entry's worktree is the runner's to remove. */
 export const FINISHED = ['landed', 'dropped'];
@@ -37,7 +38,18 @@ export function updateMainMends({ root = workRoot(), repo, read = readTextOrNull
 }
 
 /** Shared by merge rounds and the runner's full run; finder is stable across repeats. */
-export function requestMainRepair({ repo, base, files, tests = [], commands = [], checks = [], pr = null, now = () => new Date(), ...state }) {
+export function shapeMainRedTest(test) {
+  return {
+    file: test.file,
+    name: test.name,
+    ...(test.at ? { at: test.at } : {}),
+    error: (test.error || []).slice(0, 12),
+    ...(test.detail?.length ? { detail: test.detail.slice(0, 40) } : {}),
+    ...(test.stack?.length ? { stack: test.stack.slice(0, 20) } : {}),
+  };
+}
+
+export function requestMainRepair({ repo, base, files, tests = [], commands = [], checks = [], pr = null, contains = null, now = () => new Date(), ...state }) {
   try {
     const red = [...new Set(files || [])].filter(Boolean).sort();
     const members = [...red.map(file => ({ file })), ...commands.map(command => ({
@@ -45,11 +57,17 @@ export function requestMainRepair({ repo, base, files, tests = [], commands = []
     })), ...checks.map(check => ({ file: check.key, check }))];
     if (!repo || !base || !members.length) return { skipped: 'nothing to repair' };
     return updateMainMends({ ...state, repo }, (entries) => {
-      const created = []; const open = []; const finished = [];
+      const created = []; const open = []; const finished = []; const stale = []; const staleMembers = [];
       for (const { file, command, check } of members) {
         // A check member is once-only on its key in any state: a finished one is returned, never made again.
         const pending = entries.find((entry) => entry.file === file && (check || !FINISHED.includes(entry.state)));
         if (pending) { (check && FINISHED.includes(pending.state) ? finished : open).push(pending.id); continue; }
+        const latest = [...entries].reverse().find((entry) => entry.file === file);
+        if (!check && latest?.state === 'landed' && latest.landed_commit && contains) {
+          let includesRepair = null;
+          try { includesRepair = contains(latest.landed_commit, base); } catch { /* unknown ancestry opens a fresh entry */ }
+          if (includesRepair === false) { stale.push(latest.id); staleMembers.push({ id: latest.id, file, landed_commit: latest.landed_commit, pr: latest.pr }); continue; }
+        }
         const id = randomUUID();
         entries.push({ id, file, tests: tests.filter((test) => test.file === file), base,
           ...(command ? { command } : {}),
@@ -59,7 +77,7 @@ export function requestMainRepair({ repo, base, files, tests = [], commands = []
         created.push(id);
       }
       // `finished`: check members already made and since landed or dropped (a check member is once-only, in any state).
-      return checks.length ? { created, open, finished } : { created, open };
+      return { created, open, ...(checks.length ? { finished } : {}), stale, ...(stale.length ? { stale_members: staleMembers } : {}) };
     });
   } catch (error) { return { skipped: error?.message || String(error) }; }
 }
@@ -90,11 +108,11 @@ export function publishMainMend({ repo, branch, pr, ...state }) {
 }
 
 /** Transient requeues are handled by the merger, not counted as failed attempts. */
-export function answerMainMend({ repo, pr, landed, reason, ...state }) {
+export function answerMainMend({ repo, pr, landed, reason, commit = null, ...state }) {
   return updateMainMends({ ...state, repo }, (entries) => {
     const answered = entries.filter((entry) => entry.pr === Number(pr) && ['published', 'running'].includes(entry.state));
     for (const entry of answered) {
-      if (landed) entry.state = 'landed';
+      if (landed) { entry.state = 'landed'; if (commit) entry.landed_commit = commit; }
       else failMainMend(entry, reason);
     }
     return answered;
@@ -117,7 +135,7 @@ function checkMemberText(entry) {
     `Read the verdict ${verdict || '(its file is gone)'} and the check log beside it, find the cause at base, repair it in ${entry.repo || 'the repository'}, and prove the repair with the gate on what you changed. Do not deploy: the next deploy of a later green commit ships it.`;
 }
 
-export function mainMendPrompt({ repo, entries, branch, worktree }) {
+export function mainMendPrompt({ repo, entries, branch, worktree, history = [], root = mcHome(), exists = () => false }) {
   const files = entries.filter(entry => !entry.command && !entry.check).map(entry => entry.file);
   const checks = [
     ...(files.length ? [`mc gate --fresh ${files.join(' ')}`] : []),
@@ -126,11 +144,26 @@ export function mainMendPrompt({ repo, entries, branch, worktree }) {
   const proof = checks.length
     ? `Prove ${checks.join(' and ')} GREEN (none of these checks SETTLED), then bare mc gate.`
     : 'Prove the repair with mc gate on the files you changed (none of these checks SETTLED), then bare mc gate.';
+  const pathFor = (entry) => mainRedPath(root, repo, entry.base);
+  const testsFor = (entry) => (entry.tests || []).map((test) => [
+    `  ${test.name ?? '(unnamed test)'}`, ...(test.at ? [`    at ${test.at}`] : []),
+    ...(test.error || []).map(line => `    ${line}`), ...(test.detail || []).map(line => `    ${line}`),
+    ...(test.stack || []).filter(line => !(test.detail || []).includes(line)).map(line => `    ${line}`),
+  ].join('\n')).join('\n');
+  const memberText = (entry) => {
+    if (entry.check) return checkMemberText({ ...entry, repo });
+    if (entry.command) return `${entry.file} at base ${entry.base}:\n${JSON.stringify(entry.command, null, 2)}`;
+    const record = pathFor(entry);
+    const prior = history.filter(old => old.file === entry.file && FINISHED.includes(old.state)).map(old =>
+      `Earlier ${old.file}: state ${old.state}; PR #${old.pr ?? 'none'}; landed_commit ${old.landed_commit || 'unknown'}; ${old.reason || 'no reason recorded'}`);
+    return `${entry.file} at base ${entry.base}:\n${testsFor(entry)}\n` +
+      `${exists(record) ? `Retained main-red record: ${record}` : `No retained main-red record: ${record}`}\n` +
+      (prior.length ? `${prior.join('\n')}\n` : '');
+  };
   return `You are a main-red mend session, headless, with no goal. Work in ${worktree} on ${branch}.\n` +
     `Repair main's red in ${repo}, found by ${entries[0].finder}. Read the main-red section of your mend role; write no GOAL.json, LOG.md or proposal.\n` +
-    entries.map((entry) => (entry.check
-      ? checkMemberText({ ...entry, repo })
-      : `${entry.file} at base ${entry.base}:\n${JSON.stringify(entry.command || entry.tests, null, 2)}`)).join('\n') +
+    entries.map(memberText).join('\n') +
+    `\nRead where each assertion failed before you run anything. A red that is green alone at the same commit is not ended as unreproducible: when the recorded failure names a missing executable, browser, library or service, classify it as the main-red section says; otherwise the test depends on load, timing or order, and the repair is to the test or the code it exposes.\n` +
     `\nPrevious outcome: ${entries[0].reason || 'first attempt'}; session log: ${entries[0].session_log || 'none'}.\n` +
     answersOf(entries) +
     `${proof} No wide selection is required for landing. Commit and mc publish --title "Repair main's red: ${entries.map((entry) => entry.file).join(', ')}" --body-file <file in MC_SCRATCH>. The body records cause and gate evidence. End after publication; the runner records the outcome. Another red member is not yours.`;

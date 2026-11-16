@@ -30,7 +30,8 @@ import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { nightlyLogPath } from '../../src/mc/nightly.js';
 import { nightlyReading, readNightlyHistory, recordNightlyRun } from '../../src/mc/nightly-history.js';
-import { fullRun, fullRunTick, loggedTick, scheduledRound } from '../../src/mc/nightly-loop.js';
+import { fullRun, fullRunTick, loggedTick, repairFromRun, scheduledRound } from '../../src/mc/nightly-loop.js';
+import { requestMainRepair } from '../../src/mc/main-repair.js';
 import { claimFullRun, liveClaims, releaseClaim } from '../../src/mc/full-run-claim.js';
 
 await preloadVerbs('test', 'repo');
@@ -182,10 +183,11 @@ describe('a full run', () => {
       const red = { ...report({ verdict: 'red', red: ['memoro-cli › names'] }) };
       red.candidate.red_tests = [{ file: 'tests/mc/names.test.js', name: 'names', error: ['expected 1', 'got 2'] }];
       const { repaired, said } = await pass(root, { repos: [REPOS[1]], round: () => red });
-      assert.deepEqual(repaired, [{
+      assert.deepEqual(repaired.map(({ contains, ...request }) => request), [{
         repo: 'memoro-cli', base: SHA, files: ['tests/mc/names.test.js'],
         tests: [{ file: 'tests/mc/names.test.js', name: 'names', error: ['expected 1', 'got 2'] }],
       }]);
+      assert.equal(typeof repaired[0].contains, 'function');
       assert.match(said.join('\n'), /main is red in tests\/mc\/names\.test\.js at aaaaaaa — main-red mend queued: mend-1/u);
     } finally { rmSync(root, { recursive: true, force: true }); }
     // A test that never ends is a red test: the files a stalled run names go
@@ -195,10 +197,11 @@ describe('a full run', () => {
       const stalled = report({ verdict: 'stopped', stopped_at: 'stalled', reason: 'no progress for 15 min' });
       stalled.stalled_files = ['tests/sw.test.js'];
       const { repaired, said } = await pass(hung, { repos: [REPOS[0]], round: () => stalled });
-      assert.deepEqual(repaired, [{
+      assert.deepEqual(repaired.map(({ contains, ...request }) => request), [{
         repo: 'memoro', base: SHA, files: ['tests/sw.test.js'],
         tests: [{ file: 'tests/sw.test.js', name: null, error: ['never ended in the full run: no progress for 15 min'] }],
       }]);
+      assert.equal(typeof repaired[0].contains, 'function');
       assert.match(said.join('\n'), /a test never ended in tests\/sw\.test\.js at aaaaaaa — main-red mend queued: mend-1/u);
       const unnamed = report({ verdict: 'stopped', stopped_at: 'stalled', reason: 'no progress for 15 min' });
       const quiet = home();
@@ -756,5 +759,55 @@ describe('mc test nightly status — red, and since when', () => {
       assert.match(page.stdout, /runner stopped {2}— no full run will start until mc run start/u);
       assert.match(page.stdout, /full run\s+never/u, 'the readings are printed whatever the runner is doing');
     } finally { fx.cleanup(); }
+  });
+});
+
+describe('repairFromRun stale report wiring', () => {
+  const repo = { name: 'memoro-cli', path: '/fixture/repo' };
+  const reported = 'reported-base';
+  const stateFor = (file) => {
+    let entries = [{ id: `prior-${file}`, file, state: 'landed', pr: 1539, landed_commit: 'landed-fix', base: 'old-base' }];
+    return {
+      state: { root: '/fixture/home', repo: repo.name, read: () => ({ version: 1, entries }),
+        write: (_path, value) => { entries = value.entries; }, lock: (_root, fn) => fn() },
+      entries: () => entries,
+    };
+  };
+  const run = { commit: reported, red: ['red'] };
+
+  for (const [label, file, report] of [
+    ['ordinary red', 'tests/stale.test.js', { candidate: { red_files: ['tests/stale.test.js'], red_tests: [{ file: 'tests/stale.test.js', name: 'red', error: ['bad'] }] } }],
+    ['stalled file', 'tests/stalled.test.js', { stopped_at: 'stalled', stalled_files: ['tests/stalled.test.js'], reason: 'timeout' }],
+    ['command member', 'command:ci:fast', { extra_gates: [{ id: 'ci-fast', name: 'ci:fast', command: 'npm run ci:fast', ok: false }] }],
+  ]) {
+    it(`stale report ${label} with exit 1 opens nothing and names the landed repair`, () => {
+      const mem = stateFor(file); const lines = [];
+      repairFromRun(repo, report, run, { say: (line) => lines.push(line),
+        git: (cwd, args) => { assert.equal(cwd, repo.path); assert.deepEqual(args, ['merge-base', '--is-ancestor', 'landed-fix', reported]); return { status: 1 }; },
+        repair: (request) => requestMainRepair({ ...request, ...mem.state }) });
+      assert.equal(mem.entries().length, 1);
+      assert.ok(lines.some(line => line.includes(`${file}: reported at ${reported}, which does not contain its landed repair landed-fix (#1539) — no repair opened`)), lines.join('\n'));
+    });
+  }
+
+  for (const status of [0, 128]) {
+    it(`stale report ordinary red with ancestry exit ${status} safely opens a fresh entry`, () => {
+      const file = 'tests/stale.test.js'; const mem = stateFor(file);
+      repairFromRun(repo, { candidate: { red_files: [file], red_tests: [{ file, name: 'red', error: ['bad'] }] } }, run, {
+        git: () => ({ status }), repair: (request) => requestMainRepair({ ...request, ...mem.state }) });
+      assert.equal(mem.entries().length, 2);
+      assert.equal(mem.entries()[1].state, 'queued');
+    });
+  }
+
+  it('full-run place and stack reach the entry through the measured evidence shaper', () => {
+    const file = 'tests/stack.test.js'; let entries = [];
+    const report = { candidate: { red_files: [file], red_tests: [{ file, name: 'long assertion', at: `${file}:99:5`,
+      error: Array.from({ length: 60 }, (_, i) => `diff ${i}`), detail: Array.from({ length: 60 }, (_, i) => `diff ${i}`), stack: ['async TestContext.<anonymous> (tests/stack.test.js:99:5)'] }] } };
+    repairFromRun(repo, report, run, { repair: (request) => requestMainRepair({ ...request, root: '/fixture/home', repo: repo.name,
+      read: () => ({ version: 1, entries }), write: (_path, value) => { entries = value.entries; }, lock: (_root, fn) => fn() }), git: () => ({ status: 1 }) });
+    assert.equal(entries[0].tests[0].at, `${file}:99:5`);
+    assert.equal(entries[0].tests[0].detail.length, 40);
+    assert.deepEqual(entries[0].tests[0].stack, ['async TestContext.<anonymous> (tests/stack.test.js:99:5)']);
   });
 });

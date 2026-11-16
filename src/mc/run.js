@@ -2503,7 +2503,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       });
       if (!entries.length) return 'skipped:claimed';
       claimed = true;
-      const prompt = mainMendPrompt({ repo: repoName, entries, branch, worktree });
+      const history = readMainMends(state).filter((entry) => entries.some((current) => current.file === entry.file) && ['landed', 'dropped'].includes(entry.state));
+      const prompt = mainMendPrompt({ repo: repoName, entries, branch, worktree, history, exists: existsSync });
       const instructions = instructionsFor(launch.id, role.overlay);
       const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
       const current = { name, kind: 'mend', variant: null, repo: repoName, lane, pid, worktree, started: stamp(), tool: settings.tool, model: settings.model,
@@ -2777,7 +2778,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         const job = pending.find((job) => job.repo === repo.name && Number(job.pr) === pr);
         if (job && job.state !== 'red') continue;
         const status = prState(deps.gh, repo.path, pr);
-        if (status === 'MERGED' || status === 'CLOSED') answerMainMend({ ...mendState(repo.name), pr, landed: status === 'MERGED', reason: 'pull request closed without merging' });
+        if (status === 'MERGED' || status === 'CLOSED') answerMainMend({ ...mendState(repo.name), pr, landed: status === 'MERGED', commit: status === 'MERGED' ? mergeCommitOf(repo, pr) : null, reason: 'pull request closed without merging' });
         else if (status === 'OPEN') {
           try { deps.queueMerge({ root, repo: repo.name, repoPath: repo.path, pr, branch: batch[0].branch, holder: { name: batch[0].owner }, now: deps.now() }); }
           catch (error) { say(`${repo.name}#${pr}: main-red delivery could not be restored — ${error.message}`); }

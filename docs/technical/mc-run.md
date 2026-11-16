@@ -1123,7 +1123,9 @@ same branch-worktree helper as goals to make
 `runMainMend` runs `mend-session` with its default catalog list and class fast,
 normal capacity/billing, disk and memory admission, current-lane ownership,
 scratch and session logs. Goal/programme identity is unset. The main-red prompt
-carries the files, errors, base and finder; no goal files or proposal are written.
+carries the files, errors, base and finder, each red test's place and stack, the
+retained record of the measuring run, and earlier finished repairs of the same
+file; no goal files or proposal are written.
 
 The [merge contract](mc-merge.md) defines request deduplication, acceptance,
 publication and the two attempts (a third waits on Martin), without a goal.
