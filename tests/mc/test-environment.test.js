@@ -972,6 +972,36 @@ describe('bringing one up', () => {
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 
+  it('says when the current attempt log has no startup reason', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const dir = join(worktree, '.wrangler', 'dev-server', 'logs');
+    mkdirSync(dir, { recursive: true });
+    let t = 0;
+    let spawned = 0;
+    try {
+      const result = await ensureDevServer(worktree, DECLARATION, {
+        root, processCwd: () => null, freeMemory: () => null,
+        now: () => t, sleep: async (ms) => { t += ms; },
+        spawn: () => {
+          spawned += 1;
+          writeFileSync(join(dir, `dev-${spawned}.log`), spawned === 1 ? 'start failed: old cause\n' : 'bundle: starting\n');
+          return { pid: 4242, unref() {} };
+        },
+        pidAlive: () => false, fetch: async () => ({ ok: true }),
+      });
+      assert.equal(result.ok, false);
+      assert.equal(spawned, 2);
+      assert.match(result.error, /^no start failed reason in this attempt’s log\n/u);
+      assert.match(result.error, /exited before it registered/u);
+      assert.match(result.error, /bundle: starting$/u);
+      assert.doesNotMatch(result.error, /old cause/u);
+      assert.deepEqual(readReservations(devPoolPath(root)), []);
+    } finally {
+      for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   it('leaves no keys child file in the temp directory once its start registered', async () => {
     const { ensured, left } = await decidedStart({ registers: true, wrapperAlive: true });
     assert.equal(ensured.ok, true, ensured.error);

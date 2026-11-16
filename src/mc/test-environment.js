@@ -653,7 +653,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
         return { ...result, waited_ms: (admitted.waited_ms ?? 0) + (result.waited_ms ?? 0) };
       };
       const reason = tail?.reason;
-      const lead = reason ? `${reason}\n` : '';
+      const lead = reason ? `${reason}\n` : (tail ? 'no start failed reason in this attempt’s log\n' : '');
       if (wrapperGone()) {
         // Gone, and it will not register: the slot is freed now, and the end of its log says why.
         letGo([process.pid, wrapperPid, ...(gone ? [gone.pid] : [])]);
