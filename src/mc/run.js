@@ -1876,7 +1876,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const roleName = GOAL_ROLES.plan;
     const role = deps.role(roleName);
     if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
-    const route = routeClass('large');
+    // The programme turn carries a signed document over into goals: simple work, on the plan list (Martin, 2026-11-16).
+    const route = routeClass('plan');
     if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
     const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const launch = deps.launch(settings.tool);
@@ -1918,12 +1919,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       marker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind: 'plan', stem, started: stamp() };
       deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
       const current = { name, step: null, kind: 'plan', variant: null, programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
-        effort: settings.effort, advisor: settings.advisor, class: 'large', billing: picked.billing,
+        effort: settings.effort, advisor: settings.advisor, class: 'plan', billing: picked.billing,
         check_in_minutes: requireCapability(launch.id, 'WATCH')?.checkIn ? settings.checkInMinutes : null, check_ins: 0, started: stamp(), pid, worktree: dir,
         ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
         role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
       writeJson(currentPath, current);
-      say(`${name}: plan starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · large list: ${route.basis} (${route.why})`);
+      say(`${name}: plan starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · plan list: ${route.basis} (${route.why})`);
       const t0 = deps.now().getTime();
       const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
       try {

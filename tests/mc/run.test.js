@@ -6724,7 +6724,8 @@ test('programme turn: a quota, an offline and a refused-login ending write no fa
 test('programme turn: on agy the turn asks the registry — no check-in, its own provider refused on a login ending, and no failure counted', async () => {
   const f = programmeFixture();
   wireDesk(f);
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), large: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
+  // The programme turn routes the plan list (Martin, 2026-11-16), so agy stands on it.
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), plan: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
   const launch = f.deps.launch;
   f.deps.launch = (tool) => (tool === 'agy' ? { ok: true, id: 'antigravity-cli', shortName: 'agy', adapter: agyAdapter, spec: { bin: '/bin/agy' } } : launch(tool));
   let current = null;

@@ -577,7 +577,8 @@ billing boundaries starts a cold cache context.
 A goal names a work class, `fast`, `medium` or `large`, not a model, and the class
 routes the goal's build sessions only. Every other unattended role runs on its
 own catalog list, whatever the goal's class: `review`, `finish` (a repair build), `mend`, `plan`
-(the runner's next-draft planning), `manager` (an unattended manager turn
+(the runner's next-draft planning and the programme turn that cuts a signed
+document into goals; Martin, 2026-11-16), `manager` (an unattended manager turn
 without an explicit tool or model) and `decision` (desk items). A role list never borrows a class's
 candidates: with none of its own usable and its API off, the session waits
 (Martin, 2026-11-09). Interactive `mc plan` and `mc martin` keep their own
