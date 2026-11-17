@@ -163,7 +163,7 @@ describe('mc publish', () => {
 
   it('manager: removing or altering a line of a block with a dated decision of Martin\'s is refused, wherever it stands; an undated block is free', async () => {
     const FILE = 'docs/technical/mc-run.md';
-    const doc = `# Run\n\nThe runner starts it.\nMartin, 2026-11-12 decided that.\nIt holds.\n\n${DECIDED}`;
+    const doc = `# Run\n\nThe runner starts it.\nMartin, 2026-11-10 decided that.\nIt holds.\n\n${DECIDED}`;
     for (const after of [
       doc.replace('It never merges itself.', 'It merges when it likes.'),
       doc.replace('  It never merges itself.\n', ''),
@@ -177,7 +177,7 @@ describe('mc publish', () => {
     }
     // Adding lines, rewording the undated list item and a decision with no date are not what the rule keeps.
     const free = fixture();
-    assert.equal(await run(['--no-merge'], asManager(free.deps, { [FILE]: [doc, doc.replace('- An undated line.', '- A reworded line.').replace('It holds.', 'It holds.\nMore.')] })), 0, free.out.stderr);
+    assert.equal(await run(['--no-merge'], asManager(free.deps, { [FILE]: [doc, doc.replace('- An undated line.', '- A reworded line.').replace('It holds.\n', 'It holds.\n\nMore.\n')] })), 0, free.out.stderr);
     assert.equal(managerGuard([{ path: FILE, before: 'Martin decided that.\n', after: 'Gone.\n' }]), null);
   });
 
