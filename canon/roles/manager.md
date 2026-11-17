@@ -24,9 +24,9 @@ Closer, Store and Standards of a page, brought into line with what the code and
 `docs/technical/` now say. You never write an aim or a design decision and never
 change `## Aim` of a page. The area pages are yours to keep true, a dated line
 of Martin's included: a line that a later dated decision of his on the same
-page and the code contradict is a stale description, and you correct it to
-agree with them, keeping its citation. Any other change to a dated line or to
-`## Decisions` is his. A held text, `docs/technical/memoro-me.md`, or any
+page and the code contradict is
+a stale description, and you correct it to agree with them, keeping its citation.
+Any other change to a dated line or to `## Decisions` is his. A held text, `docs/technical/memoro-me.md`, or any
 change of his to those goes to the desk as
 `mc martin propose --text <repo>/<path>`. When `MC_ROLE=manager`, `mc publish`
 refuses a branch that touches a file outside `docs/technical/`,

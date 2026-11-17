@@ -183,32 +183,33 @@ describe('mc publish', () => {
 
   // D2: an older dated decision of Martin's is superseded by a later one on the same page that stands unchanged; only then may it be
   // corrected (its citation kept) or removed. Everything else stays his.
-  it('manager: a line superseded by a later dated decision of his is corrected or removed; every other change to it is refused', async () => {
-    const OLD = '- Merging waits for a review. Martin, 2026-11-10, programme mc.\n  It never merges itself.\n';
-    const CORRECTED = '- Merging waits for a review. Martin, 2026-11-10, programme mc.\n  It merges when a review passes.\n';
-    const LATER = '- The review is a gate. Martin, 2026-11-12, programme mc.\n';
-    const AREA = 'docs/technical/areas/x.md';
-    const FILE = 'docs/technical/mc-run.md';
-    const doc = (decisions) => `# Run\n\n${decisions}`;
-    const guard = (path, before, after) => managerGuard([{ path, before, after }]);
-    // (a) corrected with its citation kept, on an area page's ## Decisions and on another page of docs/technical/; (b) removed.
+  const OLD = '- Merging waits for a review. Martin, 2026-11-10, programme mc.\n  It never merges itself.\n';
+  const CORRECTED = '- Merging waits for a review. Martin, 2026-11-10, programme mc.\n  It merges when a review passes.\n';
+  const LATER = '- The review is a gate. Martin, 2026-11-12, programme mc.\n';
+  const AREA = 'docs/technical/areas/x.md';
+  const FILE = 'docs/technical/mc-run.md';
+  const doc = (decisions) => `# Run\n\n${decisions}`;
+  const guard = (path, before, after) => managerGuard([{ path, before, after }]);
+
+  it('manager: a superseded dated line is corrected with its citation kept, on an area page and on another page of docs/technical/', async () => {
     assert.equal(guard(AREA, PAGE('Aim.', OLD + LATER), PAGE('Aim.', CORRECTED + LATER)), null);
     assert.equal(guard(FILE, doc(OLD + LATER), doc(CORRECTED + LATER)), null);
-    assert.equal(guard(AREA, PAGE('Aim.', OLD + LATER), PAGE('Aim.', LATER)), null);
-    assert.equal(guard(FILE, doc(OLD + LATER), doc(LATER)), null);
     const allowed = fixture();
     assert.equal(await run(['--no-merge'], asManager(allowed.deps, { [AREA]: [PAGE('Aim.', OLD + LATER), PAGE('Aim.', CORRECTED + LATER)] })), 0, allowed.out.stderr);
     assert.deepEqual(allowed.out.pushed, ['step-x']);
-    // (c) the same correction with no later dated block is refused.
+  });
+
+  it('manager: a superseded dated line is removed, on an area page and on another page of docs/technical/', () => {
+    assert.equal(guard(AREA, PAGE('Aim.', OLD + LATER), PAGE('Aim.', LATER)), null);
+    assert.equal(guard(FILE, doc(OLD + LATER), doc(LATER)), null);
+  });
+
+  it('manager: the same change is refused with no later dated block, with the later block changed, with the citation changed, with a block added, and with ## Aim changed', () => {
     assert.match(guard(AREA, PAGE('Aim.', OLD), PAGE('Aim.', CORRECTED)), /docs\/technical\/areas\/x\.md removes or alters a line of a dated decision of Martin's/u);
     assert.match(guard(FILE, doc(OLD), doc(CORRECTED)), /docs\/technical\/mc-run\.md removes or alters/u);
-    // (d) the later block changed too: the older one has no later block kept unchanged.
     assert.match(guard(AREA, PAGE('Aim.', OLD + LATER), PAGE('Aim.', CORRECTED + LATER.replace('is a gate', 'is optional'))), /removes or alters/u);
-    // (e) the older block's citation changed.
     assert.match(guard(AREA, PAGE('Aim.', OLD + LATER), PAGE('Aim.', CORRECTED.replace('programme mc', 'programme other') + LATER)), /docs\/technical\/areas\/x\.md changes its ## Decisions/u);
-    // (f) a new block added to ## Decisions.
     assert.match(guard(AREA, PAGE('Aim.', OLD + LATER), PAGE('Aim.', CORRECTED + LATER + '- A new decision. Martin, 2026-11-13, programme mc.\n')), /docs\/technical\/areas\/x\.md changes its ## Decisions/u);
-    // (g) ## Aim changed.
     assert.match(guard(AREA, PAGE('Aim.', OLD + LATER), PAGE('A new aim.', CORRECTED + LATER)), /docs\/technical\/areas\/x\.md changes its ## Aim/u);
   });
 
