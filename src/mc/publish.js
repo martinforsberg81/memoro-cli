@@ -137,11 +137,10 @@ function sectionOf(text, heading) {
 }
 
 /**
- * The blocks of `text` that hold a dated decision of Martin's, each as its lines: a list item with its continuation
- * lines, a heading, or a paragraph up to the next blank line. A line that starts a list item or a heading starts a
- * block of its own.
+ * The blocks of `text`, each as its lines: a list item with its continuation lines, a heading, or a paragraph up to
+ * the next blank line. A line that starts a list item or a heading starts a block of its own.
  */
-export function martinBlocks(text) {
+export function blocksOf(text) {
   const blocks = []; let current = [];
   const close = () => { if (current.length) blocks.push(current); current = []; };
   for (const line of String(text ?? '').split('\n')) {
@@ -150,37 +149,80 @@ export function martinBlocks(text) {
     current.push(line);
   }
   close();
-  return blocks.filter((block) => MARTIN_DECIDED.test(block.join('\n')));
+  return blocks;
+}
+
+/** The blocks of `text` that hold a dated decision of Martin's. */
+export function martinBlocks(text) {
+  return blocksOf(text).filter((block) => MARTIN_DECIDED.test(block.join('\n')));
+}
+
+const textOf = (block) => block.join('\n');
+
+/** The latest date of Martin's decisions in a block, as YYYY-MM-DD; '' when it holds none. */
+function blockDate(block) {
+  return [...textOf(block).matchAll(/Martin, (\d{4}-\d\d-\d\d)/gu)].map((match) => match[1]).sort().at(-1) ?? '';
+}
+
+/** The citation a block ends with: its last `Martin, YYYY-MM-DD` and what follows it on the line, up to a `)`. */
+function citation(block) {
+  return [...textOf(block).matchAll(/Martin, \d{4}-\d\d-\d\d[^)\n]*/gu)].map((match) => match[0]).at(-1) ?? null;
+}
+
+/**
+ * Which dated blocks of `before` the new text supersedes (D2). A block of before is kept when `after` holds it unchanged;
+ * a dated block that is not kept is superseded when a kept block has a later date.
+ */
+function supersession(before, after) {
+  const afterTexts = new Set(martinBlocks(after).map(textOf));
+  const kept = martinBlocks(before).filter((block) => afterTexts.has(textOf(block)));
+  const keptTexts = new Set(kept.map(textOf));
+  const newest = kept.map(blockDate).sort().at(-1) ?? '';
+  return {
+    kept: keptTexts,
+    superseded: (block) => MARTIN_DECIDED.test(textOf(block)) && !keptTexts.has(textOf(block)) && blockDate(block) < newest,
+  };
+}
+
+/**
+ * Whether the `## Decisions` of an area page changed only by the removal or the correction of superseded dated blocks: each
+ * block of before is in after unchanged, or is superseded and is removed, or is replaced in its place by a block with the
+ * same citation. Nothing else may differ — a block added, an undated block changed, a block changed that is not superseded.
+ */
+function decisionsCorrected(before, after, superseded) {
+  const was = blocksOf(before);
+  const now = blocksOf(after);
+  let at = 0;
+  for (const block of was) {
+    if (at < now.length && textOf(now[at]) === textOf(block)) { at++; continue; }
+    if (!superseded(block)) return false;
+    if (at < now.length && citation(now[at]) !== null && citation(now[at]) === citation(block)) at++;
+  }
+  return at === now.length;
 }
 
 /**
  * Why the manager may not publish this diff, or null (D6). `files` is `[{ path, before, after }]`: each file the branch
  * changes against origin/main with its text there and at the branch's head, null where it is not (added, deleted).
- * It refuses a file outside `docs/technical/`, `docs/technical/memoro-me.md`, a change to the `## Aim` or `##
- * Decisions` of an area page, and any removal or alteration of a line in a block that holds a dated decision of Martin's.
+ * It refuses a file outside `docs/technical/`, `docs/technical/memoro-me.md`, a change to the `## Aim` of an area page, a
+ * change to its `## Decisions` other than the correction of a superseded dated block, and any removal or alteration of a
+ * block that holds a dated decision of Martin's unless the same file keeps, unchanged, a dated block with a later date (D2).
  */
 export function managerGuard(files) {
   const found = [];
   for (const { path, before, after } of files) {
     if (!path.startsWith(MANAGER_ROOT)) { found.push(`${path} is outside docs/technical/`); continue; }
     if (path === MANAGER_ME) { found.push(`${path} is Martin's own text`); continue; }
+    const { kept, superseded } = supersession(before, after);
     if (AREA_PAGE.test(path)) {
-      for (const heading of ['Aim', 'Decisions']) {
-        if (sectionOf(before, heading) !== sectionOf(after, heading)) found.push(`${path} changes its ## ${heading}`);
-      }
+      if (sectionOf(before, 'Aim') !== sectionOf(after, 'Aim')) found.push(`${path} changes its ## Aim`);
+      if (!decisionsCorrected(sectionOf(before, 'Decisions'), sectionOf(after, 'Decisions'), superseded)) found.push(`${path} changes its ## Decisions`);
     }
-    if (before != null) {
-      const kept = new Map();
-      for (const line of String(after ?? '').split('\n')) kept.set(line, (kept.get(line) ?? 0) + 1);
-      for (const block of martinBlocks(before)) {
-        const lost = block.find((line) => {
-          const left = kept.get(line) ?? 0;
-          if (!left) return true;
-          kept.set(line, left - 1);
-          return false;
-        });
-        if (lost !== undefined) found.push(`${path} removes or alters a line of a dated decision of Martin's (${JSON.stringify(lost.trim().slice(0, 60))})`);
-      }
+    const here = new Set(String(after ?? '').split('\n'));
+    for (const block of martinBlocks(before)) {
+      if (kept.has(textOf(block)) || superseded(block)) continue;
+      const lost = block.find((line) => !here.has(line)) ?? block[0];
+      found.push(`${path} removes or alters a line of a dated decision of Martin's (${JSON.stringify(lost.trim().slice(0, 60))})`);
     }
   }
   if (!found.length) return null;
