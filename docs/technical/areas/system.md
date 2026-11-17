@@ -46,6 +46,12 @@ Measured, with the baselines of 2026-11-14 (programme `mc`):
 - A programme is an order of what is to be built: temporary, archived when its work has landed, and of no interest afterwards. What must last is written in its permanent place before then: `docs/technical/`, the area page, or a proposal in its area (Martin, 2026-11-17; the desk).
 - An order is buildable to its end without Martin: no visual or functional check of his (look, listen, try, accept, a step "on Martin's word") between ready and done. Everything he decides is decided in the document before it is set ready, and an act it needs is done before ready or after its end (Martin, 2026-11-17; the desk).
 - Proposals live in the permanent areas, `~/mc/areas/<repo>/<area>/proposals/`, one folder per area page; no programme holds proposals and there is no ownerless folder (Martin, 2026-11-17; the desk).
+- Main's red is to be found and repaired far earlier, not met when it is time to deploy: a deploy exists to get main into production (Martin, 2026-11-15; programme `mc`).
+- No tmux in the interactive path, not even as a fallback ("Tmux är inte en fallback. Alldeles för dåligt." Martin, 2026-11-13; programme `mc-server`).
+- Claude sessions are used in the Claude app through Remote Control: every interactive Claude session mc opens carries Remote Control; Codex keeps its local terminal client (Martin, 2026-11-14; programme `mc-server`).
+- The page mc draws stays English, and a waiting desk item is shown as its brief is written (Martin, 2026-11-15; programme `mc-page`).
+- Plan review is removed: a complete goal moves from draft to build when its author says so ("Plan-review ska tas bort! Det är redan bestämt." Martin, 2026-11-16; programme `no-plan-review`).
+- The third agent tool is Antigravity CLI (`agy`), on Martin's Antigravity plan as a subscription like claude and codex, never an API key; the plan question is settled and not raised again (Martin, 2026-11-15; programme `antigravity`).
 
 ## Store
 
