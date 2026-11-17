@@ -173,3 +173,4 @@ existed?
 | 2026-11-03 | mc | dev-queue | delivered | Review the project against its goal | [docs/technical/mc-shot.md](../technical/mc-shot.md) | none |
 | 2026-11-03 | mc | page-one-screen | delivered | Review the project against its goal | none | [#1230](https://github.com/martinforsberg81/memoro-cli/pull/1230) |
 | 2026-11-14 | mc-keys | - | closed | Programme closed with `mc plan mc-keys --archive`: `docs/project/mc-keys/` removed — its programme document and rulings are in the history (`git log -- docs/project/mc-keys`). | none | acfb45c3 |
+| 2026-11-17 | mc | - | closed | Programme closed with `mc plan mc --archive`: `docs/project/mc/` removed — its programme document and rulings are in the history (`git log -- docs/project/mc`). | none | de8139d3 |
