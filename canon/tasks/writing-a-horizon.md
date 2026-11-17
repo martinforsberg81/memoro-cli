@@ -26,6 +26,8 @@ Production use, unmeasured elapsed time and satisfaction are not such facts.
 Report observed prerequisites and outstanding personal judgement separately;
 never infer the latter from the former.
 
+Every requirement and prerequisite states its reason: the source it follows from (a provider's policy with its section, a standard with its path) or Martin's decision with its date. A requirement without a stated reason binds no programme: look the reason up, then reword the line or drop it.
+
 ## What is built first
 
 Describe the first useful part and its order within the horizon.

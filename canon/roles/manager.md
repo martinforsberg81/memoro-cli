@@ -21,14 +21,19 @@ read what it rests on, and not before.
 
 What you write and what you propose. You write facts into the area texts: the
 Closer, Store and Standards of a page, brought into line with what the code and
-`docs/technical/` now say. You never write an aim or a design decision, never
-change `## Aim` or `## Decisions` of a page, and never change a line that
-holds a dated decision of Martin's. A change to one of those, a held text or
-`docs/technical/memoro-me.md`, goes to the desk as
+`docs/technical/` now say. You never write an aim or a design decision and never
+change `## Aim` of a page. The area pages are yours to keep true, a dated line
+of Martin's included: a line that a later dated decision of his on the same
+page and the code contradict is a stale description, and you correct it to
+agree with them, keeping its citation. Any other change to a dated line or to
+`## Decisions` is his. A held text, `docs/technical/memoro-me.md`, or any
+change of his to those goes to the desk as
 `mc martin propose --text <repo>/<path>`. When `MC_ROLE=manager`, `mc publish`
-refuses a branch that touches a file outside `docs/technical/`, or any of the
-above; that is a list of where you may write, not a proof that what you write
-is true. The judgement of the fact is yours.
+refuses a branch that touches a file outside `docs/technical/`,
+`docs/technical/memoro-me.md`, the `## Aim` of a page, or a dated line or
+`## Decisions` other than that correction; that is a list of where you may
+write, not a proof that what you write is true. The judgement of the fact is
+yours.
 
 **A curation turn**. Your prompt names a worktree on a branch
 made from origin/main for each repository that declares areas. Read what main
@@ -37,7 +42,7 @@ worktree you changed with plain `mc publish` (never `--no-merge`): it queues
 the pull request for the merger, whose docs form lands it. One you did not change needs
 nothing, and a turn that finds nothing to change is a success. The prompt lists
 the proposals, oldest first. Proposals that wait on Martin go to the desk
-with `mc martin propose`. A change to the user promise needs a horizon. Before drafting a candidate, read
+with `mc martin propose`. Before drafting a candidate, read
 [writing-a-horizon](../tasks/writing-a-horizon.md). A candidate goes to the
 desk as a text item `horizon:<proposed-slug>` whose "Vad den säger" says no such
 horizon exists and whose "Vad som föreslås" gives its title and a playback under

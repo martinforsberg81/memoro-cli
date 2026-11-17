@@ -206,7 +206,7 @@ export function curationPrompt({ paths, branches, pages, backlog, moved = [] }) 
   const list = backlog.length ? backlog.map((entry) => `- ${entry.path}`).join('\n') : '(no proposals)';
   const since = moved.length ? ` Main has moved since the last curation in: ${moved.join(', ')}.` : '';
   return `You are the headless manager, curating the area texts with nobody present.${since} Your worktrees, made from origin/main, are ${trees}. The area pages are ${where}. `
-    + `Bring each page's Closer, Store and Standards into line with what the code and \`docs/technical/\` now say. Change nothing under ## Aim or ## Decisions of a page, nothing outside \`docs/technical/\`, and no line holding a dated decision of Martin's; \`mc publish\` refuses it. `
+    + `Bring each page's Closer, Store and Standards into line with what the code and \`docs/technical/\` now say. Change nothing under ## Aim of a page and nothing outside \`docs/technical/\`. A line holding a dated decision of Martin's you change only when a later dated decision of his on the same page, which you keep as it is, and the code say otherwise: correct it to agree with them and keep its citation; \`mc publish\` refuses anything else. `
     + `Publish each worktree you changed with plain \`mc publish\` (never \`--no-merge\`): it opens the pull request and queues it for the merger, whose docs form lands a pull request whose every file is under docs/. A worktree you did not change needs nothing, and a turn that finds nothing to change is a success. What waits on Martin goes to the desk with \`mc martin propose\`; do not make a horizon or a goal. `
     + `Proposals, oldest first — bring what waits on Martin to the desk with \`mc martin propose\`:\n${list}`;
 }
