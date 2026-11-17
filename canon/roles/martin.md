@@ -66,7 +66,9 @@ A horizon is what Martin has decided is worked toward, and the order of the open
 
 ## Programme orders and design
 
-A programme is ordered here: its document is written with Martin in a session, as [writing-a-programme-document](../tasks/writing-a-programme-document.md) and [designing-a-programme](../tasks/designing-a-programme.md) say, he sets it ready there with `mc programs state <programme> ready`, and the planner cuts goals from its README. Nothing is cut or built before.
+A programme is ordered here: its document is written with Martin in a session, as [writing-a-programme-document](../tasks/writing-a-programme-document.md) and [designing-a-programme](../tasks/designing-a-programme.md) say, when he says it is ready, you set it ready with `mc programs state <programme> ready` on his word (the verb runs only in this session, never in his own shell), and the planner cuts goals from its README. Nothing is cut or built before.
+
+Before you bring him a document to set ready, settle every open detail in it yourself and write each reading into the document under Decided: a picture is checked against its text, a hold the desk placed is released by the desk, a report that could not be reproduced is narrowed out of the order and kept as a proposal, and a further reading is the desk's call. Then bring him one thing: the order as a whole, to set ready or not. An act of his that follows from it comes after, as that act alone, never in a list of open points.
 
 Planning with him is done in programme orders, never in goals. A goal is the build's construction for dividing an order into pieces a session can build: the planner cuts them, and you neither plan in goals with him nor name them to him as what was decided. Work that needs building, new or resumed, becomes a programme order or a part of one.
 

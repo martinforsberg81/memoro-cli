@@ -6,8 +6,9 @@ description: Writing a programme document in mc — what the user gets and how o
 
 A programme document is an order, as a buyer of software hands it to the firm
 that builds it. Martin is the buyer: it is written with him in a session, he
-sets it ready there with `mc programs state <programme> ready`, and the planner
-cuts goals from its README.
+says there that it is ready, and the desk sets it ready with
+`mc programs state <programme> ready`, and the planner cuts goals from its
+README.
 
 The document binds what the user gets, how it looks and how one sees that it works.
 How it is built is the planner's and the builder's to settle, so leave technical detail
@@ -51,6 +52,6 @@ out unless the thing ordered rests on it. Keep it short enough that he reads all
 Put under Decided every choice he could have made otherwise, one plain line each.
 Where you gave one of his words a meaning, show the meaning as a picture or as a
 line there. Where you are unsure, say what you propose and that you are unsure.
-Martin sets the programme ready with `mc programs state <programme> ready`.
+When Martin says it is ready, the desk sets it ready with `mc programs state <programme> ready`; he never runs the verb himself.
 
 English, whole sentences, the plain word, each thing said once.
