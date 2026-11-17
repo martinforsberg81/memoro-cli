@@ -74,17 +74,16 @@ export function horizonWords(data, group) {
 }
 
 /**
- * A programme's frame heading: its number and name in the title; in the top rule its horizon, its phase, its goals and
- * proposals, then the figures it has always had (priority, done, an invalid record).
+ * A programme's frame heading: its number and name in the title; in the top rule its horizon, its phase and its goals,
+ * then the figures it has always had (priority, done, an invalid record).
  */
 export function programmeHeading(c, wide, data, group, facts) {
   const phase = group.record_state === 'draft' ? 'draft' : facts.unfinished && facts.current != null ? `phase ${facts.current}${facts.last != null ? ` of ${facts.last}` : ''}` : '';
   const goals = group.goals?.length || 0;
-  // README.md Part 2: `28  name  ·  no horizon  ·  phase 1 of 2 · 2 goals · 7 proposals`.
+  // README.md Part 2: `28  name  ·  no horizon  ·  phase 1 of 2 · 2 goals`. Proposals are the areas', not a programme's.
   const rest = [
     phase,
     plural(goals, 'goal'),
-    group.proposals ? plural(group.proposals, 'proposal') : '',
     group.priority ? `priority ${group.priority}` : '',
     facts.done ? `${facts.done} done` : '',
   ].filter(Boolean).map((text) => ({ text, styles: ['grey'] }));

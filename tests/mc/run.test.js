@@ -7066,7 +7066,7 @@ test('curation turn: due at once with no state, in a worktree per declaring repo
   assert.match(managerRows(f)[0].note, /,curated$/u);
   assert.equal(managerRows(f)[0].name, 'manager:curation');
   assert.deepEqual(items(), []);
-  assert.match(call.prompt, /Proposals, oldest first/u);
+  assert.match(call.prompt, /Proposals in the areas, oldest first/u);
   // Not due again inside the 24 hours, whatever moved; after them only when main moved.
   world.heads.memoro = 'a2';
   clock += 23 * 3_600_000;
@@ -7352,14 +7352,27 @@ test('programme archive: an OK reading is kept; a failed archive is tried again 
   assert.equal(archiveRunnable(runner), false);
 });
 
-test('programme archive: proposals move out of the programme before the archive', async () => {
+test('programme archive: a legacy programme\'s proposals move to memoro-cli/system before the archive when its record names no page-area', async () => {
   const f = archiveFixture();
   f.files[`${PROG}/proposals/idea.md`] = 'An idea\n';
   const runner = createRunner({ deps: f.deps });
   await runner.pass({ repo: 'memoro' });
   assert.equal(f.archived.length, 1);
   assert.equal(`${PROG}/proposals/idea.md` in f.files, false, 'moved out of the programme');
-  assert.ok(Object.entries(f.files).some(([path, text]) => path.endsWith('/idea.md') && !path.startsWith(PROG) && text.startsWith('From programme prog')), 'into the proposals folder, naming the programme');
+  assert.match(f.files['/w/areas/memoro-cli/system/proposals/idea.md'], /^From programme prog/u, 'into memoro-cli/system, naming the programme');
+  assert.equal('/w/proposals/idea.md' in f.files, false, 'never into the old ownerless root');
+});
+
+test('programme archive: a legacy programme\'s proposals move to the page-area its record\'s area names', async () => {
+  const f = archiveFixture({ record: recordWith({ area: 'memoro/keys', version: 2 }) });
+  const git = f.deps.git;
+  const declared = JSON.stringify({ schema_version: 1, areas: [{ id: 'keys', name: 'Keys', covers: 'Keys.', standards: [], paths: [], questions: [], page: 'docs/technical/areas/trust.md' }] });
+  f.deps.git = (cwd, args) => (args.join(' ') === 'show origin/main:.mc/areas.json' ? (String(cwd).includes('memoro-cli') ? { ok: false, stdout: '', stderr: 'fatal: path does not exist in origin/main' } : { ok: true, stdout: declared, stderr: '' }) : git(cwd, args));
+  f.files[`${PROG}/proposals/idea.md`] = 'An idea\n';
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(f.archived.length, 1);
+  assert.match(f.files['/w/areas/memoro/trust/proposals/idea.md'] ?? '', /^From programme prog/u, Object.keys(f.files).filter((path) => path.endsWith('idea.md')).join(', '));
 });
 
 test('programme archive: no turn for a programme without a record, with a live goal, with every goal dropped, or whose record reads done; nothing is read or archived', async () => {

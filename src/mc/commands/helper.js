@@ -17,17 +17,17 @@
  * reads, and `~/mc/helper/` holds the retired desk's old conversations.
  *
  * Nothing here writes `queue.md`. Whichever half wrote a proposal, it is read
- * at Martin's desk (`mc martin`) or by the owning programme's plan session;
+ * in the area it was written to (`~/mc/areas/<repo>/<area>/proposals/`);
  * that is the whole arrangement, and it is why the intake half can run
  * unattended every day.
  */
 import { commandUsage } from '../command-help.js';
 import {
-  collectHelper, DEFAULT_LIMIT, DEFAULT_THRESHOLD, describeDigest, HELPER_REPOS, proposalsDir,
+  collectHelper, DEFAULT_LIMIT, DEFAULT_THRESHOLD, describeDigest, HELPER_REPOS,
   unreadableSections,
 } from '../helper-collect.js';
 import { describeTurn, drainIntake } from '../helper-turn.js';
-import { programsHome } from '../paths.js';
+import { areasHome } from '../area-proposals.js';
 import { INTAKE_PER_ROUND } from '../run-plan.js';
 import { scanArgs } from './flags.js';
 
@@ -148,9 +148,8 @@ export async function run(argv, deps = {}) {
   if (drained.left) stdout.write(`mc: ${drained.left} more in the inbox — run it again to take the next ${INTAKE_PER_ROUND}\n`);
   // Only when there is something to read. A quiet day that still points at
   // the proposals directory is a line that trains people to ignore the line.
-  // Each lands where its programme's plan session reads it; the turn's own
-  // line above already named where each one went.
-  if (wrote) stdout.write(`mc: each programme's plan session reads its own — ${programsHome()}/<programme>/proposals, the rest in ${proposalsDir()}\n`);
+  // Each waits in its area; the turn's own line above already named which.
+  if (wrote) stdout.write(`mc: proposals wait in their areas — ${areasHome()}/<repo>/<area>/proposals (mc proposals counts them)\n`);
   return worst;
 }
 

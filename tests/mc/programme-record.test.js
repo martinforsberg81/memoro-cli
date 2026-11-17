@@ -107,8 +107,8 @@ describe('mc programs create and state', () => {
     try {
       const { code, out } = await call(['create', 'alpha', '--end', 'Alpha is done when it holds.', '--horizon', 'mc-autonomy'], a.env);
       assert.equal(code, 0, out);
-      assert.deepEqual(readdirSync(join(a.home, 'alpha')).sort(), ['PROGRAMME.json', 'README.md', 'evidence', 'goals', 'proposals']);
-      assert.ok(existsSync(join(a.home, 'alpha', 'proposals', 'archive')));
+      // No proposals/: a programme is an order, and proposals wait in the areas.
+      assert.deepEqual(readdirSync(join(a.home, 'alpha')).sort(), ['PROGRAMME.json', 'README.md', 'evidence', 'goals']);
       assert.deepEqual(recordOf(a.home, 'alpha'), { ...DRAFT, end: 'Alpha is done when it holds.', created: '2026-11-14T10:20:30Z', phases: { order: 'stated' } });
       const page = readFileSync(join(a.home, 'alpha', 'README.md'), 'utf8');
       assert.deepEqual([...page.matchAll(/^#+ .+$/gmu)].map(([line]) => line).slice(1), ['## What it is for', '## End', '## Why', '## What runs today', '## Parts', '### Part 1 — <name>', '## Order', '## Decided', '## Not built', '## Read', '## Where things are', '## Decisions']);
@@ -380,7 +380,7 @@ describe('the list and the page', () => {
     } finally { a.done(); }
   });
 
-  it('leaves a programme without a record as it was: seven cells and record null, beside one with a record', () => {
+  it('leaves a programme without a record as it was: six cells and record null, beside one with a record', () => {
     const group = (programme) => ({ programme, goals: [], dormant: true, statuses: {}, priority: 0 });
     const view = { horizon: null, end: 'e', state: 'ready', created: '2026-11-14T10:20:30Z', created_by: 'person' };
     const listing = programmesListing({ section: { programmes: [group('with'), group('without')] } }, { record: (name) => (name === 'with' ? view : null) });
@@ -388,11 +388,11 @@ describe('the list and the page', () => {
     assert.deepEqual(withRecord.record, view);
     assert.equal(without.record, null);
     const [, first, second] = listingText(listing).split('\n');
-    assert.equal(first.trim().split(/ {2,}/u).length, 8, 'the programme with a record has one cell more');
+    assert.equal(first.trim().split(/ {2,}/u).length, 7, 'the programme with a record has one cell more');
     assert.match(first, /record ready · no horizon$/u);
-    assert.equal(second.trim().split(/ {2,}/u).length, 7);
+    assert.equal(second.trim().split(/ {2,}/u).length, 6);
     assert.doesNotMatch(second, /record/u);
-    assert.deepEqual(Object.keys(without).slice(0, -1), ['name', 'priority', 'state', 'dormant', 'repos', 'goals', 'proposals', 'statuses', 'plan_sessions']);
+    assert.deepEqual(Object.keys(without).slice(0, -1), ['name', 'priority', 'state', 'dormant', 'repos', 'goals', 'statuses', 'plan_sessions']);
   });
 });
 
@@ -466,16 +466,18 @@ describe('mc programs create for an area', () => {
     } finally { a.done(); }
   });
 
-  /** An area repair programme `ops-repair` for memoro-cli/operations holding a goal in `stage`, and a proposal waiting in ~/mc/proposals/. */
+  /** An area repair programme `ops-repair` for memoro-cli/operations holding a goal in `stage`, and a proposal waiting in the memoro-cli/system area. */
   function repairArea(stage = 'build') {
     const a = area();
-    mkdirSync(join(a.root, 'proposals'));
-    const proposal = join(a.root, 'proposals', '2026-11-12-operations.md');
+    const waiting = join(a.root, 'areas', 'memoro-cli', 'system', 'proposals');
+    mkdirSync(waiting, { recursive: true });
+    const proposal = join(waiting, '2026-11-12-mc-operations.md');
     writeFileSync(proposal, '# The operations text is stale\n\nThe runner section.\n');
-    return { ...a, proposal, create: async (name) => call(['create', name, '--end', 'e', '--area', 'memoro-cli/operations', '--purpose', 'p', '--from-proposal', proposal], a.env, AREA_DEPS), stage };
+    const archived = join(waiting, 'archive', '2026-11-12-mc-operations.md');
+    return { ...a, waiting, proposal, archived, create: async (name) => call(['create', name, '--end', 'e', '--area', 'memoro-cli/operations', '--purpose', 'p', '--from-proposal', proposal], a.env, AREA_DEPS), stage };
   }
 
-  it('repair: a second repair programme for an area with an open one holding a live goal is made, exit 0, and the proposal moves into it', async () => {
+  it('repair: a second repair programme for an area with an open one holding a live goal is made, exit 0, and the proposal is archived as ordered in it', async () => {
     const a = repairArea();
     try {
       assert.equal((await call(['create', 'ops-repair', '--end', 'e', '--area', 'memoro-cli/operations', '--purpose', 'p'], a.env, AREA_DEPS)).code, 0);
@@ -484,37 +486,51 @@ describe('mc programs create for an area', () => {
       const { code, err } = await a.create('ops-repair-2');
       assert.equal(code, 0, err);
       assert.equal(JSON.parse(readFileSync(join(a.home, 'ops-repair-2', RECORD_FILE), 'utf8')).area, 'memoro-cli/operations');
-      assert.equal(existsSync(a.proposal), false, 'the proposal moves into the second repair programme');
-      assert.match(readFileSync(join(a.home, 'ops-repair-2', 'proposals', '2026-11-12-operations.md'), 'utf8'), /^Moved here from /u);
-      assert.deepEqual(readdirSync(join(a.root, 'proposals')), []);
+      assert.equal(existsSync(a.proposal), false, 'the proposal leaves the waiting ones');
+      assert.match(readFileSync(a.archived, 'utf8'), /^Utfall: ordered in programme ops-repair-2\n/u);
+      assert.deepEqual(readdirSync(a.waiting), ['archive']);
     } finally { a.done(); }
   });
 
-  it('repair: with none open, create makes the programme and moves the proposal into its proposals/ under a first line naming where it came from', async () => {
+  it('repair: with none open, create makes the programme, archives the proposal in its area under Utfall and names the archived path on the page', async () => {
     const a = repairArea();
     try {
       const { code, out } = await a.create('ops-repair');
       assert.equal(code, 0, out);
       assert.equal(existsSync(a.proposal), false);
-      const moved = readFileSync(join(a.home, 'ops-repair', 'proposals', '2026-11-12-operations.md'), 'utf8');
-      assert.match(moved.split('\n')[0], new RegExp(`^Moved here from ${a.proposal.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')} `, 'u'));
-      assert.match(moved, /# The operations text is stale\n\nThe runner section\./u);
+      const archived = readFileSync(a.archived, 'utf8');
+      assert.equal(archived.split('\n')[0], 'Utfall: ordered in programme ops-repair');
+      assert.match(archived, /# The operations text is stale\n\nThe runner section\./u);
+      assert.match(out, new RegExp(`ops-repair: the proposal is archived at ${a.archived.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')} \\(area memoro-cli/system\\)`, 'u'));
+      const page = readFileSync(join(a.home, 'ops-repair', 'README.md'), 'utf8');
+      const where = page.split(/^## Where things are\n/mu)[1].split(/^## /mu)[0];
+      assert.ok(where.trimStart().startsWith(`Ordered from the proposal \`${a.archived}\`.`), where);
+      assert.equal(existsSync(join(a.home, 'ops-repair', 'proposals')), false, 'the programme gets no proposals/');
     } finally { a.done(); }
   });
 
-  it('repair: a --from-proposal that is no proposal of ~/mc/proposals/ or a programme is refused before anything is made', async () => {
+  it('repair: a --from-proposal that is no waiting proposal of an area is refused before anything is made', async () => {
     const a = repairArea();
     try {
       const outside = join(a.root, 'elsewhere.md');
       writeFileSync(outside, 'x');
-      const archivedHere = join(a.root, 'proposals', 'archive', 'old.md');
-      const archivedThere = join(a.home, 'other', 'proposals', 'archive', 'old.md');
-      for (const file of [archivedHere, archivedThere]) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, 'x'); }
-      for (const given of [outside, join(a.root, 'proposals', 'missing.md'), archivedHere, archivedThere]) {
+      const archivedHere = join(a.waiting, 'archive', 'old.md');
+      const programme = join(a.home, 'other', 'proposals', 'old.md');
+      const root = join(a.root, 'proposals', 'old.md');
+      const areaFile = join(a.root, 'areas', 'memoro-cli', 'system', 'notes.md');
+      for (const file of [archivedHere, programme, root, areaFile]) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, 'x'); }
+      for (const given of [outside, join(a.waiting, 'missing.md'), archivedHere, programme, root, areaFile]) {
         const { code, err } = await call(['create', 'ops-repair', '--end', 'e', '--area', 'memoro-cli/operations', '--from-proposal', given], a.env, AREA_DEPS);
         assert.equal(code, 1, given);
         assert.match(err, /--from-proposal/u);
       }
+      // A proposal whose archived name is taken was decided once: refused, and nothing is made or moved.
+      mkdirSync(dirname(a.archived), { recursive: true });
+      writeFileSync(a.archived, 'Utfall: ej aktuellt\n');
+      const taken = await a.create('ops-repair');
+      assert.equal(taken.code, 1);
+      assert.match(taken.err, /exists already — the proposal was decided once; nothing was made/u);
+      assert.ok(existsSync(a.proposal));
       assert.equal(existsSync(join(a.home, 'ops-repair')), false);
     } finally { a.done(); }
   });

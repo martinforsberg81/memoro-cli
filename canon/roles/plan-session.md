@@ -64,7 +64,7 @@ recommendation when the call says unread). Amend the canonical rule and goal con
 
 Your headless assignment ends after that one draft is ready for build or
 waits on a concrete decision. Do not implement it, plan another draft or
-process the programme's proposal backlog in this turn. Work in the selected
+process proposals in this turn. Work in the selected
 goal's worktrees on its goal branch, as the launch prompt says; the interactive
 planning checkouts remain separate. Reserved acts retain their headless boundary.
 The runner contains an incomplete session that leaves draft ready so it cannot
@@ -96,7 +96,9 @@ and a goal already built gets a new goal for the difference. Move each goal to
 `build` in its phase as soon as it is complete.
 
 Where a part leaves open a choice of what is delivered or how it looks, which
-the document neither shows nor routes, do not make it: leave it at the desk with
+the document neither shows nor routes, or has a step that waits on Martin
+between ready and done (a look, an acceptance, a trial, a word), do not make
+it or cut it as a waiting goal: leave it at the desk with
 `mc martin propose --text <programme>/README.md --file <brief>`, the brief in the
 desk's three parts (what the document says, what is missing, what was found), and
 end. A question that is not such a choice goes through goal-bound `mc ask` on the draft
@@ -160,26 +162,13 @@ your own is named `plan/<slug>`, and a worktree you make for it is removed once
 it is pushed. A goal's worktrees are under `goals/<goal>/`, on `goal/<goal>`;
 you may work in them.
 
-## Your programme's proposals
+## Proposals
 
-During interactive planning, proposals for this programme wait in `~/mc/programs/<programme>/proposals/`;
-the start context says how many when there are some. Read them when you
-start and take a stand on each, with the whole programme as context:
-
-- **Work.** Apply tasks/writing-a-goal.md in the mc skill before proposing or
-  creating a goal. When the implementation is defined, write the goal and
-  move the file to `proposals/archive/` with first line `Utfall: <the goal>`.
-- **Needs investigation.** Investigate here and record findings and remaining
-  uncertainty in the proposal. Do not turn an unexplained symptom into an
-  implementation goal. A separate diagnosis goal requires Martin's explicit
-  agreement to that investigation and its bounded deliverable.
-- **Not now.** Move it to `proposals/archive/` with first line
-  `Utfall: ej aktuellt — <why>`.
-- **Another programme's.** Move it to that programme's `proposals/` and say
-  so in one line; touch nothing else there.
-
-Read `~/mc/programs/<programme>/proposals/archive/` to judge whether one is a
-duplicate of something already taken or declined.
+Proposals wait in the areas, not in the programme
+([proposals](../tasks/proposals.md)). A planning session processes none: a
+proposal the programme document names is the document's, and the goal carries
+from it what the part needs. A finding of your own outside the goal is a new
+proposal in its area.
 
 ## Letting work go and asking Martin
 
@@ -204,7 +193,7 @@ Yours without asking:
   reason in LOG.md. It widens the work, not the product scope.
 - A technical standard the goal needs and `docs/technical/` lacks, written
   there within the app's existing direction (all-sessions, Decided standards).
-- A `SETTLED` red: a proposal to the programme that owns the failing file, and
+- A `SETTLED` red: a proposal in the area of the failing file, and
   the goal goes on.
 - The goal's text after a decision: record it as a decision item and amend the
   item, stand or criterion it changes with the verbs, so the goal says what was

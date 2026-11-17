@@ -19,6 +19,9 @@ not a migration. `src/mc/commands/layout.js` and `src/mc/paths.js` supply it.
   goals/.archive/                   finished goals moved aside
   goals/goal_log.md                 archive rows
   evidence/<date>-<topic>/          the programme's evidence, with README.md
+~/mc/areas/<repo>/<slug>/
+  proposals/*.md                    proposals waiting in the area (area-proposals.js)
+  proposals/archive/*.md            decided ones, each with `Utfall: …` first
 ~/mc/restricted/
   README.md                         the rules below
   <programme>/<date>-<topic>/       restricted evidence, with README.md
@@ -31,6 +34,16 @@ not a migration. `src/mc/commands/layout.js` and `src/mc/paths.js` supply it.
 ~/mc/martin/horizons/<slug>/        the horizons the desk holds, each with its playback
 ~/mc/archive/programs/              programmes archived by the person
 ```
+
+A programme is an order: temporary, archived when done. It has no `proposals/`,
+and there is no ownerless `~/mc/proposals/` either (Martin, 2026-11-17).
+Proposals live in the permanent areas, one folder per area page: an area is a
+distinct `page` a repository declares in `.mc/areas.json` on origin/main, keyed
+`<repo>/<slug>` by the page's file name without `.md` (`memoro-cli/system`,
+`memoro/trust`, `memoro/delivery`, …). A finding with no clear area goes to
+`memoro-cli/system` when mc would change and to `memoro/delivery` when memoro
+would change. Every reader lists the folders on disk (`listAllProposals`), so an
+area folder whose page is no longer declared is still read.
 
 The goal directory and branch are made by `mc goal new`; phases and stages
 are described in [mc-goals.md](mc-goals.md). Projects went on 2026-11-03;

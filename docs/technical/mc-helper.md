@@ -6,9 +6,10 @@ Linux SSH interactive launches keep their provider alive past the terminal ([Cla
 digest, and the inbox of files drained one turn at a time. Martin's own word —
 a bug, something that should be better — is not here: it is said at the desk,
 `mc martin`, which places it ([mc-martin.md](mc-martin.md), *Placing*). **The
-only thing the eye produces is a proposal** — a file in `~/mc/proposals/` that
-nobody acts on until Martin picks it up at `mc martin` or `mc plan`, or the
-manager's curation turn reads it ([mc-manager.md](mc-manager.md)).
+only thing the eye produces is a proposal** — a file in the `proposals/` of the
+area it concerns, `~/mc/areas/<repo>/<area>/proposals/`, that nobody acts on
+until Martin picks it up at `mc martin`, or the manager's curation turn reads it
+([mc-manager.md](mc-manager.md)).
 
 | | what it does |
 |---|---|
@@ -31,7 +32,7 @@ conversations stay where they are, and nothing creates or reads it for a
 session any more.
 
 Nothing here changes a goal. A proposal is read at the next brief and
-Martin queues it or drops it — that is the arrangement that lets the eye run
+Martin orders it or drops it — that is the arrangement that lets the eye run
 unattended every day.
 
 ## The inbox
@@ -51,11 +52,11 @@ takes again. An inbox that keeps what it could not judge never drains.
 it: the turn stands in `~/mc/intake/`, so a name is enough, and a screenshot has
 no text to inline. That is the whole reason the inbox can hold anything.
 
-### It is not `~/mc/proposals/`
+### It is not an area's `proposals/`
 
 The two rooms differ by who has done the judging. The inbox is raw material
-nobody has read yet, and it costs a turn to work out what is in it.
-`~/mc/proposals/` is the other end: a session already understood the thing and
+nobody has read yet, and it costs a turn to work out what is in it. An area's
+`proposals/` is the other end: a session already understood the thing and
 wrote down what should happen about it. A session that has done the judging and
 drops its finding in the inbox asks a second session to work it out again from
 less than it had.
@@ -323,18 +324,30 @@ to judge it against"*. Two large text files did not reach the rule at all: a
 as counted, which is the better answer. The failure this guards against is the
 confident summary of a file somebody saw the first page of.
 
-**What it wrote is measured, not believed.** `runHelperTurn` lists
-`proposals/` before and after and reports the difference. A turn that says it
-filed three and filed none is reported as having filed none.
+**Where a proposal goes is the area it concerns.** An area is an area page a
+repository declares on origin/main (a distinct `page` of its `.mc/areas.json`),
+keyed `<repo>/<slug>` by the page's file name: `memoro-cli/system`,
+`memoro/trust`, `memoro/delivery` and the rest. `helperGround` reads the declared
+pages from the checkouts it already reads, and the prompt lists their keys (the
+directories under `~/mc/areas/` when none could be read) with the two fallbacks
+for a finding with no clear area: `memoro-cli/system` when mc would change,
+`memoro/delivery` when memoro would change. There is no ownerless place, and a
+programme is an order, not a place for a proposal: the programmes are in the
+prompt as ground only.
 
-Its output is zero or more `~/mc/proposals/<date>-<system>-<slug>.md`, system
+**What it wrote is measured, not believed.** `runHelperTurn` lists every
+area's `proposals/` (`listAllProposals`, `src/mc/area-proposals.js`) before and
+after and reports the difference, by area. A turn that says it filed three and
+filed none is reported as having filed none.
+
+Its output is zero or more `~/mc/areas/<repo>/<area>/proposals/<date>-<system>-<slug>.md`, system
 `mc` or `memoro`, with prose inside. The turn is told the system when the
 digest's name says it (`errors-<repo>-<date>.md`); a file whose name says
 nothing is decided from what the turn reads, and the turn puts the system in
 the name. `describeTurn` names a new file whose name carries no system, and
 that file is never renamed: mc does not guess a system from its text, because
-that is the parse `listProposals` was rewritten to avoid. **mc does not read a
-proposal** — `listProposals` returns filenames and never opens one.
+that is the parse the listing was rewritten to avoid. **mc does not read a
+proposal** — `listAllProposals` returns filenames and never opens one.
 
 The role's judgement rules are in the role file, and
 three of them matter enough to repeat: what was already there yesterday has
@@ -342,8 +355,7 @@ already been seen; a proposal that duplicates a live goal is noise; **zero
 proposals is a good answer** — a quiet day should cost Martin nothing to
 read.
 
-The turn writes only a proposal in its owning programme's proposals directory
-(or `~/mc/proposals/` when no programme owns it). It changes no goal, code,
+The turn writes only a proposal in an area's `proposals/`. It changes no goal, code,
 production data or credential, opens no PR or session, and asks no question:
 there is nobody to answer one.
 
@@ -424,18 +436,16 @@ it runs when Martin opens it.
 No session turns a proposal into work on its own, with one bounded exception.
 
 - **The manager's curation turn** ([mc-manager.md](mc-manager.md)) — its prompt
-  lists the waiting proposals of `~/mc/proposals/` and every programme's
-  `proposals/`, oldest first. It creates no programme: a proposal that reports a
+  lists the waiting proposals of every area's `proposals/`, each with its area,
+  oldest first. It creates no programme: a proposal that reports a
   defect against an area text, in an area with no repair in flight, is put to
   Martin with `mc martin propose`, and Martin creates that area's repair
   programme (`mc programs create … --area … --from-proposal`); the others wait.
-- **Martin**, at `mc martin` or in `mc plan`, has one become a goal, or
-  archived to `~/mc/proposals/archive/`. The proposals the desk files and the eye's are
-  read the same way, because they are the same file.
-- **`mc plan <programme>`** is the other way in: open the programme the
-  proposal belongs to, with the proposal in front of you. Nothing automatic
-  carries one across — `mc plan` takes a programme, not a file, and a proposal
-  is a candidate for a goal rather than runnable work.
+- **Martin**, at `mc martin`, orders one (`mc programs create … --from-proposal`,
+  which archives it in its area's `proposals/archive/` under `Utfall: ordered in
+  programme <name>`) or has it archived there with its own `Utfall:` line. The
+  proposals the desk files and the eye's are read the same way, because they are
+  the same file. `mc proposals` counts what waits, by area.
 - **The page (`mc`)** puts digests under HELPER and proposals under BRIEF.
   The digest view shows its age,
   what is new in it, how many proposals are waiting — and the `!` lines
@@ -469,7 +479,8 @@ No session turns a proposal into work on its own, with one bounded exception.
 | `src/mc/run-plan.js` | `helperDue` and `collectNote` for the day; `intakeQueue`, `intakeNote`, `INTAKE_KIND` and `INTAKE_PER_ROUND` for the drain |
 | `src/mc/run.js` | `runHelperDay` — the daily collect — and `runIntakeDrain`, the inbox every chore pass |
 | `src/mc/paths.js` | `RUNNER_HOME` and the three tables that left the inbox: `runnerTablePath` for the writer, `runnerTableLabel` for the brief |
-| `src/mc/brief-collect.js` | `listProposals` — the names, and nothing about what is in them — and the three sections read from `~/mc/runner/` |
+| `src/mc/area-proposals.js` | where proposals live: `areasHome`, `areaProposalsDir`, `areaProposalsArchiveDir`, the area keys (`declaredAreaKeys`, `areaKeysOnDisk`), the fallbacks and `listAllProposals` — the names, and nothing about what is in them |
+| `src/mc/brief-collect.js` | `proposalSystem`, the system a proposal's name carries, and the three sections read from `~/mc/runner/` |
 | `src/mc/page-collect.js`, `page-render.js` | `newErrorLines`, `intakeSection`, the INTAKE block |
 
 The intake role file reaches its session the same way every other role file does —
@@ -481,9 +492,9 @@ section names out of every file, in three places that disagreed with each
 other: a proposal whose first prose line was not marked `# ` was counted by the
 page, missing from the brief, and recorded as "wrote nothing" by the very turn
 that had just written it, with no error anywhere. The parse existed so a script
-could say what kind of thing each file was; nothing needs that. `listProposals`
-returns the markdown names, oldest first, and a session that has to know what
-is in one opens it.
+could say what kind of thing each file was; nothing needs that. `listAllProposals`
+returns the markdown names by area, and a session that has to know what is in
+one opens it.
 
 Tests: `tests/mc/helper-collect.test.js` (the digest on stubbed script output
 and stubbed routes, the delta against a previous digest, the failure domains

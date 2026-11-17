@@ -41,8 +41,10 @@ moved, bring the pages' Closer, Store and Standards into line, and publish each
 worktree you changed with plain `mc publish` (never `--no-merge`): it queues
 the pull request for the merger, whose docs form lands it. One you did not change needs
 nothing, and a turn that finds nothing to change is a success. The prompt lists
-the proposals, oldest first. Proposals that wait on Martin go to the desk
-with `mc martin propose`. Before drafting a candidate, read
+the proposals of every area, oldest first. One that main has already resolved
+you move to its area's `proposals/archive/` with first line
+`Utfall: resolved — <where>`; the rest wait for an order at the desk. One that
+waits on a text of Martin's goes to the desk with `mc martin propose`. Before drafting a candidate, read
 [writing-a-horizon](../tasks/writing-a-horizon.md). A candidate goes to the
 desk as a text item `horizon:<proposed-slug>` whose "Vad den säger" says no such
 horizon exists and whose "Vad som föreslås" gives its title and a playback under
@@ -68,9 +70,8 @@ Martin is told in reasoned Swedish prose; everything you write in a repository
 is English.
 
 Where to read: `mc --fresh` is the page; `mc goal list` and
-`mc goal show <programme>/<goal>` are the goals; each programme's
-`~/mc/programs/<programme>/proposals/` holds its proposals, and
-`~/mc/proposals/` those no programme owns; `mc repos` names mc's source
-checkout.
+`mc goal show <programme>/<goal>` are the goals; each area's
+`~/mc/areas/<repo>/<area>/proposals/` holds its proposals; `mc repos` names
+mc's source checkout.
 
 @verb goal

@@ -138,8 +138,9 @@ Martin role, the manager and the plan role may call it, the last two also
 unattended. Its form and refusals are in [mc-goals.md](mc-goals.md#stated-order).
 
 `create` makes `~/mc/programs/<programme>/` with `PROGRAMME.json` (state
-`draft`, an area repair included, created now), `README.md` from its template, and empty `goals/`,
-`proposals/archive/` and `evidence/`, so `mc goal new <programme>/<goal>`
+`draft`, an area repair included, created now), `README.md` from its template, and empty `goals/`
+and `evidence/` — no `proposals/`: a programme is an order, and proposals wait in the areas
+([mc-layout.md](mc-layout.md)) — so `mc goal new <programme>/<goal>`
 is available once Martin sets the programme `ready`. It refuses a name that exists (exit 1) and, when the page
 template cannot be read, makes nothing. `record` gives an existing directory
 without a record its record and touches nothing else; it refuses a directory
@@ -150,10 +151,14 @@ without `--area` with exit 2, before any write; `record` takes none of `--area`,
 `--purpose` and `--from-proposal`. `--purpose` is written under What it is for
 in the page. `--area` is refused (exit 1) when the repository is not known, does
 not declare the area at its origin/main, or a valid open record already names it.
-`--from-proposal <path>` names a file in `~/mc/proposals/` or a programme's
-`proposals/`; after the programme is made it is moved into the new programme's
-`proposals/` with a line saying where it came from, and one that cannot be moved
-is said with exit 1 after the programme exists.
+`--from-proposal <path>` names a file directly in an area's
+`~/mc/areas/<repo>/<area>/proposals/` (anything else, an archived one included,
+is refused with exit 1 before anything is made, and so is one whose name is taken
+in that area's `proposals/archive/`). The new `README.md` names its archived path
+first under Where things are (`Ordered from the proposal \`<path>\`.`); after the
+programme is made the proposal is moved to `proposals/archive/` of its area with
+the first line `Utfall: ordered in programme <programme>`, and one that cannot be
+moved is said with exit 1 after the programme exists.
 `show` prints the record (`--json`: `{ "name", "record" }`, where `record` is
 `null` without one; for a stated programme it also prints `phases: stated` and
 a line `phase <n> after phase <m>[, <m>…]` per waiting phase) or says the programme has none; a record that does not
@@ -357,9 +362,12 @@ No-record programmes are not automatically archived or migrated. The manual
 command can archive one after work and write-back without declaring its enduring
 direction over. For a valid record, the runner checks its end and safety as
 above; the manual command also archives it, leaving `state` as it finds it and
-moving its `proposals/` with the directory, whole.
-The runner's archive moves the top-level `proposals/*.md` to `~/mc/proposals/`
-first, so a finding is not shelved with the programme.
+moving the directory whole.
+No programme gets a `proposals/` any more. For a programme made before, the
+runner's archive first moves its top-level `proposals/*.md` to an area's
+`proposals/` — the page-area its record's `area` names, else `memoro-cli/system`
+— each under a first line naming the programme, so a finding is not shelved with
+the programme.
 
 ## How it is tested
 

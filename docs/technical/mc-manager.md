@@ -81,9 +81,10 @@ settle it (`canon/roles/manager.md`).
 
 A proposal is a reading, not runnable work. Once decided it becomes a goal, is built directly, or is dropped.
 Preserve the evidence the goal needs before archiving the proposal, with a line saying what happened and where it
-landed. A partly handled proposal stays, rewritten to what remains. Programme-owned proposals live in
-`~/mc/programs/<programme>/proposals/`; those no programme owns live in `~/mc/proposals/`. The curation prompt
-lists both, oldest first.
+landed. A partly handled proposal stays, rewritten to what remains. Proposals live in the area they concern,
+`~/mc/areas/<repo>/<area>/proposals/` (one folder per declared area page; the decided ones in its `archive/` with an
+`Utfall:` first line), never in a programme: a programme is an order. The curation prompt lists every area's, each
+with its area, oldest first.
 
 ## Checks
 

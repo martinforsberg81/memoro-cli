@@ -77,19 +77,13 @@ describe('mc hook — the worktree a session starts in', () => {
     assert.match(sessionStartContext({ cwd: '/x', inside: true, states: [], env: {} }), /session role unknown.*MC_ROLE.*MC_GOAL and cwd \/x/u);
   });
 
-  it('a plan session is told how many proposals wait in its programme, archive not counted', () => {
+  it('a plan session is told nothing about proposals: they wait in the areas, not in its programme', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-hook-proposals-'));
     const dir = join(root, 'programs', 'mc', 'proposals');
-    mkdirSync(join(dir, 'archive'), { recursive: true });
-    const env = { MC_WORK_ROOT: root };
-    const start = () => sessionStartContext({ cwd: join(root, 'programs', 'mc'), inside: true, states: [], env });
-    assert.ok(!/proposals? waits?/u.test(start()), 'none waiting: nothing said');
+    mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, '2026-11-03-mc-a.md'), 'a\n');
-    writeFileSync(join(dir, '2026-11-03-mc-b.md'), 'b\n');
-    writeFileSync(join(dir, 'archive', '2026-11-01-mc-old.md'), 'Utfall: ej aktuellt — x\n');
-    assert.match(start(), /\n2 proposals wait in ~\/mc\/programs\/mc\/proposals\/ — take a stand on each/u);
-    const build = sessionStartContext({ cwd: join(root, 'programs', 'mc', 'goals', 'g'), inside: true, states: [], env });
-    assert.ok(!build.includes('proposals wait'), 'a build session is not told');
+    const text = sessionStartContext({ cwd: join(root, 'programs', 'mc'), inside: true, states: [], env: { MC_WORK_ROOT: root } });
+    assert.ok(!/proposal/u.test(text), text);
   });
 
   it('finds the worktrees of a workarea, and only those mc knows', () => {
@@ -542,11 +536,21 @@ describe('mc hook stop: a goal\'s review ends only once it has decided and writt
   const STARTED = '2026-11-03T20:00:00.000Z';
   const REVIEW = { MC_ROLE: 'review-session:goal', MC_GOAL: 'mc/g', MC_SESSION_STARTED: STARTED };
   /** The deps `reviewStopDecision` reads: the goal in `stage`, and the proposals with their mtimes. */
-  const world = (stage, proposals = {}) => ({
-    home: HOME,
+  // The proposals are in one area of two, memoro/trust; memoro-cli/system holds none, and the programme's own
+  // legacy proposals/ is never read.
+  const world = (stage, proposals = {}, legacy = {}) => ({
+    home: HOME, areas: '/w/areas',
     read: (path) => { if (path === '/p/mc/goals/g/GOAL.json') return JSON.stringify({ stage, status: 'ready' }); throw new Error('ENOENT'); },
-    list: (path) => { if (path === '/p/mc/proposals') return Object.keys(proposals); throw new Error('ENOENT'); },
-    mtimeMs: (path) => proposals[path.split('/').pop()],
+    list: (path) => {
+      const tree = {
+        '/w/areas': ['memoro-cli', 'memoro'], '/w/areas/memoro-cli': ['system'], '/w/areas/memoro': ['trust'],
+        '/w/areas/memoro-cli/system/proposals': ['archive'], '/w/areas/memoro/trust/proposals': Object.keys(proposals),
+        '/p/mc/proposals': Object.keys(legacy),
+      };
+      if (tree[path]) return tree[path];
+      throw new Error('ENOENT');
+    },
+    mtimeMs: (path) => ({ ...proposals, ...legacy })[path.split('/').pop()],
   });
   const after = Date.parse(STARTED) + 60_000;
   const sink = () => { const out = { text: '' }; out.write = (chunk) => { out.text += chunk; }; return out; };
@@ -554,12 +558,14 @@ describe('mc hook stop: a goal\'s review ends only once it has decided and writt
 
   it('refuses the end while the goal is in review, and while no proposal was written since the review began, naming each', () => {
     const both = reviewStopDecision({ env: REVIEW, ...world('review') });
-    assert.match(both.reason, /^the goal is still in review — mc goal stage merge \(OK to land: it merges all registered pull requests\) or write REVIEW\.md in the goal's directory and mc goal stage build \(not OK\); no proposal written — one file in \/p\/mc\/proposals\/ /u);
+    assert.match(both.reason, /^the goal is still in review — mc goal stage merge \(OK to land: it merges all registered pull requests\) or write REVIEW\.md in the goal's directory and mc goal stage build \(not OK\); no proposal written — one file in \/w\/areas\/<repo>\/<area>\/proposals\/ /u);
     const stage = reviewStopDecision({ env: REVIEW, ...world('review', { '2026-11-03-mc-x.md': after }) });
     assert.match(stage.reason, /^the goal is still in review/u);
     assert.doesNotMatch(stage.reason, /proposal/u);
     const old = reviewStopDecision({ env: REVIEW, ...world('merge', { '2026-11-01-mc-old.md': before, 'notes.txt': after }) });
     assert.match(old.reason, /^no proposal written/u, 'one from before the review, or no .md, is none');
+    const programme = reviewStopDecision({ env: REVIEW, ...world('merge', {}, { '2026-11-03-mc-x.md': after }) });
+    assert.match(programme.reason, /^no proposal written/u, 'one in the programme\'s own proposals/ is none');
   });
 
   it('lets the review end once it is in merge or build with a proposal; and holds no other session', () => {

@@ -1090,8 +1090,10 @@ keeps one (no new reading, no session), the runner:
 1. refuses when `~/mc/restricted/<p>/` holds entries: deleting data is a person's
    act. It opens one `for-martin` item at once, sort `reserved`, with a Swedish
    brief naming `mc plan <p> --archive`; the programme stays as it was;
-2. moves the top-level `proposals/*.md` to `~/mc/proposals/`, each with a first
-   line naming the programme, never over a file already there;
+2. moves a legacy programme's top-level `proposals/*.md` (none is made any more)
+   to an area's `proposals/` — the page-area the record's `area` names (its
+   declared `page`, read at origin/main), else `~/mc/areas/memoro-cli/system/proposals/` —
+   each with a first line naming the programme, never over a file already there;
 3. calls `archiveProgramme` with the runner's own git, gh, docs merge and release
    and a `fence`, the same function `mc plan <p> --archive` calls. The fence
    re-reads `goals/` and `~/mc/restricted/<p>/` after each docs PR merge, before
@@ -1160,7 +1162,7 @@ and the desk sync reports it.
 **Worktrees.** The runner fetches, then makes for each repository that declares
 areas a branch `manager/curation-<stamp>` from origin/main in
 `runner/work/manager-curation/<stamp>/<repo>`. The prompt names them and lists the
-proposals. The session publishes what it changed with plain `mc publish`, which
+proposals waiting in every area's `~/mc/areas/<repo>/<area>/proposals/`, each with its area, oldest first. The session publishes what it changed with plain `mc publish`, which
 opens the pull request and queues it for the merger, where the docs form lands a
 pull request whose every file is under `docs/` (never `--no-merge`: nothing
 would queue a `manager/curation-*` branch);

@@ -52,5 +52,5 @@ phases is [designing a programme](designing-a-programme.md): a complete brief st
   components, and the build works out their change; `large` only for work that must choose between designs the goal could not choose for.
   Never a concrete model.
 - **Out of scope:** each item names its owner: another goal, another programme, or nobody.
-- **Proposals consumed:** move them to the programme's `proposals/archive/` in the same move, first line `Utfall: <the goal>`, and carry into
-  the goal everything it needs from them.
+- **Proposals consumed:** the programme document names them and the desk has archived them in their area
+  ([proposals](proposals.md)); carry into the goal everything it needs from them.

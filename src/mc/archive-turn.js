@@ -9,7 +9,7 @@
  * the runner decides around the one reading session: whether a programme is
  * due, the reading's file and its parse, the state that keeps an OK reading
  * and counts what failed, the desk item a NOT OK reading or a second failure
- * opens, the proposals moved out of the programme, and the archive itself,
+ * opens, a legacy programme's proposals moved to an area, and the archive itself,
  * fenced, with the record's state set to done once the directory has moved.
  * The runner (`run.js`) supplies its own file reads, lock and git, so a
  * fixture drives all of it in memory.
@@ -355,7 +355,9 @@ function restrictedBrief({ programme, entries }) {
 /* ----------------------------------------------------------- the archiving */
 
 /**
- * The programme's top-level `proposals/*.md` moved to `target` (`~/mc/proposals/`), each with a first line naming the
+ * A legacy programme's top-level `proposals/*.md` moved to `target`, an area's `proposals/` (the area the record's
+ * `area` names when it names a page-area, else `memoro-cli/system`: `archiveOnOk`'s `proposalsTarget`). No programme
+ * gets a `proposals/` folder any more; this empties one made before. Each moved file gets a first line naming the
  * programme, never over a file already there (a taken name gets the programme's name in front, then a number). Returns the
  * names moved. `read`/`write`/`remove`/`exists` are the runner's seams; a file that cannot be moved is an error thrown,
  * after the ones before it were: the move is safe to run again, a moved file being gone from the programme.
@@ -363,11 +365,14 @@ function restrictedBrief({ programme, entries }) {
 export function moveProposals({ home, programme, target, list, read, write, remove, exists }) {
   const folder = join(home, programme, 'proposals');
   const moved = [];
-  for (const name of list(folder).filter((entry) => entry.endsWith('.md') && !entry.startsWith('.')).sort()) {
+  const names = list(folder).filter((entry) => entry.endsWith('.md') && !entry.startsWith('.')).sort();
+  // The target is asked only when there is something to move: naming the area may read the repositories.
+  const into = names.length && typeof target === 'function' ? target() : target;
+  for (const name of names) {
     const text = read(join(folder, name));
     if (text === null || text === undefined) continue;
-    let to = join(target, name);
-    for (let n = 1; exists(to); n += 1) to = join(target, n === 1 ? `${programme}-${name}` : `${programme}-${n}-${name}`);
+    let to = join(into, name);
+    for (let n = 1; exists(to); n += 1) to = join(into, n === 1 ? `${programme}-${name}` : `${programme}-${n}-${name}`);
     write(to, `From programme ${programme}, which was archived with these still open.\n\n${text}`);
     remove(join(folder, name));
     moved.push(name);
@@ -388,13 +393,14 @@ function setDoneSafely(setDone, dir, seams) {
  * `{ ok: false, restricted: [entries] }` (the programme holds restricted data: nothing is moved), or `{ ok: false, reason }`.
  *
  * Checked first, in the runner's own reads: `goals/` holds no live goal and the record is open. Then
- * `~/mc/restricted/<programme>/` is read; with entries nothing is touched. Then the proposals move, and `archive` — the
+ * `~/mc/restricted/<programme>/` is read; with entries nothing is touched. Then a legacy programme's proposals move to
+ * `proposalsTarget(record)` (an area's `proposals/`), and `archive` — the
  * runner's `archiveProgramme` with its git, gh, docsMerge and release — runs with the fence (a live goal or restricted data
  * that appears meanwhile stops it before anything local is released, deleted or moved) and `onShelved`, which records the
  * destination in the turn state before anything else can fail. The record's state is then set done at the destination (or in
  * place, where the directory did not move) and the destination is cleared.
  */
-export async function archiveOnOk({ programme, home, restrictedDir, proposalsHome, list, read, write, remove, exists, archive, setDone = setRecordState, root, writeJson, lock }) {
+export async function archiveOnOk({ programme, home, restrictedDir, proposalsTarget, list, read, write, remove, exists, archive, setDone = setRecordState, root, writeJson, lock }) {
   const seams = { root, read, writeJson, lock };
   const dir = join(home, programme);
   if (liveGoals({ home, programme, list }).length) return { ok: false, reason: 'the programme holds a live goal' };
@@ -407,7 +413,7 @@ export async function archiveOnOk({ programme, home, restrictedDir, proposalsHom
     const held = list(restrictedDir).filter((entry) => !entry.startsWith('.'));
     return held.length ? `restricted data appeared (${held.join(', ')})` : null;
   };
-  try { moveProposals({ home, programme, target: proposalsHome, list, read, write, remove, exists }); } catch (error) { return { ok: false, reason: `its proposals could not be moved: ${error.message || String(error)}` }; }
+  try { moveProposals({ home, programme, target: () => proposalsTarget(record.record), list, read, write, remove, exists }); } catch (error) { return { ok: false, reason: `its proposals could not be moved: ${error.message || String(error)}` }; }
   let destination = null; let noted = null;
   const rc = await archive({ fence, onShelved: (moved) => { destination = moved; try { noteDestination({ destination: moved, programme, ...seams }); } catch (error) { noted = error; } } });
   if (rc !== 0) return { ok: false, reason: `archiveProgramme returned ${rc}` };

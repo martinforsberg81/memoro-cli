@@ -267,18 +267,28 @@ function withSection(text, heading, body) {
   return [...lines.slice(0, start + 1), '', ...body.split('\n'), '', ...lines.slice(end)].join('\n');
 }
 
+/** `line` as the first paragraph of the section under `## <heading>`, the rest of it kept. */
+function leadSection(text, heading, line) {
+  const lines = text.split('\n');
+  const start = lines.indexOf(`## ${heading}`);
+  if (start < 0) return text;
+  return [...lines.slice(0, start + 1), '', line, ...lines.slice(start + 1)].join('\n');
+}
+
 /**
  * The page of a new programme with a record: the template with the name in its
  * first line, the end sentence under End and, when there is one, the horizon
- * under What it is for (or the area it repairs), followed by `purpose` when one is given. What the plan
- * session writes is left as placeholders.
+ * under What it is for (or the area it repairs), followed by `purpose` when one is given, and, for a programme ordered
+ * from a proposal, the proposal's archived path first under Where things are. What the plan session writes is left as
+ * placeholders.
  */
-export function recordPage(template, { name, end, horizon, area = null, purpose = null }) {
+export function recordPage(template, { name, end, horizon, area = null, purpose = null, proposal = null }) {
   let page = template.replace(/^# <programme>/mu, `# ${name}`);
   page = withSection(page, 'End', end.trim().replace(/^#/gmu, '\\#'));
   const said = purpose?.trim() ? purpose.trim().replace(/^#/gmu, '\\#') : null;
   if (horizon) page = withSection(page, 'What it is for', `Serves the horizon \`${horizon}\`. ${said ?? '<The part of that horizon this programme delivers.>'}`);
   else if (area) page = withSection(page, 'What it is for', `Repairs the text of the area \`${area}\`, a programme without a horizon. ${said ?? '<What in that area text is wrong or missing.>'}`);
   else if (said) page = withSection(page, 'What it is for', said);
+  if (proposal) page = leadSection(page, 'Where things are', `Ordered from the proposal \`${proposal}\`.`);
   return page.endsWith('\n') ? page : `${page}\n`;
 }

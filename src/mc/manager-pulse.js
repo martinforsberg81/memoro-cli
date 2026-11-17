@@ -15,7 +15,6 @@
  * label, and the item closes by source.
  */
 import { join } from 'node:path';
-import { NAME_RE } from './plan-schema.js';
 import { readAreas } from './areas.js';
 
 export const MANAGER_SCHEMA = 'mc-manager-turn';
@@ -192,10 +191,14 @@ export function areaPages({ repos, checkouts }) {
     .map((area) => ({ repo: repo.name, id: area.id, path: join(checkouts[repo.name], area.page) })));
 }
 
-/** The proposals folders the curation prompt lists, each file with its age: `~/mc/proposals/` and every programme's `proposals/`. */
-export function proposalBacklog({ root, home, list, modified }) {
-  const folders = [join(root, 'proposals'), ...list(home).filter((name) => NAME_RE.test(name)).sort().map((name) => join(home, name, 'proposals'))];
-  return folders.flatMap((folder) => list(folder).filter((name) => !name.startsWith('.')).map((name) => ({ path: join(folder, name), at: modified(join(folder, name)) })))
+/**
+ * The proposals the curation prompt lists, each file with its area and age: every direct `.md` in every area's
+ * `~/mc/areas/<repo>/<area>/proposals/` (`areas` is `~/mc/areas`), never an archive.
+ */
+export function proposalBacklog({ areas, list, modified }) {
+  const shown = (dir) => list(dir).filter((name) => !name.startsWith('.')).sort();
+  const folders = shown(areas).flatMap((repo) => shown(join(areas, repo)).map((slug) => ({ area: `${repo}/${slug}`, folder: join(areas, repo, slug, 'proposals') })));
+  return folders.flatMap(({ area, folder }) => shown(folder).filter((name) => name.endsWith('.md')).map((name) => ({ area, path: join(folder, name), at: modified(join(folder, name)) })))
     .sort((a, b) => (a.at ?? 0) - (b.at ?? 0) || (a.path < b.path ? -1 : 1));
 }
 
@@ -203,10 +206,10 @@ export function proposalBacklog({ root, home, list, modified }) {
 export function curationPrompt({ paths, branches, pages, backlog, moved = [] }) {
   const trees = Object.entries(paths).map(([repo, path]) => `${repo}: \`${path}\` on branch ${branches[repo]}`).join('; ');
   const where = pages.length ? pages.map((page) => `${page.repo} ${page.id}: \`${page.path}\``).join('; ') : '(none)';
-  const list = backlog.length ? backlog.map((entry) => `- ${entry.path}`).join('\n') : '(no proposals)';
+  const list = backlog.length ? backlog.map((entry) => `- ${entry.area ? `${entry.area}: ` : ''}${entry.path}`).join('\n') : '(no proposals)';
   const since = moved.length ? ` Main has moved since the last curation in: ${moved.join(', ')}.` : '';
   return `You are the headless manager, curating the area texts with nobody present.${since} Your worktrees, made from origin/main, are ${trees}. The area pages are ${where}. `
     + `Bring each page's Closer, Store and Standards into line with what the code and \`docs/technical/\` now say. Change nothing under ## Aim of a page and nothing outside \`docs/technical/\`. A line holding a dated decision of Martin's you change only when a later dated decision of his on the same page, which you keep as it is, and the code say otherwise: correct it to agree with them and keep its citation; \`mc publish\` refuses anything else. `
     + `Publish each worktree you changed with plain \`mc publish\` (never \`--no-merge\`): it opens the pull request and queues it for the merger, whose docs form lands a pull request whose every file is under docs/. A worktree you did not change needs nothing, and a turn that finds nothing to change is a success. What waits on Martin goes to the desk with \`mc martin propose\`; do not make a horizon or a goal. `
-    + `Proposals, oldest first — bring what waits on Martin to the desk with \`mc martin propose\`:\n${list}`;
+    + `Proposals in the areas, oldest first — bring what waits on Martin to the desk with \`mc martin propose\`:\n${list}`;
 }

@@ -1467,7 +1467,7 @@ describe('INTAKE', () => {
   ].join('\n');
 
   it('shows the latest recorded helper run even after a missed day, separately from Manager', () => {
-    const intake = intakeSection({ now: NOW, proposals: ['2026-08-29-mc-one.md'], runs: [
+    const intake = intakeSection({ now: NOW, proposals: ['2026-08-29-mc-one.md', '2026-08-29-mc-two.md', '2026-08-29-memoro-three.md'], runs: [
       { kind: 'helper', ts: '2026-08-27T10:00:00Z', exit: '0' },
       { kind: 'intake', ts: '2026-08-29T11:00:00Z', exit: '0' },
       { kind: 'helper', ts: '2026-08-28T10:00:00Z', exit: '1' },
@@ -1477,7 +1477,7 @@ describe('INTAKE', () => {
     const sessions = sessionsSection({ foreground: [
       { verb: 'manager', pid: 102, started: '2026-08-29T11:00:00Z', tool: 'claude', model: 'opus' },
     ], now: NOW, alive: () => true });
-    const programmes = programmesSection({ programmes: ['mc'], proposalCounts: { mc: 2 } });
+    const programmes = programmesSection({ programmes: ['mc'] });
     for (const columns of [60, 80, 120, 160]) {
       const lines = renderPageLines(pageData({ intake, sessions, programmes }), { columns });
       const header = lines.slice(0, lines.findIndex((line) => /^ {2}(?:┌─ )?(?:MERGE|DEV|MAINTENANCE)/u.test(line) || line.includes('── SYSTEM'))).join('\n');
@@ -1496,12 +1496,13 @@ describe('INTAKE', () => {
 
   it('aggregates queues and recorded priorities without treating volume or dependency severity as error priority', () => {
     const intake = intakeSection({
-      now: NOW, proposals: ['unassigned.md'], programmeProposals: { mc: 2, photos: 3 },
+      now: NOW, proposals: ['2026-08-29-mc-one.md'],
       intakeFiles: ['report.md', 'screenshot.png', 'errors-memoro-2026-08-29.md', 'errors-2026-08-29.md'],
       digests: [{ repo: 'memoro', name: 'errors-memoro-2026-08-29.md', mtime_ms: NOW.getTime(),
         text: `${DIGEST}\n## Analysis items\n\n| priority | title | occurrences | files |\n|---|---|---|---|\n| critical | lost data | 1 | a.js |\n| high | failed job | 900 | b.js |\n| high | stuck job | 2 | c.js |\n## AI-provider errors\n` }],
     });
-    assert.deepEqual([intake.proposals, intake.unhandled, intake.other_intake], [1, 5, 2]);
+    assert.deepEqual([intake.proposals, intake.other_intake], [1, 2]);
+    assert.equal('unhandled' in intake, false, 'no programme holds proposals to be unhandled in');
     assert.deepEqual([intake.repos[0].critical, intake.repos[0].high], [1, 2]);
     const quiet = intakeSection({ digests: [{ repo: 'memoro', text: '## Analysis items\n\n_no items_\n' }] });
     assert.deepEqual([quiet.repos[0].critical, quiet.repos[0].high], [0, 0]);
@@ -2301,24 +2302,29 @@ describe('collectPage', () => {
       holder: { name: 'martin@laptop' },
     }]));
     writeFileSync(join(root, 'queue.md'), '# the queue\nmc-ui\ndocx-editor\n');
-    mkdirSync(join(root, 'proposals'), { recursive: true });
+    mkdirSync(join(root, 'areas', 'memoro-cli', 'system', 'proposals'), { recursive: true });
     mkdirSync(join(root, 'intake'), { recursive: true });
     writeFileSync(join(root, 'intake', 'errors-2026-08-29.md'), '# Errors\n\n## New since the last digest\n\n- ! `abc` — 41x 500 — loud\n');
     writeFileSync(join(root, 'intake', 'screenshot.png'), 'pending');
     mkdirSync(join(root, 'intake', 'archive'), { recursive: true });
     writeFileSync(join(root, 'intake', 'archive', 'old.md'), 'archived');
-    writeFileSync(join(root, 'proposals', '2026-08-29-one.md'), 'A proposal, with no heading — mc counts it either way.\n');
+    writeFileSync(join(root, 'areas', 'memoro-cli', 'system', 'proposals', '2026-08-29-mc-one.md'), 'A proposal, with no heading — mc counts it either way.\n');
     for (const area of ['mc-ui', 'docx-editor']) mkdirSync(join(root, area, 'memoro-cli', '.git'), { recursive: true });
     // One goal under the programmes home: PROGRAMMES reads it from there.
     const goal = join(root, 'programs', 'mc', 'goals', 'mc-ui');
     mkdirSync(goal, { recursive: true });
     writeFileSync(join(goal, 'GOAL.json'), goalJson({ title: 'The page' }));
     writeFileSync(join(goal, 'LOG.md'), '');
-    const programmeProposals = join(root, 'programs', 'mc', 'proposals');
-    mkdirSync(join(programmeProposals, 'archive'), { recursive: true });
-    writeFileSync(join(programmeProposals, '2026-08-29-mc-one.md'), 'one');
-    writeFileSync(join(programmeProposals, '2026-08-29-mc-two.md'), 'two');
-    writeFileSync(join(programmeProposals, 'archive', 'old.md'), 'archived');
+    const trust = join(root, 'areas', 'memoro', 'trust', 'proposals');
+    mkdirSync(join(trust, 'archive'), { recursive: true });
+    writeFileSync(join(trust, '2026-08-29-memoro-two.md'), 'two');
+    writeFileSync(join(trust, '2026-08-29-memoro-three.md'), 'three');
+    writeFileSync(join(trust, 'archive', 'old.md'), 'archived');
+    // The old places, which nothing reads any more: the ownerless root and a programme's own proposals/.
+    mkdirSync(join(root, 'proposals'), { recursive: true });
+    writeFileSync(join(root, 'proposals', '2026-08-29-mc-root.md'), 'root');
+    mkdirSync(join(root, 'programs', 'mc', 'proposals'), { recursive: true });
+    writeFileSync(join(root, 'programs', 'mc', 'proposals', '2026-08-29-mc-programme.md'), 'programme');
     return root;
   }
 
@@ -2396,10 +2402,10 @@ describe('collectPage', () => {
 
   it('heads a programme with its number, its horizon and its phase, and says draft for a draft', () => {
     const data = { horizons: { open: [{ slug: 'first', title: 'First', position: 5, programmes: ['p'] }], none: ['d'], unreadable: [], error: null } };
-    const group = { programme: 'p', number: 7, record_state: 'open', current_phase: 2, horizon: 'first', priority: 3, finished: 4, proposals: 1, goals: [{ stage: 'build', phase: 2 }, { stage: 'plan', phase: 3 }] };
+    const group = { programme: 'p', number: 7, record_state: 'open', current_phase: 2, horizon: 'first', priority: 3, finished: 4, goals: [{ stage: 'build', phase: 2 }, { stage: 'plan', phase: 3 }] };
     const draft = { programme: 'd', number: 8, record_state: 'draft', current_phase: 1, goals: [{ stage: 'build', phase: 1 }] };
     const head = (item, columns = 160) => programmeHeading(text => text, columns - 2, data, item, programmeFacts(item));
-    assert.match(head(group), /^ {2}┌─ 7 {2}p {2}· {2}horizon 5 {2}· {2}phase 2 of 3 · 2 goals · 1 proposal · priority 3 · 4 done ─+┐$/u);
+    assert.match(head(group), /^ {2}┌─ 7 {2}p {2}· {2}horizon 5 {2}· {2}phase 2 of 3 · 2 goals · priority 3 · 4 done ─+┐$/u);
     assert.match(head(draft), /^ {2}┌─ 8 {2}d {2}· {2}no horizon {2}· {2}draft · 1 goal ─+┐$/u);
     assert.doesNotMatch(head(draft), /phase/u, 'a draft has no phase');
     assert.ok(width(head({ ...group, programme: 'x'.repeat(60) }, 80)) <= 80);
@@ -2540,7 +2546,7 @@ describe('collectPage', () => {
       assert.match(body, /runner pid 4000/u, `${columns}: the runner session sits under its goal`);
       assert.equal(body.match(/runner pid 4000/gu).length, 1);
       assert.match(body, /PLAN/u, `${columns}: the plan session`);
-      if (columns === 160) assert.match(frame.heading, / {2}· {2}horizon 1 {2}· {2}phase 1 of 3 · 6 goals · 2 proposals · priority 5 · 1 done · record invalid/u, frame.heading);
+      if (columns === 160) assert.match(frame.heading, / {2}· {2}horizon 1 {2}· {2}phase 1 of 3 · 6 goals · priority 5 · 1 done · record invalid/u, frame.heading);
       // HORIZONS counts the same goals: open, landed, held, and a mark while a session works.
       const row = lines.find((line) => /Title of first/u.test(line));
       assert.match(row, /1 programme +4 open · 1 landed · ⊘ 1 +●$/u, `${columns}: ${row}`);
@@ -2636,7 +2642,8 @@ describe('collectPage', () => {
     assert.ok('horizons' in data);
     assert.deepEqual(Object.keys(data.horizons), ['open', 'none', 'unreadable', 'error']);
     const group = data.programmes.programmes.find((item) => item.programme === 'mc');
-    for (const key of ['programme', 'priority', 'dormant', 'finished', 'goals', 'phases', 'current_phase', 'proposals', 'repos', 'planning', 'planning_sessions', 'sessions', 'statuses']) assert.ok(key in group, key);
+    for (const key of ['programme', 'priority', 'dormant', 'finished', 'goals', 'phases', 'current_phase', 'repos', 'planning', 'planning_sessions', 'sessions', 'statuses']) assert.ok(key in group, key);
+    assert.equal('proposals' in group, false, 'a programme holds no proposals: they wait in the areas');
   });
 
   it('collects current disk state and retry times at the page observation clock', async (t) => {
@@ -2815,19 +2822,18 @@ describe('collectPage', () => {
     assert.equal(data.merges.landings.length, 0);
     assert.equal(data.intake.repos[0].new_errors, 1);
     assert.deepEqual(data.intake.repos[0].loud_lines, [{ message: 'loud', fingerprint: 'abc', count: '41x 500' }]);
-    assert.equal(data.intake.proposals, 1);
-    assert.equal(data.intake.unhandled, 2);
+    assert.equal(data.intake.proposals, 3, 'every area\'s direct files, not an archive, the old root or a programme\'s proposals/');
+    assert.deepEqual(data.intake.proposal_files.newest_names, ['memoro-two', 'memoro-three', 'mc-one']);
     assert.equal(data.intake.other_intake, 1);
-    assert.equal(data.programmes.programmes.find((group) => group.programme === 'mc').proposals, 2,
-      'the programme count includes its direct files, not its archive');
+    const proposalsRow = data.maintenance.sources.find((source) => source.id === 'proposals');
+    assert.deepEqual(proposalsRow.groups.map((group) => [group.label, group.count]), [['memoro/trust', 2], ['memoro-cli/system', 1]]);
     let json = '';
     await page(['--json'], {
       collect: async () => data,
       stdout: { write: (text) => { json += text; } },
       checkAndPrintFreshInstall: async () => {},
     });
-    assert.equal(JSON.parse(json).programmes.programmes.find((group) => group.programme === 'mc').proposals, 2,
-      'mc --json carries the same programme count');
+    assert.equal(JSON.parse(json).intake.proposals, 3, 'mc --json carries the same count');
     assert.deepEqual(data.programmes.programmes.flatMap((g) => g.goals).map((goal) => [goal.programme, goal.name, goal.status]), [['mc', 'mc-ui', 'ready']]);
     assert.equal(data.prs.items.find((pr) => pr.number === 440).branch, 'mc-ui');
     assert.equal('no_workarea' in data.programmes, false);

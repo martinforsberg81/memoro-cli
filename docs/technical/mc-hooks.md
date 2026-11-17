@@ -188,7 +188,7 @@ door is `src/mc/commands/hook.js`; `tests/mc/hooks.test.js` holds both.
 ## `mc hook stop`
 
 A goal review (`MC_ROLE=review-session:goal`, with MC_GOAL) cannot end while
-the goal remains in review, or without a proposal written in its programme's
-proposals directory since MC_SESSION_STARTED. It names each missing act. A
+the goal remains in review, or without a proposal written in an area's
+`~/mc/areas/<repo>/<area>/proposals/` since MC_SESSION_STARTED. It names each missing act. A
 goal that cannot be read does not hold the session, and a missing start time
 disables the proposal-time check. Other sessions are not held.

@@ -95,6 +95,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, rmdirSy
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
+import { AREAS_HOME } from './area-proposals.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos } from './brief-collect.js';
@@ -834,8 +835,8 @@ function positivelyFinished(text) {
 /**
  * What names a scratch session (S-whole): the text of every goal's GOAL.json and LOG.md under
  * `programs/<programme>/goals/<goal>/`, unless the goal's GOAL.json positively says it is done or dropped,
- * and of every waiting proposal (`proposals/*.md` under the work root and under each programme; `archive/`
- * is not read). A goal whose GOAL.json is missing or does not parse is read as unfinished: what it names is
+ * and of every waiting proposal (`areas/<repo>/<area>/proposals/*.md` under the work root; `archive/` is not
+ * read). A goal whose GOAL.json is missing or does not parse is read as unfinished: what it names is
  * kept, and nothing else is held. A file that exists but cannot be read is recorded as `unreadable`, and then
  * nothing is judged unreferenced.
  */
@@ -866,7 +867,13 @@ export function gatherScratchReferences(roots) {
       } catch (error) { unreadable(`goal ${label}: ${message(error)}`); }
     }
   }
-  for (const dir of [join(roots.root, 'proposals'), ...programmes.map((programme) => join(programs, programme, 'proposals'))]) {
+  const areas = join(roots.root, AREAS_HOME);
+  const folders = [];
+  const subdirs = (dir) => entriesOf(dir).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name);
+  try {
+    for (const repo of subdirs(areas)) for (const slug of subdirs(join(areas, repo))) folders.push(join(areas, repo, slug, 'proposals'));
+  } catch (error) { unreadable(`areas in ${shortPath(areas)}: ${message(error)}`); }
+  for (const dir of folders) {
     let entries = [];
     try { entries = entriesOf(dir); } catch (error) { unreadable(`proposals in ${shortPath(dir)}: ${message(error)}`); continue; }
     for (const entry of entries) {

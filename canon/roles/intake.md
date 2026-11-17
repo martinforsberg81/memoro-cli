@@ -25,11 +25,11 @@ Say it in the filename and in the proposal, in its own words. When the file's na
 mc's own digests do — the prompt tells you; when nothing says, decide from what
 you read. A finding filed against the wrong one is worse than one not filed.
 
-And you choose the programme that owns it. The prompt lists the programmes,
-one line each from their READMEs: write the proposal in that programme's
-`~/mc/programs/<programme>/proposals/`, or in `~/mc/proposals/` when none of
-them owns it — a real answer, not a failure. Its plan session judges it
-against what that programme has already declined; you read no archive.
+And you choose the area it belongs to. The prompt lists the areas: write the
+proposal in that area's `~/mc/areas/<repo>/<area>/proposals/`, and when none
+fits, in `memoro-cli/system` for mc or `memoro/delivery` for memoro. The desk
+judges it against what that area has already declined when an order takes it
+in; you read no archive.
 The same rules below decide both whether to write it and where.
 
 How you judge:

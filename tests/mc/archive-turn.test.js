@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { archiveDue, archiveName, archiveOnOk, archiveReadPrompt, archivedGoals, archiveStatePath, failuresSinceItem, finishDestination, keepReading, moveProposals, pendingDestination, noteDestination, openRestrictedItem, parseWriteBack, readArchiveState, recordArchiveFailure, statedProgrammes } from '../../src/mc/archive-turn.js';
 import { itemDirectory } from '../../src/mc/desk-items.js';
+import { FALLBACK_AREAS, pageAreaOf } from '../../src/mc/area-proposals.js';
 import { renderGoal } from '../../src/mc/goals.js';
 
 /**
@@ -186,7 +187,7 @@ test('archive turn: a programme with restricted data opens a reserved item at on
   assert.match(brief, /^## Vad det gäller\n/u);
 });
 
-test('archive turn: proposals move with a first line naming the programme, and never over a file already there', () => {
+test('archive turn: a legacy programme\'s proposals move to an area with a first line naming the programme, and never over a file already there', () => {
   const s = finished({ [`${HOME}/prog/proposals/a.md`]: 'A\n', [`${HOME}/prog/proposals/b.md`]: 'B\n', [`${HOME}/prog/proposals/notes.txt`]: 'x', [`${HOME}/prog/proposals/.hidden.md`]: 'h', '/pr/a.md': 'taken\n', '/pr/prog-a.md': 'taken too\n' });
   const moved = moveProposals({ home: HOME, programme: 'prog', target: '/pr', list: s.list, read: s.read, write: s.write, remove: s.remove, exists: s.exists });
   assert.deepEqual(moved, ['a.md', 'b.md']);
@@ -195,10 +196,22 @@ test('archive turn: proposals move with a first line naming the programme, and n
   assert.match(s.files['/pr/prog-2-a.md'], /^From programme prog, which was archived with these still open\.\n\nA\n$/u);
   assert.match(s.files['/pr/b.md'], /^From programme prog,/u);
   assert.deepEqual(Object.keys(s.files).filter((path) => path.startsWith(`${HOME}/prog/proposals/`)).sort(), [`${HOME}/prog/proposals/.hidden.md`, `${HOME}/prog/proposals/notes.txt`]);
+  // The area is asked for only when something is to move: naming it may read the repositories.
+  let asked = 0;
+  const none = finished();
+  assert.deepEqual(moveProposals({ home: HOME, programme: 'prog', target: () => { asked += 1; return '/pr'; }, list: none.list, read: none.read, write: none.write, remove: none.remove, exists: none.exists }), []);
+  assert.equal(asked, 0);
+});
+
+test('archive turn: the area a legacy programme\'s proposals go to is the page-area its record names, else memoro-cli/system', () => {
+  const repos = [{ name: 'memoro', areas: [{ id: 'keys', page: 'docs/technical/areas/trust.md' }, { id: 'rules', questions: [{}] }] }];
+  assert.equal(pageAreaOf('memoro/keys', repos), 'memoro/trust', 'the area id names its page, and the page is the area');
+  for (const ref of ['memoro/rules', 'memoro/none', 'memoro-cli/system', null, undefined, 'nonsense']) assert.equal(pageAreaOf(ref, repos), null, String(ref));
+  assert.equal(FALLBACK_AREAS.mc, 'memoro-cli/system');
 });
 
 /** `archiveOnOk` over a store, with an `archive` that the test supplies. */
-const onOk = (s, archive, extra = {}) => archiveOnOk({ programme: 'prog', home: HOME, restrictedDir: '/r/prog', proposalsHome: '/pr', list: s.list, read: s.read, write: s.write, remove: s.remove, exists: s.exists, archive, root: ROOT, writeJson: s.writeJson, lock: s.lock, ...extra });
+const onOk = (s, archive, extra = {}) => archiveOnOk({ programme: 'prog', home: HOME, restrictedDir: '/r/prog', proposalsTarget: (record) => { s.targets = [...(s.targets || []), record.end]; return '/pr'; }, list: s.list, read: s.read, write: s.write, remove: s.remove, exists: s.exists, archive, root: ROOT, writeJson: s.writeJson, lock: s.lock, ...extra });
 
 test('archive turn: on OK the archive runs fenced, the destination is recorded, the record is set done there and the state cleared', async () => {
   const s = finished({ [`${HOME}/prog/proposals/p.md`]: 'P\n' });
@@ -225,6 +238,7 @@ test('archive turn: on OK the archive runs fenced, the destination is recorded, 
   assert.deepEqual(result, { ok: true, destination: '/arch/prog-2' });
   assert.equal(seen.fence, null);
   assert.match(s.files['/pr/p.md'], /^From programme prog/u, 'proposals moved before the archive');
+  assert.deepEqual(s.targets, ['Done when it holds.'], 'the target is asked once, of the programme\'s record');
   assert.equal(JSON.parse(s.files['/arch/prog-2/PROGRAMME.json']).state, 'done');
   assert.ok(locked.includes('programme-state'), 'the real record writer uses the archive caller lock and root');
   assert.equal(stateOf(s).destination, null);

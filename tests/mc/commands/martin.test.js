@@ -453,8 +453,9 @@ describe('mc martin brief', () => {
     assert.match(out, /Failed: delta\/p2 \(preparation failed 0 times, decision 1 time\)\./u);
     assert.match(out, /Today \(UTC 2026-11-14\): \$0\.0000\. Last seven days: \$0\.0000\. Ceiling: off\./u);
   });
-  it('ends with Where a new thing goes: the UTC date of generated_at, the name shape, both destinations and one line per programme', async () => {
+  it('ends with Where a new thing goes: the UTC date of generated_at, the name shape, the areas with the fallbacks and one line per programme', async () => {
     const d = openingStore();
+    mkdirSync(join(d.env.MC_WORK_ROOT, 'areas', 'memoro', 'trust', 'proposals'), { recursive: true });
     for (const [name, readme] of [['alpha', '# Alpha\n\nAlpha aim.\n'], ['beta', ''], ['gamma', 'Gamma line\n']]) {
       mkdirSync(join(d.env.MC_WORK_ROOT, 'programs', name), { recursive: true });
       writeFileSync(join(d.env.MC_WORK_ROOT, 'programs', name, 'README.md'), readme);
@@ -464,14 +465,17 @@ describe('mc martin brief', () => {
     const part = out.slice(out.indexOf('## Where a new thing goes'));
     assert.ok(out.indexOf('## What the system changed') < out.indexOf('## Where a new thing goes'), 'after What the system changed');
     assert.equal(out.split('\n').filter((line) => line.startsWith('## ')).at(-1), '## Where a new thing goes', 'the last part');
-    assert.match(part, /^Today is 2026-11-14\. A proposal is a file named `2026-11-14-<mc\|memoro>-<slug>\.md`, in `.*\/programs\/<programme>\/proposals\/` when a programme owns it, else in `.*\/mc\/proposals`\./mu);
-    assert.ok(part.includes(`\`${d.home}/<programme>/proposals/\``), 'the programmes destination is the programs home, absolute');
-    assert.ok(part.includes(`else in \`${join(d.env.MC_WORK_ROOT, 'proposals')}\``), 'the fallback destination is absolute');
+    const areas = join(d.env.MC_WORK_ROOT, 'areas');
+    assert.ok(part.includes(`Today is 2026-11-14. A proposal is a file named \`2026-11-14-<mc|memoro>-<slug>.md\`, in \`${areas}/<repo>/<area>/proposals/\` of the area it concerns. `
+      + 'With no clear area it goes to `memoro-cli/system` when mc would change and to `memoro/delivery` when memoro would change.'), part);
+    assert.ok(part.includes('\nThe areas:\n- memoro-cli/system\n- memoro/delivery\n- memoro/trust\n'), part);
+    assert.ok(!part.includes('/proposals/` when a programme'), 'no programme is a place for a proposal');
     assert.ok(part.includes('\n- alpha — Alpha aim.\n- beta — (no description)\n- gamma — Gamma line\n'), part);
     const json = io(); assert.equal(await run(['brief', '--json'], { ...json, env: d.env, home: d.home, now: () => new Date('2026-11-14T23:30:00.000Z') }), 0, json.out.stderr);
     const { placing } = JSON.parse(json.out.stdout);
     assert.deepEqual(placing, {
-      date: '2026-11-14', file_name: '2026-11-14-<mc|memoro>-<slug>.md', programs_path: d.home, proposals_path: join(d.env.MC_WORK_ROOT, 'proposals'),
+      date: '2026-11-14', file_name: '2026-11-14-<mc|memoro>-<slug>.md', programs_path: d.home, areas_path: areas,
+      areas: ['memoro-cli/system', 'memoro/delivery', 'memoro/trust'], fallbacks: { mc: 'memoro-cli/system', memoro: 'memoro/delivery' },
       programmes: [{ name: 'alpha', line: 'Alpha aim.' }, { name: 'beta', line: '(no description)' }, { name: 'gamma', line: 'Gamma line' }],
     });
     assert.equal(renderOpening(JSON.parse(json.out.stdout)), out);
@@ -479,7 +483,7 @@ describe('mc martin brief', () => {
   it('says _none_ when there are no programmes', async () => {
     const d = openingStore();
     const text = io(); assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
-    assert.ok(text.out.stdout.endsWith('The programmes, one line each:\n_none_\n'), text.out.stdout.slice(-200));
+    assert.ok(text.out.stdout.endsWith('The programmes (orders, not places for a proposal), one line each:\n_none_\n'), text.out.stdout.slice(-200));
     const json = io(); assert.equal(await run(['brief', '--json'], { ...json, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, json.out.stderr);
     assert.deepEqual(JSON.parse(json.out.stdout).placing.programmes, []);
   });

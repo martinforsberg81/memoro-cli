@@ -428,7 +428,7 @@ export function statusRollup(statuses = {}) {
 }
 
 function programmeLine(c, wide, group, expand, numbered = false) {
-  const metadata = expand ? ` · ${group.goals?.length || 0} goal${group.goals?.length === 1 ? '' : 's'}${group.proposals ? ` · ${group.proposals} proposal${group.proposals === 1 ? '' : 's'}` : ''}` : '';
+  const metadata = expand ? ` · ${group.goals?.length || 0} goal${group.goals?.length === 1 ? '' : 's'}` : '';
   // The goals done or dropped and still under `goals/`: the count `a` shows.
   const done = group.finished ?? (group.goals || []).filter((goal) => ['done', 'dropped'].includes(goal.stage)).length;
   const facts = `${group.priority ? `priority ${group.priority}` : ''}${done ? `${group.priority ? ' · ' : ''}${done} done` : ''}${group.record_invalid ? `${group.priority || done ? ' · ' : ''}record invalid` : ''}${metadata}`.replace(/^ · /u, '');
@@ -673,7 +673,8 @@ export function pipelineStages(data) {
   const groups = data.programmes?.programmes || [];
   const goals = groups.flatMap(group => group.goals || []);
   const sessions = data.runner?.sessions || [];
-  const proposals = (data.intake?.proposals || 0) + groups.reduce((n, group) => n + (group.proposals || 0), 0);
+  // Every proposal waiting in an area (`~/mc/areas/<repo>/<area>/proposals/`), as the intake section counts them.
+  const proposals = data.intake?.proposals || 0;
   const interactive = Object.values(data.sessions?.planning_sessions || {}).reduce((n, list) => n + (list?.length || 0), 0);
   const ofKind = (kind) => sessions.filter(session => session.kind === kind).length;
   const rounds = (data.merges?.repos || []).reduce((n, repo) => n + (repo.landings?.length || 0), 0);

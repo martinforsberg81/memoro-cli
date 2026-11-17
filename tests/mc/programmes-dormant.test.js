@@ -66,7 +66,6 @@ const section = () => programmesSection({
   planning: { planned: SESSION },
   planningSessions: { planned: [SESSION] },
   programmes: ['empty', 'mc'],
-  proposalCounts: { empty: 2, mc: 1 },
 });
 
 describe('dormant programmes in the collector', () => {
@@ -101,22 +100,15 @@ describe('programmes with nothing under way on the page', () => {
     for (const name of ['empty', 'done-only']) assert.ok(!framed(lines, name), `${name} is folded`);
   });
 
-  it('shows proposal counts on a heading, pluralizes, omits zero and yields on narrow lines', () => {
+  it('shows no proposal count on a heading: proposals wait in the areas, not in a programme', () => {
     const programmes = programmesSection({
       goalRows: GOALS.slice(0, 1),
-      programmes: ['empty', 'mc', 'zero'],
-      proposalCounts: { mc: 2, empty: 1 },
+      programmes: ['empty', 'mc'],
       planningSessions: { mc: [{ ...SESSION, tool: 'codex' }] },
     });
     const wide = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW, expand: true }));
-    assert.match(wide.find((line) => line.startsWith('  ┌─ mc ')), /2 proposals/u);
     assert.ok(wide.some((line) => /PLAN.*codex/u.test(line)));
-    assert.match(wide.find((line) => line.startsWith('  ┌─ empty ')), /1 proposal/u);
-    assert.doesNotMatch(wide.find((line) => line.startsWith('  ┌─ zero ')), /proposal/u);
-    const narrow = programmesOf(renderPageLines(pageData({ programmes }), { columns: 60, now: NOW, expand: true }));
-    const mc = narrow.find((line) => line.startsWith('  ┌─ mc '));
-    assert.match(mc, /2 proposals/u);
-    assert.ok(mc.length <= 60, mc);
+    for (const name of ['mc', 'empty']) assert.doesNotMatch(wide.find((line) => line.startsWith(`  ┌─ ${name} `)), /proposal/u, name);
   });
 
   it('folds a programme with nothing under way, and says "1 programme" for one', () => {
@@ -171,18 +163,17 @@ describe('mc programs', () => {
     assert.ok(!('projects' in byName.mc), 'no project count');
     assert.equal(byName['goal-only'].goals, 1);
     assert.deepEqual(byName.planned.plan_sessions, { claude: 1 });
-    assert.equal(byName.empty.proposals, 2);
-    assert.equal(byName.mc.proposals, 1);
+    assert.ok(!('proposals' in byName.mc), 'no proposal count: proposals are the areas\'');
   });
 
   it('says it in the page’s words, one line each', () => {
     const lines = listingText(programmesListing(read())).trimEnd().split('\n');
     assert.equal(lines[0], 'programmes — 3 active · 2 dormant');
     assert.equal(lines.length, 6);
-    assert.match(lines[1], /^ {2}done-only +active +priority 0 +memoro +1 goal · ready 1 +0 proposals +no plan session$/u);
-    assert.match(lines[2], /^ {2}empty +dormant +priority 0 +memoro +no goal +2 proposals +no plan session$/u);
-    assert.match(lines[3], /^ {2}goal-only +active +priority 0 +memoro +1 goal · blocked 1 +0 proposals +no plan session$/u);
-    assert.match(lines[5], /^ {2}planned +dormant +priority 0 +— +no goal +0 proposals +plan claude 1$/u);
+    assert.match(lines[1], /^ {2}done-only +active +priority 0 +memoro +1 goal · ready 1 +no plan session$/u);
+    assert.match(lines[2], /^ {2}empty +dormant +priority 0 +memoro +no goal +no plan session$/u);
+    assert.match(lines[3], /^ {2}goal-only +active +priority 0 +memoro +1 goal · blocked 1 +no plan session$/u);
+    assert.match(lines[5], /^ {2}planned +dormant +priority 0 +— +no goal +plan claude 1$/u);
   });
 
   it('prints the list, or the same as data with --json', async () => {
@@ -216,8 +207,6 @@ describe('mc programs', () => {
       writeFileSync(join(goal, 'LOG.md'), '');
       mkdirSync(join(root, 'runner', 'foreground'), { recursive: true });
       writeFileSync(join(root, 'runner', 'foreground', '1.json'), JSON.stringify({ ...SESSION, pid: process.pid }));
-      mkdirSync(join(root, 'programs', 'empty', 'proposals'), { recursive: true });
-      writeFileSync(join(root, 'programs', 'empty', 'proposals', 'first.md'), 'proposal');
       const repo = { name: 'memoro', git: root, path: root };
       const { section: read, homes } = readProgrammes({
         env: { MC_WORK_ROOT: root, MC_HOME: join(root, 'home') },
@@ -229,7 +218,6 @@ describe('mc programs', () => {
       assert.deepEqual(homes, { empty: ['memoro'] });
       const verdict = Object.fromEntries(read.programmes.map((group) => [group.programme, group.dormant]));
       assert.deepEqual(verdict, { empty: true, 'goal-only': false, planned: true });
-      assert.equal(read.programmes.find((group) => group.programme === 'empty').proposals, 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

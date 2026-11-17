@@ -324,5 +324,5 @@ export function deployMendPrompt({ entry, branch, worktrees, root }) {
     `${what}.\n${rows}\n` +
     `Work on ${branch} in ${worktrees.map((tree) => `${tree.repo}: ${tree.path}`).join(', ')}. Runner root: ${root}.\n` +
     `Previous outcome: ${entry.reason || 'first attempt'}; session log: ${entry.session_log || 'none'}.\n` +
-    `Write a proposal in ~/mc/programs/mc-tests/proposals/ naming the fault of mc deploy's design. End with a published PR (mc publish) or mc repo mend deploy ${entry.id} repaired --reason "<what was repaired>". Never run mc deploy.`;
+    `Write a proposal in ~/mc/areas/memoro-cli/system/proposals/ naming the fault of mc deploy's design. End with a published PR (mc publish) or mc repo mend deploy ${entry.id} repaired --reason "<what was repaired>". Never run mc deploy.`;
 }

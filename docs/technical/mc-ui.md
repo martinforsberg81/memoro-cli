@@ -50,7 +50,7 @@ programme's view — is drawn in the one frame DESK has: a top rule
 `┌─ TITLE  facts ───── key ┐` with the title in bold, the facts after two spaces
 (joined with ` · `) and the key that opens the section at the right, then the rows
 at indent 4, then the bottom rule `└────┘`. Each programme is its own frame, with
-its name as the title and its goal count, priority and proposals as the facts. A
+its name as the title and its goal count and priority as the facts. A
 frame with nothing beyond its title and facts — MERGE and DEPLOY with no detail, the
 folded `<n> programmes with nothing under way`, DEV with none running — is its top
 rule alone, with no bottom rule. There are no loose headings, no cyan rules and no
@@ -85,10 +85,10 @@ which have no header of their own. A programme's own view keeps the header and t
 `a` has always drawn a programme (a frame with its phases, goals, sessions and pull
 requests), in name order, not in the horizons' order. Its heading is its number and name in
 the title and, in the top rule, its horizon (`horizon 5`, the number the HORIZONS row gives, or
-`no horizon`), then its phase (`phase 2 of 4`, `draft`), its goal count, proposals, priority
+`no horizon`), then its phase (`phase 2 of 4`, `draft`), its goal count, priority
 and done count; `  ·  ` sets the horizon apart from the name and from the phase, and ` · `
-joins the rest: `28  inbox-library-chat-repairs  ·  no horizon  ·  phase 1 of 2 · 2 goals · 7 proposals`
-(`programmeHeading`, `page-horizons.js`). Held, blocked and malformed goals, the sessions at work on a goal (under that
+joins the rest: `28  inbox-library-chat-repairs  ·  no horizon  ·  phase 1 of 2 · 2 goals`
+(`programmeHeading`, `page-horizons.js`); a programme holds no proposals, which wait in the areas. Held, blocked and malformed goals, the sessions at work on a goal (under that
 goal) and the programme's plan sessions are drawn in its frame, so nothing is repeated
 in a separate attention list. Something under way is a `draft` record, an unfinished goal, a
 session, an open pull request or an item needing attention. The programmes with nothing under
@@ -105,7 +105,7 @@ reader, which `collectPage` wires and `maintenanceSection` calls:
 | source | what waits | oldest | verb |
 |---|---|---|---|
 | User feedback | no reader: `no source — memoro's product feedback was retired (migration 0213)` | — | — |
-| Proposals | the files directly in `~/mc/proposals` (the new ones, whose programme is not yet named) and in each `programs/<programme>/proposals/` | the file name's date, else its mtime | `mc plan` |
+| Proposals | the `.md` files directly in each area's `~/mc/areas/<repo>/<area>/proposals/` (every area folder on disk; no archive), counted and aged by area | the file name's date, else its mtime | `mc proposals` |
 | Lessons | `mc martin lessons`' own list: open, in a goal, late (older than 14 days) and landed this week | the oldest open or carried lesson | `mc martin` |
 | Errors | the helper's newest digest of each repository: new errors, critical and high | when the digest was collected | `mc helper --intake` |
 | Tests | the last full test of each repository, from the nightly record | the oldest run | `mc gate` |
@@ -146,8 +146,7 @@ programmes the frame is not drawn.
 
 **The maintenance view** (`m` or `manager`, `maintenanceView`, `page-overview.js`) draws the
 overview's header rows (`headerRows`), the warnings and the same frame, nothing else (FIGURES 24 h
-and PIPELINE are the operations view's), with each source's detail below its row: proposals by programme, the
-new ones by name; lessons by state (open and in a goal by name); errors, tests and dependencies by
+and PIPELINE are the operations view's), with each source's detail below its row: proposals by area, each with its count and oldest; lessons by state (open and in a goal by name); errors, tests and dependencies by
 repository, each with its age; intake by file; areas as a table of name, repository, when its page
 last changed on `origin/main` (`today`, `1 day ago`) and its aims (`3 aims`, `1 aim`, `no aim`); the
 strays' items. The aims are the top-level bullets under the page's `## Aim`; `No aim stated yet.`
@@ -339,9 +338,9 @@ Unowned sessions and directories remain visible as strays.
 ### MAINTENANCE
 
 Three bold orange subheadings summarize maintenance without listing programmes,
-proposals or individual errors. Proposals shows New / unassigned (direct files in
-`~/mc/proposals/`) and Unhandled (pending proposals across programme directories,
-excluding archives). Other intake counts direct inbox files other than collector
+proposals or individual errors. Proposals counts the direct `.md` files in every
+area's `~/mc/areas/<repo>/<area>/proposals/` (`intake.proposals`, with
+`by_system` and the newest names), archives excluded. Other intake counts direct inbox files other than collector
 digests; directories and archived files do not count.
 
 Errors has New, Critical and High columns per repository, with each digest's age.
@@ -909,7 +908,7 @@ never wider; the count and the marks are centred in it. Boxes are joined by
 when that fits the hero frame's width less its indent; otherwise they are joined
 by ` ▶ `; otherwise three and three on two rows, each keeping its arrows with
 ` ──▶ ` when both rows fit and ` ▶ ` when not.
-The count is the waiting proposals (programmes and the root) for proposals, and
+The count is the proposals waiting in the areas for proposals, and
 the goals in the stage otherwise, followed by `⚑n` for goals waiting on Martin
 and `⊘n` for blocked goals there. The marks are one per session working in the
 stage, in the stage's colour: build and repair sessions on build (a repair in its own

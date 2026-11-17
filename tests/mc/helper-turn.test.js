@@ -13,9 +13,9 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { proposalSystem } from '../../src/mc/brief-collect.js';
-import {
-  intakeArchiveDir, intakeDir, listAllProposals, programmeProposalsArchiveDir, programmeProposalsDir, proposalsDir,
-} from '../../src/mc/helper-collect.js';
+import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
+import { areaProposalsArchiveDir, areaProposalsDir, listAllProposals } from '../../src/mc/area-proposals.js';
+import { collectProposalCounts, listingText as proposalsListing } from '../../src/mc/commands/proposals.js';
 import {
   describeTurn, drainIntake, helperGround, helperPrompt, programmeRoutes, repoOfFile, runHelperTurn,
 } from '../../src/mc/helper-turn.js';
@@ -54,13 +54,17 @@ function env() {
   return { MC_WORK_ROOT: root, MC_REPOS_HOME: join(root, 'repos') };
 }
 
+/** The area the stub turn writes in: memoro's delivery page, where a finding about memoro with no clearer area goes. */
+const DELIVERY = (e) => areaProposalsDir('memoro', 'delivery', e);
+
 /** A session that writes what a real turn writes, and reports how it was called. */
 function fakeSession(seen, { write = PROPOSAL, status = 0, timedOut = false, stdout = CLAUDE_JSON } = {}) {
   return async (call) => {
     Object.assign(seen, call);
-    // The turn stands in `intake/` and writes into `../proposals/` — its own
-    // room beside intake, not inside the material it reads.
-    if (write) writeFileSync(join(call.cwd, '..', 'proposals', '2026-08-29-expose-operations.md'), write);
+    // The turn stands in `intake/` and writes into an area's `proposals/`
+    // under `../areas/` — not inside the material it reads.
+    const dir = join(call.cwd, '..', 'areas', 'memoro', 'delivery', 'proposals');
+    if (write) { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, '2026-08-29-expose-operations.md'), write); }
     return { status, stdout, stderr: '', timedOut };
   };
 }
@@ -200,24 +204,24 @@ describe('the helper turn', () => {
 
   it('counts only what this turn added, not what was already waiting', async () => {
     const e = env();
-    mkdirSync(proposalsDir(e), { recursive: true });
-    writeFileSync(join(proposalsDir(e), '2026-08-28-older.md'), '# An older proposal\n');
+    mkdirSync(DELIVERY(e), { recursive: true });
+    writeFileSync(join(DELIVERY(e), '2026-08-28-older.md'), '# An older proposal\n');
     const { result } = await turn({}, { env: e, session: { write: PROPOSAL } });
-    assert.deepEqual(result.wrote.map((p) => p.file), ['2026-08-29-expose-operations.md']);
-    assert.equal(result.waiting.length, 2);
-    assert.ok(result.wrote[0].path.startsWith(proposalsDir(e)));
+    assert.deepEqual(result.wrote.map((p) => [p.area, p.file]), [['memoro/delivery', '2026-08-29-expose-operations.md']]);
+    assert.deepEqual(result.waiting.map((p) => p.file), ['2026-08-28-older.md', '2026-08-29-expose-operations.md']);
+    assert.ok(result.wrote[0].path.startsWith(DELIVERY(e)));
   });
 
   it('names the directory it may write in, which is this machine\'s and not the default', async () => {
     const e = env();
     const { seen } = await turn({}, { env: e });
-    assert.ok(seen.args[1].includes(proposalsDir(e)), 'the turn is told where it stands');
+    assert.ok(seen.args[1].includes(`\`${join(e.MC_WORK_ROOT, 'areas')}/<repo>/<area>/proposals/\``), 'the turn is told where it may write');
   });
 
   it('tells the turn what is already proposed, so it does not propose it twice', async () => {
     const e = env();
-    mkdirSync(proposalsDir(e), { recursive: true });
-    writeFileSync(join(proposalsDir(e), '2026-08-28-older.md'), '# An older proposal\n');
+    mkdirSync(DELIVERY(e), { recursive: true });
+    writeFileSync(join(DELIVERY(e), '2026-08-28-older.md'), '# An older proposal\n');
     const { seen } = await turn({}, { env: e });
     assert.match(seen.args[1], /PROPOSALS ALREADY WAITING[\s\S]*2026-08-28-older\.md/u);
   });
@@ -361,10 +365,15 @@ describe('the ground', () => {
       asked.push(args[0]);
       if (args[0] === 'fetch') return '';
       if (args[1] === 'origin/main:docs/project/project_log.md') return '| 2026-08-26 | msr-core |';
+      if (args[1] === 'origin/main:.mc/areas.json') return JSON.stringify({ schema_version: 1, areas: [
+        { id: 'trust', name: 'Trust', covers: 'Keys.', standards: [], paths: [], questions: [], page: 'docs/technical/areas/trust.md' },
+        { id: 'keys', name: 'Keys', covers: 'Keys again.', standards: [], paths: [], questions: [], page: 'docs/technical/areas/trust.md' },
+      ] });
       return null;
     };
     const goals = () => [goal('mc-x', 'build', 'Step 2'), goal('mc-gone', 'done', 'nothing')];
     const ground = await helperGround({ env: {}, repos: list, git, goals });
+    assert.deepEqual(ground.areas, ['memoro/trust'], 'the area pages memoro declares on origin/main, one per page');
     assert.equal(ground.goals.length, 1, 'a finished goal is not listed');
     assert.deepEqual(ground.goals[0], { programme: 'mc', goal: 'mc-x', stage: 'build', status: 'ready', title: 'The mc-x goal', next: 'Step 2' });
     assert.match(ground.projectLog, /msr-core/u);
@@ -392,7 +401,6 @@ describe('draining the inbox', () => {
   function inbox(names) {
     const e = env();
     mkdirSync(intakeDir(e), { recursive: true });
-    mkdirSync(proposalsDir(e), { recursive: true });
     // An archive already, and a directory rather than a file: it is skipped,
     // not drained and not moved.
     mkdirSync(join(intakeDir(e), 'decisions-archive'), { recursive: true });
@@ -480,29 +488,56 @@ describe('draining the inbox', () => {
   });
 });
 
-describe('proposals per programme', () => {
+describe('proposals per area', () => {
   const programme = (e, name, readme) => {
     mkdirSync(join(e.MC_WORK_ROOT, 'programs', name), { recursive: true });
     if (readme !== undefined) writeFileSync(join(e.MC_WORK_ROOT, 'programs', name, 'README.md'), readme);
   };
 
-  it('lists the root and every programme\'s proposals/, and no archive', () => {
+  it('lists every area\'s proposals/ on disk, by area then name, and no archive, no root and no programme folder', () => {
     const e = env();
-    programme(e, 'mc');
-    programme(e, 'memoro');
-    mkdirSync(programmeProposalsArchiveDir('mc', e), { recursive: true });
-    mkdirSync(proposalsDir(e), { recursive: true });
-    writeFileSync(join(proposalsDir(e), '2026-08-27-mc-orphan.md'), 'x\n');
-    writeFileSync(join(programmeProposalsDir('mc', e), '2026-08-28-mc-own.md'), 'x\n');
-    writeFileSync(join(programmeProposalsArchiveDir('mc', e), '2026-08-01-mc-declined.md'), 'Utfall: ej aktuellt — no\n');
-    assert.equal(programmeProposalsArchiveDir('mc', e), join(e.MC_WORK_ROOT, 'programs', 'mc', 'proposals', 'archive'));
-    assert.deepEqual(listAllProposals(e).map((p) => [p.programme, p.file]), [
-      [null, '2026-08-27-mc-orphan.md'],
-      ['mc', '2026-08-28-mc-own.md'],
+    assert.deepEqual(listAllProposals(e), [], 'no areas home is no proposals, not an error');
+    mkdirSync(areaProposalsArchiveDir('memoro-cli', 'system', e), { recursive: true });
+    mkdirSync(areaProposalsDir('memoro', 'trust', e), { recursive: true });
+    // An area folder whose page is no longer declared is still listed: listing reads the disk, not git.
+    mkdirSync(areaProposalsDir('memoro', 'retired-page', e), { recursive: true });
+    writeFileSync(join(areaProposalsDir('memoro-cli', 'system', e), '2026-08-28-mc-own.md'), 'x\n');
+    writeFileSync(join(areaProposalsDir('memoro-cli', 'system', e), '2026-08-27-mc-older.md'), 'x\n');
+    writeFileSync(join(areaProposalsDir('memoro', 'trust', e), '2026-08-29-memoro-keys.md'), 'x\n');
+    writeFileSync(join(areaProposalsDir('memoro', 'retired-page', e), '2026-08-20-memoro-old.md'), 'x\n');
+    // A name is all mc reads: a file with no heading counts, a file that is not markdown does not.
+    writeFileSync(join(areaProposalsDir('memoro', 'trust', e), 'notes.txt'), 'not markdown\n');
+    writeFileSync(join(areaProposalsArchiveDir('memoro-cli', 'system', e), '2026-08-01-mc-declined.md'), 'Utfall: ej aktuellt — no\n');
+    mkdirSync(join(e.MC_WORK_ROOT, 'proposals'), { recursive: true });
+    writeFileSync(join(e.MC_WORK_ROOT, 'proposals', '2026-08-26-mc-root.md'), 'x\n');
+    mkdirSync(join(e.MC_WORK_ROOT, 'programs', 'mc', 'proposals'), { recursive: true });
+    writeFileSync(join(e.MC_WORK_ROOT, 'programs', 'mc', 'proposals', '2026-08-26-mc-programme.md'), 'x\n');
+    assert.equal(areaProposalsArchiveDir('memoro-cli', 'system', e), join(e.MC_WORK_ROOT, 'areas', 'memoro-cli', 'system', 'proposals', 'archive'));
+    assert.deepEqual(listAllProposals(e).map((p) => [p.area, p.file]), [
+      ['memoro-cli/system', '2026-08-27-mc-older.md'],
+      ['memoro-cli/system', '2026-08-28-mc-own.md'],
+      ['memoro/retired-page', '2026-08-20-memoro-old.md'],
+      ['memoro/trust', '2026-08-29-memoro-keys.md'],
     ]);
   });
 
-  it('gives the turn the programmes, one line each, and both destinations', () => {
+  it('mc proposals counts them by area, with each area\'s path and the total', () => {
+    const e = env();
+    for (const [repo, slug, file] of [['memoro-cli', 'system', '2026-08-28-mc-a.md'], ['memoro-cli', 'system', '2026-08-29-mc-b.md'], ['memoro', 'trust', '2026-08-29-memoro-c.md']]) {
+      mkdirSync(areaProposalsDir(repo, slug, e), { recursive: true });
+      writeFileSync(join(areaProposalsDir(repo, slug, e), file), 'x\n');
+    }
+    mkdirSync(areaProposalsArchiveDir('memoro', 'trust', e), { recursive: true });
+    writeFileSync(join(areaProposalsArchiveDir('memoro', 'trust', e), '2026-08-01-memoro-done.md'), 'Utfall: x\n');
+    const summary = collectProposalCounts(e);
+    assert.deepEqual(summary, { total: 3, areas: [
+      { area: 'memoro-cli/system', count: 2, path: areaProposalsDir('memoro-cli', 'system', e) },
+      { area: 'memoro/trust', count: 1, path: areaProposalsDir('memoro', 'trust', e) },
+    ] });
+    assert.equal(proposalsListing(summary), 'proposals — 3 waiting\n  memoro-cli/system  2\n  memoro/trust       1\n  Total              3\n');
+  });
+
+  it('gives the turn the programmes as ground, and the areas with the two fallbacks as where a proposal goes', () => {
     const e = env();
     programme(e, 'mc', '# mc\n\nmc itself: the runner, the verbs and the page.\n\nMore.\n');
     programme(e, 'quiet');
@@ -511,26 +546,30 @@ describe('proposals per programme', () => {
       { name: 'mc', line: 'mc itself: the runner, the verbs and the page.' },
       { name: 'quiet', line: '(no description)' },
     ]);
-    const prompt = helperPrompt({ file: FILE, now: NOW, programmes: routes, programsPath: '/w/programs', proposalsPath: '/w/proposals' });
+    const prompt = helperPrompt({ file: FILE, now: NOW, programmes: routes, areas: ['memoro/trust'], env: { MC_WORK_ROOT: '/w' } });
     assert.match(prompt, /----- PROGRAMMES -----\n- mc — mc itself: the runner, the verbs and the page\.\n- quiet — \(no description\)\n/u);
-    assert.ok(prompt.includes('`/w/programs/<programme>/proposals/`'), 'the owning programme\'s proposals/');
-    assert.match(prompt, /it goes in `\/w\/proposals` — a valid answer for a proposal no programme owns, not a failure/u);
+    assert.ok(prompt.includes('A proposal goes in the `proposals/` of the area it concerns: `/w/areas/<repo>/<area>/proposals/`, '
+      + 'where `<repo>/<area>` is one of `memoro-cli/system`, `memoro/delivery`, `memoro/trust`. With no clear area it goes to '
+      + '`memoro-cli/system` when mc would change and to `memoro/delivery` when memoro would change.'), prompt);
+    assert.ok(!prompt.includes('/w/proposals'), 'no ownerless root is named');
+    assert.ok(!/<programme>\/proposals/u.test(prompt), 'no programme is a place for a proposal');
     assert.ok(!/archive/u.test(prompt), 'no archive is named or read');
   });
 
-  it('groups the proposals already waiting by programme', () => {
+  it('groups the proposals already waiting by area', () => {
     const prompt = helperPrompt({
-      file: FILE, now: NOW, proposalsPath: '/w/proposals',
-      proposals: [{ programme: 'mc', file: 'b.md' }, { programme: null, file: 'a.md' }, { programme: 'mc', file: 'c.md' }],
+      file: FILE, now: NOW,
+      proposals: [{ area: 'memoro/trust', file: 'b.md' }, { area: 'memoro-cli/system', file: 'a.md' }, { area: 'memoro/trust', file: 'c.md' }],
     });
-    assert.match(prompt, /PROPOSALS ALREADY WAITING -----\nno programme \(`\/w\/proposals`\):\n- a\.md\nprogramme mc:\n- b\.md\n- c\.md$/u);
+    assert.match(prompt, /PROPOSALS ALREADY WAITING -----\narea memoro-cli\/system:\n- a\.md\narea memoro\/trust:\n- b\.md\n- c\.md$/u);
   });
 
-  it('finds a proposal the turn wrote in a programme and says which programme it went to', async () => {
+  it('finds a proposal the turn wrote in an area and says which area it went to', async () => {
     const e = env();
     programme(e, 'mc', 'mc itself.\n');
-    mkdirSync(programmeProposalsDir('mc', e), { recursive: true });
-    writeFileSync(join(programmeProposalsDir('mc', e), '2026-08-28-mc-older.md'), 'x\n');
+    const system = areaProposalsDir('memoro-cli', 'system', e);
+    mkdirSync(system, { recursive: true });
+    writeFileSync(join(system, '2026-08-28-mc-older.md'), 'x\n');
     const seen = {};
     const result = await runHelperTurn({
       env: e, now: NOW, file: FILE,
@@ -538,24 +577,24 @@ describe('proposals per programme', () => {
         role: () => ROLE, launch: () => LAUNCH, ground: GROUND,
         session: async (call) => {
           Object.assign(seen, call);
-          writeFileSync(join(programmeProposalsDir('mc', e), '2026-08-29-mc-routed.md'), PROPOSAL);
+          writeFileSync(join(system, '2026-08-29-mc-routed.md'), PROPOSAL);
           return { status: 0, stdout: CLAUDE_JSON, stderr: '', timedOut: false };
         },
       },
     });
     assert.match(seen.args[1], /- mc — mc itself\./u);
-    assert.match(seen.args[1], /programme mc:\n- 2026-08-28-mc-older\.md/u);
-    assert.deepEqual(result.wrote.map((p) => [p.programme, p.file]), [['mc', '2026-08-29-mc-routed.md']]);
+    assert.match(seen.args[1], /area memoro-cli\/system:\n- 2026-08-28-mc-older\.md/u);
+    assert.match(seen.args[1], /one of `memoro-cli\/system`, `memoro\/delivery`\./u, 'the areas on disk and the fallbacks, when the ground read none');
+    assert.deepEqual(result.wrote.map((p) => [p.area, p.file]), [['memoro-cli/system', '2026-08-29-mc-routed.md']]);
     assert.equal(result.waiting.length, 2);
-    assert.equal(describeTurn(result), '1 proposal to programme mc, 2 waiting');
-    assert.equal(describeTurn({ wrote: [{ programme: null, file: '2026-08-29-mc-x.md' }], waiting: [1] }), '1 proposal to no programme (~/mc/proposals), 1 waiting');
+    assert.equal(describeTurn(result), '1 proposal to area memoro-cli/system, 2 waiting');
   });
 });
 
 describe('the proposal a turn leaves behind', () => {
   it('is a file a person and the brief can both read', async () => {
     const { env: e } = await turn();
-    const text = readFileSync(join(proposalsDir(e), '2026-08-29-expose-operations.md'), 'utf8');
+    const text = readFileSync(join(DELIVERY(e), '2026-08-29-expose-operations.md'), 'utf8');
     assert.match(text, /^---\nname: expose-operations\nrepo: memoro\nkind: project\n---\n/u);
     assert.match(text, /## Done when/u);
   });
