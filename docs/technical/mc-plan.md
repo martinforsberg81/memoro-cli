@@ -78,11 +78,12 @@ Martin's interactive session (`mc martin`); every headless role, the manager
 included, is refused (exit 2). Martin sets the state with
 `mc programs state <programme> draft|ready`.
 
-A record cannot name both a horizon and an area. An area carrier is existing
-storage for one small goal without a horizon, not an extra product planning
-level. Small work includes a single fix; a user-promise change needs a horizon.
-The create guard refuses a second ready carrier for an identified area and goal
-creation refuses a second live goal in it. Other work waits oldest first.
+A record cannot name both a horizon and an area. A repair programme (`--area`)
+orders a set of small adjustments to one area as one document, and the planner
+cuts its goals; an area may have several repair programmes open, and one may
+hold several live goals. No programme needs a horizon: Martin decides what is
+taken up and in which form, and only a change small enough to run through
+directly skips the document (Martin, 2026-11-16).
 
 `phases` says how the programme's phases run. A record without it is a
 sequential programme: a phase starts when every lower phase is finished. With

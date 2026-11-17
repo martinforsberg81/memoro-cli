@@ -475,22 +475,22 @@ describe('mc programs create for an area', () => {
     return { ...a, proposal, create: async (name) => call(['create', name, '--end', 'e', '--area', 'memoro-cli/operations', '--purpose', 'p', '--from-proposal', proposal], a.env, AREA_DEPS), stage };
   }
 
-  it('repair: a second create for an area that has an open repair programme holding a live goal is refused, exit 1, and the proposal stays where it is', async () => {
+  it('repair: a second repair programme for an area with an open one holding a live goal is made, exit 0, and the proposal moves into it', async () => {
     const a = repairArea();
     try {
       assert.equal((await call(['create', 'ops-repair', '--end', 'e', '--area', 'memoro-cli/operations', '--purpose', 'p'], a.env, AREA_DEPS)).code, 0);
       mkdirSync(join(a.home, 'ops-repair', 'goals', 'fix'), { recursive: true });
       writeFileSync(join(a.home, 'ops-repair', 'goals', 'fix', 'GOAL.json'), JSON.stringify({ stage: 'build' }));
       const { code, err } = await a.create('ops-repair-2');
-      assert.equal(code, 1);
-      assert.match(err, /the area memoro-cli\/operations already has the open repair programme ops-repair/u);
-      assert.ok(existsSync(a.proposal), 'the proposal is not moved by a refused create');
-      assert.equal(existsSync(join(a.home, 'ops-repair-2')), false);
-      assert.deepEqual(readdirSync(join(a.root, 'proposals')), ['2026-11-12-operations.md']);
+      assert.equal(code, 0, err);
+      assert.equal(JSON.parse(readFileSync(join(a.home, 'ops-repair-2', RECORD_FILE), 'utf8')).area, 'memoro-cli/operations');
+      assert.equal(existsSync(a.proposal), false, 'the proposal moves into the second repair programme');
+      assert.match(readFileSync(join(a.home, 'ops-repair-2', 'proposals', '2026-11-12-operations.md'), 'utf8'), /^Moved here from /u);
+      assert.deepEqual(readdirSync(join(a.root, 'proposals')), []);
     } finally { a.done(); }
   });
 
-  it('repair: with none open, create makes the programme and moves the proposal into its proposals/ under a first line naming where it came from; a done record frees the area', async () => {
+  it('repair: with none open, create makes the programme and moves the proposal into its proposals/ under a first line naming where it came from', async () => {
     const a = repairArea();
     try {
       const { code, out } = await a.create('ops-repair');
@@ -499,10 +499,6 @@ describe('mc programs create for an area', () => {
       const moved = readFileSync(join(a.home, 'ops-repair', 'proposals', '2026-11-12-operations.md'), 'utf8');
       assert.match(moved.split('\n')[0], new RegExp(`^Moved here from ${a.proposal.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')} `, 'u'));
       assert.match(moved, /# The operations text is stale\n\nThe runner section\./u);
-      const record = JSON.parse(readFileSync(join(a.home, 'ops-repair', RECORD_FILE), 'utf8'));
-      writeFileSync(join(a.home, 'ops-repair', RECORD_FILE), JSON.stringify({ ...record, state: 'done' }));
-      writeFileSync(a.proposal, '# Again\n');
-      assert.equal((await a.create('ops-repair-2')).code, 0, 'a repair that is done no longer holds the area');
     } finally { a.done(); }
   });
 
