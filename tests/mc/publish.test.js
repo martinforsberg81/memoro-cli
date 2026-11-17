@@ -202,6 +202,9 @@ describe('mc publish', () => {
   it('manager: a superseded dated line is removed, on an area page and on another page of docs/technical/', () => {
     assert.equal(guard(AREA, PAGE('Aim.', OLD + LATER), PAGE('Aim.', LATER)), null);
     assert.equal(guard(FILE, doc(OLD + LATER), doc(LATER)), null);
+    // The next block shares the removed block's citation and stays unchanged: a removal, not a replacement by its neighbour.
+    const SIBLING = '- Reviews are read in order. Martin, 2026-11-10, programme mc.\n';
+    assert.equal(guard(AREA, PAGE('Aim.', OLD + SIBLING + LATER), PAGE('Aim.', SIBLING + LATER)), null);
   });
 
   it('manager: the same change is refused with no later dated block, with the later block changed, with the citation changed, with a block added, and with ## Aim changed', () => {

@@ -188,17 +188,28 @@ function supersession(before, after) {
  * Whether the `## Decisions` of an area page changed only by the removal or the correction of superseded dated blocks: each
  * block of before is in after unchanged, or is superseded and is removed, or is replaced in its place by a block with the
  * same citation. Nothing else may differ — a block added, an undated block changed, a block changed that is not superseded.
+ * The blocks are aligned over every pairing, not greedily: a superseded block removed before an unchanged block with the
+ * same citation is a removal, not a replacement by its neighbour.
  */
 function decisionsCorrected(before, after, superseded) {
   const was = blocksOf(before);
   const now = blocksOf(after);
-  let at = 0;
-  for (const block of was) {
-    if (at < now.length && textOf(now[at]) === textOf(block)) { at++; continue; }
-    if (!superseded(block)) return false;
-    if (at < now.length && citation(now[at]) !== null && citation(now[at]) === citation(block)) at++;
-  }
-  return at === now.length;
+  const seen = new Map();
+  const aligns = (i, j) => {
+    if (i === was.length) return j === now.length;
+    const key = i * (now.length + 1) + j;
+    if (seen.has(key)) return seen.get(key);
+    const block = was[i];
+    const same = j < now.length && textOf(now[j]) === textOf(block);
+    const gone = superseded(block);
+    const cited = citation(block);
+    const ok = (same && aligns(i + 1, j + 1))
+      || (gone && aligns(i + 1, j))
+      || (gone && j < now.length && cited !== null && citation(now[j]) === cited && aligns(i + 1, j + 1));
+    seen.set(key, ok);
+    return ok;
+  };
+  return aligns(0, 0);
 }
 
 /**
