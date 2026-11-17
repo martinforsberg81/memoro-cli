@@ -1674,7 +1674,7 @@ carried by the proposal `2026-10-19-mc-project`
    bekymmer"), backup of `~/mc` ("låt oss vänta med backup-arbetet och landa
    detta först"), sessions outside this machine.
 
-The concept in full: [`mc-project.md`](mc-project.md). Carried by
+The concept in full: [`mc-project.md`](https://github.com/martinforsberg81/memoro-cli/blob/6ceebdcdd189d57b1cbc7a0519eafc540580cef0/docs/project/mc/mc-project.md). Carried by
 `archived-releases` (a blocker fix needed under the current layout) and the
 `mc project` projects that follow it.
 

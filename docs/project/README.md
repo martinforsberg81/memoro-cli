@@ -320,7 +320,7 @@ answer line — so the plan and the ruling are the only two places it survives.
 Carry it at the moment it is given.
 
 The same rule covers any other working material a plan leans on. The programme's
-design source, [`mc/utredning-2026-08-24.md`](mc/utredning-2026-08-24.md), was
+design source, [`mc/utredning-2026-08-24.md`](https://github.com/martinforsberg81/memoro-cli/blob/6ceebdcdd189d57b1cbc7a0519eafc540580cef0/docs/project/mc/utredning-2026-08-24.md), was
 cited by section number from four plans while living only in a workarea; that is
 why it is in the repository.
 
