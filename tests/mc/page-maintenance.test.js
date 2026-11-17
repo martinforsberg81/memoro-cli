@@ -1,13 +1,17 @@
 /**
  * MAINTENANCE: its sources as the collector reads them, and the frame and view that draw them (goal mc-ui/maintenance-sources).
- * The readings are pure builders over read data, so every case hands them a fixture; none reads the machine.
+ * The readings are pure builders over read data, so every case hands them a fixture; only the proposals reader's case
+ * reads a disk, a temporary work root of its own.
  */
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
   SOURCES, aimsOf, areasReading, depsReading, errorsReading, intakeReading, lessonsReading, maintenanceSection,
-  proposalsReading, readAreaPages, straysReading, testsReading,
+  proposalsReading, readAreaPages, readProposals, straysReading, testsReading,
 } from '../../src/mc/page-maintenance.js';
 import { intakeSection, mergesSection, programmesSection, runnerSection, sessionsSection } from '../../src/mc/page-collect.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
@@ -42,11 +46,11 @@ const lesson = (name, state, days, extra = {}) => ({ name, state, at: new Date(a
 const FIXTURE = {
   proposals: () => proposalsReading({
     now: NOW,
-    fresh: [{ name: '2026-11-15-new-one.md', at: ago(1) }, { name: '2026-11-10-new-two.md', at: ago(6) }],
-    programmes: [
-      { programme: 'mc-ui', files: [{ name: 'a.md', at: ago(2) }, { name: 'b.md', at: ago(9) }, { name: 'c.md', at: ago(3) }] },
-      { programme: 'memoro', files: [{ name: 'd.md', at: ago(40) }] },
-      { programme: 'idle', files: [] },
+    areas: [
+      { area: 'memoro-cli/system', files: [{ name: '2026-11-15-mc-one.md', at: ago(1) }, { name: '2026-11-10-mc-two.md', at: ago(6) }] },
+      { area: 'memoro/trust', files: [{ name: 'a.md', at: ago(2) }, { name: 'b.md', at: ago(9) }, { name: 'c.md', at: ago(3) }] },
+      { area: 'memoro/delivery', files: [{ name: 'd.md', at: ago(40) }] },
+      { area: 'memoro/games', files: [] },
     ],
   }),
   lessons: () => lessonsReading({
@@ -142,15 +146,27 @@ describe('the maintenance collector', () => {
 });
 
 describe('the readings count what is on disk', () => {
-  it('counts proposals the new ones and the ones in programmes, the oldest by its name\'s date', () => {
+  it('counts proposals by area, each with its oldest by its name\'s date, and leaves out an area with none', () => {
     const reading = FIXTURE.proposals();
     assert.equal(reading.count, 6);
-    assert.equal(reading.new, 2);
-    assert.equal(reading.waiting, 4);
     assert.equal(reading.oldest_seconds, 40 * 86400);
-    assert.match(reading.summary, /^2 new · 4 waiting in 2 programmes · oldest 40 days$/u);
-    assert.deepEqual(reading.groups.map((g) => [g.label, g.count]), [['New', 2], ['mc-ui', 3], ['memoro', 1]]);
-    assert.deepEqual(reading.groups[0].items, ['2026-11-15-new-one.md', '2026-11-10-new-two.md']);
+    assert.match(reading.summary, /^6 waiting in 3 areas · oldest 40 days$/u);
+    assert.deepEqual(reading.groups.map((g) => [g.label, g.count, g.oldest_seconds / 86400]), [['memoro/trust', 3, 9], ['memoro-cli/system', 2, 6], ['memoro/delivery', 1, 40]]);
+  });
+
+  it('reads every area\'s proposals/ on disk, an archive and the old places left out', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-maintenance-areas-'));
+    const env = { MC_WORK_ROOT: root };
+    const put = (path) => { mkdirSync(join(root, path, '..'), { recursive: true }); writeFileSync(join(root, path), 'x\n'); };
+    put('areas/memoro-cli/system/proposals/2026-11-15-mc-one.md');
+    put('areas/memoro-cli/system/proposals/archive/2026-11-01-mc-done.md');
+    put('areas/memoro/trust/proposals/2026-11-14-memoro-two.md');
+    put('areas/memoro/trust/proposals/notes.txt');
+    put('proposals/2026-11-13-mc-root.md');
+    put('programs/mc/proposals/2026-11-12-mc-programme.md');
+    assert.deepEqual(readProposals({ env }).map((entry) => [entry.area, entry.files.map((file) => file.name)]), [
+      ['memoro-cli/system', ['2026-11-15-mc-one.md']], ['memoro/trust', ['2026-11-14-memoro-two.md']],
+    ]);
   });
 
   it('counts lessons by state as `mc martin lessons` does: open, in a goal, late, landed this week', () => {
@@ -222,20 +238,20 @@ describe('the maintenance frame and view', () => {
     const labels = lines.slice(top + 1).filter((line) => /^ {4}\S/u.test(line)).map((line) => line.trim().split(/ {2,}/u)[0]);
     assert.deepEqual(labels.slice(0, 9), ['User feedback', 'Proposals', 'Lessons', 'Errors', 'Tests', 'Dependencies', 'Intake', 'Areas', 'Strays']);
     const row = (label) => lines.slice(top).find((line) => line.startsWith(`    ${label}`));
-    assert.match(row('Proposals'), /2 new · 4 waiting in 2 programmes · oldest 40 days +mc plan$/u);
+    assert.match(row('Proposals'), /6 waiting in 3 areas · oldest 40 days +mc proposals$/u);
     assert.match(row('Lessons'), /2 open · 1 in a goal · 1 late · 1 landed this week +mc martin$/u);
     assert.match(row('User feedback'), /no source — memoro's product feedback was retired \(migration 0213\)/u);
     assert.match(row('Intake'), /nothing waiting +~\/mc\/intake$/u);
     assert.match(row('Strays'), /none/u);
   });
 
-  it('opens the view with the detail below each row: proposals by programme, lessons by state, repos, areas', () => {
+  it('opens the view with the detail below each row: proposals by area, lessons by state, repos, areas', () => {
     const text = renderPageLines(pageData({ sources: sources() }), { columns: 120, now: NOW, maintenance: true }).map(strip);
     const joined = text.join('\n');
     assert.match(joined, /┌─ MAINTENANCE {2}9 sources/u);
-    assert.match(joined, /2026-11-15-new-one\.md/u, 'the new proposals by name');
-    assert.match(joined, /mc-ui +3/u);
-    assert.match(joined, /memoro +1/u);
+    assert.match(joined, /memoro\/trust +3/u);
+    assert.match(joined, /memoro-cli\/system +2/u);
+    assert.match(joined, /memoro\/delivery +1/u);
     for (const state of ['open', 'in a goal', 'landed', 'dismissed']) assert.match(joined, new RegExp(`^ +${state} +\\d`, 'mu'), state);
     for (const repo of ['memoro', 'memoro-cli']) assert.ok(text.some((line) => line.trim().startsWith(`${repo} `)), repo);
     // The areas as the README draws them: name, repo, when main last changed the page, aims.

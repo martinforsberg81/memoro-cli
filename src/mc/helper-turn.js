@@ -7,9 +7,8 @@
  * he has in it by hand. This is the turn that empties it one file at a time: a
  * fresh, headless session with the `intake` role from `canon/roles/intake.md`,
  * standing in `~/mc/intake/`, given one filename and asked for one outcome —
- * one `<date>-<system>-<slug>.md` in the `proposals/` of the programme that
- * owns it (`~/mc/programs/<programme>/proposals/`), or in `~/mc/proposals/`
- * when no programme does — or none.
+ * one `<date>-<system>-<slug>.md` in the `proposals/` of the area it concerns
+ * (`~/mc/areas/<repo>/<area>/proposals/`, area-proposals.js) — or none.
  *
  * `drainIntake` at the bottom is what makes that an inbox rather than a pile:
  * the oldest files, one turn each, every one archived under
@@ -19,7 +18,7 @@
  *
  * The verb has no other half: `~/mc/helper/` holds the retired desk's old
  * conversations, and the desk is `mc martin` (`commands/helper.js`).
- * The turn writes into `proposals/`, where the owning programme's plan session reads it.
+ * The turn writes into an area's `proposals/`, where the proposal waits until someone takes a stand on it.
  *
  * The file is **named**, not inlined. Everything else the turn judges against
  * is in the prompt — the project log, every plan on main with the step it is
@@ -31,11 +30,11 @@
  * naming it is enough. What it may write is one directory, and the role says
  * so in the same words as this comment.
  *
- * A proposal is not a plan and not a queue entry. It waits in its programme's
- * `proposals/` until that programme's plan session takes a stand on it, and
- * one no programme owns waits in `~/mc/proposals/`; mc reads only its name.
- * The turn reads no archive: judging a proposal against the ones already
- * declined is the plan session's, with its programme as context.
+ * A proposal is not a plan and not a queue entry. It waits in its area's
+ * `proposals/` until a stand is taken on it; one with no clear area goes to
+ * `memoro-cli/system` or `memoro/delivery`; mc reads only its name. The turn
+ * reads no archive: judging a proposal against the ones already declined is
+ * whoever decides it.
  */
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from 'node:fs';
@@ -53,7 +52,9 @@ import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 import { defaultRepos, proposalSystem } from './brief-collect.js';
 import { FINISHED, programsGoals } from './goals.js';
 import { runAsync as runGitAsync } from './git.js';
-import { intakeArchiveDir, intakeDir, listAllProposals, programmeNames, proposalsDir } from './helper-collect.js';
+import { intakeArchiveDir, intakeDir, programmeNames } from './helper-collect.js';
+import { areaKeysOnDisk, declaredAreaKeys, listAllProposals, placementWords } from './area-proposals.js';
+import { AREAS_PATH, checkAreas } from './areas.js';
 import { programsHome } from './paths.js';
 import { profileArgs } from './portrait.js';
 import { gitDirOf } from './repos.js';
@@ -104,7 +105,7 @@ export function repoOfFile(file) {
  * works for a file that is not text.
  */
 export function helperPrompt({
-  file, proposalsPath = proposalsDir(), programsPath = programsHome(), programmes = [], projectLog = null, goals = [], proposals = [], repo = null, now = new Date(),
+  file, areas = [], env = process.env, programmes = [], projectLog = null, goals = [], proposals = [], repo = null, now = new Date(),
 }) {
   const tagOf = (repo) => (repo === 'memoro-cli' ? 'mc' : 'memoro');
   const date = now.toISOString().slice(0, 10);
@@ -139,10 +140,8 @@ export function helperPrompt({
     'or none at all. Not two from one file — one report is one proposal — and no proposal is the right',
     'answer whenever the file does not warrant one.',
     '',
-    'A proposal goes to the programme that owns the question it raises: that programme\'s',
-    `\`${programsPath}/<programme>/proposals/\`, where its plan session takes a stand on it with the whole`,
-    'programme as context. The programmes are under PROGRAMMES below, one line each. When none of them',
-    `owns it, it goes in \`${proposalsPath}\` — a valid answer for a proposal no programme owns, not a failure.`,
+    placementWords(areas, env),
+    'A programme is an order, not a place for a proposal; the programmes are under PROGRAMMES below as ground.',
     'Say in one line which you did, where it went and why, then stop.',
     '',
     'If you cannot read the file whole — it is past your tool\'s read limit, or in a form you cannot open —',
@@ -165,13 +164,11 @@ export function helperPrompt({
   else {
     const groups = new Map();
     for (const p of proposals) {
-      const key = p.programme || null;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(p.file);
+      if (!groups.has(p.area)) groups.set(p.area, []);
+      groups.get(p.area).push(p.file);
     }
-    const keys = [...groups.keys()].sort((a, b) => (a === null ? -1 : b === null ? 1 : a.localeCompare(b)));
-    for (const key of keys) {
-      out.push(key === null ? `no programme (\`${proposalsPath}\`):` : `programme ${key}:`);
+    for (const key of [...groups.keys()].sort()) {
+      out.push(`area ${key}:`);
       for (const name of groups.get(key)) out.push(`- ${name}`);
     }
   }
@@ -209,12 +206,9 @@ export function programmeRoutes(env = process.env, { read = (path) => readFileSy
 export function describeTurn({ wrote = [], waiting = [], providerPriority = 'auto', tool = null, routeWhy = null }) {
   const route = providerPriority === 'auto' || !tool ? '' : ` · ${tool} (${providerPriority} priority${tool !== providerPriority ? `, fallback: ${routeWhy || 'other provider selected'}` : ''})`;
   if (!wrote.length) return `no proposal — nothing in the file warranted one (${waiting.length} still waiting)${route}`;
-  // Where it went, when the listing said: a programme by name, or the root as
-  // the place for what no programme owns.
-  const placed = wrote.filter((p) => p && typeof p === 'object' && 'programme' in p);
-  const where = placed.length
-    ? ` to ${[...new Set(placed.map((p) => (p.programme ? `programme ${p.programme}` : 'no programme (~/mc/proposals)')))].join(' and ')}`
-    : '';
+  // Where it went, when the listing said: the area by its key.
+  const placed = wrote.filter((p) => p && typeof p === 'object' && typeof p.area === 'string');
+  const where = placed.length ? ` to ${[...new Set(placed.map((p) => `area ${p.area}`))].join(' and ')}` : '';
   const line = `${wrote.length} proposal${wrote.length === 1 ? '' : 's'}${where}, ${waiting.length} waiting`;
   const untagged = wrote.filter((p) => typeof p?.file === 'string' && !proposalSystem(p.file)).map((p) => `proposal ${p.file} names no system (mc|memoro)`);
   const described = untagged.length ? `${line} — ${untagged.join('; ')}` : line;
@@ -257,12 +251,18 @@ export async function helperGround({ env = process.env, repos = defaultRepos(env
   }));
   const notes = [];
   let projectLog = null;
+  const declaring = [];
   for (const repo of present) {
     const text = await git(repo.path, ['show', `origin/main:${PROJECT_LOG}`]);
     if (text) projectLog = projectLog ? `${projectLog}\n\n${text}` : text;
+    // The area pages it declares, for where a proposal goes; one it does not declare, or cannot be read, names none.
+    const declared = await git(repo.path, ['show', `origin/main:${AREAS_PATH}`]);
+    const read = declared ? checkAreas(declared, `${repo.name}'s ${AREAS_PATH}`) : null;
+    if (read?.ok) declaring.push({ name: repo.name, areas: read.areas });
   }
   if (!projectLog) notes.push(`no ${PROJECT_LOG} on origin/main in ${present.map((r) => r.name).join(', ') || 'any checkout'}`);
-  return { goals, projectLog, notes };
+  const keys = declaredAreaKeys(declaring);
+  return { goals, projectLog, notes, areas: keys.length ? keys : areaKeysOnDisk(env) };
 }
 
 /**
@@ -272,7 +272,7 @@ export async function helperGround({ env = process.env, repos = defaultRepos(env
  * missing tool and a session that failed are all outcomes the caller prints,
  * because the runner logs this the same way it logs a step.
  *
- * `wrote` is measured, not claimed — the proposals directory before and
+ * `wrote` is measured, not claimed — every area's `proposals/` before and
  * after. A turn that said it wrote a file and did not is reported as having
  * written none.
  */
@@ -321,19 +321,17 @@ export async function runHelperTurn({
   if (fromCatalog(launch.id) && !model && !routeCandidate) return { ok: false, reason: `no ${declared(launch.id, 'INTAKE_FROM_CATALOG')} intake candidate is listed in mc model` };
 
   const dir = intakeDir(env);
-  const proposals = proposalsDir(env);
-  mkdirSync(proposals, { recursive: true });
-  // Every directory a proposal may be written in, before and after: the root
-  // and each programme's `proposals/`, never an archive.
+  // Every directory a proposal may be written in, before and after: each
+  // area's `proposals/` under `~/mc/areas/`, never an archive.
   const listAll = deps.list || listAllProposals;
   const waitingBefore = listAll(env);
   const before = new Set(waitingBefore.map((p) => p.path));
 
   const ground = await (deps.ground || helperGround)({ env });
   const prompt = helperPrompt({
-    file, proposalsPath: proposals, programsPath: programsHome(env), programmes: (deps.routes || programmeRoutes)(env),
+    file, areas: ground.areas ?? areaKeysOnDisk(env), env, programmes: (deps.routes || programmeRoutes)(env),
     projectLog: ground.projectLog, goals: ground.goals,
-    proposals: waitingBefore.map((p) => ({ programme: p.programme, file: p.file })), repo, now,
+    proposals: waitingBefore.map((p) => ({ area: p.area, file: p.file })), repo, now,
   });
   const instructions = instructionsFor(launch.id, role.overlay);
   const args = headlessArgs({

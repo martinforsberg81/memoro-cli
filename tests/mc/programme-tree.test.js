@@ -350,7 +350,8 @@ describe('Programmes without finished goals', () => {
   it('keeps every key the collector had and adds finished and archive_refused to it', () => {
     // The keys of a goal row and of a programme group at d2e05d90, before this goal.
     const rowKeys = ['name', 'title', 'runnable', 'programme', 'repos', 'stage', 'status', 'kind', 'repo', 'state', 'progress', 'prs', 'carries', 'phase', 'held', 'sessions', 'criteria', 'last', 'running', 'person', 'question', 'hold', 'problems'];
-    const groupKeys = ['programme', 'priority', 'dormant', 'goals', 'current_phase', 'phases', 'proposals', 'repos', 'planning', 'planning_sessions', 'sessions', 'statuses'];
+    // `proposals` left with the areas (2026-11-17): a programme holds none.
+    const groupKeys = ['programme', 'priority', 'dormant', 'goals', 'current_phase', 'phases', 'repos', 'planning', 'planning_sessions', 'sessions', 'statuses'];
     const sectionKeys = ['count', 'programmes', 'active', 'dormant', 'statuses', 'planning', 'running', 'strays'];
     const goals = goalsFor(['a', 1, { stage: 'done' }], ['b', 1]);
     const rows = goalsOf({ goals, currents: [], alive: () => true });

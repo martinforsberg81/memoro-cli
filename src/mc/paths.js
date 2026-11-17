@@ -402,8 +402,11 @@ export function sessionName(areaName) {
  * there that is not a legacy runner area is a stray (`listStrays`,
  * work-area.js). Dot-directories are left out by the caller.
  */
+// `areas` holds each area page's proposals (area-proposals.js). `proposals` is the old ownerless root: nothing reads or
+// writes it any more, and it stays a home only so its files, until they are moved into the areas, are never taken for
+// a legacy work area.
 export const STATE_HOMES = new Set([
-  'runner', PLAN_HOME, STEP_HOME, WORK_HOME, PROGRAMS_HOME, ARCHIVE_HOME, REPOS_HOME, SELF_HOME, RESTRICTED_HOME, 'gate', 'gate-cache', 'brief', 'manager', 'proposals', 'intake',
+  'runner', PLAN_HOME, STEP_HOME, WORK_HOME, PROGRAMS_HOME, ARCHIVE_HOME, REPOS_HOME, SELF_HOME, RESTRICTED_HOME, 'gate', 'gate-cache', 'brief', 'manager', 'areas', 'proposals', 'intake',
   'node_modules', 'bin', 'npm', 'status', 'helper', 'martin', 'pm',
 ]);
 

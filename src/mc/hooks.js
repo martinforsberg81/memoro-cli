@@ -23,11 +23,12 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { adapterFor, declared, toolsDeclaring } from '../adapters/index.js';
 
-import { PLAN_ROLE, REVIEW_ROLE } from './goals.js';
+import { REVIEW_ROLE } from './goals.js';
 import { run as runGit } from './git.js';
 import { sessionIdentity, sessionRoleLine } from './session-role.js';
 import { defaultRepos, gitDirOf } from './repos.js';
 import { programsHome, workRoot } from './paths.js';
+import { areasHome } from './area-proposals.js';
 
 /** A branch this far behind origin/main is old enough to be the wrong code. */
 export const BEHIND_WARNING = 50;
@@ -152,26 +153,10 @@ export const TOOLBOX = [
   'Every verb: mc <verb> --help.',
 ];
 
-/**
- * How many proposals wait in a programme's `proposals/`: its `.md` files, the
- * `archive/` beside them not counted. Read here, without the helper's
- * modules, because the hook runs at the start of every session.
- */
-export function programmeProposalCount(programme, env = process.env) {
-  try {
-    return readdirSync(join(programsHome(env), programme, 'proposals'), { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.md')).length;
-  } catch { return 0; }
-}
-
 /** The SessionStart context: the worktrees' state, the warnings, the toolbox. */
 export function sessionStartContext({ cwd, inside, states, env = process.env, synced = [] }) {
   const identity = sessionIdentity({ cwd, env });
   const lines = [sessionRoleLine(identity, { cwd, env })];
-  const waiting = identity.role === PLAN_ROLE && identity.programme ? programmeProposalCount(identity.programme, env) : 0;
-  if (waiting) {
-    lines.push(`${waiting} proposal${waiting === 1 ? '' : 's'} wait${waiting === 1 ? 's' : ''} in ~/mc/programs/${identity.programme}/proposals/ — take a stand on each (your role says how).`);
-  }
   // Said only when something moved: a skill rewritten after the tool listed its
   // skills is read from disk when it is loaded, but the list itself may be old.
   const moved = [...new Set(synced.map((row) => `${row.name} ${row.did}`))];
@@ -941,13 +926,13 @@ export const MC_HOOKS = Object.freeze([
  * Why a goal's review session may not end yet, or null (`mc hook stop`). Only
  * a session with MC_ROLE `review-session:goal` and MC_GOAL is held: it ends
  * once the goal has left `review` — `mc goal stage merge` or `build` —
- * and it has written one proposal, a `.md` in its programme's `proposals/`
- * written since the session began (MC_SESSION_STARTED, which the runner
+ * and it has written one proposal, a `.md` in any area's
+ * `~/mc/areas/<repo>/<area>/proposals/` written since the session began (MC_SESSION_STARTED, which the runner
  * sets). Each thing missing is named. A goal blocked or waiting on Martin is not
  * held: its review has asked, and the question is Martin's. A goal that does not read, or a
  * session with no start, is not held: a hook that cannot tell lets go.
  */
-export function reviewStopDecision({ env = process.env, home, read = (path) => readFileSync(path, 'utf8'), list = readdirSync, mtimeMs = (path) => statSync(path).mtimeMs } = {}) {
+export function reviewStopDecision({ env = process.env, home, areas = areasHome(env), read = (path) => readFileSync(path, 'utf8'), list = readdirSync, mtimeMs = (path) => statSync(path).mtimeMs } = {}) {
   if (env.MC_ROLE !== REVIEW_ROLE || !env.MC_GOAL) return null;
   const [programme, goal] = String(env.MC_GOAL).split('/');
   if (!programme || !goal) return null;
@@ -961,11 +946,11 @@ export function reviewStopDecision({ env = process.env, home, read = (path) => r
   const missing = [];
   if (stage === 'review') missing.push('the goal is still in review — mc goal stage merge (OK to land: it merges all registered pull requests) or write REVIEW.md in the goal\'s directory and mc goal stage build (not OK)');
   if (Number.isFinite(started)) {
-    const dir = join(home, programme, 'proposals');
-    let names = [];
-    try { names = list(dir).filter((name) => name.endsWith('.md')); } catch { names = []; }
-    const written = names.some((name) => { try { return mtimeMs(join(dir, name)) >= started; } catch { return false; } });
-    if (!written) missing.push(`no proposal written — one file in ${dir}/ (the proposals skill's form) with what this review noticed beyond the goal`);
+    const names = (dir) => { try { return list(dir).map(String).filter((name) => !name.startsWith('.')); } catch { return []; } };
+    const folders = names(areas).flatMap((repo) => names(join(areas, repo)).map((slug) => join(areas, repo, slug, 'proposals')));
+    const written = folders.some((dir) => names(dir).filter((name) => name.endsWith('.md'))
+      .some((name) => { try { return mtimeMs(join(dir, name)) >= started; } catch { return false; } }));
+    if (!written) missing.push(`no proposal written — one file in ${areas}/<repo>/<area>/proposals/ (the proposals skill's form) with what this review noticed beyond the goal`);
   }
   return missing.length ? { reason: missing.join('; ') } : null;
 }

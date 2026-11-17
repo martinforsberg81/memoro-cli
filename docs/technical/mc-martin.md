@@ -107,16 +107,19 @@ The opening has these parts, in this order (Horizons only when the desk holds on
    *Lessons and the learning pass*). It never lists lessons or prints their text.
 8. **Where a new thing goes** — what the session needs to place a thing Martin
    says that answers no waiting item (*Placing*, below): the UTC date of the
-   opening, the proposal file name shape `<date>-<mc|memoro>-<slug>.md`, the two
-   destinations as absolute paths (`<programs home>/<programme>/proposals/` when a
-   programme owns it, else `~/mc/proposals`) and every programme with one line, in
-   alphabetical order, from the same reader the intake turn routes by
-   (`programmeRoutes`, [mc-helper.md](mc-helper.md)); `_none_` when there are none.
+   opening, the proposal file name shape `<date>-<mc|memoro>-<slug>.md`, where it
+   goes — `<areas home>/<repo>/<area>/proposals/` of the area it concerns, absolute,
+   and with no clear area `memoro-cli/system` when mc would change, `memoro/delivery`
+   when memoro would change — then the area keys (the directories under
+   `~/mc/areas/` with the two fallbacks), and every programme with one line, in
+   alphabetical order, as orders rather than places for a proposal, from the same
+   reader the intake turn reads (`programmeRoutes`, [mc-helper.md](mc-helper.md));
+   `_none_` when there are none.
    It is read from the disk at the opening and stores nothing.
 
 `brief --json` carries `texts`, `acts` and `not_ready.stuck` for these parts, and no
 `yours`; its last key, `placing`, is `{ date, file_name, programs_path,
-proposals_path, programmes: [{ name, line }] }`.
+areas_path, areas: [<repo>/<area>], fallbacks: { mc, memoro }, programmes: [{ name, line }] }`.
 
 The interval is `(since, now]`, where `since` is the time of the last
 successful opening, or the store's `first_sync_at` before the first opening.

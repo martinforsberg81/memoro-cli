@@ -1,6 +1,7 @@
 /**
- * `brief-collect.js` — the shared readers of runs and proposals, on
- * fixtures: the proposal listing and the runs.tsv rows.
+ * `brief-collect.js` — the shared reader of runs, on fixtures: the runs.tsv
+ * rows. The proposal listing is `listAllProposals` (area-proposals.js), tested
+ * with the intake turn that measures by it (helper-turn.test.js).
  */
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -8,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { listProposals, runsFor } from '../../src/mc/brief-collect.js';
+import { runsFor } from '../../src/mc/brief-collect.js';
 
 const RUNS = [
   'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
@@ -16,27 +17,6 @@ const RUNS = [
   '2026-08-25T18:00:00Z\tdocx\tstep\t0\t698\t10958\t49\t88\t36423\t3683298\t94528\ts2\tsuccess,open',
   '',
 ].join('\n');
-
-describe('proposals', () => {
-  // mc does not read a proposal. It used to parse a frontmatter and fixed
-  // section names, in three places that disagreed — a file whose first prose
-  // line was not marked `# ` was counted by the page, missing from the brief,
-  // and recorded as "wrote nothing" by the turn that had just written it. The
-  // names are the whole of what mc knows now.
-  it('lists the markdown names and nothing about what is in them', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'mc-proposals-'));
-    writeFileSync(join(dir, 'b.md'), 'no heading here, and it still counts\n');
-    writeFileSync(join(dir, 'a.md'), '# A title\n');
-    writeFileSync(join(dir, 'notes.txt'), 'not markdown\n');
-    assert.deepEqual(listProposals(dir).map((p) => p.file), ['a.md', 'b.md']);
-    assert.deepEqual(Object.keys(listProposals(dir)[0]).sort(), ['file', 'path']);
-  });
-
-  it('an absent directory is empty, not an error', () => {
-    assert.deepEqual(listProposals(join(tmpdir(), 'mc-no-such-proposals-dir')), []);
-  });
-});
-
 
 describe('runner log', () => {
   it('keeps the last rows of one project', () => {

@@ -23,7 +23,7 @@ already established. Do not require the enduring direction to be declared over.
 
 - `README.md` — the working document; read first. The document reference owns its headings and part entries.
 - `goals/<goal>/` — goal briefs written with [writing-a-goal](writing-a-goal.md); README does not repeat them.
-- `proposals/` and `proposals/archive/` — findings and dispositions ([proposals](proposals.md)).
+- No `proposals/`: findings wait in their area, and the document names those it takes in ([proposals](proposals.md)).
 - `docs/technical/` (memoro, memoro-cli) — what runs; README points to it. No session writes
   `docs/project/`.
 - `evidence/<date>-<slug>/` — measured evidence linked from README. No `PLAN.md`, `decisions/` or
@@ -33,7 +33,7 @@ already established. Do not require the enduring direction to be declared over.
 
 1. Define what the implementation plan delivers and its end; point to its
    area's enduring direction and, where applicable, the horizon it serves.
-2. Read affected code, technical standards, programme README and proposals; design claims cite files actually opened.
+2. Read affected code, technical standards, programme README and the areas' proposals; design claims cite files actually opened.
 3. Resolve questions through [asking-martin](asking-martin.md). Record decisions in the README or goal, or in the technical standard
    if it reaches beyond the programme, then in affected goals. Add needed standards within the app's
    direction. No goal is written with a decision still open.

@@ -1869,8 +1869,8 @@ describe('(S-whole) an ended runner session\'s scratch directory, taken whole on
       w.m.write(join(w.m.work, 'programs', 'mc', 'goals', 'finished', 'LOG.md'), `Scratch: ${inDone}\n`, NOW);
       goal(w.m, 'dropped-goal', 'dropped');
       w.m.write(join(w.m.work, 'programs', 'mc', 'goals', 'dropped-goal', 'LOG.md'), `Scratch: ${inDropped}\n`, NOW);
-      w.m.write(join(w.m.work, 'proposals', 'waiting.md'), `Names ${inProposal}\n`, NOW);
-      w.m.write(join(w.m.work, 'proposals', 'archive', 'old.md'), `Names ${inArchive}\n`, NOW);
+      w.m.write(join(w.m.work, 'areas', 'memoro-cli', 'system', 'proposals', 'waiting.md'), `Names ${inProposal}\n`, NOW);
+      w.m.write(join(w.m.work, 'areas', 'memoro-cli', 'system', 'proposals', 'archive', 'old.md'), `Names ${inArchive}\n`, NOW);
       const { list } = runTidy(w.doors());
       assert.deepEqual(list.targets.filter((item) => item.kind === 'scratch-session').map((item) => item.path).sort(), [inDone, inDropped, inArchive].sort());
       assert.equal(keptOf(list, inLog).why, 'named by goal mc/live LOG.md: kept until that goal is finished or the proposal leaves');
@@ -1933,7 +1933,7 @@ describe('(S-whole) an ended runner session\'s scratch directory, taken whole on
       const idle = w.session('idle', { at: OLD });
       const { listPath } = runTidy(w.doors());
       writeFileSync(join(touched, 'later.txt'), 'written after the list');
-      w.m.write(join(w.m.work, 'proposals', 'waiting.md'), `Names ${named}\n`, NOW);
+      w.m.write(join(w.m.work, 'areas', 'memoro-cli', 'system', 'proposals', 'waiting.md'), `Names ${named}\n`, NOW);
       const { applied } = applyTidy({ listPath, ...w.doors() });
       const result = new Map(applied.map((item) => [item.path, item]));
       assert.equal(result.get(touched).ok, false);

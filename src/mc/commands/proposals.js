@@ -1,6 +1,6 @@
-/** Waiting proposals by programme, including the root's unassigned proposals. */
+/** Waiting proposals by area (`~/mc/areas/<repo>/<area>/proposals/`), plus the total. */
 import { statSync } from 'node:fs';
-import { listAllProposals, programmeProposalsDir, proposalsDir } from '../helper-collect.js';
+import { keyProposalsDir, listAllProposals } from '../area-proposals.js';
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
 
@@ -17,31 +17,22 @@ export function usage() {
 
 export function collectProposalCounts(env = process.env) {
   const counts = new Map();
-  let unassignedCount = 0;
   let total = 0;
-  // The shared reader visits every programme directory, including dormant or
-  // local-only ones. It reads names, never proposal contents or archives.
+  // The shared reader visits every area directory on disk, declared or not.
+  // It reads names, never proposal contents or archives.
   for (const proposal of listAllProposals(env)) {
     if (!statSync(proposal.path, { throwIfNoEntry: false })?.isFile()) continue;
     total += 1;
-    if (proposal.programme === null) unassignedCount += 1;
-    else counts.set(proposal.programme, (counts.get(proposal.programme) || 0) + 1);
+    counts.set(proposal.area, (counts.get(proposal.area) || 0) + 1);
   }
   return {
     total,
-    programmes: [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([programme, count]) => ({
-      programme, count, path: programmeProposalsDir(programme, env),
-    })),
-    unassigned: { count: unassignedCount, path: proposalsDir(env) },
+    areas: [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([area, count]) => ({ area, count, path: keyProposalsDir(area, env) })),
   };
 }
 
 export function listingText(summary) {
-  const rows = [
-    ...summary.programmes.map(({ programme, count }) => [programme, count]),
-    ['Unassigned', summary.unassigned.count],
-    ['Total', summary.total],
-  ];
+  const rows = [...summary.areas.map(({ area, count }) => [area, count]), ['Total', summary.total]];
   const width = Math.max(...rows.map(([name]) => name.length));
   return `proposals — ${summary.total} waiting\n${rows.map(([name, count]) => `  ${name.padEnd(width)}  ${count}`).join('\n')}\n`;
 }

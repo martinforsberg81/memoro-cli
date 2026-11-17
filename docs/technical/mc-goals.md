@@ -1135,16 +1135,17 @@ output som ingen läser."* Its output is exactly three things:
   [publication and landing procedure](../../canon/tasks/publish-and-merge.md).
   Not OK: `mc goal stage build`.
   Either way `REVIEW.md` is written first, in its fixed form (below).
-- **One proposal, always** — whichever stage, one file in
-  `~/mc/programs/<programme>/proposals/` with what it noticed beyond the goal.
-  The programme's interactive plan session takes a stand on it.
+- **One proposal, always** — whichever stage, one file in the `proposals/` of
+  the area it concerns, `~/mc/areas/<repo>/<area>/proposals/` (with no clear
+  area `memoro-cli/system` or `memoro/delivery`), with what it noticed beyond the
+  goal. It waits there until Martin or the manager takes a stand on it.
 - **One line in LOG.md**, the stage verb's `--reason`, naming the files it wrote.
 
 Nothing else: no comment on the pull request, no long entry. **A review never
 ends in `review`.** Claude Code's Stop hook runs `mc hook stop`
 (`reviewStopDecision`, `hooks.js`): for a session with `MC_ROLE=review-session:goal`
 it refuses the end — `{ "decision": "block", "reason": … }` — while the goal is in
-`review` or no `.md` has been written in the programme's `proposals/` since
+`review` or no `.md` has been written in any area's `~/mc/areas/<repo>/<area>/proposals/` since
 `MC_SESSION_STARTED`, naming what is missing. A goal moved to `merge` or `build`, `blocked` or in `Martin` is not held (a third rejection stays in review, set Martin): the review
 has asked, and the question is Martin's. Any other session ends as it will. A review that dies anyway leaves the goal `review · ready` (*How the
 runner takes a goal*, step 5).

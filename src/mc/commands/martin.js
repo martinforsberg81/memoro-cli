@@ -478,8 +478,9 @@ function blocksPhrase(item) {
 /** The part Where a new thing goes: reference for placing, never something that waits. */
 function renderPlacing(placing) {
   const out = ['## Where a new thing goes', ''];
-  out.push(`Today is ${placing.date}. A proposal is a file named \`${placing.file_name}\`, in \`${placing.programs_path}/<programme>/proposals/\` when a programme owns it, else in \`${placing.proposals_path}\`.`);
-  out.push('', 'The programmes, one line each:');
+  out.push(`Today is ${placing.date}. A proposal is a file named \`${placing.file_name}\`, in \`${placing.areas_path}/<repo>/<area>/proposals/\` of the area it concerns. With no clear area it goes to \`${placing.fallbacks.mc}\` when mc would change and to \`${placing.fallbacks.memoro}\` when memoro would change.`);
+  out.push('', 'The areas:', ...placing.areas.map((key) => `- ${key}`));
+  out.push('', 'The programmes (orders, not places for a proposal), one line each:');
   if (!placing.programmes.length) out.push('_none_');
   else for (const programme of placing.programmes) out.push(`- ${programme.name} — ${programme.line}`);
   return out;

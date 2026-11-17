@@ -49,7 +49,7 @@ Before deciding, read the relevant technical contracts and the programme README 
 existing direction. A shared component that falls short of a
 standard may be changed by a goal only to the bounded extent its own criteria
 require; say so in its LOG.md and pull request, and let review judge it. Anything
-beyond that is a proposal to the owning programme, not a passing change.
+beyond that is a proposal in the owning area, not a passing change.
 
 ## Test authority
 

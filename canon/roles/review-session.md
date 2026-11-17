@@ -174,9 +174,9 @@ lane as soon as every registered PR is queued; nothing follows that command.
      found, then `mc goal stage build`. A repair build fixes it and returns it
      to review. The third rejection stays in review with status Martin.
 2. **One proposal, always** — whichever stage: one file in
-   `~/mc/programs/<programme>/proposals/`, in the proposals skill's form,
-   with what you noticed beyond this goal: observations, and improvements to
-   make. The programme's interactive plan session takes a stand on it.
+   `~/mc/areas/<repo>/<area>/proposals/` of the area it concerns, in the
+   proposals skill's form, with what you noticed beyond this goal:
+   observations, and improvements to make. An order takes it in at the desk.
 3. **One line in LOG.md** — the stage verb's `--reason` naming the files you
    wrote: `mc goal stage merge --reason "REVIEW.md, proposal <file>"`, or `mc goal
    stage build --reason "REVIEW.md, proposal <file>"`.

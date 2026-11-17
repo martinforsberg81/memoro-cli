@@ -99,7 +99,8 @@ describe('the pipeline', () => {
 
   it('puts each session in the stage it works on, and flags Martin and blocked where they stand', () => {
     const stages = pipelineStages({
-      intake: { proposals: 1 },
+      intake: { proposals: 3 },
+      // A count left on a programme from before is not added: the proposals are the areas', as intake counts them.
       programmes: { programmes: [{ proposals: 2, goals: [
         { stage: 'draft', status: 'ready' }, { stage: 'build', status: 'Martin' }, { stage: 'build', status: 'blocked' },
       ] }] },

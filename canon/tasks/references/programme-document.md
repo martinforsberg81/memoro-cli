@@ -51,7 +51,8 @@ Not in this part: <The nearest thing a builder might add.>
 
 ## Order
 
-<Steps, prerequisites and shared files.>
+<Steps, prerequisites and shared files. No step of Martin's: the order is
+built to its end without him.>
 
 ## Decided
 
@@ -73,7 +74,8 @@ one line each.>
 ## Decisions
 
 <Once the programme is ready, sessions record programme decisions here. Cross-programme
-rules belong in docs/technical/; point there instead of repeating them.>
+rules belong in docs/technical/ and lasting direction on the area page; point there
+instead of repeating them. Nothing here outlives the programme.>
 ```
 
 Repeat `### Part n — <name>` for each piece of work: the planner cuts one or
@@ -96,7 +98,8 @@ document comes to the desk, the writer goes through every Solution sentence that
 changes what a user sees and checks that Design shows or says it.
 
 Findings of an advisory reading are settled in the document with Martin before
-it is set ready.
+it is set ready. No part has a step that waits on Martin between ready and done
+([writing a programme document](../writing-a-programme-document.md)).
 
 `## Decisions` is optional and belongs to the working README.
 When a goal lands, its functionality goes to `docs/technical/` and its section

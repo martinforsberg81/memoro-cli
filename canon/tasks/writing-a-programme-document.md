@@ -4,15 +4,13 @@ description: Writing a programme document in mc — what the user gets and how o
 ---
 # Writing a programme document
 
-A programme document is an order, as a buyer of software hands it to the firm
-that builds it. Martin is the buyer: it is written with him in a session, he
-says there that it is ready, and the desk sets it ready with
-`mc programs state <programme> ready`, and the planner cuts goals from its
-README.
+A programme document is an order, as a buyer of software hands it to the firm that builds it. Martin is the buyer: it is written with him in a session, he says there that it is ready, the desk sets it ready with `mc programs state <programme> ready`, and the planner cuts goals from its README.
 
-The document binds what the user gets, how it looks and how one sees that it works.
-How it is built is the planner's and the builder's to settle, so leave technical detail
-out unless the thing ordered rests on it. Keep it short enough that he reads all of it.
+An order is built to its end without him (Martin, 2026-11-17). Between ready and done nothing waits for him: no picture to accept, nothing to look at, listen to or try, no reading to approve. Every choice of his is made in the document before it is ready; the build is judged against the document and measured (`mc shot`, the checks), never by his use. An act of his the work needs (money, a console, a legal commitment) is done before ready or after the end, as an act of its own.
+
+An order is temporary: archived when its work has landed and not read again. What must last is written where it lasts before then: what runs in `docs/technical/`, aims and decisions on the area page, findings as proposals in their area ([proposals](proposals.md)).
+
+The document binds what the user gets, how it looks and how one sees that it works. How it is built is the planner's and the builder's to settle, so leave technical detail out unless the thing ordered rests on it. Keep it short enough that he reads all of it.
 
 ## The document
 
@@ -21,7 +19,7 @@ out unless the thing ordered rests on it. Keep it short enough that he reads all
   it is two programmes.
 - A part is something that is built, cut by what a user gets and not by
   layer. It can land by itself, and it keeps its number.
-- What Martin or the desk does beside the build stands under Order.
+- Order says the sequence of the parts and what the desk does beside the build; it holds no step of Martin's.
 - Three to eight parts.
 - At most 1,500 words. What runs today is written as a user meets it, from
   the app and the standards; code is read only for a fact the order depends
@@ -52,6 +50,7 @@ out unless the thing ordered rests on it. Keep it short enough that he reads all
 Put under Decided every choice he could have made otherwise, one plain line each.
 Where you gave one of his words a meaning, show the meaning as a picture or as a
 line there. Where you are unsure, say what you propose and that you are unsure.
+Before it is ready, read every part for a step that waits on him (a look, an acceptance, a trial, a word) and settle it: decide it now, make it measurable, or move his act before ready or after the end.
 When Martin says it is ready, the desk sets it ready with `mc programs state <programme> ready`; he never runs the verb himself.
 
 English, whole sentences, the plain word, each thing said once.

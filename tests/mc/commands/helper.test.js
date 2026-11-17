@@ -128,7 +128,7 @@ describe('mc helper --intake', () => {
     assert.match(result.moved[0][1], /\/runner\/log\/intake\/\d{4}-\d{2}-\d{2}\/errors-2026-08-29\.md$/u);
     assert.match(result.stdout, /errors-2026-08-29\.md: 1 proposal, 1 waiting \(\d+s, claude sonnet\)/u);
     assert.match(result.stdout, /2026-08-29-mc-expose-operations\.md/u);
-    assert.match(result.stdout, /each programme's plan session reads its own — .*\/<programme>\/proposals/u);
+    assert.match(result.stdout, /\nmc: proposals wait in their areas — .*\/areas\/<repo>\/<area>\/proposals \(mc proposals counts them\)\n/u);
   });
 
   /**

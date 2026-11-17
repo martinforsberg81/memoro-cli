@@ -25,7 +25,7 @@ import { describe, it } from 'node:test';
 import { DEPLOYS_HEADER } from '../../src/mc/deploys.js';
 import {
   analysisRows, collectHelper, computeDelta, deployState, digestName, errorRows, failingConditions,
-  healthState, intakeArchiveDir, intakeDir, parseState, previousDigest, proposalsDir, readAdminToken, renderState,
+  healthState, intakeArchiveDir, intakeDir, parseState, previousDigest, readAdminToken, renderState,
   networkDown, NO_TOKEN, operationsState, scriptFailure, serviceHealthState,
 } from '../../src/mc/helper-collect.js';
 import { readLiveVersion } from '../../src/mc/live-version.js';
@@ -232,15 +232,13 @@ describe('mc helper --collect — the sources', () => {
     assert.equal(survey[survey.indexOf('--since') + 1], '2026-08-27T00:00:00.000Z');
   });
 
-  it('creates the intake and proposals directories on first run', async () => {
+  it('creates the intake directory on first run, and no proposals directory', async () => {
     const g = ground();
     const result = await collect(g);
     assert.equal(result.path, join(intakeDir(g.env), 'errors-memoro-2026-08-29.md'));
     assert.ok(readFileSync(result.path, 'utf8').startsWith('# Errors and maintenance'));
-    // Two rooms, not one inside the other: the digest lands in intake, and
-    // proposals is its own directory beside it, made ready the same way.
-    assert.ok(existsSync(proposalsDir(g.env)), 'the proposals directory was not made');
-    assert.notEqual(proposalsDir(g.env), join(intakeDir(g.env), 'proposals'));
+    // Proposals wait in the areas (~/mc/areas/<repo>/<area>/proposals/); the collect makes no ownerless room for them.
+    assert.equal(existsSync(join(g.env.MC_WORK_ROOT, 'proposals')), false, 'no ownerless proposals root is made');
   });
 
   it('no longer carries the standing "Not readable" section', async () => {

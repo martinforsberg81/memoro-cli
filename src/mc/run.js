@@ -110,6 +110,7 @@ import { readHorizon } from './desk-horizons.js';
 import { MANAGER_CLAIM, areaPages, areaRepositories, curationDue, curationPrompt, curationState, curationWorktreesDir, headOf, proposalBacklog, readCurationState, curationStatePath, setUpCurationWorktrees, settleCurationWorktrees } from './manager-pulse.js';
 import { ARCHIVE_CHECKOUTS_PREFIX, FAILURES_TO_ITEM, WRITE_BACK_FILE, archiveDue, archiveName, archiveOnOk, archiveReadPrompt, archiveCheckInPrompt, archiveReference, finishDestination, keepReading, openRestrictedItem, parseWriteBack, readArchiveState, recordArchiveFailure, statedProgrammes } from './archive-turn.js';
 import { archiveProgramme } from './archive-programme.js';
+import { AREAS_HOME, FALLBACK_AREAS, keyProposalsDir, pageAreaOf } from './area-proposals.js';
 import { runDocsMerge } from './docs-merge.js';
 import { releaseWorkArea } from './work-area.js';
 import { finishTurn, goalCount, programmeDirs, programmeDue, readTurnState, recordTurnFailure, removeReadCheckouts, setUpReadCheckouts, turnName } from './programme-turn.js';
@@ -2066,7 +2067,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     });
     let result;
     try {
-      result = await archiveOnOk({ ...archiveSeams(programme), home, restrictedDir: restrictedProgrammeDir(programme, deps.env), proposalsHome: join(root, 'proposals'),
+      result = await archiveOnOk({ ...archiveSeams(programme), home, restrictedDir: restrictedProgrammeDir(programme, deps.env),
+        proposalsTarget: (record) => keyProposalsDir(pageAreaOf(record?.area, areaRepos().repos) || FALLBACK_AREAS.mc, deps.env),
         list: deps.list, write: deps.write, remove, exists: deps.exists, archive });
     } catch (error) { result = { ok: false, reason: error.message || String(error) }; }
     for (const line of captured.join('').split('\n').filter(Boolean)) say(`${name}: ${line}`);
@@ -2321,7 +2323,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         return 'skipped:setup';
       }
       areaSet = declaring.repos;
-      const backlog = proposalBacklog({ root, home: programsHome(deps.env), list: deps.list, modified: deps.modified ?? (() => 0) });
+      const backlog = proposalBacklog({ areas: join(root, AREAS_HOME), list: deps.list, modified: deps.modified ?? (() => 0) });
       prompt = curationPrompt({ paths: worktrees.paths, branches: worktrees.branches, pages: areaPages({ repos: declaring.repos, checkouts: worktrees.paths }), backlog, moved: turn.moved });
       cwd = curationWorktreesDir(root, stampText);
       // The turn has started: the cadence runs from now, and the bases stay what the last success read.

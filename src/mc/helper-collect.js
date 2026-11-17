@@ -60,7 +60,6 @@ import { defaultRepos } from './repos.js';
 import { cliFailing, cliRows as cliCollect, renderCliSections } from './helper-cli-collect.js';
 import { writeLiveVersion } from './live-version.js';
 import { programsHome, workRoot } from './paths.js';
-import { listProposals } from './brief-collect.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -180,38 +179,6 @@ export function helperDir(env = process.env) {
   return join(workRoot(env), 'helper');
 }
 
-/**
- * `~/mc/proposals/` — a room of its own beside `~/mc/intake/`, not a
- * subdirectory of it. Intake is inbound material the turn reads and files
- * away; proposals are what came out of reading it. Nesting the output inside
- * the input made "read everything in intake" an instruction that had to carve
- * out an exception for its own results.
- */
-export function proposalsDir(env = process.env) {
-  return join(workRoot(env), 'proposals');
-}
-
-/**
- * `~/mc/programs/<programme>/proposals/` — where a proposal goes when a
- * programme owns the question it raises (Martin, 2026-11-03). That
- * programme's plan session reads it when it starts, with the whole programme
- * as context, and takes a stand on each one. `proposalsDir` above is what is
- * left: the proposals no programme owns.
- */
-export function programmeProposalsDir(programme, env = process.env) {
-  return join(programsHome(env), programme, 'proposals');
-}
-
-/**
- * `~/mc/programs/<programme>/proposals/archive/` — the proposals that
- * programme's plan session has taken a stand on, each with its `Utfall:` line
- * first. The plan session reads it to judge duplicates; the intake turn and
- * every lister below do not.
- */
-export function programmeProposalsArchiveDir(programme, env = process.env) {
-  return join(programmeProposalsDir(programme, env), 'archive');
-}
-
 /** The programmes under `~/mc/programs/`, by name: its directories, dot-directories left out. */
 export function programmeNames(env = process.env) {
   try {
@@ -220,20 +187,6 @@ export function programmeNames(env = process.env) {
       .map((entry) => entry.name)
       .sort();
   } catch { return []; }
-}
-
-/**
- * Every waiting proposal, wherever it waits: `~/mc/proposals/` first, as
- * `programme: null`, then each programme's `proposals/` by name. An archive is
- * not waiting, so none is read. `{ programme, file, path }`, oldest first
- * within each directory.
- */
-export function listAllProposals(env = process.env, { list = listProposals } = {}) {
-  const rows = list(proposalsDir(env)).map((p) => ({ programme: null, file: p.file, path: p.path }));
-  for (const programme of programmeNames(env)) {
-    for (const p of list(programmeProposalsDir(programme, env))) rows.push({ programme, file: p.file, path: p.path });
-  }
-  return rows;
 }
 
 export function baseUrl(env = process.env) {
@@ -964,7 +917,6 @@ export async function collectHelper({
     errors, analysis, provider, health, services, operations, deploy, live, mainCommit, notes, repo, offline,
   });
   mkdirSync(dir, { recursive: true });
-  mkdirSync(proposalsDir(env), { recursive: true });
   const path = join(dir, name);
   writeFileSync(path, text);
   return {
@@ -1022,7 +974,6 @@ async function collectCli({ env, now, since, threshold, cli = cliCollect }) {
 
   const text = `${out.join('\n')}\n`;
   mkdirSync(dir, { recursive: true });
-  mkdirSync(proposalsDir(env), { recursive: true });
   const path = join(dir, name);
   writeFileSync(path, text);
   return {

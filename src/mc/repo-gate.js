@@ -73,7 +73,8 @@ import { duplicateRow } from './archive-plan.js';
 import { readRounds, recordRound } from './repo-round-log.js';
 import { PROCESS_PROGRESS_PRELOAD, TIMES_REPORTER, measuredSeconds, outputCut, recordTestTimes, recordTooSlow, progressTracker, runProgress, slowTests, testsMeasured } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
-import { intakeDir, programmeNames, programmeProposalsDir, proposalsDir } from './helper-collect.js';
+import { intakeDir } from './helper-collect.js';
+import { areaKeysOnDisk, keyProposalsDir } from './area-proposals.js';
 import { classifiedEmptyChange, GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
 import { ensure as ensureDocker, needsDocker, release as releaseDocker } from './docker.js';
 import { repoNameOf } from './repos.js';
@@ -2278,8 +2279,8 @@ export const RED_ON_MAIN_NOTE_DAYS = 7;
  * An intake note for the helper about a test file red on main that a round
  * went on past (ruling 44 § 4) — or null when one is not written.
  *
- * One per file per week: a file at the top of `~/mc/intake/`,
- * `~/mc/proposals/` or a programme's `proposals/` (not its archive) younger
+ * One per file per week: a file at the top of `~/mc/intake/` or of an
+ * area's `~/mc/areas/<repo>/<area>/proposals/` (not its archive) younger
  * than seven days that names the test path is the
  * note already, whoever wrote it. The SQL snapshot tests were red in 77 rounds
  * of 43 pull requests; 77 notes would be the noise the round just stopped
@@ -2288,8 +2289,8 @@ export const RED_ON_MAIN_NOTE_DAYS = 7;
 export function noteRedOnMain({ env = process.env, now = Date.now(), repo, file, names = [], breaks = [], prs = [] }) {
   try {
     const since = now - RED_ON_MAIN_NOTE_DAYS * 24 * 60 * 60 * 1000;
-    const programmes = programmeNames(env).map((programme) => programmeProposalsDir(programme, env));
-    for (const dir of [intakeDir(env), proposalsDir(env), ...programmes]) {
+    const areas = areaKeysOnDisk(env).map((key) => keyProposalsDir(key, env));
+    for (const dir of [intakeDir(env), ...areas]) {
       if (!existsSync(dir)) continue;
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         if (!entry.isFile()) continue;

@@ -61,14 +61,21 @@ test('curation turn: an unreadable state starts no turn and says so; a state fil
   assert.equal(readCurationState({ root: ROOT, read: good.read }).status, 'valid');
 });
 
-test('curation turn: the prompt lists every proposals folder, oldest first, and says what the turn may and may not write', () => {
-  const s = store({ '/w/proposals/b.md': '#', '/w/proposals/.hidden': '#', [`${HOME}/one/proposals/a.md`]: '#', [`${HOME}/one/README.md`]: '#', [`${HOME}/two/proposals/c.md`]: '#' });
-  const ages = { '/w/proposals/b.md': 300, [`${HOME}/one/proposals/a.md`]: 100, [`${HOME}/two/proposals/c.md`]: 200 };
-  const backlog = proposalBacklog({ root: '/w', home: HOME, list: s.list, modified: (path) => ages[path] ?? null });
-  assert.deepEqual(backlog.map((entry) => entry.path), [`${HOME}/one/proposals/a.md`, `${HOME}/two/proposals/c.md`, '/w/proposals/b.md']);
+test('curation turn: the prompt lists every area\'s proposals, oldest first, and says what the turn may and may not write', () => {
+  const A = '/w/areas';
+  const s = store({
+    [`${A}/memoro/trust/proposals/b.md`]: '#', [`${A}/memoro/trust/proposals/.hidden.md`]: '#', [`${A}/memoro-cli/system/proposals/a.md`]: '#',
+    [`${A}/memoro-cli/system/proposals/archive/old.md`]: '#', [`${A}/memoro/delivery/proposals/c.md`]: '#',
+    // The old places are not read: the ownerless root and a programme's own proposals/.
+    '/w/proposals/root.md': '#', [`${HOME}/one/proposals/programme.md`]: '#',
+  });
+  const ages = { [`${A}/memoro/trust/proposals/b.md`]: 300, [`${A}/memoro-cli/system/proposals/a.md`]: 100, [`${A}/memoro/delivery/proposals/c.md`]: 200 };
+  const backlog = proposalBacklog({ areas: A, list: s.list, modified: (path) => ages[path] ?? null });
+  assert.deepEqual(backlog.map((entry) => [entry.area, entry.path]), [
+    ['memoro-cli/system', `${A}/memoro-cli/system/proposals/a.md`], ['memoro/delivery', `${A}/memoro/delivery/proposals/c.md`], ['memoro/trust', `${A}/memoro/trust/proposals/b.md`],
+  ]);
   const prompt = curationPrompt({ paths: { memoro: '/w/wt/memoro' }, branches: { memoro: 'manager/curation-x' }, pages: [{ repo: 'memoro', id: 'capture', path: '/w/wt/memoro/docs/technical/areas/capture.md' }], backlog, moved: ['memoro'] });
-  assert.ok(prompt.indexOf(`${HOME}/one/proposals/a.md`) < prompt.indexOf(`${HOME}/two/proposals/c.md`));
-  assert.ok(prompt.indexOf(`${HOME}/two/proposals/c.md`) < prompt.indexOf('/w/proposals/b.md'));
+  assert.ok(prompt.includes(`Proposals in the areas, oldest first — bring what waits on Martin to the desk with \`mc martin propose\`:\n- memoro-cli/system: ${A}/memoro-cli/system/proposals/a.md\n- memoro/delivery: ${A}/memoro/delivery/proposals/c.md\n- memoro/trust: ${A}/memoro/trust/proposals/b.md`), prompt);
   for (const text of ['manager/curation-x', 'Main has moved since the last curation in: memoro', 'a turn that finds nothing to change is a success', 'do not make a horizon or a goal']) assert.ok(prompt.includes(text), text);
   // D7: each changed repository is published with the form that queues it for the merger, whose docs form lands it;
   // `--no-merge` would open a pull request nothing ever queues.

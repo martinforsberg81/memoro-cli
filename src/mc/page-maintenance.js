@@ -12,6 +12,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { readAreas } from './areas.js';
+import { areaKeysOnDisk, keyProposalsDir } from './area-proposals.js';
 import { LATE_DAYS, listLessons } from './desk-lessons.js';
 import { run } from './git.js';
 import { ageWords } from './page-cache.js';
@@ -22,7 +23,7 @@ const WEEK_S = 7 * 24 * 60 * 60;
 /** The sources in the order the frame draws them. `verb` is what handles one; `none` is the row of a source with no reader. */
 export const SOURCES = [
   { id: 'feedback', label: 'User feedback', verb: '', none: "no source — memoro's product feedback was retired (migration 0213)" },
-  { id: 'proposals', label: 'Proposals', verb: 'mc plan' },
+  { id: 'proposals', label: 'Proposals', verb: 'mc proposals' },
   { id: 'lessons', label: 'Lessons', verb: 'mc martin' },
   { id: 'errors', label: 'Errors', verb: 'mc helper --intake' },
   { id: 'tests', label: 'Tests', verb: 'mc gate' },
@@ -84,26 +85,20 @@ export function maintenanceSection({ readers = {}, sources = SOURCES } = {}) {
 /* ------------------------------------------------------------------ readings */
 
 /**
- * Proposals: `fresh` are the files in the root `~/mc/proposals` (no programme owns them yet — the new ones) and
- * `programmes` is `[{ programme, files }]`, the files directly under each `programs/<programme>/proposals/`. A file is
- * `{ name, at }` — the instant it is dated, in ms.
+ * Proposals: `areas` is `[{ area, files }]`, the files directly under each `~/mc/areas/<repo>/<area>/proposals/`
+ * (`area` its key `<repo>/<area>`). A file is `{ name, at }` — the instant it is dated, in ms. Counted and aged by area.
  */
-export function proposalsReading({ fresh = [], programmes = [], now = new Date() } = {}) {
-  const waiting = programmes.filter((entry) => entry.files.length);
-  const inProgrammes = waiting.reduce((sum, entry) => sum + entry.files.length, 0);
-  const all = [...fresh, ...waiting.flatMap((entry) => entry.files)].map((file) => file.at).filter(Number.isFinite);
-  const oldest = all.length ? seconds(Math.min(...all), now) : null;
-  const count = fresh.length + inProgrammes;
-  const parts = [`${fresh.length} new`, `${inProgrammes} waiting in ${plural(waiting.length, 'programme')}`];
-  if (oldest != null) parts.push(`oldest ${howLong(oldest)}`);
+export function proposalsReading({ areas = [], now = new Date() } = {}) {
+  const waiting = areas.filter((entry) => entry.files.length);
+  const count = waiting.reduce((sum, entry) => sum + entry.files.length, 0);
   const age = (files) => { const ats = files.map((file) => file.at).filter(Number.isFinite); return ats.length ? seconds(Math.min(...ats), now) : null; };
+  const oldest = age(waiting.flatMap((entry) => entry.files));
+  const parts = [`${count} waiting in ${plural(waiting.length, 'area')}`];
+  if (oldest != null) parts.push(`oldest ${howLong(oldest)}`);
   return {
-    count, new: fresh.length, waiting: inProgrammes, oldest_seconds: oldest, summary: parts.join(' · '), tone: count ? WAITS : QUIET,
-    groups: [
-      ...(fresh.length ? [{ label: 'New', count: fresh.length, oldest_seconds: age(fresh), items: fresh.map((file) => file.name) }] : []),
-      ...waiting.map((entry) => ({ label: entry.programme, count: entry.files.length, oldest_seconds: age(entry.files) }))
-        .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)),
-    ],
+    count, oldest_seconds: oldest, summary: parts.join(' · '), tone: count ? WAITS : QUIET,
+    groups: waiting.map((entry) => ({ label: entry.area, count: entry.files.length, oldest_seconds: age(entry.files) }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)),
   };
 }
 
@@ -243,15 +238,9 @@ export function readFiles(dir, { keep = () => true, exists = existsSync } = {}) 
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** The root proposals and every programme's: `{ fresh, programmes }`, for `proposalsReading`. */
-export function readProposals({ root, programs }) {
-  const programmes = [];
-  if (existsSync(programs)) {
-    for (const entry of readdirSync(programs, { withFileTypes: true }).filter((item) => item.isDirectory())) {
-      programmes.push({ programme: entry.name, files: readFiles(join(programs, entry.name, 'proposals')) });
-    }
-  }
-  return { fresh: readFiles(root), programmes };
+/** Every area's waiting proposals on disk, `[{ area, files }]` for `proposalsReading`; an archive is not read. */
+export function readProposals({ env }) {
+  return areaKeysOnDisk(env).map((area) => ({ area, files: readFiles(keyProposalsDir(area, env), { keep: (name) => name.endsWith('.md') }) }));
 }
 
 /** `lessons` for `lessonsReading`, from the desk's lesson files. */

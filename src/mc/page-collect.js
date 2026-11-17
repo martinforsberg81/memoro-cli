@@ -16,7 +16,7 @@
  *              and what the runner refuses to land at all.
  * intake     — the helper's newest digest per repository, what is new in it,
  *              the `!` lines split into message, fingerprint and count, and
- *              the root proposals with no owning programme.
+ *              the proposals waiting in the areas.
  * checks     — per repository, the nightly's last full test and the last
  *              daily `mc deps` reading: when, of which commit, and what each
  *              found. Two file reads each; nothing is run.
@@ -68,7 +68,8 @@ import { deployMendLine, deployMendReading } from './deploy-repair.js';
 import { mainMendReading } from './main-repair.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { languageState } from './language-runs.js';
-import { HELPER_REPOS, digestDirs, findDigest, intakeDir, proposalsDir } from './helper-collect.js';
+import { HELPER_REPOS, digestDirs, findDigest, intakeDir } from './helper-collect.js';
+import { listAllProposals } from './area-proposals.js';
 import {
   areasReading, depsReading, errorsReading, intakeReading, lessonsReading, maintenanceSection, proposalsReading, readAreaPages, readIntakeFiles,
   readLessons, readProposals, straysReading, testsReading,
@@ -1011,12 +1012,12 @@ export function countNewErrors(text) {
 
 /**
  * What waits in `~/mc/intake/`: the newest digest with what is new in it, and
- * the root proposals with no owning programme.
+ * the proposals waiting in the areas (`~/mc/areas/<repo>/<area>/proposals/`), by file name.
  *
  * With no digest the section says so. It never prints a zero — a zero here
  * would read as "production is quiet" when it means "nobody has looked".
  */
-export function intakeSection({ digests = [], proposals = [], now = new Date(), named = INTAKE_LOUD_NAMED, runs = [], programmeProposals = {}, intakeFiles = [] } = {}) {
+export function intakeSection({ digests = [], proposals = [], now = new Date(), named = INTAKE_LOUD_NAMED, runs = [], intakeFiles = [] } = {}) {
   const repos = digests.map((digest) => {
     const { lines, first } = newErrorLines(digest.text);
     const loud = lines.filter((line) => line.loud);
@@ -1052,7 +1053,6 @@ export function intakeSection({ digests = [], proposals = [], now = new Date(), 
     && (!latest || Date.parse(row.ts) >= Date.parse(latest.ts)) ? row : latest, null);
   const last_run = last ? { at: last.ts, age_seconds: Math.max(0, Math.round((now.getTime() - Date.parse(last.ts)) / 1000)), ok: String(last.exit) === '0' } : null;
   return { last_run, repos, digests: repos.length,
-    unhandled: Object.values(programmeProposals).reduce((sum, count) => sum + count, 0),
     other_intake: intakeFiles.filter(name => !/^errors-(?:(?:memoro|memoro-cli)-)?\d{4}-\d{2}-\d{2}\.md$/u.test(name)).length,
     proposals: proposals.length, by_system: proposalCounts(proposals), proposal_files: proposalSummary(proposals) };
 }
@@ -1072,7 +1072,7 @@ function analysisPriorities(text) {
 export const PROPOSALS_NAMED = 3;
 
 /**
- * What lies in `~/mc/proposals`, as BRIEF's one line says it: how far back the
+ * What waits in the areas' `proposals/`, as BRIEF's one line says it: how far back the
  * pile reaches and the newest few by name. A proposal is `<date>-<system>-<slug>.md`,
  * and what follows the date is the only title mc has without opening the file —
  * which is enough to recognise one, and reading 109 files for a line is not.
@@ -1238,10 +1238,10 @@ function statedPhaseSection(goals, order) {
 /**
  * Programme → phases → goals. Flat goals retain their stable menu numbers
  * (programme then name); phase groups reference those same goal objects.
- * Plans, proposals and otherwise unexplained sessions remain programme facts.
+ * Plans and otherwise unexplained sessions remain programme facts; proposals are the areas'.
  */
 export function programmesSection({
-  planning = {}, planningSessions = {}, programmeSessions = {}, goalRows = [], programmes = [], proposalCounts = {},
+  planning = {}, planningSessions = {}, programmeSessions = {}, goalRows = [], programmes = [],
   strays = [], sessionStrays = [], runnerSessions = [], priority = () => 0, order = () => SEQUENTIAL,
 } = {}) {
 
@@ -1283,7 +1283,6 @@ export function programmesSection({
       finished: goals.filter((goal) => FINISHED.includes(goal.stage)).length,
       goals,
       ...phaseSection(goals, order(name)),
-      proposals: proposalCounts[name] || 0,
       repos: [...new Set(goals.flatMap((goal) => goal.repos || []))].sort(),
       planning: planning[name] || null,
       planning_sessions: [...(planningSessions[name] || (planning[name] ? [planning[name]] : [])), ...(runnerPlanning[name] || [])],
@@ -1581,7 +1580,6 @@ export function readProgrammes({
     runnerSessions: runnerSection({ currents, now, alive }).sessions,
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive, order }),
     programmes: [...Object.keys(homes), ...recordedProgrammes(programsHome(env))],
-    proposalCounts: readProgrammeProposalCounts(programsHome(env)),
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
     order,
   });
@@ -1752,7 +1750,6 @@ export async function collectPage({
     merger: readMerger({ root, alive }), history: readRounds({ root: home }).rounds,
     alive, goals, recoverySessions: runner.sessions,
   });
-  const programmeProposals = readProgrammeProposalCounts(programsHome(env));
   const records = recordReader(env);
   const order = records.order;
   const programmes = programmesSection({
@@ -1763,7 +1760,6 @@ export async function collectPage({
     sessionStrays: sessions.strays,
     goalRows: goalsOf({ goals, currents, alive, order }),
     programmes: [...present.flatMap((repo) => listProgrammes(repo)), ...recordedProgrammes(programsHome(env))],
-    proposalCounts: programmeProposals,
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
     order,
     strays: readStrays(root, { git }),
@@ -1812,7 +1808,7 @@ export async function collectPage({
     landed: landedSection({ rows: readRunRows(tsv), now }),
     // The interactive sessions' cost, from the tools' own transcripts (desk-cost.js).
     desk_cost: readDeskCost({ root, claudeDir: claudeHome(env), codexDir: codexHome(env), agyDir: agyBrainDir(env), now, read: readText }),
-    intake: intakeSection({ runs: parseRuns(tsv), digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), programmeProposals, intakeFiles: directFiles(intakeDir(env)), now }),
+    intake: intakeSection({ runs: parseRuns(tsv), digests: readDigests(env), proposals: listAllProposals(env).map((p) => p.file).sort(), intakeFiles: directFiles(intakeDir(env)), now }),
     // MAINTENANCE's one row per source, filled in below once the rest of the page is read (page-maintenance.js).
     maintenance: null,
     programmes,
@@ -1860,7 +1856,7 @@ export async function collectPage({
   };
   page.maintenance = maintenanceSection({
     readers: {
-      proposals: () => proposalsReading({ ...readProposals({ root: proposalsDir(env), programs: programsHome(env) }), now }),
+      proposals: () => proposalsReading({ areas: readProposals({ env }), now }),
       lessons: () => lessonsReading({ lessons: readLessons({ env }), now }),
       errors: () => errorsReading({ intake: page.intake }),
       tests: () => testsReading({ checks: page.checks, missing: nightlyMissing }),
@@ -1895,24 +1891,6 @@ function mcReading(checkout, base, git) {
 /** Direct files only: archive directories and nested files are not pending intake. */
 function directFiles(dir) {
   try { return readdirSync(dir, { withFileTypes: true }).filter(entry => entry.isFile()).map(entry => entry.name); } catch { return []; }
-}
-
-/** The proposal files, by name. A count is all mc does with a proposal. */
-function proposalFiles(dir) {
-  try { return readdirSync(dir).filter((name) => name.endsWith('.md')).sort(); } catch { return []; }
-}
-
-/** Count proposal files directly under each programme's proposals/ directory. */
-function readProgrammeProposalCounts(home) {
-  const counts = {};
-  let programmes = [];
-  try { programmes = readdirSync(home, { withFileTypes: true }).filter((entry) => entry.isDirectory()); } catch { return counts; }
-  for (const programme of programmes) {
-    let files = [];
-    try { files = readdirSync(join(home, programme.name, 'proposals'), { withFileTypes: true }); } catch { /* no proposals directory */ }
-    counts[programme.name] = files.filter((entry) => entry.isFile()).length;
-  }
-  return counts;
 }
 
 /** The open deploy repair as the page shows it: its state, its reading line and, when it waits on Martin, why. */

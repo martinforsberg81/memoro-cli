@@ -174,7 +174,7 @@ the keychain, state mc owns); end a stale process only when you can show it is a
 leftover of the run's own round, never a live session's. There is no deploy to
 retry: nothing was typed, so the request ends when the repair has landed.
 
-Write a proposal in `~/mc/programs/mc-tests/proposals/` naming the fault of mc deploy's
+Write a proposal in `~/mc/areas/memoro-cli/system/proposals/` naming the fault of mc deploy's
 design that let this happen, so it is removed. End with a published PR in each
 repository you changed, or, when nothing needed a change (the cause was state that
 is mended, or has passed), `mc repo mend deploy <id> repaired --reason "<what was

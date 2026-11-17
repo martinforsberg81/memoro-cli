@@ -5,8 +5,8 @@
  *
  * Programmes come from `docs/project/` on `origin/main` (`listProgrammes`);
  * the runs are the rows of `~/mc/runner/log/runs.tsv` (`parseRuns`,
- * `runsFor`); the proposals are the files in `~/mc/proposals/`
- * (`listProposals`). The pure readers take text and return data so a test
+ * `runsFor`); what a proposal's file name says (`proposalSystem`) — the
+ * proposals themselves are listed by `area-proposals.js`. The pure readers take text and return data so a test
  * can feed them fixtures; the git calls are injected. The plan readers went
  * with projects on 2026-11-03 (goal mc/projects-to-goals).
  *
@@ -15,8 +15,7 @@
  * `mc goal list` where they live. The file kept its name because a dozen
  * modules import from it.
  */
-import { readdirSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename } from 'node:path';
 
 import { run as runGitSync } from './git.js';
 
@@ -29,33 +28,6 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 export { defaultRepos } from './repos.js';
 
 /* ---------------------------------------------------------------- proposals */
-
-/**
- * `~/mc/proposals/` — what the helper wrote and nobody has acted on yet: the
- * desk session's, from what Martin reported, and the intake turn's, from the
- * digest, in one directory.
- *
- * **mc does not read them.** It used to parse a fixed frontmatter and fixed
- * section names out of every file, in three places that disagreed: a proposal
- * whose first prose line was not marked `# ` was counted by the page, missing
- * from the old brief, and recorded as "wrote nothing" by the very turn that had
- * just written it — with no error anywhere. The parse existed so a script
- * could say what kind of thing each file was. Nothing needs that. A count says
- * how many are waiting, and a session that has to know what is in one opens
- * it, the way it would open any other document.
- *
- * So this is the whole of it: the names, oldest first. A proposal is prose.
- */
-export function listProposals(dir) {
-  try {
-    return readdirSync(dir)
-      .filter((name) => name.endsWith('.md'))
-      .sort()
-      .map((file) => ({ file, path: join(dir, file) }));
-  } catch {
-    return [];
-  }
-}
 
 /** The systems a proposal's filename may name: `<date>-<system>-<slug>.md`. One word per repository in `defaultRepos`; the list grows only when one joins. */
 export const PROPOSAL_SYSTEMS = Object.freeze(['mc', 'memoro']);

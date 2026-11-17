@@ -17,7 +17,8 @@
  * here exactly when it is on the page. `mc programs` alone prints the usage.
  */
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { basename, join, sep } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
+import { areasHome } from '../area-proposals.js';
 import { programsHome, workRoot } from '../paths.js';
 import { wakeRunner } from '../run-control.js';
 import { readAreas } from '../areas.js';
@@ -199,7 +200,6 @@ export function programmesListing({ section, homes = {} }, { record = () => null
       ...(group.goals || []).flatMap((goal) => goal.repos || []),
     ].filter(Boolean))].sort(),
     goals: (group.goals || []).length,
-    proposals: group.proposals || 0,
     statuses: Object.fromEntries(statusRollup(group.statuses)),
     plan_sessions: planProviders(group),
     record: record(group.programme),
@@ -227,7 +227,6 @@ function cells(item) {
     `priority ${item.priority}`,
     item.repos.join(',') || '—',
     item.goals ? `${plural(item.goals, 'goal')}${rollup ? ` · ${rollup}` : ''}` : 'no goal',
-    plural(item.proposals, 'proposal'),
     meta ? `plan ${meta}` : 'no plan session',
     ...(item.record ? [recordCell(item.record)] : []),
   ];
@@ -251,19 +250,21 @@ function gitIn(cwd, args) {
   return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
-/** The proposal `--from-proposal` names, as a real path to a file in ~/mc/proposals/ or a programme's proposals/, or why not. */
-function proposalIn(given, { env, home }) {
+/**
+ * The proposal `--from-proposal` names, as a real path to a file directly in an area's
+ * `~/mc/areas/<repo>/<area>/proposals/`, with where it is archived once ordered, or why not.
+ */
+function proposalIn(given, { env }) {
   let path;
   try { path = realpathSync(given); } catch { return { error: `--from-proposal ${given} is not a file` }; }
   if (!statSync(path).isFile()) return { error: `--from-proposal ${given} is not a file` };
-  const root = join(workRoot(env), 'proposals') + sep;
-  // A proposal is a file directly in a proposals folder; one under its archive/ has been decided already.
-  const under = (dir) => (path.startsWith(dir + sep) ? path.slice(dir.length + 1).split(sep) : null);
-  const inRoot = under(realOr(root.slice(0, -1)))?.length === 1;
-  const parts = under(realOr(home));
-  const inProgramme = parts?.length === 3 && parts[1] === 'proposals';
-  if (!inRoot && !inProgramme) return { error: `--from-proposal ${given} is not a proposal: it must be a file in ${root} or in a programme's proposals/ folder` };
-  return { path };
+  // A proposal is a file directly in an area's proposals folder; one under its archive/ has been decided already.
+  const home = realOr(areasHome(env));
+  const parts = path.startsWith(home + sep) ? path.slice(home.length + 1).split(sep) : null;
+  if (parts?.length !== 4 || parts[2] !== 'proposals') return { error: `--from-proposal ${given} is not a proposal: it must be a file directly in an area's ${areasHome(env)}/<repo>/<area>/proposals/` };
+  const archived = join(dirname(path), 'archive', basename(path));
+  if (existsSync(archived)) return { error: `--from-proposal ${given}: ${archived} exists already — the proposal was decided once; nothing was made` };
+  return { path, area: `${parts[0]}/${parts[1]}`, archived };
 }
 
 function realOr(path) {
@@ -311,26 +312,27 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
     }
     let proposal = null;
     if (flags['from-proposal'] !== null) {
-      proposal = proposalIn(flags['from-proposal'], { env, home });
+      proposal = proposalIn(flags['from-proposal'], { env });
       if (proposal.error) return problem(proposal.error);
     }
     const template = recordPageTemplate({ ...(canon ? { canon } : {}), area: flags.area });
     if (template === null) return problem(`could not read the programme page template (canon/tasks/references/${flags.area ? 'repair-page.md' : 'programme-document.md'}) — nothing was made`);
-    const page = recordPage(template, { name, end: flags.end, horizon: flags.horizon, area: flags.area, purpose: flags.purpose });
+    const page = recordPage(template, { name, end: flags.end, horizon: flags.horizon, area: flags.area, purpose: flags.purpose, proposal: proposal?.archived ?? null });
     const record = newRecord({ horizon: flags.horizon, area: flags.area, end: flags.end.trim(), createdBy: writer.by, now, stated: true });
     mkdirSync(home, { recursive: true });
     mkdirSync(dir);
-    for (const sub of ['goals', join('proposals', 'archive'), 'evidence']) mkdirSync(join(dir, sub), { recursive: true });
+    for (const sub of ['goals', 'evidence']) mkdirSync(join(dir, sub), { recursive: true });
     writeFileSync(join(dir, 'README.md'), page, { flag: 'wx' });
     writeRecord(dir, record);
     stdout.write(`${name}: programme made at ${dir} — record state ${record.state}, phases stated, page README.md to fill in; mc goal new ${name}/<goal> makes its first goal\n`);
     if (proposal) {
-      const moved = join(dir, 'proposals', basename(proposal.path));
+      // Ordered is decided: the proposal goes to its area's archive under the line that says so.
       try {
-        writeFileSync(moved, `Moved here from ${proposal.path} when ${name} was made (mc programs create --from-proposal).\n\n${readFileSync(proposal.path, 'utf8')}`, { flag: 'wx' });
+        mkdirSync(dirname(proposal.archived), { recursive: true });
+        writeFileSync(proposal.archived, `Utfall: ordered in programme ${name}\n\n${readFileSync(proposal.path, 'utf8')}`, { flag: 'wx' });
         unlinkSync(proposal.path);
-      } catch (error) { return problem(`${name} is made, but the proposal ${proposal.path} was not moved into ${join(dir, 'proposals')}: ${error.message}`); }
-      stdout.write(`${name}: the proposal moved into ${moved}\n`);
+      } catch (error) { return problem(`${name} is made, but the proposal ${proposal.path} was not archived at ${proposal.archived}: ${error.message}`); }
+      stdout.write(`${name}: the proposal is archived at ${proposal.archived} (area ${proposal.area})\n`);
     }
     return 0;
   } catch (error) {

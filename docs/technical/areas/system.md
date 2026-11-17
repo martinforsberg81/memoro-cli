@@ -23,7 +23,7 @@ Measured, with the baselines of 2026-11-14 (programme `mc`):
 
 ## Decisions
 
-- Three kinds of thing reach Martin: a product choice, a judgement (look, listen, try) and a reserved act (deploy, money, credentials, production data). Every technical question is decided by the system, by the goal, the standards, the app's pattern and established practice, and reported afterwards in a record he can read and overturn; a question that established practice answers is never his, also when it concerns privacy, security or cost (Martin, 2026-11-14; programme `mc`).
+- Three kinds of thing reach Martin: a product choice, a judgement (look, listen, try; superseded for orders by the 2026-11-17 decision below) and a reserved act (deploy, money, credentials, production data). Every technical question is decided by the system, by the goal, the standards, the app's pattern and established practice, and reported afterwards in a record he can read and overturn; a question that established practice answers is never his, also when it concerns privacy, security or cost (Martin, 2026-11-14; programme `mc`).
 - `mc martin` is his one way in: he reads no ledger, queue or programme page himself (Martin, 2026-11-14; programme `mc`).
 - `mc martin` may do everything: there are no limits in Martin's interactive sessions; what he says there is carried out, whatever it touches (Martin, 2026-11-16; programme `mc`).
 - A goal stops on its own after five build sessions and waits for the desk (Martin, 2026-11-16; programme `mc`).
@@ -43,12 +43,15 @@ Measured, with the baselines of 2026-11-14 (programme `mc`):
 - `mc programs review` is advisory: Martin's interactive session calls it when he wants, it writes PROGRAMME-REVIEW.md beside the programme, and nothing reads the report (Martin, 2026-11-16; programme `plain-programmes`).
 - The planner cuts goals from README.md of a ready programme (Martin, 2026-11-16; programme `plain-programmes`).
 - A horizon has a basis file, and what is not designed is settled in a programme document (Martin, 2026-11-15; programme `programme-sign-off`).
+- A programme is an order of what is to be built: temporary, archived when its work has landed, and of no interest afterwards. What must last is written in its permanent place before then: `docs/technical/`, the area page, or a proposal in its area (Martin, 2026-11-17; the desk).
+- An order is buildable to its end without Martin: no visual or functional check of his (look, listen, try, accept, a step "on Martin's word") between ready and done. Everything he decides is decided in the document before it is set ready, and an act it needs is done before ready or after its end (Martin, 2026-11-17; the desk).
+- Proposals live in the permanent areas, `~/mc/areas/<repo>/<area>/proposals/`, one folder per area page; no programme holds proposals and there is no ownerless folder (Martin, 2026-11-17; the desk).
 
 ## Store
 
 - `canon/` in memoro-cli: the roles, verbs and task pages that every session is started from.
 - `.mc/areas.json` in each repository: the areas it declares, their standards, paths and questions. This page is the page of the source area `system`.
-- The `~/mc` layout: programmes, archive, proposals, horizons, runner state and the desk's items, as [mc-layout.md](../mc-layout.md) describes it.
+- The `~/mc` layout: programmes, archive, the areas' proposals, horizons, runner state and the desk's items, as [mc-layout.md](../mc-layout.md) describes it.
 
 ## Standards
 

@@ -31,13 +31,13 @@ that silently performs the old operation. `mc status` points to the page and
 
 ## Proposal counts
 
-`mc proposals` reports waiting proposal counts per programme, unassigned root
-proposals and the total. It uses the shared filesystem proposal reader, so it
-also includes dormant and local-only programme directories. Only direct
-Markdown files count; archives, directories and other files do not. No proposal
-body or network is read. `mc proposals --json` returns `total`, `programmes`
-(`programme`, `count`, `path`) and `unassigned` (`count`, `path`). The paths
-follow the configured mc work root.
+`mc proposals` reports waiting proposal counts per area and the total. It uses
+the shared filesystem proposal reader (`listAllProposals`), so it includes every
+area folder under `~/mc/areas/<repo>/<area>/proposals/` on disk, one whose page is
+no longer declared too. Only direct Markdown files count; archives, directories
+and other files do not. No proposal body, git or network is read.
+`mc proposals --json` returns `areas` (`area`, `count`, `path`) and `total`. The
+paths follow the configured mc work root.
 
 ## Checks
 
