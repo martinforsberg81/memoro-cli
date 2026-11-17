@@ -57,11 +57,14 @@ text item `horizon:<proposed-slug>`; before drafting, apply [writing a horizon](
 
 When `MC_ROLE=manager`, `mc publish` refuses with exit 2 and one `mc:` line naming the file a branch whose diff
 against origin/main (a) changes a file outside `docs/technical/`, (b) changes `docs/technical/memoro-me.md`,
-(c) changes the `## Aim` or `## Decisions` section of an area page (`docs/technical/areas/*.md`), or (d) removes
-or alters any line of a block that holds a dated decision of Martin's (a list item with its continuation lines,
-or a paragraph up to the next blank line, containing `Martin` followed by a comma and a date). That is a list of
-where curation may write, not a proof that what it writes is true: whether a statement is a fact stays the
-session's judgement. Other roles are unaffected (`managerGuard` in `src/mc/publish.js`).
+(c) changes the `## Aim` of an area page (`docs/technical/areas/*.md`), or changes its `## Decisions` by anything
+but the removal or correction of a superseded dated block, or (d) removes or alters a block that holds a dated
+decision of Martin's (a list item with its continuation lines, or a paragraph up to the next blank line, containing
+`Martin` followed by a comma and a date) unless the same file keeps, unchanged, a dated block with a later date. A
+block is superseded by that later block; the manager may then remove it or correct it, keeping its citation (the
+last `Martin, YYYY-MM-DD` in it, as written). Everything else is refused with the one message that sends a text of
+Martin's to the desk with `mc martin propose`. That is a list of where curation may write, not a proof that what it
+writes is true: whether a statement is a fact stays the session's judgement. Other roles are unaffected (`managerGuard` in `src/mc/publish.js`).
 
 The manager writes no programme: `mc programs create`, `record` and `state` refuse it with exit 2, as they refuse
 every headless role ([mc-plan.md](mc-plan.md)). Work the manager finds that needs a programme, a repair included,

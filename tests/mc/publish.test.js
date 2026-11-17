@@ -163,7 +163,7 @@ describe('mc publish', () => {
 
   it('manager: removing or altering a line of a block with a dated decision of Martin\'s is refused, wherever it stands; an undated block is free', async () => {
     const FILE = 'docs/technical/mc-run.md';
-    const doc = `# Run\n\nThe runner starts it.\nMartin, 2026-11-12 decided that.\nIt holds.\n\n${DECIDED}`;
+    const doc = `# Run\n\nThe runner starts it.\nMartin, 2026-11-10 decided that.\nIt holds.\n\n${DECIDED}`;
     for (const after of [
       doc.replace('It never merges itself.', 'It merges when it likes.'),
       doc.replace('  It never merges itself.\n', ''),
@@ -177,8 +177,43 @@ describe('mc publish', () => {
     }
     // Adding lines, rewording the undated list item and a decision with no date are not what the rule keeps.
     const free = fixture();
-    assert.equal(await run(['--no-merge'], asManager(free.deps, { [FILE]: [doc, doc.replace('- An undated line.', '- A reworded line.').replace('It holds.', 'It holds.\nMore.')] })), 0, free.out.stderr);
+    assert.equal(await run(['--no-merge'], asManager(free.deps, { [FILE]: [doc, doc.replace('- An undated line.', '- A reworded line.').replace('It holds.\n', 'It holds.\n\nMore.\n')] })), 0, free.out.stderr);
     assert.equal(managerGuard([{ path: FILE, before: 'Martin decided that.\n', after: 'Gone.\n' }]), null);
+  });
+
+  // D2: an older dated decision of Martin's is superseded by a later one on the same page that stands unchanged; only then may it be
+  // corrected (its citation kept) or removed. Everything else stays his.
+  const OLD = '- Merging waits for a review. Martin, 2026-11-10, programme mc.\n  It never merges itself.\n';
+  const CORRECTED = '- Merging waits for a review. Martin, 2026-11-10, programme mc.\n  It merges when a review passes.\n';
+  const LATER = '- The review is a gate. Martin, 2026-11-12, programme mc.\n';
+  const AREA = 'docs/technical/areas/x.md';
+  const FILE = 'docs/technical/mc-run.md';
+  const doc = (decisions) => `# Run\n\n${decisions}`;
+  const guard = (path, before, after) => managerGuard([{ path, before, after }]);
+
+  it('manager: a superseded dated line is corrected with its citation kept, on an area page and on another page of docs/technical/', async () => {
+    assert.equal(guard(AREA, PAGE('Aim.', OLD + LATER), PAGE('Aim.', CORRECTED + LATER)), null);
+    assert.equal(guard(FILE, doc(OLD + LATER), doc(CORRECTED + LATER)), null);
+    const allowed = fixture();
+    assert.equal(await run(['--no-merge'], asManager(allowed.deps, { [AREA]: [PAGE('Aim.', OLD + LATER), PAGE('Aim.', CORRECTED + LATER)] })), 0, allowed.out.stderr);
+    assert.deepEqual(allowed.out.pushed, ['step-x']);
+  });
+
+  it('manager: a superseded dated line is removed, on an area page and on another page of docs/technical/', () => {
+    assert.equal(guard(AREA, PAGE('Aim.', OLD + LATER), PAGE('Aim.', LATER)), null);
+    assert.equal(guard(FILE, doc(OLD + LATER), doc(LATER)), null);
+    // The next block shares the removed block's citation and stays unchanged: a removal, not a replacement by its neighbour.
+    const SIBLING = '- Reviews are read in order. Martin, 2026-11-10, programme mc.\n';
+    assert.equal(guard(AREA, PAGE('Aim.', OLD + SIBLING + LATER), PAGE('Aim.', SIBLING + LATER)), null);
+  });
+
+  it('manager: the same change is refused with no later dated block, with the later block changed, with the citation changed, with a block added, and with ## Aim changed', () => {
+    assert.match(guard(AREA, PAGE('Aim.', OLD), PAGE('Aim.', CORRECTED)), /docs\/technical\/areas\/x\.md removes or alters a line of a dated decision of Martin's/u);
+    assert.match(guard(FILE, doc(OLD), doc(CORRECTED)), /docs\/technical\/mc-run\.md removes or alters/u);
+    assert.match(guard(AREA, PAGE('Aim.', OLD + LATER), PAGE('Aim.', CORRECTED + LATER.replace('is a gate', 'is optional'))), /removes or alters/u);
+    assert.match(guard(AREA, PAGE('Aim.', OLD + LATER), PAGE('Aim.', CORRECTED.replace('programme mc', 'programme other') + LATER)), /docs\/technical\/areas\/x\.md changes its ## Decisions/u);
+    assert.match(guard(AREA, PAGE('Aim.', OLD + LATER), PAGE('Aim.', CORRECTED + LATER + '- A new decision. Martin, 2026-11-13, programme mc.\n')), /docs\/technical\/areas\/x\.md changes its ## Decisions/u);
+    assert.match(guard(AREA, PAGE('Aim.', OLD + LATER), PAGE('A new aim.', CORRECTED + LATER)), /docs\/technical\/areas\/x\.md changes its ## Aim/u);
   });
 
   it('manager: a diff that cannot be read refuses; a role other than the manager is not guarded', async () => {
