@@ -330,9 +330,6 @@ function newGoal(args, flags, ctx) {
   if (ctx.list(join(home, programme, GOALS_DIR)).includes(goal)) { stderr.write(`mc: ${programme}/${goal} exists — ${dir}\n`); return 1; }
   const holed = phaseHole(phase, programme, null, ctx);
   if (holed) { stderr.write(`mc: ${holed}\n`); return 2; }
-  const live = liveRepairGoal(programme, ctx);
-  if (live) { stderr.write(`mc: ${live}\n`); return 1; }
-
   const bares = repos.map((repo) => ({ repo, bare: known.find((path) => repoNameOf(path) === repo) }));
   for (const { repo, bare } of bares) {
     const fetched = ctx.git(bare, ['fetch', '-q', 'origin']);
@@ -355,20 +352,6 @@ function newGoal(args, flags, ctx) {
   }
   stdout.write(`${GOAL_FILE} is to be filled in by verbs: mc goal set ${programme}/${goal} goal|contract|out-of-scope --text "…", mc goal criterion add ${programme}/${goal} --criterion "…" --check "…"\n`);
   return 0;
-}
-
-/**
- * Why a programme that repairs an area (its record names `area`) may not take another goal, or null: one repair goal
- * is in flight per area, and the next waits until it is done or dropped. A programme with no record, a record that
- * names no area and one that cannot be read are not held here. A goal whose file cannot be read counts as live.
- */
-function liveRepairGoal(programme, ctx) {
-  const found = readRecord(join(ctx.home, programme), { read: (path) => ctx.read(path) });
-  if (found.status !== 'valid' || !found.record.area) return null;
-  const live = programsGoals({ home: ctx.home, list: ctx.list, read: ctx.read })
-    .filter((goal) => goal.programme === programme)
-    .find((goal) => goal.problems.length > 0 || !FINISHED.includes(goal.stage));
-  return live ? `${programme} repairs the area ${found.record.area} and holds the live goal ${live.goal} — one repair goal in flight per area, the next waits until ${live.goal} is done or dropped` : null;
 }
 
 /**

@@ -457,7 +457,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   Without a record, `MC_HEADLESS=1` refuses (exit 1): `mc: <programme> has no
   record — a goal here is made at the desk`; interactive recordless creation
   remains available. Ready programmes (an old `open` record reads ready), area repairs included, are admitted
-  subject to the existing guards, including one live goal per repair area. It writes
+  subject to the existing guards. It writes
   version 2 (numbered parts) unless given `--structure 1`, which writes version 1
   (goal and contract prose); it prints one hint for the version it wrote. It is in
   stage `draft` (awaiting planning; see *Next draft planning*; `--stage build`

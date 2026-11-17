@@ -26,7 +26,7 @@ import { repoNameOf } from '../repos.js';
 import { knownRepositories } from '../work-area.js';
 import { setProgrammePriorities, validPriority } from '../programme-priority.js';
 import {
-  AREA_RE, RECORD_FILE, changePhases, cycleOf, newRecord, readRecord, recordPage, recordPageTemplate, recordView, recordedProgrammes, setRecordState, writeRecord,
+  AREA_RE, RECORD_FILE, changePhases, cycleOf, newRecord, readRecord, recordPage, recordPageTemplate, recordView, setRecordState, writeRecord,
 } from '../programme-record.js';
 import { PLAN_ROLE, listDirsOf, programsGoals, readTextOrNull } from '../goals.js';
 import { NAME_RE } from '../plan-schema.js';
@@ -308,10 +308,6 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
     if (flags.area !== null) {
       const refused = areaRefusal(flags.area, { env, git, known });
       if (refused) return problem(refused);
-      const active = recordedProgrammes(home)
-        .map((p) => ({ name: p, found: readRecord(join(home, p)) }))
-        .find(({ found }) => found.status === 'valid' && found.record.area === flags.area && found.record.state !== 'done');
-      if (active) return problem(`the area ${flags.area} already has the open repair programme ${active.name} — one repair at a time per area, the rest wait`);
     }
     let proposal = null;
     if (flags['from-proposal'] !== null) {
