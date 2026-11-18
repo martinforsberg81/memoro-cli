@@ -1580,6 +1580,20 @@ export function archiveStatus({ programme, home, root, items, env }) {
   return due.due && (due.mode === 'read' || due.mode === 'archive') ? { status: 'pending' } : null;
 }
 
+/** A completed local programme is not revived by its sessions, PRs or retained tree. */
+function archiveCompleted({ programme, home, root }) {
+  const list = (dir) => { try { return readdirSync(dir); } catch { return []; } };
+  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw error; } };
+  if (liveGoals({ home, programme, list }).length) return false;
+  const dir = join(home, programme);
+  const record = readRecord(dir, { read });
+  if (record.status === 'valid' && record.record.state === 'done') return true;
+  // A current directory is a successor, including one without a record.
+  if (existsSync(dir)) return false;
+  const state = readArchiveState({ root, programme, read });
+  return state.status === 'valid' && !!state.state.destination && existsSync(state.state.destination);
+}
+
 /**
  * PROGRAMMES alone, from the sources `collectPage` reads it from — the goals,
  * the open plan sessions and the tree's own programmes (`listProgrammes`) — and through the same `programmesSection`, so
@@ -1807,6 +1821,11 @@ export async function collectPage({
   for (const group of programmes.programmes) {
     group.archive = archiveStatus({ programme: group.programme, home: programsHome(env), root, items: archiveItems, env });
   }
+  programmes.programmes = programmes.programmes.filter((group) => !archiveCompleted({
+    programme: group.programme, home: programsHome(env), root,
+  }));
+  programmes.dormant = programmes.programmes.filter((group) => group.dormant).length;
+  programmes.active = programmes.programmes.length - programmes.dormant;
   const horizons = horizonsSection({ programmes, found: records.found, env });
 
   let providerPriority = 'auto';

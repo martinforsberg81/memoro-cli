@@ -2282,6 +2282,22 @@ describe('collectPage', () => {
     return { root, env, horizon, record, collect };
   }
 
+  it('removes a done record in place but keeps it while a physical goal exists', async (t) => {
+    const fx = horizonsFixture({ plan: ['finished'] });
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    fx.horizon('first', 'open', 1);
+    fx.record('finished', 'first');
+    const file = join(programsHome(fx.env), 'finished', 'PROGRAMME.json');
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), state: 'done' }));
+    let page = await fx.collect();
+    assert.deepEqual(page.horizons.open[0].programmes, []);
+    assert.ok(!page.programmes.programmes.some((group) => group.programme === 'finished'));
+    mkdirSync(join(programsHome(fx.env), 'finished', 'goals', 'still-live'), { recursive: true });
+    page = await fx.collect();
+    assert.deepEqual(page.horizons.open[0].programmes, ['finished']);
+    assert.ok(page.programmes.programmes.some((group) => group.programme === 'finished'));
+  });
+
   it('collects a draft with no goals into JSON and draws draft at 160 and 80 columns', async (t) => {
     const fx = horizonsFixture();
     t.after(() => rmSync(fx.root, { recursive: true, force: true }));
