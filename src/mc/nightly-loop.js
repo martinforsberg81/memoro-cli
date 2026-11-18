@@ -239,7 +239,7 @@ export function runOfReport(repo, report, { startedAt = Date.now(), clock = () =
 export async function fullRun(repo, {
   root = mcHome(), env = process.env, say = () => {}, narrate = say, round = scheduledRound,
   clock = () => Date.now(), signal = null, repair = requestMainRepair, repairFullRun = requestDeployRepair,
-  sha = null, claims = {}, handover = null, onMeasuring = null,
+  sha = null, claims = {}, handover = null, onMeasuring = null, deploy = false,
 } = {}) {
   // One full run of a tree at a time, whoever starts it (`full-run-claim.js`):
   // a run already measuring this main — a deploy's, a hand-typed `--full`, the
@@ -247,7 +247,7 @@ export async function fullRun(repo, {
   // One whose process died without writing it is no answer, and this starts its
   // own.
   for (;;) {
-    const taken = claimFullRun({ repo: repo.name, sha, verb: 'full run', root, ...claims });
+    const taken = claimFullRun({ repo: repo.name, sha, verb: 'full run', root, deploy, ...claims });
     if (taken.claimed) {
       onMeasuring?.(taken.claim);
       try {
@@ -259,8 +259,13 @@ export async function fullRun(repo, {
     if (taken.waitFor) {
       // Another tree of this repository is being measured, in the one
       // checkout a full run has: wait for it, then measure this one.
-      say(`${repo.name} — a full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} is using the full-run checkout (pid ${taken.waitFor.pid}); waiting for it before measuring ${sha ? sha.slice(0, 7) : 'main'}`);
-      await awaitClaim(taken.waitFor, { root, ...claims, signal: handover, onWait: (ms) => say(`${repo.name} — still waiting for the full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} (pid ${taken.waitFor.pid}), ${Math.round(ms / 60000)} min so far`) });
+      const blocker = taken.waitFor.waiting ? 'deploy preparation' : 'full run';
+      const otherSha = taken.waitFor.sha?.slice(0, 7) || 'main';
+      const target = sha?.slice(0, 7) || 'main';
+      say(taken.waitFor.waiting
+        ? `${repo.name} — waiting for the deploy preparation of ${otherSha} (pid ${taken.waitFor.pid}) before measuring ${target}`
+        : `${repo.name} — a full run of ${otherSha} is using the full-run checkout (pid ${taken.waitFor.pid}); waiting for it before measuring ${target}`);
+      await awaitClaim(taken.waitFor, { root, ...claims, signal: handover, onWait: (ms) => say(`${repo.name} — still waiting for the ${blocker} of ${otherSha} (pid ${taken.waitFor.pid}), ${Math.round(ms / 60000)} min so far`) });
       if (handover?.aborted) return dropped(repo, say);
       continue;
     }
