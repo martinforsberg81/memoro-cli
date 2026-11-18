@@ -14,6 +14,7 @@ import { describe, it } from 'node:test';
 import headless from '@xterm/headless';
 
 import { RESTART, liveReader, plainReader, readLine, screenRows } from '../../src/mc/page-live.js';
+import { pageKey } from '../../src/mc/commands/home.js';
 
 const { Terminal } = headless;
 
@@ -561,7 +562,7 @@ describe('a page taller than the screen', () => {
    * `answers: false` is a terminal that ignores `CSI 6n` — the by-count path,
    * which has the same arithmetic and had the same fault.
    */
-  function tall({ answers = true, pages = [], key = null } = {}) {
+  function tall({ answers = true, pages = [], key = null, first = tallPage(TALL) } = {}) {
     const term = new Terminal({ cols: WIDTH, rows: HEIGHT, scrollback: 500, allowProposedApi: true });
     const input = keyboard();
     // The terminal's reply arrives on the stream the typing arrives on, which
@@ -585,7 +586,6 @@ describe('a page taller than the screen', () => {
     };
 
     const time = clock();
-    const first = tallPage(TALL);
     // Printed the way `run()` prints it, before it knows anybody is watching.
     stdout.write(`${first.join('\n')}\n`);
     const reader = liveReader({
@@ -741,6 +741,129 @@ describe('a page taller than the screen', () => {
 
     it_.input.type('q\r');
     assert.equal(await answer, 'q');
+  });
+
+  it('live redraw: changes horizon label, reference state and warnings independently above the screen at fixed height', async () => {
+    // A page of 97 lines (TALL), with horizon lines at the top (rows 1-10, well above the screen at HEIGHT 45).
+    const makeData = (over = {}) => ({
+      programmes: {
+        programmes: [
+          {
+            number: 1,
+            programme: 'mc',
+            horizon: 'first',
+            horizon_state: 'open',
+            goals: [{ programme: 'mc', name: 'ui', stage: 'build', status: 'ready', phase: 1, title: 'UI Goal', hold: null, running: false }],
+            prs: [],
+          },
+          {
+            number: 2,
+            programme: 'p-other',
+            horizon: 'ghost',
+            horizon_state: over.refState ?? 'reached',
+            goals: [],
+            prs: [],
+          },
+        ],
+      },
+      horizons: {
+        open: [{ slug: 'first', position: 1, title: over.label ?? 'First Horizon', programmes: ['mc'] }],
+        none: ['p-other'],
+        unreadable: over.unreadable ?? [],
+        error: over.error ?? null,
+      },
+    });
+
+    const makeLines = (data) => {
+      const label = data.horizons.open[0].title;
+      const ref = data.programmes.programmes[1].horizon_state;
+      const warn = data.horizons.unreadable.length
+        ? `    1 horizon record cannot be read: ${data.horizons.unreadable.join(', ')}`
+        : '    no warnings';
+      const top = [
+        '  ┌─ HORIZONS  1 open · 1 programme under way · 1 goal open ───────────────────────────────────────────┐',
+        warn,
+        `  ┌─ 1  ${label} ─────────────────────────────────────────────────────────────────────────────┐`,
+        '     1 programme · 1 goal open',
+        '      ┌─ mc  horizon 1 · phase 1 of 1 · 1 goal ───────────────────────────────────────────────────────┐',
+        '      └───────────────────────────────────────────────────────────────────────────────────────────────┘',
+        '  └───────────────────────────────────────────────────────────────────────────────────────────────────┘',
+        '  ┌─ OTHER PROGRAMMES ────────────────────────────────────────────────────────────────────────────────┐',
+        `      ┌─ p-other  horizon ghost (${ref}) · 0 goals ─────────────────────────────────────────────────┐`,
+        '      └───────────────────────────────────────────────────────────────────────────────────────────────┘',
+        '  └───────────────────────────────────────────────────────────────────────────────────────────────────┘',
+      ];
+      const rest = tallPage(TALL - top.length);
+      return [...top, ...rest];
+    };
+
+    const d0 = makeData();
+    const l0 = makeLines(d0);
+    const k0 = pageKey(d0);
+
+    const d1 = makeData({ label: 'Renamed First Horizon' });
+    const l1 = makeLines(d1);
+    const k1 = pageKey(d1);
+
+    const d2 = makeData({ label: 'Renamed First Horizon', refState: 'dropped' });
+    const l2 = makeLines(d2);
+    const k2 = pageKey(d2);
+
+    const d3 = makeData({ label: 'Renamed First Horizon', refState: 'dropped', unreadable: ['broken'] });
+    const l3 = makeLines(d3);
+    const k3 = pageKey(d3);
+
+    const pages = [
+      { data: d1, lines: l1, key: k1 },
+      { data: d2, lines: l2, key: k2 },
+      { data: d3, lines: l3, key: k3 },
+    ];
+
+    const it_ = tall({ first: l0, key: k0, pages });
+    const answer = it_.reader.ask(TAIL, '>');
+    await it_.flush();
+    await settle();
+
+    // Type pending input before any refresh
+    it_.input.type('pending-1');
+    await it_.advance(1_000);
+
+    // 1. Change displayed horizon label independently above screen at fixed height
+    assert.notEqual(k1, k0, 'horizon label change changes pageKey');
+    assert.equal(l1.length, l0.length, 'height is fixed');
+    await it_.advance(31_000);
+
+    assert.equal(it_.everything().filter((line) => line.includes('Renamed First Horizon')).length, 1, 'changed horizon label appears once');
+    assert.equal(it_.everything().filter((line) => line.includes('1  First Horizon')).length, 0, 'old horizon label is gone');
+    assert.ok(it_.screen().at(-1).includes('> pending-1'), 'pending input survives label change');
+
+    // Type more pending input
+    it_.input.type('-2');
+    await it_.advance(1_000);
+
+    // 2. Change reference state independently above screen at fixed height
+    assert.notEqual(k2, k1, 'reference state change changes pageKey');
+    assert.equal(l2.length, l1.length, 'height is fixed');
+    await it_.advance(31_000);
+
+    assert.equal(it_.everything().filter((line) => line.includes('horizon ghost (dropped)')).length, 1, 'changed reference state appears once');
+    assert.equal(it_.everything().filter((line) => line.includes('horizon ghost (reached)')).length, 0, 'old reference state is gone');
+    assert.ok(it_.screen().at(-1).includes('> pending-1-2'), 'pending input survives reference state change');
+
+    // Type more pending input
+    it_.input.type('-3');
+    await it_.advance(1_000);
+
+    // 3. Change warnings independently above screen at fixed height
+    assert.notEqual(k3, k2, 'warnings change changes pageKey');
+    assert.equal(l3.length, l2.length, 'height is fixed');
+    await it_.advance(31_000);
+
+    assert.equal(it_.everything().filter((line) => line.includes('1 horizon record cannot be read: broken')).length, 1, 'changed warning appears once');
+    assert.ok(it_.screen().at(-1).includes('> pending-1-2-3'), 'pending input survives warning change');
+
+    it_.input.type('\r');
+    assert.equal(await answer, 'pending-1-2-3');
   });
 });
 
