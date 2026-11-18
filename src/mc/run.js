@@ -106,7 +106,7 @@ import { drainDeskPreparation } from './desk-prepare.js';
 import { deskBudget } from './desk-budget.js';
 import { itemDirectory, listDeskItems, readDeskItem, syncDeskItems } from './desk-items.js';
 import { decisionEligible, decisionFailure, decisionPrompt, decisionUnfinished } from './desk-decision.js';
-import { readHorizon } from './desk-horizons.js';
+import { horizonsDir, readHorizon } from './desk-horizons.js';
 import { MANAGER_CLAIM, areaPages, areaRepositories, curationDue, curationPrompt, curationState, curationWorktreesDir, headOf, proposalBacklog, readCurationState, curationStatePath, setUpCurationWorktrees, settleCurationWorktrees } from './manager-pulse.js';
 import { ARCHIVE_CHECKOUTS_PREFIX, FAILURES_TO_ITEM, WRITE_BACK_FILE, archiveDue, archiveName, archiveOnOk, archiveReadPrompt, archiveCheckInPrompt, archiveReference, finishDestination, keepReading, openRestrictedItem, parseWriteBack, readArchiveState, recordArchiveFailure, statedProgrammes } from './archive-turn.js';
 import { archiveProgramme } from './archive-programme.js';
@@ -2152,7 +2152,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (updateRequested()) return 'skipped:update';
       // A file left by an earlier reading is not this one's.
       remove(join(dir, WRITE_BACK_FILE));
-      const prompt = archiveReadPrompt({ programme, dir, goals: due.goals, dropped: due.dropped, checkouts: set.paths, archive: archiveDirIn(programsHome(deps.env), programme) });
+      const horizon = due.record.horizon;
+      const prompt = archiveReadPrompt({ programme, dir, horizonDir: horizon ? join(horizonsDir(deps.env), horizon) : null, goals: due.goals, dropped: due.dropped, checkouts: set.paths, archive: archiveDirIn(programsHome(deps.env), programme) });
       const instructions = instructionsFor(launch.id, role.overlay);
       const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
       const stem = `archive-${programme}-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;
@@ -2188,7 +2189,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const seconds = Math.round((deps.now().getTime() - t0) / 1000);
       // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
       const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
-      const parsed = parseWriteBack(deps.read(join(dir, WRITE_BACK_FILE)), { goals: due.goals, checkouts: shas });
+      const parsed = parseWriteBack(deps.read(join(dir, WRITE_BACK_FILE)), { goals: due.goals, checkouts: shas, horizon });
       let note = `${read.note},${due.goals.length} goal${due.goals.length === 1 ? '' : 's'}`;
       if (!parsed.ok) {
         if (!providerEnding) {
@@ -2198,7 +2199,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         }
       } else if (parsed.verdict === 'OK') {
         try {
-          keepReading({ ...archiveSeams(programme), at: stamp(), goals: due.goals, lines: [] });
+          keepReading({ ...archiveSeams(programme), at: stamp(), goals: due.goals, lines: [], horizon });
           outcome = 'kept';
           note = `${note},write-back OK`;
         } catch (error) { say(`${name}: the OK reading was not kept — ${error.message || String(error)}`); }

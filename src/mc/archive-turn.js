@@ -19,7 +19,7 @@
  */
 import { join } from 'node:path';
 import { deskItemId } from './desk-items.js';
-import { archiveDirIn, parseGoal, GOAL_FILE } from './goals.js';
+import { archiveDirIn, parseGoal, GOAL_FILE, GOAL_LOG_FILE } from './goals.js';
 import { NAME_RE } from './plan-schema.js';
 import { readRecord, setRecordState } from './programme-record.js';
 import { sameHead, writeBackFault } from './review-verdict.js';
@@ -102,8 +102,8 @@ export function archivedGoals({ home, programme, list, read }) {
   return { done, dropped, problems, repos: [...repos].sort() };
 }
 
-/** Whether `goals/` holds a live goal: any entry but a dot-entry. */
-export const liveGoals = ({ home, programme, list }) => list(join(home, programme, 'goals')).filter((name) => !name.startsWith('.'));
+/** Ignore archive metadata while keeping the fence closed for other entries. */
+export const liveGoals = ({ home, programme, list }) => list(join(home, programme, 'goals')).filter((name) => !name.startsWith('.') && name !== GOAL_LOG_FILE);
 
 /** Whether a desk item of kind archive is open for `programme`. */
 const openArchiveItem = (items, programme) => items.some((item) => item.kind === ARCHIVE_ITEM_KIND && item.reference === archiveReference(programme) && item.state !== 'closed');
@@ -158,7 +158,7 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
   // A programme whose goals were all dropped is no programme that made anything true: nothing is read or archived.
   if (!goals.done.length) return { due: false, reason: 'no goal reached done', notice: null };
   const reading = state.status === 'valid' ? state.state.reading : null;
-  const kept = reading && reading.verdict === 'OK' && reading.goals.join('\n') === goals.done.join('\n');
+  const kept = reading && reading.verdict === 'OK' && (reading.horizon ?? null) === record.record.horizon && reading.goals.join('\n') === goals.done.join('\n');
   return { due: true, mode: kept ? 'archive' : 'read', record: record.record, goals: goals.done, dropped: goals.dropped, repos: goals.repos };
 }
 
@@ -172,11 +172,11 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
  * <section>[, …]`, `<goal>: OK — none — <reason>`, `<goal>: NOT OK — <what is true that no page says>`), the last line
  * is not `verdict: OK` or `verdict: NOT OK`, or the verdict is OK beside a NOT OK line (or NOT OK with none).
  */
-export function parseWriteBack(text, { goals, checkouts }) {
+export function parseWriteBack(text, { goals, checkouts, horizon = null }) {
   if (text === null || text === undefined) return { ok: false, problems: [`${WRITE_BACK_FILE} is missing`] };
   const problems = [];
   const lines = String(text).split('\n').map((line) => line.trim()).filter(Boolean);
-  const reads = []; const judged = new Map(); let verdict = null;
+  const reads = []; const judged = new Map(); let verdict = null; let horizonJudgment = null;
   for (const [index, line] of lines.entries()) {
     const readLine = line.match(/^read: (\S+) ([0-9a-f]{7,64})$/u);
     const verdictLine = line.match(/^verdict: (OK|NOT OK)$/u);
@@ -190,6 +190,12 @@ export function parseWriteBack(text, { goals, checkouts }) {
     if (goalLine) {
       const [, goal, word, reason = ''] = goalLine;
       const ok = word === 'OK';
+      if (goal === '@horizon' && horizon) {
+        if (horizonJudgment) problems.push('two horizon lines');
+        if (!reason.trim()) problems.push('the horizon line needs its evidence or finding');
+        horizonJudgment = { ok, line };
+        continue;
+      }
       if (!goals.includes(goal)) { problems.push(`a line for "${goal}", which is no done goal of the programme`); continue; }
       if (judged.has(goal)) { problems.push(`two lines for ${goal}`); continue; }
       if (!ok && !reason.trim()) { problems.push(`${goal}: NOT OK needs what is true that no page says`); }
@@ -207,23 +213,30 @@ export function parseWriteBack(text, { goals, checkouts }) {
   }
   for (const one of reads) if (!(one.repo in checkouts)) problems.push(`\`read: ${one.repo}\` names no checkout given`);
   for (const goal of goals) if (!judged.has(goal)) problems.push(`no line for the done goal ${goal}`);
+  if (horizon && !horizonJudgment) problems.push('no @horizon line for the programme');
   if (verdict === null) problems.push('no last line `verdict: OK` or `verdict: NOT OK`');
   else {
-    const notOk = [...judged.values()].some((one) => !one.ok);
+    const notOk = horizonJudgment?.ok === false || [...judged.values()].some((one) => !one.ok);
     if (verdict === 'OK' && notOk) problems.push('`verdict: OK` beside a NOT OK line');
     if (verdict === 'NOT OK' && !notOk) problems.push('`verdict: NOT OK` with no NOT OK line saying what is missing');
   }
   if (problems.length) return { ok: false, problems };
-  return { ok: true, verdict, goals: Object.fromEntries(judged), lines: [...judged.entries()].filter(([, one]) => !one.ok).map(([goal, one]) => `${goal}: NOT OK — ${one.reason}`) };
+  const findings = [...judged.entries()].filter(([, one]) => !one.ok).map(([goal, one]) => `${goal}: NOT OK — ${one.reason}`);
+  if (horizonJudgment?.ok === false) findings.push(horizonJudgment.line);
+  return { ok: true, verdict, goals: Object.fromEntries(judged), lines: findings };
 }
 
 /** What the reader is told: the programme, what to read, the file to write and its forms. */
-export function archiveReadPrompt({ programme, dir, goals, dropped = [], checkouts, archive }) {
+export function archiveReadPrompt({ programme, dir, goals, dropped = [], checkouts, archive, horizonDir = null }) {
   const read = Object.entries(checkouts).map(([repo, path]) => `${repo}: \`${path}\``).join('; ');
   const goalList = goals.map((goal) => `- ${goal}: \`${join(archive, goal)}\` (GOAL.json, LOG.md, ${REVIEW_FILE})`).join('\n');
   const droppedLine = dropped.length ? ` Dropped goals (${dropped.join(', ')}) made nothing true and are not judged.` : '';
+  const horizonCheck = horizonDir
+    ? `Read the programme README and evidence for investigations, references and other material needed by a later programme serving the same horizon. Check that the material is usable in \`${horizonDir}\` (basis.md or supporting files), including its referenced files. Add one \`@horizon: OK — <paths and what they preserve, or why no material carries forward>\` or \`@horizon: NOT OK — <what must be carried forward>\` line before the verdict. Do not move or write the material yourself.\n`
+    : '';
   return `You are the headless archive reader for programme ${programme}, with nobody present. Every goal of the programme is finished; the programme is archived by the system only if what it made true is written into docs/technical/ and the area pages. Its directory is \`${dir}\`; read its README.md first. The done goals, each with its goal file, log and review, are:\n${goalList}${droppedLine}\n`
-    + `Read checkouts at origin/main are ${read}; read code and docs there and change nothing in them. For each done goal decide what it made true of the app that a reader of docs/technical/ and the area pages needs, and read the pages to see whether they say it. Write ${dir}/${WRITE_BACK_FILE} and nothing else, with: one line \`read: <repo> <sha>\` per checkout (the sha its HEAD is at); one line per done goal, \`<goal>: OK — <repo>/docs/technical/<page>.md § <section>[, …]\`, \`<goal>: OK — none — <reason>\` or \`<goal>: NOT OK — <what is true that no page says>\`; and a last line \`verdict: OK\` when no goal is NOT OK, else \`verdict: NOT OK\`. Your role page says the rest.`;
+    + horizonCheck
+    + `Read checkouts at origin/main are ${read}; read code and docs there and change nothing in them. For each done goal decide what it made true of the app that a reader of docs/technical/ and the area pages needs, and read the pages to see whether they say it. Write ${dir}/${WRITE_BACK_FILE} and nothing else, with: one line \`read: <repo> <sha>\` per checkout (the sha its HEAD is at); one line per done goal, \`<goal>: OK — <repo>/docs/technical/<page>.md § <section>[, …]\`, \`<goal>: OK — none — <reason>\` or \`<goal>: NOT OK — <what is true that no page says>\`; and a last line \`verdict: OK\` when every check is OK, else \`verdict: NOT OK\`. Your role page says the rest.`;
 }
 
 /** The check-in for the reading: keep to the one task. */
@@ -249,8 +262,8 @@ function withState({ root, programme, read, writeJson, lock }, change) {
 }
 
 /** The OK reading kept, for exactly the goals it judged: the archive is tried again on it without a new reading. */
-export function keepReading({ at, goals, lines = [], ...seams }) {
-  return withState(seams, (state) => { state.reading = { at, verdict: 'OK', goals: [...goals], lines }; });
+export function keepReading({ at, goals, lines = [], horizon = null, ...seams }) {
+  return withState(seams, (state) => { state.reading = { at, verdict: 'OK', goals: [...goals], lines, ...(horizon ? { horizon } : {}) }; });
 }
 
 /** Where the programme's directory moved to: recorded before anything else can fail, so the record's state is set later. */
@@ -319,7 +332,7 @@ export function openRestrictedItem({ entries, at, env, write, itemDirectory, ...
 function preparedText({ programme, failures, lines, item }) {
   const gap = lines.length ? `## What the reading found\n${lines.map((line) => `- ${line}`).join('\n')}\n\n` : '';
   return `# Programme ${programme}: the write-back reading is not OK\n\n`
-    + `Every goal of programme ${programme} is finished, and the runner's archive reading found what the programme made true that no page says. `
+    + `Every goal of programme ${programme} is finished, and the runner's archive reading found missing write-back or horizon material. `
     + `Nothing was asked of Martin; this is a gap to close within reach.\n\n`
     + gap
     + `## The failures\n${failureLines(failures)}\n\n`
@@ -327,7 +340,7 @@ function preparedText({ programme, failures, lines, item }) {
     + `- The turn's state: runner/archive-turn/${programme}.json under the work root.\n`
     + `- Item: ${item.id}.\n\n`
     + `## What closes it\nWrite the missing pages: make a goal in the programme that writes them into docs/technical/ and the area pages. The item closes by itself when the programme holds a live goal, and the runner reads the write-back again once that goal is archived. `
-    + `Or settle that the reading was wrong, and close the item (--by decision) so the runner reads again. A text of Martin's that would have to change goes to a brief instead.\n`;
+    + `For an @horizon finding, preserve the reusable material under the recorded horizon and close by decision so the runner reads again. Or settle that the reading was wrong, and close the item (--by decision) so the runner reads again. A text of Martin's that would have to change goes to a brief instead.\n`;
 }
 
 /** The brief a mechanical item carries. Swedish, as the desk reads it. */

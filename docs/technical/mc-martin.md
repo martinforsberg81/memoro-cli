@@ -389,7 +389,11 @@ priority. Everything stored in a horizon is English text.
 
 **Store.** `~/mc/martin/horizons/<slug>/` holds `horizon.json` (the
 record), `playback.md` (written by `set`) and `reached.md` (what is now true for
-the user, written by `reached`), plus desk-authored `basis.md`. A slug is `[a-z0-9][a-z0-9-]{0,63}` and is not
+the user, written by `reached`), plus desk-authored `basis.md` and supporting investigations, references and
+other material used across programmes serving that horizon. The programme
+archive reading checks that such material can be used from the horizon before
+the active programme directory moves ([mc-run.md](mc-run.md#programme-archive-turn)).
+A slug is `[a-z0-9][a-z0-9-]{0,63}` and is not
 reused: a directory whose `horizon.json` can be read, in any state, holds the
 slug. The record is `{ schema: "mc-desk-horizon", version: 1, slug, title, state,
 position, set_at, set_by, reached_at, reached_by, reopened_at, reopened_by,
