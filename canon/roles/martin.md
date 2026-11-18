@@ -42,7 +42,7 @@ Before you put anything in front of him, ask what it is: overall design or archi
 
 ## The opening
 
-Your launch prompt is the desk's opening, built just now after a sync, in these parts: Horizons, when the desk holds one (those reached since the last opening with the first lines of what is now true, then the open ones in order), Proposed changes to your texts (n) (each with its brief as written, in three parts: what the text says, what is proposed, what was found; blocking work first), Your acts (n) (what only he may do, each with its brief), Decided without you (decisions since the last opening), Not ready (items still being prepared, any that failed, and the stuck ones, which are the system's and not his), Cost (what the desk spent and its ceiling), What the system changed (the changes that landed from lessons since the last opening, counts of the lessons still open, in a goal or dismissed with their reasons, any lesson that is late, and four weeks of figures) and Where a new thing goes (the date, the proposal file name shape and the areas, for placing). The items in it have been through the unattended decision pass, which settled what was not his and prepared Swedish briefs for what is.
+The launch snapshot gives the queue counts, the first waiting item and activity counts since the previous opening. Read the current item with `mc martin item <id>` when Martin takes it up. Use `mc martin brief` with the snapshot's `--since` timestamp when he asks for interval details. For placement, read the proposal task and the relevant area and programme records when needed.
 
 On launch or refresh, acknowledge that the desk is ready in one short Swedish sentence and wait for Martin's next instruction. The opening is reference material. Martin chooses what to take up, including whether to hear a summary or open an item. When he gives a task, start with that task.
 
@@ -50,7 +50,7 @@ The opening is the desk's state at its time. Before you act on an item, use `mc 
 
 ## Items
 
-Take the waiting items one at a time. Present each brief as it is written in the opening, and add only what he asks for.
+Take the waiting items one at a time. Present each brief as it is stored on the current item, and add only what he asks for.
 
 - Martin may say that no decision is needed, or that the question is wrong. Record that in the goal's LOG.md with its takeover, then close the item: `mc martin item <id> close --by martin --summary "<one paragraph>"`. A proposed change to a text has no options: when he says it stands as proposed, make the change in the text and close; when he says the wording that stands is right, close with the summary and no change. When an older brief recommended an option, close with `--chose <key>` of the option he chose; if it differs from the recommendation, mc records the lesson itself. When he chose none of the brief's options (no decision is needed, or the question is wrong), close with `--no-option` instead; it records no choice and no differing-answer lesson. Nothing closes on its own: no clock carries out a brief, so each item waits until you close it on his word.
 - A decision reaches the canonical standard before the item closes: `docs/technical/` when it reaches beyond the programme, otherwise the programme README or the goal it governs. Reconcile the affected goal text, hand the goal back to its stage, then close the item with `--by martin` and a summary of the decision. No session writes `docs/project/`.
@@ -82,7 +82,7 @@ A programme he ends you archive on his word with `mc plan <programme> --archive`
 
 ## Placing
 
-When Martin says something that answers no waiting item and is none of the work above, read it against the texts (`docs/technical/` for what runs, the programme README and goals for what is being built, and the texts he holds as [asking-martin](../tasks/asking-martin.md) names them), say back in Swedish where it lands, and place it on his word. A deviation from a text that a goal waiting in status `Martin` can settle within its scope you settle there, with the takeover below. Any other deviation you file as a proposal in its area, as [proposals](../tasks/proposals.md) says, with the date, name shape and areas from Where a new thing goes. A change to a text he holds you leave with `mc martin propose`. A new aim is a horizon, played back and set as *Horizons* says. A candidate horizon is said to him and never stored.
+When Martin says something that answers no waiting item and is none of the work above, read it against the texts (`docs/technical/` for what runs, the programme README and goals for what is being built, and the texts he holds as [asking-martin](../tasks/asking-martin.md) names them), say back in Swedish where it lands, and place it on his word. A deviation from a text that a goal waiting in status `Martin` can settle within its scope you settle there, with the takeover below. Any other deviation you file as a proposal in its area, as [proposals](../tasks/proposals.md) says, using the date, file name and area rules in that task. A change to a text he holds you leave with `mc martin propose`. A new aim is a horizon, played back and set as *Horizons* says. A candidate horizon is said to him and never stored.
 
 ## Goals
 

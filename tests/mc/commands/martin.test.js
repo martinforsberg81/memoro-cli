@@ -303,7 +303,7 @@ describe('Martin ask authority', () => {
 
 describe('mc martin launch', () => {
   it('advertises durable item commands and the opening brief in the routed help', () => { assert.match(usage(),/mc martin items/u); assert.match(usage(),/mc martin item <id>/u); assert.match(usage(),/mc martin brief \[--json\]/u); });
-  it('opens a distinct role/path with the opening as first prompt and launcher conventions', async () => {
+  it('opens a distinct role/path with a compact first prompt and launcher conventions', async () => {
     const d = openingStore(); const { out, stdout, stderr } = io(); let opened;
     const code = await run(['--resume', 'abc', '--codex', '--model', 'gpt-6.2-sol'], {
       stdout, stderr, env: d.env, home: d.home, interactive: () => true, now: () => new Date(NOW), role: ROLE,
@@ -314,9 +314,9 @@ describe('mc martin launch', () => {
     assert.equal(opened.areaRoot, join(d.env.MC_WORK_ROOT, 'martin')); assert.equal(opened.roleName, 'martin');
     assert.equal(opened.overlay, 'Martin role instructions'); assert.equal(opened.defaultModel, 'opus');
     assert.equal(opened.pick, 'abc'); assert.equal(opened.tool, 'codex'); assert.equal(opened.model, 'gpt-6.2-sol');
-    assert.match(opened.prompt, /^Martin's desk, opened 2026-11-14T12:00:00\.000Z\./u); assert.match(opened.prompt, /### 1\. alpha\/one/u);
+    assert.match(opened.prompt, /^Martin's desk, opened 2026-11-14T12:00:00\.000Z\./u); assert.match(opened.prompt, /First: alpha\/one \(mc martin item [a-f0-9]+\)/u);
     assert.match(opened.prompt, /wait for Martin's instruction before choosing a topic or doing any work/u);
-    assert.ok(opened.resumePrompt.endsWith(opened.prompt));
+    assert.equal(opened.resumePrompt, opened.prompt);
   });
   it('writes last-open only after a successful launch, and the next opening starts from that time', async () => {
     const d = openingStore({ lastOpen: null }); const lastFile = join(d.env.MC_WORK_ROOT, 'martin', 'last-open.json'); const captured = [];
@@ -324,12 +324,18 @@ describe('mc martin launch', () => {
     const first = await launch(d, '2026-11-14T08:00:00.000Z', { open });
     assert.equal(first.code, 0, first.out.stderr);
     assert.deepEqual(JSON.parse(readFileSync(lastFile, 'utf8')), { at: '2026-11-14T08:00:00.000Z' });
-    assert.match(captured[0].prompt, /Decision before the opening/u, 'the first opening covers everything since the store began, up to its own time');
-    assert.doesNotMatch(captured[0].prompt, /Decision at nine/u, 'a decision after the opening time is not in it');
+    assert.match(captured[0].prompt, /Since 2026-11-01T00:00:00\.000Z: 1 decision,/u);
     const second = await launch(d, NOW, { open });
     assert.equal(second.code, 0, second.out.stderr);
-    assert.match(captured[1].prompt, /covers 2026-11-14T08:00:00\.000Z to 2026-11-14T12:00:00\.000Z/u);
-    assert.match(captured[1].prompt, /Decision at nine/u); assert.doesNotMatch(captured[1].prompt, /Decision before the opening/u);
+    assert.match(captured[1].prompt, /Since 2026-11-14T08:00:00\.000Z: 3 decisions,/u);
+    assert.doesNotMatch(captured[1].prompt, /Decision at nine/u);
+    assert.deepEqual(JSON.parse(readFileSync(lastFile, 'utf8')), { at: NOW });
+    const detail = io();
+    assert.equal(await run(['brief', '--since', '2026-11-14T08:00:00.000Z'], {
+      ...detail, env: d.env, home: d.home, now: () => new Date(NOW),
+    }), 0, detail.out.stderr);
+    assert.match(detail.out.stdout, /Decision at nine/u);
+    assert.doesNotMatch(detail.out.stdout, /Decision before the opening/u);
     assert.deepEqual(JSON.parse(readFileSync(lastFile, 'utf8')), { at: NOW });
   });
   it('leaves last-open unchanged after a refused or failed launch, and refuses a corrupt file before opening', async () => {
@@ -1106,12 +1112,14 @@ describe('mc martin brief with horizons', () => {
     assert.equal(readFileSync(join(broken, 'horizon.json'), 'utf8'), bytes);
   });
 
-  it('(f) the launch gives the model the printed snapshot as context for waiting', async () => {
+  it('(f) the launch reports activity without carrying the full brief into the session', async () => {
     const d = openingStore(); await withHorizons(d); const printed = await brief(d); const prompts = [];
     const r = await launch(d, NOW, { open: async (spec) => { prompts.push(spec.prompt); return { ok: true, code: 0 }; } });
     assert.equal(r.code, 0, r.out.stderr); assert.equal(prompts.length, 1);
-    assert.ok(prompts[0].startsWith(printed));
-    assert.match(prompts[0].slice(printed.length), /wait for Martin's instruction/u);
+    assert.match(prompts[0], /1 horizon reached/u);
+    assert.ok(Buffer.byteLength(prompts[0]) < Buffer.byteLength(printed) / 3);
+    assert.doesNotMatch(prompts[0], /Line one\.|Brief: the rule of alpha|Where a new thing goes|Decision at nine/u);
+    assert.match(prompts[0], /wait for Martin's instruction/u);
   });
 });
 

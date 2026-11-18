@@ -233,8 +233,7 @@ export function buildPlacing({ env = process.env, home = programsHome(env), now 
 }
 
 /** The opening as data. Reads only; `last` is the previous opening's time, or null. */
-export function buildOpening({ env = process.env, home = programsHome(env), now = new Date(), last = null, read = readDeskText } = {}) {
-  const since = openingSince({ env, last });
+export function buildOpening({ env = process.env, home = programsHome(env), now = new Date(), last = null, since = openingSince({ env, last }), read = readDeskText } = {}) {
   const items = listDeskItems({ env });
   const all = programsGoals({ home });
   const goals = () => all;

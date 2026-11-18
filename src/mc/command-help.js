@@ -684,7 +684,7 @@ export const COMMAND_USAGE = Object.freeze({
   ].join(''),
   martin: [
     "usage — mc martin [--local] [--new] [--resume [<id>]] [--codex|--claude|--agy] [--model <model>] [--bg]\n",
-    "        mc martin brief [--json]\n",
+    "        mc martin brief [--json] [--since <timestamp>]\n",
     "        mc martin get [--all] [--json]\n",
     "        mc martin get --programme <programme> [--json]\n",
     "        mc martin get --goal <programme>/<goal> [--json]\n",
@@ -718,7 +718,7 @@ export const COMMAND_USAGE = Object.freeze({
     "changes proposed to your texts, your acts, what was decided without you since the last opening, what\n",
     "is not ready (a stuck item is listed there, never as yours), what the desk cost and what the system\n",
     "changed. The opening's time is kept\n",
-    "in ~/mc/martin/last-open.json, written only after a launch succeeds. brief prints that opening\n",
+    "in ~/mc/martin/last-open.json, written only after a launch succeeds. brief prints the detailed opening\n",
     "without starting a session; --json gives the same data. The desk may take over, finish, return,\n",
     "rewrite or drop waiting goals using validated mc goal verbs, and asks only for genuine choices.\n",
     "--new starts a fresh conversation; --resume lists compatible conversations or selects an ID.\n",
