@@ -427,24 +427,12 @@ export function statusRollup(statuses = {}) {
   return Object.entries(statuses).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
-/**
- * One programme's frame in the overview: its heading, then its plan and programme sessions and
- * its goals by phase, then the border. A programme with nothing to draw is its heading row alone.
- */
-function programmeFrame(lines, c, wide, data, group, runnerSessions) {
-  const body = programmeBody(c, wide - 2, group, runnerSessions);
-  const continuation = [];
-  lines.push(programmeHeading(c, wide, data, group, programmeFacts(group, runnerSessions), continuation));
-  if (!body.length && !continuation.length) return;
-  lines.push(...continuation, ...body.map((row) => row ? `  ${row}` : row));
-  panelEnd(lines, c, wide);
-}
-
 /** What a programme's block holds under its heading: its plan and programme sessions, then its goals by phase. */
 function programmeBody(c, wide, group, runnerSessions) {
+  const sessionOptions = { indent: 2, expand: true, inline: true };
   return [
-    ...(group.planning_sessions || []).flatMap((session) => activityLines(c, wide, { ...session, kind: 'plan' }, { indent: 4, expand: true })),
-    ...(group.sessions || []).flatMap((session) => activityLines(c, wide, session, { indent: 4, expand: true })),
+    ...(group.planning_sessions || []).flatMap((session) => activityLines(c, wide, { ...session, kind: 'plan' }, sessionOptions)),
+    ...(group.sessions || []).flatMap((session) => activityLines(c, wide, session, sessionOptions)),
     ...programmeTreeLines(c, wide, group, { sessions: runnerSessions }),
   ];
 }
@@ -811,7 +799,8 @@ export function renderPageLines(data, {
 } = {}) {
   const paintText = painter(colour);
   // Secondary information must remain readable on dark terminal palettes.
-  const c = (text, ...styles) => paintText(text, ...styles.map((style) => style === 'grey' ? 'white' : style));
+  const tones = { grey: 'white', rule: 'grey' };
+  const c = (text, ...styles) => paintText(text, ...styles.map((style) => tones[style] ?? style));
   const wide = Math.max(60, Math.min(columns, 160)) - 2;
   const at = now instanceof Date ? now.getTime() : Number(now);
   const lines = [];
@@ -834,7 +823,10 @@ export function renderPageLines(data, {
   }
   lines.push(...overviewLines(c, wide, data, {
     version,
-    drawProgramme: (into, group, childWide) => programmeFrame(into, c, childWide, data, group, runnerSessions),
+    drawProgramme: (group, childWide) => ({
+      heading: programmeHeading(c, childWide, data, group, programmeFacts(group, runnerSessions)),
+      body: programmeBody(c, childWide, group, runnerSessions),
+    }),
   }));
   if (expand) {
     // `a` holds what the single page held (D10): the operations view's sections expanded, beginning with its hero
