@@ -774,7 +774,7 @@ describe('a page taller than the screen', () => {
     const frameFor = (data) => ({ data, key: pageKey(data), lines: renderPageLines(data, { columns: 60, now: 0 }) });
     const first = frameFor(makeData());
     assert.ok(first.lines.every((line) => [...line].length <= 60));
-    assert.ok(first.lines.findIndex((line) => line.includes('aaa-dormant')) < first.lines.findIndex((line) => line.includes('┌─ active')));
+    assert.ok(first.lines.findIndex((line) => line.includes('aaa-dormant')) < first.lines.findIndex((line) => line.startsWith('      active  ')));
     const holdAt = first.lines.findIndex((line) => line.includes('held by plan'));
     const holdRows = first.lines.slice(holdAt, first.lines.findIndex((line, i) => i > holdAt && line.includes('old question')));
     assert.ok(holdRows.map((line) => line.trim()).join(' ').includes(reason));

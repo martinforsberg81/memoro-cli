@@ -1,4 +1,4 @@
-/** Rounded session frames and their detail rows. */
+/** Session activity and its detail rows. */
 import { clipCell, duration, kindTone } from './page-grid.js';
 import { detail } from './page-operations.js';
 import { width } from './status-render.js';
@@ -9,10 +9,9 @@ export function sessionGoal(session) {
 }
 
 /** Keep identity and the clock before optional metadata on narrow terminals. */
-export function activityLines(c, wide, session, { indent = 10, expand = false, named = false } = {}) {
+export function activityLines(c, wide, session, { indent = 10, expand = false, named = false, inline = false } = {}) {
   const tone = kindTone(session.kind || session.verb);
-  // Reserve the two borders and one space on either side before wrapping.
-  const contentWide = wide - 4;
+  const contentWide = inline ? wide : wide - 4;
   const parts = [];
   const add = (text, styles = []) => { if (text) parts.push({ text: String(text), styles }); };
   add('●', ['green']);
@@ -28,27 +27,36 @@ export function activityLines(c, wide, session, { indent = 10, expand = false, n
   else if (session.pid) add(`${Object.hasOwn(session, 'session_pid') || session.goal ? 'runner ' : ''}pid ${session.pid}`, ['grey']);
   const lines = [];
   let current = ' '.repeat(indent);
-  for (const part of parts) {
-    const separator = width(current) > indent ? ' · ' : '';
+  for (const [index, part] of parts.entries()) {
+    const separator = current.trim() ? inline && index === 1 ? ' ' : ' · ' : '';
     if (width(current) + separator.length + part.text.length > contentWide) {
-      if (width(current) > indent) lines.push(current);
+      if (current.trim()) lines.push(current);
       current = ' '.repeat(indent + 2);
     } else current += separator;
-    current += c(clipCell(part.text, contentWide - width(current)), ...part.styles);
+    if (inline && width(current) + part.text.length > contentWide) {
+      detail(lines, c, contentWide, indent + 2, part.text, part.styles);
+      current = ' '.repeat(indent + 2);
+    } else {
+      current += c(clipCell(part.text, contentWide - width(current)), ...part.styles);
+    }
   }
-  if (width(current) > indent) lines.push(current);
+  if (current.trim()) lines.push(current);
+  const activity = inline ? lines : framedActivity(c, lines, indent, tone);
+  if (expand) {
+    const details = [session.repo, session.advisor && `${session.advisor} advisor`,
+      session.check_ins === 0 && '0 check-ins'].filter(Boolean).join(' · ');
+    detail(activity, c, wide, indent + 2, details);
+  }
+  return activity;
+}
+
+function framedActivity(c, lines, indent, tone) {
   const room = Math.max(...lines.map((line) => width(line) - indent));
   const prefix = ' '.repeat(indent);
   const rule = '─'.repeat(room + 2);
-  const framed = [
+  return [
     `${prefix}${c(`╭${rule}╮`, ...tone)}`,
     ...lines.map((line) => `${prefix}${c('│', ...tone)} ${line.slice(indent)}${' '.repeat(room - (width(line) - indent))} ${c('│', ...tone)}`),
     `${prefix}${c(`╰${rule}╯`, ...tone)}`,
   ];
-  if (expand) {
-    const details = [session.repo, session.advisor && `${session.advisor} advisor`,
-      session.check_ins === 0 && '0 check-ins'].filter(Boolean).join(' · ');
-    detail(framed, c, wide, indent + 2, details);
-  }
-  return framed;
 }

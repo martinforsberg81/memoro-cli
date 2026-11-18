@@ -62,10 +62,10 @@ const plain = (line) => line.replace(/\u001b\[[0-9;]*m/gu, '');
 /** The goal row named `name`, found by its kind and its name. */
 const goalLineOf = (lines, name) => lines.find((line) => new RegExp(`^ +\\d+ ${name}(?: |$)`, 'u').test(plain(line)));
 
-/** The programmes' lines, from the first programme frame's heading to the end of the page. */
+/** The programmes' lines, from the first programme heading to the end of the page. */
 function programmesOf(lines) {
-  const head = lines.findIndex((line) => /^ {6}┌─ (?:\d+ {2})?[a-z][a-z-]*(?: |$)/u.test(plain(line)));
-  assert.ok(head >= 0, 'a programme frame is drawn');
+  const head = lines.findIndex((line) => /^ {6}[a-z][a-z-]*(?: |$)/u.test(plain(line)));
+  assert.ok(head >= 0, 'a programme heading is drawn');
   return lines.slice(head);
 }
 
@@ -123,7 +123,7 @@ describe('goal rows on the page', () => {
     const at = (re) => lines.findIndex((line) => re.test(line));
 
 
-    const mcHeading = at(/^ {6}┌─ mc(?: |$)/u);
+    const mcHeading = at(/^ {6}mc(?: |$)/u);
     const cleanup = at(/^ +1 cleanup$/u);
     const rollout = at(/^ +2 rollout$/u);
     assert.ok(mcHeading >= 0 && mcHeading < cleanup, 'the goals are under their programme\'s heading');
@@ -154,7 +154,7 @@ describe('goal rows on the page', () => {
     const rollout = painted[painted.indexOf(goalLineOf(painted, 'rollout')) + 1];
     const cleanup = painted[painted.indexOf(goalLineOf(painted, 'cleanup')) + 1];
     // Status stays canonical even while a session is running.
-    assert.match(rollout, /\u001b\[[0-9;]*32mready/u);
+    assert.match(rollout, /\u001b\[[0-9;]*37mready/u);
     assert.doesNotMatch(plain(rollout), /g · /u, 'no `g ·` before the name');
     assert.match(plain(goalLineOf(painted, 'rollout')), /^ +2 rollout/u);
     assert.match(cleanup, /\u001b\[[0-9;]*31mMartin/u);
@@ -198,8 +198,8 @@ describe('goal rows on the page', () => {
   it('the programme header counts its goals, or says it has none yet', () => {
     const data = pageData({ programmes: programmesSection({ goalRows: GOALS, programmes: PROGRAMMES }) });
     const lines = programmesOf(renderPageLines(data, { columns: 120, now: NOW, expand: true }));
-    const mcHeading = lines.find((line) => /^ {6}┌─ mc(?: |$)/u.test(line));
-    const docxHeading = lines.find((line) => /^ {6}┌─ docx-editing-surface\s/u.test(line));
+    const mcHeading = lines.find((line) => /^ {6}mc(?: |$)/u.test(line));
+    const docxHeading = lines.find((line) => /^ {6}docx-editing-surface\s/u.test(line));
     assert.match(mcHeading, /2 goals/u);
     assert.match(docxHeading, /0 goals/u, 'a programme with no goal says so');
   });
@@ -272,7 +272,7 @@ describe('a goal\'s stage and status on the page, and one waiting on a person', 
     const line = (name) => lines[lines.indexOf(goalLineOf(lines, name)) + 1];
     assert.match(plain(line('judged')), /stage review · status ready/u);
     assert.match(plain(line('landing')), /stage merge · status ready/u);
-    assert.match(line('landing'), /\u001b\[32mready/u);
+    assert.match(line('landing'), /\u001b\[37mready/u);
     assert.match(plain(line('stuck')), /stage finish · status Martin/u);
     assert.ok(lines.some((row) => plain(row).includes('split the goal in two?')));
     assert.match(line('stuck'), /\u001b\[31mMartin/u);

@@ -43,7 +43,7 @@ describe('The programmes\' phase tree', () => {
       programmes: programmesSection({ runnerSessions: runner.sessions, planningSessions: sessions.planning_sessions }) };
     for (const columns of [60, 80, 120, 160]) for (const expand of [false, true]) {
       const lines = draw(JSON.parse(JSON.stringify(data)), { columns, expand });
-      const programmes = lines.findIndex(line => /^ {6}┌─ (?:\d+ {2})?inbox /u.test(line));
+      const programmes = lines.findIndex(line => /^ {6}inbox /u.test(line));
       assert.ok(programmes >= 0, 'the programmes are drawn');
       assert.ok(!lines.some(line => /^ {2}┌─ PROGRAMMES(?: |$)/u.test(line) || /IN FLIGHT/u.test(line)), 'there is no legacy PROGRAMMES or IN FLIGHT section');
       // A desk session has its frame, trigger and pid under `a` (D6, D10); the overview counts it in DESK's title.
@@ -63,8 +63,8 @@ describe('The programmes\' phase tree', () => {
         assert.ok(lines.slice(heroEnd, panels).some(line => line.includes('manual_task')), 'the trigger is in the frame');
       } else assert.ok(!lines.some(line => line.includes('pid 400') || line.includes('pid 401')), 'a desk session has no frame of its own in the overview');
       for (const [programme, pid] of [['inbox', 300], ['empty', 301]]) {
-        const heading = lines.findIndex(line => line.startsWith(`      ┌─ ${programme}`));
-        const close = lines.findIndex((line, index) => index > heading && line.startsWith('      └'));
+        const heading = lines.findIndex(line => line.startsWith(`      ${programme}`));
+        const close = lines.indexOf('', heading + 1);
         const activity = lines.slice(heading, close).join('\n');
         assert.match(activity, /daily_proposals/u);
         assert.ok(activity.includes(`pid ${pid}`), `${programme} owns its plan turn`);
@@ -140,33 +140,26 @@ describe('The programmes\' phase tree', () => {
       assert.deepEqual(painted.map(plain), lines);
       // The plan session on no goal is a MAINTENANCE row, not a box: its colours are held by page.test.js.
       for (const [kind, code] of [['BUILD', 32], ['REVIEW', 35]]) {
-        const at = lines.findIndex((line) => line.includes(`● · ${kind}`));
-        assert.ok(painted[at - 1].includes(`\u001b[${code}m╭`), `${kind} top border`);
-        const bottom = lines.findIndex((line, index) => index > at && line.trimStart().startsWith('╰'));
-        assert.ok(bottom > at, `${kind} bottom border`);
-        assert.ok(painted[bottom].includes(`\u001b[${code}m╰`), `${kind} bottom border colour`);
-        for (let row = at; row < bottom; row++) {
-          assert.ok(painted[row].includes(`\u001b[${code}m│`), `${kind} side border colour`);
-          assert.equal(width(lines[row]), width(lines[at - 1]), `${kind} wrapped frame width`);
-        }
+        const at = lines.findIndex((line) => line.includes(`● ${kind}`));
+        assert.ok(at >= 0, kind);
+        assert.ok(painted[at].includes('\u001b[32m●'), 'every running session has a green dot');
+        assert.ok(painted[at].includes(`\u001b[${code}m${kind}`), kind);
       }
       assert.ok(!lines.some((line) => /^  SESSIONS/u.test(line)));
       for (const title of ['Title parallel-a', 'Title far-future']) {
         const at = lines.findIndex((line) => line.includes(title));
         assert.ok(at >= 0, title);
         const top = lines[at + 2].includes('criteria ') ? at + 3 : at + 2;
-        assert.match(lines[top], /^ {15}╭─+╮$/u);
-        const bottom = lines.findIndex((line, index) => index > top && line.trimStart().startsWith('╰'));
-        const content = lines.slice(top + 1, bottom).map((line) => line.trim().slice(1, -1).trim()).join(' ');
-        assert.match(content, /^● · (BUILD|REVIEW) · 12 min · codex · sol(?: ·)? 1 check-in(?: ·)? runner pid 7$/u);
-        assert.equal(width(lines[top]), width(lines[top + 1]), 'frame hugs the session');
-        assert.equal(width(lines[top + 1]), width(lines[bottom]));
-        assert.ok(!lines[bottom + 1]?.includes('check-in'), 'no separate check-in below the frame');
+        assert.match(lines[top], /^ {13}● (BUILD|REVIEW)/u);
+        const detail = lines.findIndex((line, index) => index > top && line === '               memoro');
+        assert.ok(detail > top, 'repository detail follows activity');
+        const content = lines.slice(top, detail).map((line) => line.trim()).join(' ');
+        assert.match(content, /^● (BUILD|REVIEW) · 12 min · codex · sol(?: ·)? 1 check-in(?: ·)? runner pid 7$/u);
       }
       const unmatched = lines.findIndex((line) => line.startsWith('  ┌─ MAINTENANCE'));
       assert.ok(unmatched > 0);
       assert.ok(lines.slice(unmatched).some((line) => /^ {6}inbox\/missing-goal {2}/u.test(line)), 'a session on no goal is a MAINTENANCE row');
-      assert.equal(lines.filter((line) => line.includes('● · REVIEW')).length, 1);
+      assert.equal(lines.filter((line) => line.includes('● REVIEW')).length, 1);
       assert.ok(lines.every((line) => width(line) <= columns));
     }
   });
@@ -180,10 +173,10 @@ describe('The programmes\' phase tree', () => {
       const plainLines = renderPageLines(data, { columns, expand, now: NOW });
       const colourLines = renderPageLines(data, { columns, expand, colour: true, now: NOW });
       assert.deepEqual(colourLines.map(plain), plainLines);
-      assert.ok(plainLines.some((line) => /^ {6}┌─ inbox /u.test(line)), 'programme has a boundary');
-      assert.ok(plainLines.some((line) => /^ {6}└/u.test(line)), 'programme closes before the next unit');
-      assert.match(plainLines.join('\n'), /^ {15}stage build · status ready(?: · |\n {15})criteria 0\/1/mu);
-      // The pipeline's box borders and arrows are the real grey by contract (mc-ui.md, Pipeline); nothing else is.
+      assert.ok(plainLines.some((line) => /^ {6}inbox /u.test(line)), 'programme has a boundary');
+      assert.ok(!plainLines.some((line) => /^ {6}[┌└]/u.test(line)), 'programme entries have no frame');
+      assert.match(plainLines.join('\n'), /^ {13}stage build · status ready(?: · |\n {13})criteria 0\/1/mu);
+      // Structural rules may use grey, while explanatory text must remain legible.
       const text = (line) => line.replace(/\u001b\[90m[┌┐└┘│─▶ ]+\u001b\[0m/gu, '');
       assert.ok(!colourLines.some((line) => /\u001b\[(?:90|2)m/u.test(text(line))), 'secondary text is not dark grey or dim');
       assert.ok(colourLines.every((line) => width(line) <= columns), `${columns}: ${colourLines.filter((line) => width(line) > columns)}`);
@@ -213,10 +206,11 @@ describe('Programmes without finished goals', () => {
       merges: mergesSection({}), intake: intakeSection({ now: NOW }), language: {}, notes: [] };
   }
   const programmeOf = (lines, name) => {
-    const start = lines.findIndex((line) => new RegExp(`^ {6}┌─ ${name}(?: |$)`, 'u').test(line));
+    const start = lines.findIndex((line) => new RegExp(`^ {6}${name}(?: |$)`, 'u').test(line));
     assert.ok(start >= 0, `${name} has its heading`);
-    const end = lines.findIndex((line, index) => index > start && /^ {6}(?:└|┌)/u.test(line));
-    return lines.slice(start, end < 0 ? undefined : (lines[end].startsWith('      └') ? end + 1 : end));
+    let end = start + 1;
+    while (lines[end]?.startsWith('        ') || (lines[end] === '' && lines[end + 1]?.startsWith('        '))) end += 1;
+    return lines.slice(start, end);
   };
 
   it('counts the finished goals on the heading, draws none by default and not a phase of nothing else', () => {
@@ -224,7 +218,7 @@ describe('Programmes without finished goals', () => {
     const [group] = data.programmes.programmes;
     assert.equal(group.finished, 3);
     const lines = draw(data);
-    assert.match(lines.find((line) => line.startsWith('      ┌─ inbox')), /inbox {2}phase 2 of 2 · 4 goals · 3 finished in tree/u);
+    assert.match(lines.find((line) => line.startsWith('      inbox')), /inbox {2}phase 2 of 2 · 4 goals · 3 finished in tree/u);
     assert.ok(lines.some((line) => line.includes('Title c')));
     for (const name of ['a', 'b', 'd']) assert.ok(!lines.some((line) => line.includes(`Title ${name}`)), `${name} is not drawn`);
     assert.ok(!lines.some((line) => /Phase 1/u.test(line)), 'phase 1 holds nothing drawn');
@@ -249,12 +243,11 @@ describe('Programmes without finished goals', () => {
     const currents = [{ name: 'mend:main-red', kind: 'mend', repo: 'memoro', pid: 7, tool: 'codex', model: 'sol', started: '2026-11-05T08:48:00Z', check_in_minutes: 60, check_ins: 1 }];
     const data = page([goal('z', 1, { programme: 'alpha' }), ...goalsFor(['x', 1, { stage: 'done' }])], { currents });
     const lines = draw(data);
-    const last = lines.findIndex((line) => /^ {6}┌─ inbox /u.test(line));
+    const last = lines.findIndex((line) => /^ {6}inbox /u.test(line));
     const maintenance = lines.findIndex((line) => line.startsWith('  ┌─ MAINTENANCE'));
-    assert.ok(last >= 0, 'the dormant programme is the last card');
-    assert.match(lines[last + 1], /^ {2}└─+┘$/u, 'group closes after the last card');
-    assert.equal(lines[last + 2], '', 'a blank line between');
-    assert.equal(maintenance, last + 3);
+    assert.ok(last >= 0, 'the dormant programme is the last entry');
+    assert.equal(lines[last + 1], '', 'a blank line between sections');
+    assert.equal(maintenance, last + 2);
     assert.match(lines[maintenance + 1], /^ {4}Strays/u);
     assert.match(lines[maintenance + 2], /^ {6}mend:main-red {2}mend · open/u);
     assert.match(lines[maintenance + 3], /^ {2}└─+┘$/u, 'the session is inside the MAINTENANCE frame');
@@ -297,7 +290,7 @@ describe('Programmes without finished goals', () => {
     const lines = draw(data);
     for (const name of ['asks', 'halted']) assert.ok(!lines.some((line) => line.includes(`Title ${name}`)), `${name} is not drawn`);
     assert.ok(!lines.some((line) => /Phase 1|NEEDS ATTENTION|▸ Finished/u.test(line)));
-    assert.match(lines.find((line) => line.startsWith('      ┌─ inbox')), / · 2 finished in tree/u);
+    assert.match(lines.find((line) => line.startsWith('      inbox')), / · 2 finished in tree/u);
     const expanded = draw(data, { expand: true });
     for (const name of ['asks', 'halted']) assert.ok(!expanded.some((line) => line.includes(`Title ${name}`)), `${name} remains filtered under a`);
   });
