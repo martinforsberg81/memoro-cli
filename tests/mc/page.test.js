@@ -180,8 +180,8 @@ describe('SESSIONS', () => {
       for (const [name, kind] of [['runner-sessions', 'BUILD'], ['review-and-land', 'REVIEW'], ['headless-plan', 'PLAN']]) {
         const at = activity.findIndex((line) => new RegExp(`^ {10}\\d+ ${name}$`, 'u').test(line));
         assert.ok(at >= 0, `${columns}: goal ${name}`);
-        const session = activity[at + 2].includes('criteria ') ? at + 3 : at + 2;
-        assert.match(activity[session], new RegExp(`● ${kind} · `, 'u'), `${columns}: ${name} draws its ${kind} session`);
+        const box = activity[at + 2].includes('criteria ') ? at + 3 : at + 2;
+        assert.match(activity[box + 1], new RegExp(`● · ${kind} · `, 'u'), `${columns}: ${name} draws its ${kind} session`);
       }
       for (const name of ['docx-editor', 'mc-ui'])
         assert.equal(activity.filter((line) => line.startsWith(`      ${name}  build · open `)).length, 1, name);
@@ -359,7 +359,7 @@ describe('SESSIONS', () => {
     const rowFor = (billing) => {
       const runner = runnerSection({ runner: RUNNER, currents: [lane(billing)], repos: ['memoro-cli'], now: NOW, alive: live });
       for (const session of runner.sessions) session.goal = 'p/docx-editor';
-      return { runner, row: strip(rowWith(paintedPage(pageData({ runner, programmes: goalsFor('p/docx-editor') }), { overview: true, expand: true }), '● BUILD · ')) };
+      return { runner, row: strip(rowWith(paintedPage(pageData({ runner, programmes: goalsFor('p/docx-editor') }), { overview: true, expand: true }), '● · BUILD · ')) };
     };
     const credits = rowFor('credits');
     assert.equal(credits.runner.sessions[0].billing, 'credits');
@@ -2461,7 +2461,7 @@ describe('collectPage', () => {
       assert.ok(lines.findIndex((line) => line.startsWith('  ┌─ DESK')) < start && start < end);
       const area = lines.slice(start, end);
       assert.doesNotMatch(area.join('\n'), /Serving no horizon|UNASSIGNED ACTIVITY|IN FLIGHT|NEEDS ATTENTION/u);
-      assert.doesNotMatch(area.join('\n'), /[┌┐└┘╭╮╰╯]/u);
+      assert.doesNotMatch(area.join('\n'), /[┌┐└┘]/u);
       const sections = area.map((line, i) => /^ {2}(?:HORIZONS\b|OTHER PROGRAMMES$|\S.* ─{3,})/u.test(line) ? i : -1).filter((i) => i >= 0);
       assert.deepEqual(sections.map((i) => area[i].trim().split(' ─')[0].replace(/^HORIZONS  .*$/u, 'HORIZONS')),
         ['HORIZONS', ...expected.map(({ title }) => title)]);
@@ -2578,10 +2578,10 @@ describe('collectPage', () => {
       assert.ok(joined.includes(reason), joined);
       assert.ok(joined.includes('mc-ui · memoro-cli · 2 sessions'), joined);
       assert.ok(joined.includes('Verify the complete offer'), joined);
-      const end = body.findIndex((row) => /^ {13}● BUILD/u.test(row));
-      assert.ok(end >= 0, 'the activity shares the stage row inset');
+      const end = body.findIndex((row) => /^ {13}╰─+╯$/u.test(row));
+      assert.ok(end >= 0, 'the rounded frame shares the stage row inset');
       const pr = body.findIndex((row, i) => i > end && /^ {13}↳ memoro-cli#7 · open/u.test(row));
-      assert.ok(pr > end, 'the PR comes after the session at the same inset');
+      assert.ok(pr > end, 'the PR comes after the frame at the same inset');
       const detail = body.slice(end + 1, pr);
       assert.equal(detail.length, columns === 60 ? 2 : 1, `${columns}: ${detail.join('\n')}`);
       assert.ok(detail.every((row) => /^ {15}\S/u.test(row)), detail.join('\n'));
@@ -3409,7 +3409,7 @@ describe('PULL REQUESTS', () => {
     // The goal's frame carries its pull request, as the collector attaches it by branch; MAINTENANCE holds the loose ones.
     const programmes = programmesSection({ goalRows: [{ ...goalRow('one-operation', 'p', { running: true }), prs: runner.sessions[0].prs }] });
     const lines = activityPage(pageData({ runner, prs: pulls, programmes }), { columns: 120, now: AT });
-    assert.ok(lines.some((line) => /● BUILD · 5 min · claude · opus/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /● · BUILD · 5 min · claude · opus/u.test(line)), lines.join('\n'));
     assert.ok(lines.some((line) => line.includes('memoro#13048')));
     assert.equal(lines.filter(line => line.includes('#13048')).length, 1, 'session PR is not repeated among loose PRs');
     const operations = renderPageLines(pageData({ runner, prs: pulls }), { columns: 120, now: AT });
