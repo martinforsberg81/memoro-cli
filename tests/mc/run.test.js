@@ -681,7 +681,8 @@ test('chores marks a carried lesson landed with the goal\'s pull request once it
 const AREA = 'memoro-cli/system';
 const AREA_PAGE = 'docs/technical/areas/system.md';
 const HELD = 'Keep the original design (Martin, 2026-11-18).';
-const STALE_AREA = `# System\n\n## Aim\n\nKeep work bounded.\n\n## Closer\n\nA measured baseline.\n\n## Decisions\n\n${HELD}\n\n## Store\n\nThe source records eight attempts.\n`;
+const INTRO = 'The system source area.';
+const STALE_AREA = `# System\n\n${INTRO}\n\n## Aim\n\nKeep work bounded.\n\n## Closer\n\nA measured baseline.\n\n## Decisions\n\n${HELD}\n\n## Store\n\nThe source records eight attempts.\n\n10. The retry limit\n\n    It was eight attempts.\n`;
 const SOURCE = 'src/actual.mjs';
 const CORRECTION = 'The source records three attempts (see [the source](../../../src/actual.mjs)).';
 
@@ -782,7 +783,9 @@ test('learning publishes a sourced area correction, then ordinary chores confirm
   const [lesson] = l.lessons();
   l.schedule(async (env) => {
     assert.match(l.g(l.checkout, ['show', `origin/main:${SOURCE}`]), /attempts = 3/u);
-    const answer = await l.change(env, lesson.name, AREA_PAGE, STALE_AREA.replace('The source records eight attempts.', CORRECTION));
+    const answer = await l.change(env, lesson.name, AREA_PAGE, STALE_AREA
+      .replace('The source records eight attempts.', CORRECTION)
+      .replace('    It was eight attempts.', '    It is three attempts.'));
     assert.equal(answer.code, 0, answer.stderr);
     assert.match(answer.stdout, /system — update published in .*\/pull\/1/u);
     assert.doesNotMatch(answer.stdout, /on main/u);
@@ -804,6 +807,7 @@ test('learning publishes a sourced area correction, then ordinary chores confirm
   l.g(l.checkout, ['merge', '--ff-only', pr.headRefOid]);
   l.g(l.checkout, ['push', '-q', 'origin', 'main']);
   assert.match(l.g(l.checkout, ['show', `origin/main:${AREA_PAGE}`]), /three attempts \(see \[the source\]/u);
+  assert.match(l.g(l.checkout, ['show', `origin/main:${AREA_PAGE}`]), /10\. The retry limit\n\n    It is three attempts\./u);
   assert.ok(l.g(l.checkout, ['show', `origin/main:${AREA_PAGE}`]).includes(HELD));
   pr.state = 'MERGED'; pr.mergedAt = l.now().toISOString();
   l.next();
@@ -828,6 +832,9 @@ test('learning guards both entrances and records accurate, held, repair and lega
     const indented = await l.change(child, accurate.name, AREA_PAGE, `    ${STALE_AREA}`);
     assert.equal(indented.code, 2, 'terminal: the opening heading must not turn into code');
     assert.match(indented.stderr, /changes its Markdown structure or raw HTML/u);
+    const codeBlock = await l.change(child, accurate.name, AREA_PAGE, STALE_AREA.replace(INTRO, `    ${INTRO}`));
+    assert.equal(codeBlock.code, 2, 'terminal: four columns turn the introductory prose into code');
+    assert.match(codeBlock.stderr, /changes its Markdown structure or raw HTML/u);
     const refused = await l.change(child, accurate.name, 'docs/technical/command.md', 'Rewrite the standard.\n');
     assert.equal(refused.code, 2, refused.stderr);
     assert.match(refused.stderr, /not an edit to the declared area page/u);
@@ -840,6 +847,9 @@ test('learning guards both entrances and records accurate, held, repair and lega
     const indented = await l.change(child, held.name, AREA_PAGE, `    ${STALE_AREA}`);
     assert.equal(indented.code, 2, 'scheduled: the opening heading must not turn into code');
     assert.match(indented.stderr, /changes its Markdown structure or raw HTML/u);
+    const codeBlock = await l.change(child, held.name, AREA_PAGE, STALE_AREA.replace(INTRO, `  \t${INTRO}`));
+    assert.equal(codeBlock.code, 2, 'scheduled: a tab advances the prose to the four-column code boundary');
+    assert.match(codeBlock.stderr, /changes its Markdown structure or raw HTML/u);
     // The old line scanner reads the same Decisions heading and body despite the fence.
     const fenced = STALE_AREA.replace('## Decisions', '~~~markdown\n## Decisions').replace('## Store', '## Store\n~~~');
     const hidden = await l.change(child, held.name, AREA_PAGE, fenced);
@@ -908,22 +918,25 @@ test('learning refuses a correction when the current main page changed only in o
 });
 
 test('learning retires an empty terminal checkout but retains dirty, unpushed, occupied, uncertain and unowned checkouts', async (t) => {
-  const l = areaLearningFixture(t, [1], ['dirty', 'unpushed', 'occupied', 'detached', 'open-file', 'unknown', 'malformed']);
+  const retained = ['dirty', 'unpushed', 'occupied', 'detached', 'open-file', 'unknown', 'malformed', 'timeout'];
+  const l = areaLearningFixture(t, [1], retained);
   const paths = {};
+  const scans = [];
   l.f.deps.deskLearning.cwds = () => Object.assign([
     { pid: 1234, cwd: join(paths.occupied, 'src') },
     { pid: 5678, cwd: l.root },
   ], { complete: true });
-  l.f.deps.deskLearning.openIn = path => openFilesIn(path, { run: (_bin, args) => {
-    assert.equal(args.at(-1), path);
-    if (path === paths['open-file']) return { status: 0, stdout: '5678\n', stderr: '' };
+  l.f.deps.deskLearning.openIn = path => openFilesIn(path, { run: (bin, args) => {
+    scans.push({ path, bin, args });
+    if (path === paths['open-file']) return { status: 1, stdout: 'p5678\n', stderr: '' };
     if (path === paths.unknown) return { status: 1, stdout: '', stderr: 'lsof: cannot read directory' };
-    if (path === paths.malformed) return { status: 0, stdout: 'not a PID\n', stderr: '' };
+    if (path === paths.malformed) return { status: 1, stdout: 'p1e3\n', stderr: '' };
+    if (path === paths.timeout) return { status: null, stdout: '', stderr: '', error: { code: 'ETIMEDOUT' } };
     return { status: 1, stdout: '', stderr: '' };
   } });
   const branches = {};
   const answer = await l.manual(async child => {
-    for (const id of ['system', 'dirty', 'unpushed', 'occupied', 'detached', 'open-file', 'unknown', 'malformed']) {
+    for (const id of ['system', ...retained]) {
       paths[id] = await l.area(child, id);
       branches[id] = l.g(paths[id], ['branch', '--show-current']);
     }
@@ -933,6 +946,8 @@ test('learning retires an empty terminal checkout but retains dirty, unpushed, o
     l.g(paths.detached, ['checkout', '--detach', 'HEAD']);
   });
   assert.equal(answer.code, 0, answer.stderr);
+  assert.deepEqual(scans.map(({ path }) => path).sort(), ['system', 'open-file', 'unknown', 'malformed', 'timeout'].map(id => paths[id]).sort());
+  for (const { path, bin, args } of scans) assert.deepEqual([bin, ...args], ['lsof', '-nP', '+w', '-Fp', '+D', path]);
   assert.equal(existsSync(dirname(paths.system)), false);
   const registered = l.g(l.checkout, ['worktree', 'list', '--porcelain']);
   assert.ok(!registered.includes(paths.system));
@@ -941,7 +956,7 @@ test('learning retires an empty terminal checkout but retains dirty, unpushed, o
   for (const [id, reason] of [['dirty', /uncommitted work/u], ['unpushed', /not published/u],
     ['occupied', /no process stands in it/u], ['detached', /could not verify its registered path and branch/u],
     ['open-file', /files are open in it \(PIDs: 5678\)/u], ['unknown', /could not establish that no files are open in it/u],
-    ['malformed', /could not establish that no files are open in it/u]]) {
+    ['malformed', /could not establish that no files are open in it/u], ['timeout', /could not establish that no files are open in it/u]]) {
     assert.ok(registered.includes(paths[id]), registered);
     const report = answer.stdout.split('\n').find(line => line.includes(paths[id]));
     assert.ok(report, answer.stdout);

@@ -152,16 +152,48 @@ function areaHeldSections(text, title) {
   return JSON.stringify(sections.map(lines => lines.join('\n').trimEnd()));
 }
 
+// Tabs advance to the next four-column stop, including after a list marker.
+function markdownIndent(whitespace, column = 0) {
+  for (const char of whitespace) column += char === '\t' ? 4 - column % 4 : 1;
+  return column;
+}
+
 /**
- * Learning edits facts in the area's existing prose or lists, not the markup that can
- * change how a held section renders. Pin structural blocks in order, including their
- * surrounding nonblank lines (e.g. a heading can be swallowed by an adjacent HTML block).
- * Be conservative about possible fence, HTML and reference markers rather than trying
- * to recognise which ones a particular Markdown renderer treats as literal text.
+ * Pin structural blocks in order, including their surrounding nonblank lines.
+ * In addition to possible headings, fences, raw HTML and reference definitions,
+ * keep top-level indented code. Indentation alone is not code within a paragraph
+ * or at a list item's content column, including after a blank line in a loose list.
  */
 function learningStructure(text) {
   const structural = /\x60{3,}|~{3,}|<[A-Za-z/!?]|\]:|^[ \t>]*(?:#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$)/mu;
-  return JSON.stringify(text.split(/\r?\n(?:[ \t]*\r?\n)+/u).filter(block => structural.test(block) || MARTIN_DECIDED.test(block)));
+  const boundary = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:\x60{3,}|~{3,}|>|<[A-Za-z/!?])|(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$)/u;
+  const listItem = /^( {0,3})([-+*]|\d{1,9}[.)])([ \t]+|$)(.*)$/u;
+  let listColumn = 0;
+  return JSON.stringify(text.split(/\r?\n(?:[ \t]*\r?\n)+/u).filter(block => {
+    let paragraph = false, code = false;
+    for (const line of block.split(/\r?\n/u)) {
+      if (!line.trim()) continue;
+      const column = markdownIndent(/^[ \t]*/u.exec(line)[0]);
+      if (listColumn && column >= listColumn) continue;
+      if (column >= 4) {
+        if (!paragraph) { code = true; listColumn = 0; }
+        continue;
+      }
+      if (boundary.test(line)) { paragraph = false; listColumn = 0; continue; }
+      const item = listItem.exec(line);
+      // Only a nonempty bullet or a list starting at 1 can interrupt prose.
+      if (item && (!paragraph || listColumn || (item[4] && /^([-+*]|1[.)])$/u.test(item[2])))) {
+        const markerEnd = item[1].length + item[2].length;
+        const padding = markdownIndent(item[3], markerEnd) - markerEnd;
+        listColumn = markerEnd + (padding >= 1 && padding <= 4 ? padding : 1);
+        paragraph = Boolean(item[4]) && padding <= 4;
+      } else {
+        if (!paragraph) listColumn = 0;
+        paragraph = true;
+      }
+    }
+    return code || structural.test(block) || MARTIN_DECIDED.test(block);
+  }));
 }
 
 /**

@@ -85,15 +85,17 @@ export function processesStandingIn(paths, { cwds = null, run, uid } = {}) {
 export function openFilesIn(path, { run = spawnSync } = {}) {
   let r;
   try {
-    r = run('lsof', ['-nP', '-t', '+D', path], { encoding: 'utf8', timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
+    // -t implies -w, hiding warnings that distinguish a partial scan from no matches.
+    r = run('lsof', ['-nP', '+w', '-Fp', '+D', path], { encoding: 'utf8', timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
   } catch { return null; }
-  if (r.error || r.signal || String(r.stderr || '').trim()) return null;
-  const output = String(r.stdout || '').trim();
+  if (r.error || r.signal || r.stderr !== '' || (r.status !== 0 && r.status !== 1)) return null;
   // lsof uses exit 1 both for no matches and for failure. Only a silent
-  // exit 1 is evidence of no open files.
-  if (r.status === 1 && !output) return [];
-  if (r.status !== 0 || !output) return null;
-  const pids = output.split('\n').map(line => Number(line));
-  if (pids.some(pid => !Number.isSafeInteger(pid) || pid <= 0)) return null;
+  // exit 1 is clear; it can also report a PID before exiting with that status.
+  if (r.status === 1 && r.stdout === '') return [];
+  if (!r.stdout?.endsWith('\n')) return null;
+  const records = r.stdout.slice(0, -1).split('\n');
+  if (records.some(line => !/^p[1-9][0-9]*$/u.test(line))) return null;
+  const pids = records.map(line => Number(line.slice(1)));
+  if (pids.some(pid => !Number.isSafeInteger(pid))) return null;
   return [...new Set(pids)];
 }

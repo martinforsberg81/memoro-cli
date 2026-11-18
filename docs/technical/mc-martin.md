@@ -702,8 +702,11 @@ accepts a committed, factual edit to that one declared area page. Pass another
 manager's publication guard is narrowed for this role: it refuses changes to
 other files, Aim, Decisions and dated decisions. To keep the held sections
 visible, it also preserves the blocks containing headings, possible fences,
-raw HTML or reference definitions, in their original order. Both the guard
-and the comparison with current main read area page blobs without trimming.
+raw HTML or reference definitions, in their original order. A top-level
+indented code block is pinned too: four columns, including tab stops, start
+code at a block boundary, not in the middle of prose or at a list item's
+content indentation. Both the guard and the comparison with current main
+read area page blobs without trimming.
 If the page changed on main, even only at its edges, the command requires a
 new check against current main.
 It gates the commit, publishes without force and hands the immutable PR
@@ -717,8 +720,9 @@ releasing its reservation. A checkout under
 assigned branch, clean (including untracked and ignored files), and have
 complete cwd evidence that no process stands in it. Its head must be reachable
 from `origin/main` or its published tracking branch. Immediately before
-removal, the same `lsof +D` check as [tidy](mc-tidy.md) must show that no file
-in the checkout is open, even by a process standing elsewhere.
+removal, the [recursive open-file check](mc-tidy.md#recursive-open-file-evidence)
+must return a silent empty scan, ruling out open files even by processes
+standing elsewhere.
 Removal is through Git without force, then the local branch is retired;
 the remote branch is not changed. Uncertain, occupied, dirty or unpushed
 checkouts are kept and reported with their paths. Older or interrupted runs'
