@@ -402,14 +402,14 @@ describe('the list and the page', () => {
     } finally { a.done(); }
   });
 
-  it('puts a recorded programme with no goal in the page data', () => {
+  it('puts local programmes with or without records in the page data', () => {
     const a = area();
     try {
       mkdirSync(join(a.home, 'alpha'));
       writeFileSync(join(a.home, 'alpha', RECORD_FILE), JSON.stringify(GOOD));
       mkdirSync(join(a.home, 'plain'));
       const { section } = readProgrammes({ env: a.env });
-      assert.deepEqual(section.programmes.map((group) => group.programme), ['alpha']);
+      assert.deepEqual(section.programmes.map((group) => group.programme), ['alpha', 'plain']);
       assert.deepEqual(recordedProgrammes(a.home), ['alpha']);
     } finally { a.done(); }
   });

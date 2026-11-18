@@ -58,7 +58,7 @@ import { attemptInFlight } from './deploy-check.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
 import { readDeployProgress } from './deploy-progress.js';
 import { criteriaCount } from './criteria.js';
-import { readRecord, recordedProgrammes } from './programme-record.js';
+import { readRecord } from './programme-record.js';
 import { archiveDue, archiveReference, failuresSinceItem, liveGoals, readArchiveState } from './archive-turn.js';
 import { itemDirectory, listDeskItems } from './desk-items.js';
 import { briefLineOf } from './page-desk.js';
@@ -1594,6 +1594,11 @@ function archiveCompleted({ programme, home, root }) {
   return state.status === 'valid' && !!state.state.destination && existsSync(state.state.destination);
 }
 
+// A recordless programme directory is still current membership.
+function localProgrammes(home) {
+  try { return readdirSync(home, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name); } catch { return []; }
+}
+
 /**
  * PROGRAMMES alone, from the sources `collectPage` reads it from — the goals,
  * the open plan sessions and the tree's own programmes (`listProgrammes`) — and through the same `programmesSection`, so
@@ -1624,7 +1629,7 @@ export function readProgrammes({
     planningSessions: sessions.planning_sessions,
     runnerSessions: runnerSection({ currents, now, alive }).sessions,
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive, order }),
-    programmes: [...Object.keys(homes), ...recordedProgrammes(programsHome(env))],
+    programmes: [...Object.keys(homes), ...localProgrammes(programsHome(env))],
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
     order,
   });
@@ -1804,7 +1809,7 @@ export async function collectPage({
     runnerSessions: runner.sessions,
     sessionStrays: sessions.strays,
     goalRows: goalsOf({ goals, currents, alive, order }),
-    programmes: [...present.flatMap((repo) => listProgrammes(repo)), ...recordedProgrammes(programsHome(env))],
+    programmes: [...present.flatMap((repo) => listProgrammes(repo)), ...localProgrammes(programsHome(env))],
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
     order,
     strays: readStrays(root, { git }),
@@ -1824,6 +1829,10 @@ export async function collectPage({
   programmes.programmes = programmes.programmes.filter((group) => !archiveCompleted({
     programme: group.programme, home: programsHome(env), root,
   }));
+  // A PR attached before completion filtering now belongs to the existing
+  // outside-goal rows, not to an invisible programme frame.
+  const visible = new Set(programmes.programmes.map((group) => group.programme));
+  for (const pr of pulls.items) if (pr.programme && !visible.has(pr.programme)) pr.programme = null;
   programmes.dormant = programmes.programmes.filter((group) => group.dormant).length;
   programmes.active = programmes.programmes.length - programmes.dormant;
   const horizons = horizonsSection({ programmes, found: records.found, env });

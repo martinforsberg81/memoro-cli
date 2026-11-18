@@ -2292,10 +2292,20 @@ describe('collectPage', () => {
     let page = await fx.collect();
     assert.deepEqual(page.horizons.open[0].programmes, []);
     assert.ok(!page.programmes.programmes.some((group) => group.programme === 'finished'));
+    assert.deepEqual(maintenanceItems(page).filter((item) => item.key === 'pr:memoro#9000').map((item) => item.key), ['pr:memoro#9000']);
     mkdirSync(join(programsHome(fx.env), 'finished', 'goals', 'still-live'), { recursive: true });
     page = await fx.collect();
     assert.deepEqual(page.horizons.open[0].programmes, ['finished']);
     assert.ok(page.programmes.programmes.some((group) => group.programme === 'finished'));
+  });
+
+  it('keeps a recordless local programme visible without repository membership', async (t) => {
+    const fx = horizonsFixture();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    mkdirSync(join(programsHome(fx.env), 'recordless'), { recursive: true });
+    const page = await fx.collect();
+    assert.deepEqual(page.programmes.programmes.map((group) => group.programme), ['mc', 'recordless']);
+    assert.deepEqual(page.horizons.none, ['mc', 'recordless']);
   });
 
   it('collects a draft with no goals into JSON and draws draft at 160 and 80 columns', async (t) => {
