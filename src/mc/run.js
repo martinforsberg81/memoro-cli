@@ -1419,7 +1419,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     try {
       reconcileAreaLearning({ env: deps.env, now: deps.now(), repos, gh: deps.gh, queue: deps.deskLearning?.queue, say });
       const out = await runLearningPass({ env: deps.env, now: deps.now, deps: {
-        ...(deps.deskLearning || {}), route: routeClass, logRun,
+        ...(deps.deskLearning || {}), repos, route: routeClass, logRun, say,
         budget: options => deskBudget({ ...options, read: deps.read }),
       } });
       if (out.started) {

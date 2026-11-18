@@ -700,12 +700,24 @@ branch from origin/main with the manager's worktree setup. From that checkout,
 accepts a committed, factual edit to that one declared area page. Pass another
 `--lesson` to link another lesson addressed by the same correction. The
 manager's publication guard is narrowed for this role: it refuses changes to
-other files, Aim, Decisions and dated decisions, and requires a new check
-against current main if the area's page changed. The command gates the commit,
-publishes without force and hands the immutable PR branch to the ordinary
-merger. It says published for the handoff and on main only after a merge into
+other files, Aim, Decisions and dated decisions. To keep the held sections
+visible, it also preserves the blocks containing headings, possible fences,
+raw HTML or reference definitions, in their original order. If the area's
+page changed on main, the command requires a new check against current main.
+It gates the commit, publishes without force and hands the immutable PR
+branch to the ordinary merger. It says published for the handoff and on main only after a merge into
 main is observed. Bare `mc publish` and mutations through the old lesson and
 goal verbs are refused to this role. No reserved act is granted.
+
+Both entrances retire their own area worktrees when the turn ends, before
+releasing its reservation. A checkout under
+`runner/work/learning/<run-id>-<area>/<repo>` must still be registered on its
+assigned branch, unoccupied and clean, including untracked and ignored files.
+Its head must be reachable from `origin/main` or its published tracking branch.
+Removal is through Git without force, then the local branch is retired;
+the remote branch is not changed. Uncertain, occupied, dirty or unpushed
+checkouts are kept and reported with their paths. Older or interrupted runs'
+checkouts are not adopted by a later turn.
 
 **Disposition records.** Each processed lesson has a versioned JSON sidecar
 at `lessons/.learning/<name>.json`; its Markdown, legacy state and goal links

@@ -3,7 +3,7 @@ import { effortArgs as codexEffortArgs } from '../../src/adapters/codex.js';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -680,12 +680,12 @@ test('chores marks a carried lesson landed with the goal\'s pull request once it
 const AREA = 'memoro-cli/system';
 const AREA_PAGE = 'docs/technical/areas/system.md';
 const HELD = 'Keep the original design (Martin, 2026-11-18).';
-const STALE_AREA = `# System\n\n## Aim\n\nKeep work bounded.\n\n## Decisions\n\n${HELD}\n\n## Store\n\nThe source records eight attempts.\n`;
+const STALE_AREA = `# System\n\n## Aim\n\nKeep work bounded.\n\n## Closer\n\nA measured baseline.\n\n## Decisions\n\n${HELD}\n\n## Store\n\nThe source records eight attempts.\n`;
 const SOURCE = 'src/actual.mjs';
 const CORRECTION = 'The source records three attempts (see [the source](../../../src/actual.mjs)).';
 
-/** Real area worktree/branch/diff/push, with GitHub and the already-tested gate/merger at their boundaries. */
-function areaLearningFixture(t, ages) {
+/** Area worktree/branch/diff/push through the repository model, with GitHub and gate/merger at their boundaries. */
+function areaLearningFixture(t, ages, extraAreas = []) {
   const l = learningFixture(t, { ages });
   const checkout = join(l.root, 'memoro-cli');
   const upstream = join(l.root, 'upstream', 'memoro-cli.git');
@@ -703,9 +703,9 @@ function areaLearningFixture(t, ages) {
   for (const [key, value] of [['user.name', 'Fixture'], ['user.email', 'test@example.invalid'], ['commit.gpgsign', 'false'], ['core.hooksPath', '/dev/null']]) g(checkout, ['config', key, value]);
   const put = (file, content) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, content); };
   put(join(checkout, AREA_PAGE), STALE_AREA);
-  put(join(checkout, '.mc/areas.json'), JSON.stringify({ schema_version: 1, areas: [
-    { id: 'system', name: 'System', covers: 'mc', paths: ['src/'], questions: [], standards: [], page: AREA_PAGE },
-  ] }));
+  put(join(checkout, '.mc/areas.json'), JSON.stringify({ schema_version: 1,
+    areas: ['system', ...extraAreas].map(id => ({ id, name: id, covers: 'mc', paths: ['src/'], questions: [], standards: [], page: AREA_PAGE })),
+  }));
   put(join(checkout, SOURCE), 'export const attempts = 3;\n');
   put(join(checkout, 'docs/technical/command.md'), 'An ordinary standard.\n');
   g(checkout, ['add', '.']); g(checkout, ['commit', '-qm', 'Seed source and stale area']);
@@ -732,6 +732,8 @@ function areaLearningFixture(t, ages) {
   l.f.deps.gh = gh;
   const options = { repos, git, gh, queue: job => queued.push(job), gate: async (_argv, o) => { gates.push(g(o.cwd, ['rev-parse', 'HEAD'])); return 0; } };
   l.f.deps.deskLearning.queue = options.queue;
+  // No host process inspection: the fixture owns its checkouts and simulates occupants at this boundary.
+  l.f.deps.deskLearning.cwds = () => Object.assign([], { complete: true });
   const result = JSON.stringify({ type: 'result', num_turns: 1, total_cost_usd: 0.01 });
   let clock = l.f.deps.now();
   const now = () => clock;
@@ -756,8 +758,8 @@ function areaLearningFixture(t, ages) {
     return answer;
   };
   const schedule = (work) => { l.f.deps.deskLearning.session = session(work); };
-  async function area(env) {
-    const r = await act(learningCommand, ['area', AREA], env);
+  async function area(env, id = 'system') {
+    const r = await act(learningCommand, ['area', `memoro-cli/${id}`], env);
     assert.equal(r.code, 0, r.stderr);
     return r.stdout.split(' · ')[0];
   }
@@ -770,7 +772,7 @@ function areaLearningFixture(t, ages) {
   const lessons = () => listLessons({ env: l.f.deps.env });
   const brief = () => act(martinCommand, ['brief'], l.f.deps.env, { home: join(l.root, 'programs'), syncDeps: { reportIssue: () => {} } });
   const list = async (state) => JSON.parse((await act(martinCommand, ['lessons', '--state', state, '--json'], l.f.deps.env)).stdout);
-  return { ...l, checkout, g, now, next, chores, options, act, manual, schedule, change, lessons, brief, list, remote, queued, gates, put, failures };
+  return { ...l, checkout, g, now, next, chores, options, act, manual, schedule, area, change, lessons, brief, list, remote, queued, gates, put, failures };
 }
 
 test('learning publishes a sourced area correction, then ordinary chores confirm its merge with no session due', async (t) => {
@@ -788,6 +790,9 @@ test('learning publishes a sourced area correction, then ordinary chores confirm
   assert.equal(l.calls.length, 1);
   assert.deepEqual(l.queued.map(({ repo, pr }) => [repo, pr]), [['memoro-cli', 1]]);
   assert.deepEqual(l.gates, [l.remote.get(1).headRefOid]);
+  assert.doesNotMatch(l.g(l.checkout, ['worktree', 'list', '--porcelain']), /learning\//u, 'scheduled publication releases its checkout');
+  assert.equal(l.g(l.checkout, ['branch', '--list', 'learning/*']), '', 'the local branch is retired');
+  assert.equal(l.g(l.checkout, ['rev-parse', `origin/${l.remote.get(1).branch}`]), l.remote.get(1).headRefOid, 'the published branch remains');
   assert.equal(l.lessons()[0].learning.source, `origin/main:${SOURCE}`);
   assert.deepEqual((await l.list('publication-pending')).map(x => x.name), [lesson.name]);
   assert.deepEqual(await l.list('landed'), []);
@@ -824,8 +829,18 @@ test('learning guards both entrances and records accurate, held, repair and lega
     assert.equal((await l.act(learningCommand, ['record', accurate.name, '--accurate', SOURCE], child)).code, 0);
   });
   assert.equal(manual.code, 0, manual.stderr);
-  assert.equal(manual.stdout, 'mc: no area information to update\n');
+  assert.match(manual.stdout, /learning worktree .* — its branch .* is not published/u);
+  assert.match(manual.stdout, /mc: no area information to update\n$/u);
   l.schedule(async (child) => {
+    // The old line scanner reads the same Decisions heading and body despite the fence.
+    const fenced = STALE_AREA.replace('## Decisions', '~~~markdown\n## Decisions').replace('## Store', '## Store\n~~~');
+    const hidden = await l.change(child, held.name, AREA_PAGE, fenced);
+    assert.equal(hidden.code, 2, hidden.stderr);
+    assert.match(hidden.stderr, /changes its Markdown structure or raw HTML/u);
+    const collapsed = STALE_AREA.replace('## Decisions', '<details>\n\n## Decisions').replace('## Store\n\n', '## Store\n\n</details>\n\n');
+    const wrapped = await l.change(child, held.name, AREA_PAGE, collapsed);
+    assert.equal(wrapped.code, 2, wrapped.stderr);
+    assert.match(wrapped.stderr, /changes its Markdown structure or raw HTML/u);
     const refused = await l.change(child, held.name, AREA_PAGE, STALE_AREA.replace(HELD, 'Replace the decision.'));
     assert.equal(refused.code, 2, refused.stderr);
     assert.match(refused.stderr, /changes its ## Decisions/u);
@@ -861,6 +876,38 @@ test('learning guards both entrances and records accurate, held, repair and lega
   const maintenance = lessonsReading({ lessons: l.lessons(), now: l.now() });
   assert.equal(maintenance.summary, '1 open · 1 in a goal · 1 late · 0 landed this week');
   assert.deepEqual(maintenance.groups.slice(0, 2).map(x => x.items), [[unsupported.name], [asGoal.name]]);
+});
+
+test('learning retires an empty terminal checkout but reports dirty, unpushed, occupied and unowned checkouts', async (t) => {
+  const l = areaLearningFixture(t, [1], ['dirty', 'unpushed', 'occupied', 'detached']);
+  const paths = {};
+  l.f.deps.deskLearning.cwds = () => Object.assign([{ pid: 1234, cwd: join(paths.occupied, 'src') }], { complete: true });
+  const branches = {};
+  const answer = await l.manual(async child => {
+    for (const id of ['system', 'dirty', 'unpushed', 'occupied', 'detached']) {
+      paths[id] = await l.area(child, id);
+      branches[id] = l.g(paths[id], ['branch', '--show-current']);
+    }
+    l.g(l.checkout, ['config', 'status.showUntrackedFiles', 'no']);
+    l.put(join(paths.dirty, 'notes.md'), 'Keep the uncommitted evidence.\n');
+    l.g(paths.unpushed, ['commit', '--allow-empty', '-qm', 'Local investigation']);
+    l.g(paths.detached, ['checkout', '--detach', 'HEAD']);
+  });
+  assert.equal(answer.code, 0, answer.stderr);
+  assert.equal(existsSync(dirname(paths.system)), false);
+  const registered = l.g(l.checkout, ['worktree', 'list', '--porcelain']);
+  assert.ok(!registered.includes(paths.system));
+  assert.deepEqual(l.g(l.checkout, ['branch', '--list', 'learning/*']).split('\n').map(line => line.trim()).sort(),
+    [branches.dirty, branches.unpushed, branches.occupied, branches.detached].sort());
+  for (const [id, reason] of [['dirty', /uncommitted work/u], ['unpushed', /not published/u],
+    ['occupied', /no process stands in it/u], ['detached', /could not verify its registered path and branch/u]]) {
+    assert.ok(registered.includes(paths[id]), registered);
+    const report = answer.stdout.split('\n').find(line => line.includes(paths[id]));
+    assert.ok(report, answer.stdout);
+    assert.match(report, reason);
+  }
+  assert.equal(readFileSync(join(paths.dirty, 'notes.md'), 'utf8'), 'Keep the uncommitted evidence.\n');
+  assert.equal(l.g(paths.unpushed, ['log', '-1', '--format=%s']), 'Local investigation');
 });
 
 test('closed unmerged learning publications get one scheduled retry and then wait for a manual run', async (t) => {

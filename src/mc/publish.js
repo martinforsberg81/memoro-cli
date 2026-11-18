@@ -15,7 +15,6 @@
  *
  * Pure over facts about the tree; the verb gathers them.
  */
-
 /** The branches nobody publishes from: a pull request is opened *to* them. */
 export const PROTECTED = new Set(['main', 'master', 'HEAD']);
 
@@ -154,6 +153,18 @@ function areaHeldSections(text, title) {
 }
 
 /**
+ * Learning edits facts in the area's existing prose or lists, not the markup that can
+ * change how a held section renders. Pin structural blocks in order, including their
+ * surrounding nonblank lines (e.g. a heading can be swallowed by an adjacent HTML block).
+ * Be conservative about possible fence, HTML and reference markers rather than trying
+ * to recognise which ones a particular Markdown renderer treats as literal text.
+ */
+function learningStructure(text) {
+  const structural = /\x60{3,}|~{3,}|<[A-Za-z/!?]|\]:|^[ \t>]*(?:#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$)/mu;
+  return JSON.stringify(text.split(/\r?\n(?:[ \t]*\r?\n)+/u).filter(block => structural.test(block) || MARTIN_DECIDED.test(block)));
+}
+
+/**
  * The blocks of `text`, each as its lines: a list item with its continuation lines, a heading, or a paragraph up to
  * the next blank line. A line that starts a list item or a heading starts a block of its own.
  */
@@ -245,6 +256,7 @@ export function managerGuard(files, { areaPage = null } = {}) {
       if (path !== areaPage || before === null || after === null) { found.push(`${path} is not an edit to the declared area page ${areaPage}`); continue; }
       if (areaHeldSections(before, 'decisions') !== areaHeldSections(after, 'decisions')) found.push(`${path} changes its ## Decisions`);
       if (areaHeldSections(before, 'aim') !== areaHeldSections(after, 'aim')) found.push(`${path} changes its ## Aim`);
+      if (learningStructure(before) !== learningStructure(after)) found.push(`${path} changes its Markdown structure or raw HTML`);
       if (JSON.stringify(martinBlocks(before)) !== JSON.stringify(martinBlocks(after))) found.push(`${path} changes a dated decision of Martin's`);
       continue;
     }

@@ -17,8 +17,9 @@ repeat the manager's repository-wide curation.
 
 - **A factual correction:** Open the assigned branch with
   `mc learning area <repo>/<area>`. Change only that area's page. Leave its
-  Aim, Decisions and held text alone. Cite the verified source in the
-  correction. Commit the correction and from that worktree run
+  Aim, Decisions and held text alone, including how they render. Keep the
+  heading, fence, raw HTML and link definition blocks unchanged. Cite the
+  verified source in the correction. Commit it and from that worktree run
   `mc learning publish <repo>/<area> --lesson <name> --source <reference>`.
   Give another `--lesson` for each lesson the same correction addresses.
   This checks the diff against main, gates the commit, publishes and records

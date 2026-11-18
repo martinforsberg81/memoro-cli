@@ -2,7 +2,7 @@
  * The shared terminal and scheduled area-learning session.
  */
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { requireCapability, resolveLaunch } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
@@ -10,19 +10,23 @@ import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { runTool } from './child-async.js';
 import { deskBudget, deskBudgetReason, deskRunsPath } from './desk-budget.js';
 import { lessonsDir, listLessons } from './desk-lessons.js';
+import { run as gitRun } from './git.js';
 import { learningEligible, learningLine } from './lesson-learning.js';
 import { learningClaimPath } from './learning-publication.js';
+import { curationWorktreesDir, settleCurationWorktrees } from './manager-pulse.js';
 import { chooseCandidate } from './model-choice.js';
 import { readCapacity } from './model-capacity.js';
 import { readModels } from './model-config.js';
-import { runnerDir } from './paths.js';
+import { runnerDir, workRoot } from './paths.js';
 import { profileArgs } from './portrait.js';
 import { instructionsFor, readCanonRole } from './roles.js';
 import { headlessArgs, readSessionOutput, TIMEOUT_EXIT, tsvHeader, tsvRow } from './run-plan.js';
 import { quotaFields, refusePlanOnRead } from './plan-refusal.js';
+import { defaultRepos } from './repos.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 import { withoutSessionIdentity } from './session-role.js';
 import { releaseClaim, takeClaim } from './resource-claim.js';
+import { cwdsOfUser, processesStandingIn } from './standing.js';
 
 /** Five open lessons, or one this old, start the pass. */
 export const LEARNING_OPEN = 5;
@@ -97,7 +101,51 @@ export async function runLearningPass({ env = process.env, now = () => new Date(
   try {
     if (!manual && (deps.ranToday || learningRanToday)({ env, now: now() })) return { started: false, reason: 'the learning pass already ran today' };
     return await launchLearning({ env, now, offered, due, manual, run, deps, candidate, launch, role, billing });
-  } finally { releaseClaim(claimPath, claim.marker); }
+  } finally {
+    try { settleLearningWorktrees({ env, run, deps }); }
+    catch (error) { deps.say?.(`mc: learning worktrees were left in ${curationWorktreesDir(workRoot(env), '', 'learning')} — ${error.message}`); }
+    finally { releaseClaim(claimPath, claim.marker); }
+  }
+}
+
+/** Only this ended turn's registered path/branch pairs belong to this reservation. Never adopt an older turn's work. */
+function settleLearningWorktrees({ env, run, deps }) {
+  const root = curationWorktreesDir(workRoot(env), '', 'learning');
+  let dirs;
+  try { dirs = readdirSync(root).filter(name => name.startsWith(`${run}-`) && /^[a-z][a-z0-9-]*$/u.test(name.slice(run.length + 1))); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  if (!dirs.length) return;
+  const git = deps.git || ((path, args) => { const r = gitRun(path, args); return { ...r, ok: r.status === 0 }; });
+  const physical = realpathSync(root);
+  const cwds = (deps.cwds || cwdsOfUser)();
+  const report = (path, why) => deps.say?.(`mc: learning worktree ${path} — ${why}`);
+  for (const repo of deps.repos || defaultRepos(env)) {
+    const expected = dirs.flatMap(stamp => {
+      const path = join(physical, stamp, repo.name);
+      const dir = lstatSync(join(physical, stamp), { throwIfNoEntry: false });
+      if (!dir?.isDirectory()) { report(path, 'its run directory is not a directory'); return []; }
+      const entry = lstatSync(path, { throwIfNoEntry: false });
+      return entry ? [{ path, branch: `learning/${stamp}`, directory: entry.isDirectory() }] : [];
+    });
+    if (!expected.length) continue;
+    const listing = git(repo.path, ['worktree', 'list', '--porcelain', '-z']);
+    const entries = listing.ok ? listing.stdout.split('\0\0').map(entry => entry.split('\0')) : [];
+    for (const { path, branch, directory } of expected) {
+      if (!directory || !entries.some(entry => entry[0] === `worktree ${path}` && entry.includes(`branch refs/heads/${branch}`))) {
+        report(path, `could not verify its registered path and branch ${branch}`);
+        continue;
+      }
+      if (!cwds?.complete || processesStandingIn([path], { cwds }).length) {
+        report(path, 'could not establish that no process stands in it');
+        continue;
+      }
+      const settled = settleCurationWorktrees({ git, repos: [repo], paths: { [repo.name]: path }, branches: { [repo.name]: branch }, preserveIgnored: true });
+      for (const keep of settled.kept) report(keep.path, keep.why);
+    }
+  }
+  for (const stamp of dirs) {
+    try { rmdirSync(join(physical, stamp)); } catch { /* nonempty, already absent, or not owned; leave it alone */ }
+  }
 }
 
 async function launchLearning({ env, now, offered, due, manual, run, deps, candidate, launch, role, billing }) {
