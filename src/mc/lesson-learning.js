@@ -67,6 +67,7 @@ export function lessonLandedAt(lesson) {
 export function learningLine(entry) {
   const ref = entry.url || entry.reference;
   const area = entry.area?.split('/').at(-1);
+  if (entry.state === 'publishing') return `mc: ${area} — publication unconfirmed; correction pending`;
   if (entry.state === 'corrected') return `mc: ${area} — update on main in ${ref}`;
   if (entry.state === 'publication-pending' && ref) return `mc: ${area} — update published in ${ref}`;
   if (entry.state === 'publication-failed') return `mc: ${area} — publication failed; correction pending`
