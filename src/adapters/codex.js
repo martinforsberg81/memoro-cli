@@ -664,7 +664,7 @@ export const API_ROUTE = Object.freeze({
 });
 
 /** The model a plan session runs on when none is named. */
-export const PLAN_MODEL = 'gpt-6.1-sol';
+export const PLAN_MODEL = 'gpt-6.2-sol';
 
 /**
  * How an interactive launch hands the role's instructions over: the

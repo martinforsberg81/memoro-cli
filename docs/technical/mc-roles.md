@@ -105,7 +105,7 @@ stage, hand off to an appropriate stage, rewrite goal/criteria/programme plan,
 move stages backward or forward, or drop. The goal verbs enforce it and log
 `by martin`; the role text alone is not authorization. It preserves JSON
 validation and acceptance, review, gate, publish and merge evidence. It cannot
-mark criteria met administratively. The unattended `decision` role has the same goal authority, including rewriting, backward moves and dropping, but never administrative done. Its default list is `claude:opus:high`, then `codex:gpt-6.1-sol:high`; the interactive Martin role stays interactive-only. Headless hooks still refuse decision deploy/admin/production-data/credential acts. Other session roles retain their bounds.
+mark criteria met administratively. The unattended `decision` role has the same goal authority, including rewriting, backward moves and dropping, but never administrative done. Its default list is `claude:opus:high`, then `codex:gpt-6.2-sol:high`; the interactive Martin role stays interactive-only. Headless hooks still refuse decision deploy/admin/production-data/credential acts. Other session roles retain their bounds.
 
 Horizons, what the desk holds as worked toward, are set, moved, reopened and dropped only by the interactive Martin role or a person; the unattended manager may mark one reached and may propose one as a text item, and never creates one. [mc-martin.md](mc-martin.md) § Horizons holds the rest.
 

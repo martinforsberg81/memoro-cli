@@ -23,14 +23,14 @@ export const CACHE_READ_FACTOR = 0.1;
 
 /**
  * OpenAI's standard (not Flex/Batch, not Fast) short-context list prices, as
- * published on platform.openai.com/docs/pricing, read 2026-11-09. OpenAI
+ * published on developers.openai.com/api/docs/pricing, read 2026-11-18. OpenAI
  * counts differently from Anthropic: its `input_tokens` already include the
  * `cached_input_tokens`, so the uncached part is the difference, and a cached
  * token has its own listed price rather than a factor. Codex reports no
  * cache-write tokens, so writes are priced as plain input (an underestimate
  * of at most the 30-minute write premium, 1.25×).
  */
-export const OPENAI_PRICES_DATED = '2026-11-09';
+export const OPENAI_PRICES_DATED = '2026-11-18';
 
 /**
  * Google's Gemini API standard (paid, not Batch/Flex/Priority) list prices, as
@@ -51,6 +51,7 @@ export const PRICES = Object.freeze({
   'gemini-4-argon': { input: 2, output: 10, cacheRead: 0.1 },
   'gemini-4-hydrogen': { input: 1.5, output: 7.5, cacheRead: 0.075 },
   'gpt-6-astra': { input: 10, output: 50, cachedInput: 1, inputIncludesCached: true },
+  'gpt-6.2-sol': { input: 2, output: 10, cachedInput: 0.1, inputIncludesCached: true },
   'gpt-6.1-sol': { input: 2, output: 10, cachedInput: 0.1, inputIncludesCached: true },
   'gpt-6.1-terra': { input: 1, output: 5, cachedInput: 0.05, inputIncludesCached: true },
   'gpt-6-sol': { input: 2, output: 10, cachedInput: 0.2, inputIncludesCached: true },

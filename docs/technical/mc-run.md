@@ -389,7 +389,7 @@ not a unit of runnable work):
   candidate whose effort differs from its slug's level (`mc model add` and `set`
   say so, exit 2). Codex's model goes to
   `codex exec -m <name>`. The legacy schema names `haiku` and `opus` on claude,
-  `gpt-6.1-sol` and `gpt-6-luna` on codex; catalog candidates are tool-specific.
+  `gpt-6.2-sol` and `gpt-6.1-terra` and `gpt-6-luna` and `gpt-6.1-sol` on codex; catalog candidates are tool-specific.
 - **`check_in_minutes:`** — 60 minutes by default: Claude receives a prompt
   asking whether the session is still moving the goal, not an elapsed-time kill.
 - **`stall_minutes:`** — 20 minutes by default: silence is watched separately.
@@ -676,14 +676,14 @@ written whole or not at all:
 
 With no file, the defaults are: `fast`, `claude:haiku:high` then
 `codex:gpt-6-luna:high`; `large`, `claude:opus:medium` then
-`codex:gpt-6.1-sol:high`; `medium`, `claude:sonnet:high` then
+`codex:gpt-6.2-sol:high`; `medium`, `claude:sonnet:high` then
 `codex:gpt-6.1-terra:high`; review, `agy:gemini-4-argon-high:high`, then
-`claude:opus:medium`, then `codex:gpt-6.1-sol:medium`; finish, `claude:opus:high` then
-`codex:gpt-6.1-sol:high`; mend, `claude:sonnet:medium` then
-`codex:gpt-6.1-sol:medium`; plan, `claude:opus:high` then
-`codex:gpt-6.1-sol:high`; manager, `claude:opus:medium` then
-`codex:gpt-6.1-sol:medium`; decision, `claude:opus:high` then
-`codex:gpt-6.1-sol:high`. A file without finish, mend, plan, manager or decision reads
+`claude:opus:medium`, then `codex:gpt-6.2-sol:medium`; finish, `claude:opus:high` then
+`codex:gpt-6.2-sol:high`; mend, `claude:sonnet:medium` then
+`codex:gpt-6.2-sol:medium`; plan, `claude:opus:high` then
+`codex:gpt-6.2-sol:high`; manager, `claude:opus:medium` then
+`codex:gpt-6.2-sol:medium`; decision, `claude:opus:high` then
+`codex:gpt-6.2-sol:high`. A file without finish, mend, plan, manager or decision reads
 that list from the defaults; a file without `medium` also reads its default.
 Missing defaulted lists are written back with every list the first time
 `mc model` changes it. A file whose

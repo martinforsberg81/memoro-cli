@@ -71,13 +71,13 @@ const candidate = (tool, model, effort) => Object.freeze({ tool, model, effort }
 export const DEFAULT_CATALOG = Object.freeze({
   fast: Object.freeze([candidate('claude', 'haiku', 'high'), candidate('codex', 'gpt-6-luna', 'high')]),
   medium: Object.freeze([candidate('claude', 'sonnet', 'high'), candidate('codex', 'gpt-6.1-terra', 'high')]),
-  large: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.1-sol', 'high')]),
-  review: Object.freeze([candidate('agy', 'gemini-4-argon-high', 'high'), candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.1-sol', 'medium')]),
-  finish: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.1-sol', 'high')]),
-  mend: Object.freeze([candidate('claude', 'sonnet', 'medium'), candidate('codex', 'gpt-6.1-sol', 'medium')]),
-  plan: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.1-sol', 'high')]),
-  manager: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.1-sol', 'medium')]),
-  decision: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.1-sol', 'high')]),
+  large: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.2-sol', 'high')]),
+  review: Object.freeze([candidate('agy', 'gemini-4-argon-high', 'high'), candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.2-sol', 'medium')]),
+  finish: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.2-sol', 'high')]),
+  mend: Object.freeze([candidate('claude', 'sonnet', 'medium'), candidate('codex', 'gpt-6.2-sol', 'medium')]),
+  plan: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.2-sol', 'high')]),
+  manager: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.2-sol', 'medium')]),
+  decision: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.2-sol', 'high')]),
 });
 
 export function modelsPath(env = process.env) {

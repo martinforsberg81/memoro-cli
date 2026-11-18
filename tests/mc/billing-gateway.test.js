@@ -13,7 +13,7 @@ async function fixture(t, { expiresAt = '2026-10-29T13:00:00Z', now = () => NOW 
     keys: { claude: 'anthropic-secret-canary', codex: 'openai-secret-canary' },
     grants: [
       { provider: 'claude', token: 'claude-session-grant', models: ['claude-opus-4-6'], maxRequests: 1, expiresAt },
-      { provider: 'codex', token: 'codex-session-grant', models: ['gpt-6.1-sol'], maxRequests: 1, expiresAt },
+      { provider: 'codex', token: 'codex-session-grant', models: ['gpt-6.2-sol'], maxRequests: 1, expiresAt },
     ],
     now,
     fetchImpl: async (url, options) => {
@@ -41,7 +41,7 @@ test('Claude and Codex requests use only their own upstream key and stream the a
   assert.equal(calls[0].options.headers.get('x-api-key'), 'anthropic-secret-canary');
   assert.equal(calls[0].options.headers.get('authorization'), null);
 
-  const codex = await send('/codex/v1/responses', 'codex-session-grant', 'gpt-6.1-sol');
+  const codex = await send('/codex/v1/responses', 'codex-session-grant', 'gpt-6.2-sol');
   assert.equal(codex.status, 200);
   assert.equal(calls[1].url, 'https://api.openai.com/v1/responses');
   assert.equal(calls[1].options.headers.get('authorization'), 'Bearer openai-secret-canary');
@@ -131,7 +131,7 @@ test('an oversized body is answered 413 after it is read, and nothing reaches th
 
 test('codex remote compaction is a route of its own', async (t) => {
   const { calls, send } = await fixture(t);
-  assert.equal((await send('/codex/v1/responses/compact', 'codex-session-grant', 'gpt-6.1-sol')).status, 200);
+  assert.equal((await send('/codex/v1/responses/compact', 'codex-session-grant', 'gpt-6.2-sol')).status, 200);
   assert.equal(calls[0].url, 'https://api.openai.com/v1/responses/compact');
 });
 
@@ -153,7 +153,7 @@ async function socketFixture(t, { maxRequests = 2, expiresAt = '2026-10-29T13:00
   });
   const gateway = createBillingGateway({
     keys: { codex: 'openai-secret-canary' },
-    grants: [{ provider: 'codex', token: 'codex-session-grant', models: ['gpt-6.1-sol'], maxRequests, expiresAt }],
+    grants: [{ provider: 'codex', token: 'codex-session-grant', models: ['gpt-6.2-sol'], maxRequests, expiresAt }],
     now,
     fetchImpl: async (url, options) => {
       provider.httpCalls.push({ url, options });
@@ -232,7 +232,7 @@ test('a Codex websocket is carried to the provider with the key, which never com
   const { provider, connect } = await socketFixture(t);
   const session = connect();
   await session.opened;
-  session.socket.send(create('gpt-6.1-sol'));
+  session.socket.send(create('gpt-6.2-sol'));
   await until(() => session.received.length === 1);
   assert.equal(provider.headers.authorization, 'Bearer openai-secret-canary');
   assert.equal(provider.headers['openai-beta'], 'responses_websockets=2026-02-06');
@@ -262,14 +262,14 @@ test('each response.create counts against the session request limit, across sock
   const { provider, connect } = await socketFixture(t, { maxRequests: 2 });
   const first = connect();
   await first.opened;
-  first.socket.send(create('gpt-6.1-sol'));
+  first.socket.send(create('gpt-6.2-sol'));
   first.socket.send(JSON.stringify({ type: 'other.event' }));
   await until(() => first.received.length === 2);
   const second = connect();
   await second.opened;
-  second.socket.send(create('gpt-6.1-sol'));
+  second.socket.send(create('gpt-6.2-sol'));
   await until(() => second.received.length === 1);
-  second.socket.send(create('gpt-6.1-sol'));
+  second.socket.send(create('gpt-6.2-sol'));
   assert.deepEqual(await second.closed, { code: 1008, reason: 'session request limit reached' });
   assert.equal(provider.frames.filter((frame) => frame.type === 'response.create').length, 2);
   assert.equal(provider.frames.length, 3, 'other session frames are forwarded unchanged');
@@ -277,7 +277,7 @@ test('each response.create counts against the session request limit, across sock
 
 test('one request budget is shared when HTTP consumes before WebSocket', async (t) => {
   const { provider, providerEvents, connect, send } = await socketFixture(t, { maxRequests: 1 });
-  assert.equal((await send({ model: 'gpt-6.1-sol', input: [] })).status, 200);
+  assert.equal((await send({ model: 'gpt-6.2-sol', input: [] })).status, 200);
   assert.equal(provider.httpCalls.length, 1);
 
   const session = connect();
@@ -286,7 +286,7 @@ test('one request budget is shared when HTTP consumes before WebSocket', async (
     { target: session.socket, name: 'close', project: (code, reason) => ({ kind: 'closed', code, reason: reason.toString() }) },
     { target: providerEvents, name: 'frame', project: (frame) => ({ kind: 'forwarded', frame }) },
   ]);
-  session.socket.send(create('gpt-6.1-sol'));
+  session.socket.send(create('gpt-6.2-sol'));
   assert.deepEqual(await outcome, { kind: 'closed', code: 1008, reason: 'session request limit reached' });
   assert.equal(provider.frames.filter((frame) => frame.type === 'response.create').length, 0);
   assert.equal(provider.httpCalls.length, 1, 'the exhausted WebSocket request was not forwarded');
@@ -297,11 +297,11 @@ test('one request budget is shared when WebSocket consumes before HTTP', async (
   const session = connect();
   await session.opened;
   const forwarded = boundedEvent(providerEvents, 'frame');
-  session.socket.send(create('gpt-6.1-sol'));
+  session.socket.send(create('gpt-6.2-sol'));
   assert.equal((await forwarded).type, 'response.create');
   assert.equal(provider.frames.filter((frame) => frame.type === 'response.create').length, 1);
 
-  assert.equal((await send({ model: 'gpt-6.1-sol', input: [] })).status, 429);
+  assert.equal((await send({ model: 'gpt-6.2-sol', input: [] })).status, 429);
   assert.equal(provider.httpCalls.length, 0, 'the exhausted HTTP request never reaches upstream');
   assert.equal(provider.frames.filter((frame) => frame.type === 'response.create').length, 1);
 });
@@ -335,7 +335,7 @@ async function secondFrameAt(t, at) {
   await session.opened;
   const upstream = await upstreamConnected;
   const firstFrame = boundedEvent(providerEvents, 'frame');
-  session.socket.send(create('gpt-6.1-sol'));
+  session.socket.send(create('gpt-6.2-sol'));
   await firstFrame;
   // Registered before the second send: the provider's close can arrive first.
   const upstreamClosed = boundedEvent(upstream, 'close', (code) => code);
@@ -345,7 +345,7 @@ async function secondFrameAt(t, at) {
     { target: providerEvents, name: 'frame', project: (frame) => ({ kind: 'forwarded', frame }) },
   ]);
   clock = at;
-  session.socket.send(create('gpt-6.1-sol'));
+  session.socket.send(create('gpt-6.2-sol'));
   return { provider, outcome, upstreamClosed };
 }
 
@@ -415,7 +415,7 @@ test('a provider that refuses the upstream handshake closes the session with 101
   await new Promise((resolve) => refusing.listen(0, '127.0.0.1', resolve));
   const gateway = createBillingGateway({
     keys: { codex: 'openai-secret-canary' },
-    grants: [{ provider: 'codex', token: 'g', models: ['gpt-6.1-sol'], maxRequests: 5, expiresAt: '2026-10-29T13:00:00Z' }],
+    grants: [{ provider: 'codex', token: 'g', models: ['gpt-6.2-sol'], maxRequests: 5, expiresAt: '2026-10-29T13:00:00Z' }],
     now: () => NOW,
     websocketUpstream: `ws://127.0.0.1:${refusing.address().port}/v1/responses`,
   });

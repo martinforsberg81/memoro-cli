@@ -35,7 +35,7 @@ const sink = () => { const parts = []; return { write: (text) => parts.push(text
 const win = (fraction_used, resets_at = AHEAD) => ({ fraction_used, resets_at });
 const capacityOf = (claudeUsed, codexUsed) => {
   let state = applyObservation(normaliseCapacity(null), 'claude', { windows: { five_hour: win(claudeUsed), seven_day: win(claudeUsed) } }, NOW);
-  state = applyObservation(state, 'codex', { windows: { primary: win(codexUsed), secondary: null }, models: [{ id: 'gpt-6.1-sol', efforts: ['high'] }] }, NOW);
+  state = applyObservation(state, 'codex', { windows: { primary: win(codexUsed), secondary: null }, models: [{ id: 'gpt-6.2-sol', efforts: ['high'] }] }, NOW);
   return state;
 };
 const BRIEF = '## Vad den säger\n\nSidan säger A.\n\n## Vad som föreslås\n\nB.\n\n## Vad som hittades\n\nC.\n';
@@ -100,13 +100,13 @@ function setup(t, { session, trees = true, secrets = [SECRET] } = {}) {
 test('one way to ask: the reader is the decision list without the asker\'s own model, and the whole list when nothing else can run', () => {
   const catalog = { ...DEFAULT_CATALOG, providerPriority: 'auto' };
   const both = chooseAskReader({ catalog, capacity: capacityOf(0.5, 0.5), now: NOW, asker: { tool: 'claude', model: 'opus' } });
-  assert.deepEqual([both.ok, both.candidate.tool, both.candidate.model], [true, 'codex', 'gpt-6.1-sol'], 'another model than the asker reads');
+  assert.deepEqual([both.ok, both.candidate.tool, both.candidate.model], [true, 'codex', 'gpt-6.2-sol'], 'another model than the asker reads');
   const seen = [];
   const choose = (args) => { seen.push(args.catalog.decision.map((one) => one.model)); return { ok: true, candidate: args.catalog.decision[0] }; };
   chooseAskReader({ catalog, capacity: capacityOf(0.5, 0.5), now: NOW, asker: { tool: 'claude', model: 'opus' }, choose });
   chooseAskReader({ catalog, capacity: capacityOf(0.5, 0.5), now: NOW, asker: { tool: 'claude', model: 'fable' }, choose });
   chooseAskReader({ catalog, capacity: capacityOf(0.5, 0.5), now: NOW, asker: null, choose });
-  assert.deepEqual(seen, [['gpt-6.1-sol'], ['opus', 'gpt-6.1-sol'], ['opus', 'gpt-6.1-sol']], 'the asker is taken out only when it is in the list');
+  assert.deepEqual(seen, [['gpt-6.2-sol'], ['opus', 'gpt-6.2-sol'], ['opus', 'gpt-6.2-sol']], 'the asker is taken out only when it is in the list');
   const empty = [];
   chooseAskReader({ catalog, capacity: capacityOf(0.5, 0.5), now: NOW, asker: { tool: 'claude', model: 'opus' }, choose: (args) => { empty.push(args.catalog.decision.length); return { ok: false, reason: 'none' }; } });
   assert.deepEqual(empty, [1, 2], 'when the others cannot run the whole list is asked');

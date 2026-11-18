@@ -83,7 +83,7 @@ test('server argv: root-level configuration, app-server listening on the session
     assert.ok(args.slice(0, at).every((arg, index) => index % 2 === 1 || arg === '-c'), 'configuration pairs only');
     const config = configOf(args);
     assert.ok(config.some(entry => entry.startsWith('developer_instructions=') && entry.includes('ROLE TEXT')));
-    for (const entry of ['model="gpt-6.1-sol"', 'sandbox_mode="danger-full-access"', 'model_reasoning_effort=medium',
+    for (const entry of ['model="gpt-6.2-sol"', 'sandbox_mode="danger-full-access"', 'model_reasoning_effort=medium',
       'project_doc_max_bytes=0', 'features.multi_agent=true']) assert.ok(config.includes(entry), entry);
     assert.equal(args.includes('hello'), false, 'the first words are the client\'s');
     assert.equal(opts.cwd, w.worktree);

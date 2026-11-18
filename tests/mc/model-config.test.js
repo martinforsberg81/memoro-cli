@@ -33,7 +33,7 @@ const LISTS = {
   fast: [{ tool: 'claude', model: 'haiku', effort: 'high' }],
   large: [{ tool: 'claude', model: 'opus', effort: 'medium' }],
 };
-const OLD = { schema: 'mc-models', version: 1, ...LISTS, review: { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' } };
+const OLD = { schema: 'mc-models', version: 1, ...LISTS, review: { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' } };
 const BEFORE_MEDIUM = {
   schema: 'mc-models', version: 1,
   fast: [{ tool: 'claude', model: 'haiku', effort: 'high' }],
@@ -48,10 +48,10 @@ const BEFORE_MEDIUM = {
 test('a catalog whose review is one object reads as a list of it, and is written back as a list only when changed', async () => {
   const c = catalogAt(OLD);
   try {
-    assert.deepEqual(readModels(c.env).review, [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }]);
+    assert.deepEqual(readModels(c.env).review, [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }]);
     const listed = await c.verb('list');
     assert.equal(listed.code, 0);
-    assert.match(listed.out, /\nreview\n {2}1 {2}codex:gpt-6\.1-sol:high\nfinish\n/u);
+    assert.match(listed.out, /\nreview\n {2}1 {2}codex:gpt-6\.2-sol:high\nfinish\n/u);
     assert.deepEqual(c.file().review, OLD.review, 'reading leaves the file as it was');
 
     assert.equal((await c.verb('add', 'review', 'claude:opus:high')).code, 0);
@@ -65,20 +65,20 @@ test('mc model add and remove review change the list as they do fast and large; 
   const c = catalogAt(null);
   try {
     assert.equal((await c.verb('remove', 'review', 'agy:gemini-4-argon-high')).code, 0);
-    assert.equal((await c.verb('remove', 'review', 'codex:gpt-6.1-sol')).code, 0);
-    const added = await c.verb('add', 'review', 'codex:gpt-6.1-sol:high');
+    assert.equal((await c.verb('remove', 'review', 'codex:gpt-6.2-sol')).code, 0);
+    const added = await c.verb('add', 'review', 'codex:gpt-6.2-sol:high');
     assert.equal(added.code, 0, added.err);
-    assert.equal(added.out, 'mc: added codex:gpt-6.1-sol:high to review — review is now claude:opus:medium, codex:gpt-6.1-sol:high\n');
-    assert.match((await c.verb('list')).out, /\nreview\n {2}1 {2}claude:opus:medium\n {2}2 {2}codex:gpt-6\.1-sol:high\nfinish\n/u);
+    assert.equal(added.out, 'mc: added codex:gpt-6.2-sol:high to review — review is now claude:opus:medium, codex:gpt-6.2-sol:high\n');
+    assert.match((await c.verb('list')).out, /\nreview\n {2}1 {2}claude:opus:medium\n {2}2 {2}codex:gpt-6\.2-sol:high\nfinish\n/u);
 
-    const twice = await c.verb('add', 'review', 'codex:gpt-6.1-sol:low');
+    const twice = await c.verb('add', 'review', 'codex:gpt-6.2-sol:low');
     assert.equal(twice.code, 1);
-    assert.match(twice.err, /review already has codex:gpt-6\.1-sol/u);
+    assert.match(twice.err, /review already has codex:gpt-6\.2-sol/u);
 
     const removed = await c.verb('remove', 'review', 'claude:opus');
     assert.equal(removed.code, 0, removed.err);
-    assert.deepEqual(c.file().review, [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }]);
-    const last = await c.verb('remove', 'review', 'codex:gpt-6.1-sol');
+    assert.deepEqual(c.file().review, [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }]);
+    const last = await c.verb('remove', 'review', 'codex:gpt-6.2-sol');
     assert.equal(last.code, 1);
     assert.match(last.err, /the only review candidate, and review needs one/u);
 
@@ -101,22 +101,22 @@ test('a file without the role lists reads them as the defaults; mc model lists e
   const c = catalogAt({ ...OLD, review: [OLD.review] });
   try {
     const models = readModels(c.env);
-    assert.deepEqual(models.finish, [{ tool: 'claude', model: 'opus', effort: 'high' }, { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }]);
-    assert.deepEqual(models.mend, [{ tool: 'claude', model: 'sonnet', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }]);
-    assert.deepEqual(models.plan, [{ tool: 'claude', model: 'opus', effort: 'high' }, { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }]);
-    assert.deepEqual(models.manager, [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }]);
+    assert.deepEqual(models.finish, [{ tool: 'claude', model: 'opus', effort: 'high' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }]);
+    assert.deepEqual(models.mend, [{ tool: 'claude', model: 'sonnet', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'medium' }]);
+    assert.deepEqual(models.plan, [{ tool: 'claude', model: 'opus', effort: 'high' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }]);
+    assert.deepEqual(models.manager, [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'medium' }]);
     const listed = (await c.verb('list')).out;
     for (const list of ['fast', 'medium', 'large', 'review', 'finish', 'mend', 'plan', 'manager']) assert.match(listed, new RegExp(`\\n${list}\\n {2}1 `, 'u'));
     assert.equal(c.file().finish, undefined, 'reading writes nothing');
 
-    const set = await c.verb('set', 'finish', 'codex:gpt-6.1-sol:high');
+    const set = await c.verb('set', 'finish', 'codex:gpt-6.2-sol:high');
     assert.equal(set.code, 0, set.err);
-    assert.equal(set.out, 'mc: finish is now codex:gpt-6.1-sol:high alone\n');
-    assert.deepEqual(c.file().finish, [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }]);
+    assert.equal(set.out, 'mc: finish is now codex:gpt-6.2-sol:high alone\n');
+    assert.deepEqual(c.file().finish, [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }]);
     assert.deepEqual(c.file().mend, models.mend, 'a change writes every list');
     assert.equal((await c.verb('add', 'manager', 'claude:sonnet:high')).code, 0);
     assert.equal((await c.verb('remove', 'manager', 'claude:opus')).code, 0);
-    assert.deepEqual(c.file().manager.map((item) => item.model), ['gpt-6.1-sol', 'sonnet']);
+    assert.deepEqual(c.file().manager.map((item) => item.model), ['gpt-6.2-sol', 'sonnet']);
     const classSet = await c.verb('set', 'fast', 'claude:opus:high');
     assert.equal(classSet.code, 2);
     assert.match(classSet.err, /mc model set review\|finish\|mend\|plan\|manager/u);
@@ -183,7 +183,7 @@ test('a catalog with an unknown key remains refused and is not rewritten', () =>
 });
 
 test('a review list that is empty or repeats a model is refused, not read as the defaults', () => {
-  for (const [review, why] of [[[], /review: a list of at least one candidate/u], [[OLD.review, OLD.review], /review: codex:gpt-6\.1-sol is listed twice/u]]) {
+  for (const [review, why] of [[[], /review: a list of at least one candidate/u], [[OLD.review, OLD.review], /review: codex:gpt-6\.2-sol is listed twice/u]]) {
     const c = catalogAt({ ...OLD, review });
     try {
       assert.throws(() => readModels(c.env), why);
@@ -236,18 +236,18 @@ test('decision defaults read without rewriting old catalogs and mc model lists a
   const c = catalogAt(BEFORE_MEDIUM);
   try {
     const before = readFileSync(modelsPath(c.env),'utf8');
-    assert.deepEqual(readModels(c.env).decision,[{tool:'claude',model:'opus',effort:'high'},{tool:'codex',model:'gpt-6.1-sol',effort:'high'}]);
-    assert.match((await c.verb('list')).out,/decision\n  1  claude:opus:high\n  2  codex:gpt-6\.1-sol:high/u);
+    assert.deepEqual(readModels(c.env).decision,[{tool:'claude',model:'opus',effort:'high'},{tool:'codex',model:'gpt-6.2-sol',effort:'high'}]);
+    assert.match((await c.verb('list')).out,/decision\n  1  claude:opus:high\n  2  codex:gpt-6\.2-sol:high/u);
     assert.equal(readFileSync(modelsPath(c.env),'utf8'),before);
-    assert.equal((await c.verb('set','decision','codex:gpt-6.1-sol:high')).code,0);
-    assert.deepEqual(c.file().decision,[{tool:'codex',model:'gpt-6.1-sol',effort:'high'}]);
+    assert.equal((await c.verb('set','decision','codex:gpt-6.2-sol:high')).code,0);
+    assert.deepEqual(c.file().decision,[{tool:'codex',model:'gpt-6.2-sol',effort:'high'}]);
   } finally { c.done(); }
 });
 
 test('the default review list starts with agy:gemini-4-argon-high:high', () => {
   const c = catalogAt(null);
   try {
-    assert.deepEqual(readModels(c.env).review.map(({ tool, model, effort }) => `${tool}:${model}:${effort}`), ['agy:gemini-4-argon-high:high', 'claude:opus:medium', 'codex:gpt-6.1-sol:medium']);
+    assert.deepEqual(readModels(c.env).review.map(({ tool, model, effort }) => `${tool}:${model}:${effort}`), ['agy:gemini-4-argon-high:high', 'claude:opus:medium', 'codex:gpt-6.2-sol:medium']);
   } finally { c.done(); }
 });
 

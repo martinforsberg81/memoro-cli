@@ -16,7 +16,7 @@ const AHEAD = '2026-10-27T15:00:00.000Z';
 const PAST = '2026-10-27T09:00:00.000Z';
 const LATER = '2026-10-30T00:00:00.000Z';
 const FOUR_HOURS_AGO = new Date(NOW.getTime() - 4 * 60 * 60 * 1000);
-const LISTED = [{ id: 'gpt-6-luna', efforts: ['high'] }, { id: 'gpt-6.1-sol', efforts: ['high'] }];
+const LISTED = [{ id: 'gpt-6-luna', efforts: ['high'] }, { id: 'gpt-6.2-sol', efforts: ['high'] }];
 
 const empty = () => normaliseCapacity(null);
 const win = (fraction_used, resets_at = AHEAD) => ({ fraction_used, resets_at });
@@ -50,11 +50,11 @@ test('explicit Claude priority bootstraps unknown or stale usage ahead of known 
   const unknown = codex(empty(), win(0.1));
   const classes = ['fast', 'medium', 'large', 'review'];
   const mixedReview = { ...DEFAULT_CATALOG, review: [
-    { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
+    { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' },
     { tool: 'claude', model: 'opus', effort: 'medium' },
   ] };
   // Review's first candidate (codex) built the goal, so the priority ranking decides, not the first choice.
-  const built = { tool: 'codex', model: 'gpt-6.1-sol' };
+  const built = { tool: 'codex', model: 'gpt-6.2-sol' };
   const bootstrap = (capacity) => classes.map((cls) => chooseCandidate({ cls, catalog: cls === 'review' ? mixedReview : DEFAULT_CATALOG, capacity, now: NOW, priority: 'claude', avoid: cls === 'review' ? built : null }));
   const missing = bootstrap(unknown);
   const old = new Date(NOW.getTime() - 25 * 60 * 60 * 1000);
@@ -89,7 +89,7 @@ test('a codex candidate is scored by its most restrictive window', () => {
 test('large chooses from the large list', () => {
   const won = choose(codex(claude(empty(), win(0.5), win(0.5)), win(0.1), win(0.1)), 'large');
   assert.equal(won.class, 'large');
-  assert.equal(won.spec, 'codex:gpt-6.1-sol:high');
+  assert.equal(won.spec, 'codex:gpt-6.2-sol:high');
 });
 
 test('a retired manual credits flag cannot override plan-first routing', () => {
@@ -129,7 +129,7 @@ test('review uses its own provider API reserve on a plan refusal', () => {
   assert.equal(choose(applyRefusal(empty(), 'claude', PAST), 'review', ONE_REVIEW).spec, 'claude:opus:high', 'a passed refusal holds nothing');
 });
 
-const SOL = Object.freeze({ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' });
+const SOL = Object.freeze({ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' });
 const OPUS = Object.freeze({ tool: 'claude', model: 'opus', effort: 'high' });
 const REVIEWS = { ...DEFAULT_CATALOG, review: [SOL, OPUS] };
 const review = (capacity, avoid = null) => chooseCandidate({ cls: 'review', catalog: REVIEWS, capacity, now: NOW, avoid });
@@ -140,22 +140,22 @@ test('review passes a candidate whose plan is spent for the next one on plan', (
   assert.equal(spent.spec, 'claude:opus:high');
   assert.equal(spent.basis, 'preferred');
   assert.equal(spent.billing, undefined, 'on the plan, not credits');
-  assert.match(spent.why, /^review candidate 2 — codex:gpt-6.1-sol:high: codex is at 100 % of its plan limit$/u);
+  assert.match(spent.why, /^review candidate 2 — codex:gpt-6.2-sol:high: codex is at 100 % of its plan limit$/u);
   const refused = review(applyRefusal(codex(empty(), win(0.1)), 'codex', AHEAD));
   assert.equal(refused.spec, 'claude:opus:high', 'a refused plan is passed too');
 });
 
 test('review passes the model the goal was built on, when both plans have room', () => {
   const both = codex(claude(empty(), win(0.5)), win(0.5));
-  const built = review(both, { tool: 'codex', model: 'gpt-6.1-sol' });
+  const built = review(both, { tool: 'codex', model: 'gpt-6.2-sol' });
   assert.equal(built.spec, 'claude:opus:high');
-  assert.match(built.why, /codex gpt-6.1-sol built it/u);
-  assert.equal(review(both).spec, 'codex:gpt-6.1-sol:high', 'unbuilt, the first is taken');
+  assert.match(built.why, /codex gpt-6.2-sol built it/u);
+  assert.equal(review(both).spec, 'codex:gpt-6.2-sol:high', 'unbuilt, the first is taken');
 });
 
 test('review chooses the roomier plan before catalog order when the first candidate built the goal', () => {
   const roomier = codex(claude(empty(), win(0.05)), win(0.9));
-  const chosen = review(roomier, { tool: 'codex', model: 'gpt-6.1-sol' });
+  const chosen = review(roomier, { tool: 'codex', model: 'gpt-6.2-sol' });
   assert.equal(chosen.spec, 'claude:opus:high', 'codex built it; claude has 95 % headroom');
   assert.match(chosen.why, /review candidate 2/u);
 });
@@ -163,22 +163,22 @@ test('review chooses the roomier plan before catalog order when the first candid
 test('review with no candidate on plan goes to the first one\'s API reserve', () => {
   const none = review(applyRefusal(codex(empty(), win(1, LATER)), 'claude', AHEAD));
   assert.equal(none.ok, true);
-  assert.equal(none.spec, 'codex:gpt-6.1-sol:high');
+  assert.equal(none.spec, 'codex:gpt-6.2-sol:high');
   assert.equal(none.basis, 'api');
   assert.equal(none.billing, 'credits');
-  const past = review(applyRefusal(codex(empty(), win(1, LATER)), 'claude', AHEAD), { tool: 'codex', model: 'gpt-6.1-sol' });
+  const past = review(applyRefusal(codex(empty(), win(1, LATER)), 'claude', AHEAD), { tool: 'codex', model: 'gpt-6.2-sol' });
   assert.equal(past.spec, 'claude:opus:high', 'never the build model\'s reserve');
   assert.equal(past.billing, 'credits');
 });
 
 test('review runs on the build model when every candidate is it, rather than waiting', () => {
   const only = { ...DEFAULT_CATALOG, review: [SOL] };
-  const result = chooseCandidate({ cls: 'review', catalog: only, capacity: codex(empty(), win(0.1)), now: NOW, avoid: { tool: 'codex', model: 'gpt-6.1-sol' } });
+  const result = chooseCandidate({ cls: 'review', catalog: only, capacity: codex(empty(), win(0.1)), now: NOW, avoid: { tool: 'codex', model: 'gpt-6.2-sol' } });
   assert.equal(result.ok, true);
-  assert.equal(result.spec, 'codex:gpt-6.1-sol:high');
+  assert.equal(result.spec, 'codex:gpt-6.2-sol:high');
   assert.equal(result.basis, 'preferred');
   assert.equal(result.billing, undefined, 'on the plan, not credits');
-  assert.equal(result.why, 'review candidate 1 — codex gpt-6.1-sol built it, and no other candidate can run on its plan');
+  assert.equal(result.why, 'review candidate 1 — codex gpt-6.2-sol built it, and no other candidate can run on its plan');
 });
 
 test('review takes the build model on its plan when every other candidate\'s plan is spent, before any API reserve', () => {
@@ -188,16 +188,16 @@ test('review takes the build model on its plan when every other candidate\'s pla
   assert.equal(result.spec, 'claude:opus:high');
   assert.equal(result.basis, 'preferred');
   assert.equal(result.billing, undefined, 'the build model\'s plan comes before another\'s reserve');
-  assert.equal(result.why, 'review candidate 2 — codex:gpt-6.1-sol:high: codex is at 100 % of its plan limit; claude opus built it, and no other candidate can run on its plan');
+  assert.equal(result.why, 'review candidate 2 — codex:gpt-6.2-sol:high: codex is at 100 % of its plan limit; claude opus built it, and no other candidate can run on its plan');
   const roomy = review(codex(claude(empty(), win(0.5)), win(0.5)), { tool: 'claude', model: 'opus' });
-  assert.equal(roomy.spec, 'codex:gpt-6.1-sol:high', 'another model on its plan is still taken first');
+  assert.equal(roomy.spec, 'codex:gpt-6.2-sol:high', 'another model on its plan is still taken first');
 });
 
 test('review with only the build model\'s candidates and none on plan goes to its API reserve', () => {
   const only = { ...DEFAULT_CATALOG, review: [SOL] };
-  const result = chooseCandidate({ cls: 'review', catalog: only, capacity: codex(empty(), win(1, LATER)), now: NOW, avoid: { tool: 'codex', model: 'gpt-6.1-sol' } });
+  const result = chooseCandidate({ cls: 'review', catalog: only, capacity: codex(empty(), win(1, LATER)), now: NOW, avoid: { tool: 'codex', model: 'gpt-6.2-sol' } });
   assert.equal(result.ok, true);
-  assert.equal(result.spec, 'codex:gpt-6.1-sol:high');
+  assert.equal(result.spec, 'codex:gpt-6.2-sol:high');
   assert.equal(result.basis, 'api');
   assert.equal(result.billing, 'credits');
 });
@@ -261,7 +261,7 @@ test('codex needs a fresh successful rate-limit read, a model listed at the effo
   const stale = choose(applyRefusal(codex(empty(), win(0.1), null, { at: FOUR_HOURS_AGO }), 'claude', AHEAD));
   assert.equal(stale.billing, 'credits');
 
-  const unlisted = choose(applyRefusal(codex(empty(), win(0.1), null, { models: [{ id: 'gpt-6.1-sol', efforts: ['high'] }] }), 'claude', AHEAD));
+  const unlisted = choose(applyRefusal(codex(empty(), win(0.1), null, { models: [{ id: 'gpt-6.2-sol', efforts: ['high'] }] }), 'claude', AHEAD));
   assert.equal(unlisted.billing, 'credits');
 
   const lowEffort = choose(applyRefusal(codex(empty(), win(0.1), null, { models: [{ id: 'gpt-6-luna', efforts: ['medium'] }] }), 'claude', AHEAD));
@@ -299,13 +299,13 @@ test('a list is a work class or a role list', () => {
 test('a role list chooses within itself and never borrows a class', () => {
   const catalog = { ...DEFAULT_CATALOG, fast: [{ tool: 'claude', model: 'haiku', effort: 'high' }] };
   for (const [list, claudeSpec, codexSpec] of [
-    ['finish', 'claude:opus:high', 'codex:gpt-6.1-sol:high'],
-    ['mend', 'claude:sonnet:medium', 'codex:gpt-6.1-sol:medium'],
-    ['plan', 'claude:opus:high', 'codex:gpt-6.1-sol:high'],
-    ['manager', 'claude:opus:medium', 'codex:gpt-6.1-sol:medium'],
+    ['finish', 'claude:opus:high', 'codex:gpt-6.2-sol:high'],
+    ['mend', 'claude:sonnet:medium', 'codex:gpt-6.2-sol:medium'],
+    ['plan', 'claude:opus:high', 'codex:gpt-6.2-sol:high'],
+    ['manager', 'claude:opus:medium', 'codex:gpt-6.2-sol:medium'],
   ]) {
     assert.equal(chooseCandidate({ cls: list, catalog, capacity: empty(), now: NOW, priority: 'claude' }).spec, claudeSpec, `${list} bootstraps on its own claude candidate`);
-    const roomierCodex = codex(claude(empty(), win(0.9)), win(0.1), null, { models: [{ id: 'gpt-6.1-sol', efforts: ['high', 'medium'] }] });
+    const roomierCodex = codex(claude(empty(), win(0.9)), win(0.1), null, { models: [{ id: 'gpt-6.2-sol', efforts: ['high', 'medium'] }] });
     assert.equal(chooseCandidate({ cls: list, catalog, capacity: roomierCodex, now: NOW, priority: 'codex' }).spec, codexSpec, `${list} follows provider priority within itself`);
     const full = claude(empty(), win(1));
     const reserve = chooseCandidate({ cls: list, catalog, capacity: full, now: NOW, priority: 'claude' });
@@ -338,8 +338,8 @@ test('priority prefers a subscription before any API reserve and falls back for 
 test('review priority wins over build-model avoidance and review headroom, but unavailable preference falls back to a subscription', () => {
   const candidates = { ...DEFAULT_CATALOG, review: [SOL, OPUS] };
   const capacity = codex(claude(empty(), win(0.1)), win(0.9));
-  const preferred = chooseCandidate({ cls: 'review', catalog: candidates, capacity, now: NOW, priority: 'codex', avoid: { tool: 'codex', model: 'gpt-6.1-sol' } });
-  assert.equal(preferred.spec, 'codex:gpt-6.1-sol:high');
+  const preferred = chooseCandidate({ cls: 'review', catalog: candidates, capacity, now: NOW, priority: 'codex', avoid: { tool: 'codex', model: 'gpt-6.2-sol' } });
+  assert.equal(preferred.spec, 'codex:gpt-6.2-sol:high');
   assert.equal(preferred.billing, undefined);
   assert.match(preferred.why, /priority overrides a roomier alternative/u);
   assert.doesNotMatch(preferred.why, /most headroom/u);
@@ -371,14 +371,14 @@ test('review falls through a first candidate that is refused, exhausted, unlaunc
   assert.equal(three(agy(room, win(1, LATER))).spec, 'claude:opus:high', 'exhausted');
   assert.equal(three(room, { launchable: (tool) => tool !== 'agy' }).spec, 'claude:opus:high', 'its tool cannot launch');
   const built = three(codex(claude(agy(empty(), win(0.5)), win(0.9)), win(0.1)), { avoid: { tool: 'agy', model: 'gemini-4-argon-high' } });
-  assert.equal(built.spec, 'codex:gpt-6.1-sol:high', 'it built the goal, so the existing ranking chooses by headroom');
+  assert.equal(built.spec, 'codex:gpt-6.2-sol:high', 'it built the goal, so the existing ranking chooses by headroom');
 });
 
 test('a review whose first candidate is not in the list it is given has no first choice', () => {
   const rest = { ...DEFAULT_CATALOG, review: [OPUS, SOL] };
   const roomierCodex = codex(claude(empty(), win(0.9)), win(0.1));
   assert.equal(chooseCandidate({ cls: 'review', catalog: rest, capacity: roomierCodex, now: NOW }).spec, 'claude:opus:high', 'the list\'s own first by default');
-  assert.equal(chooseCandidate({ cls: 'review', catalog: rest, capacity: roomierCodex, now: NOW, first: null }).spec, 'codex:gpt-6.1-sol:high', 'with none named first, headroom ranks');
+  assert.equal(chooseCandidate({ cls: 'review', catalog: rest, capacity: roomierCodex, now: NOW, first: null }).spec, 'codex:gpt-6.2-sol:high', 'with none named first, headroom ranks');
 });
 
 test('the API reserve never takes a tool with no API route: review and another list wait instead', () => {
