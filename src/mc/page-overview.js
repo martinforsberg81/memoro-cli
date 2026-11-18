@@ -52,6 +52,7 @@ export function warningLines(lines, c, wide, data) {
 /**
  * The header: `MC <version> · runner on|off · <n>/<m> lanes · runner ≈$<x> today · deploy <when>`, with `d  mc martin` at
  * the right edge of the first row. A second row only where the facts do not fit one at the width.
+ * Model priority and cached provider usage follow on wrapped rows, visible without opening operations.
  */
 export function headerRows(c, wide, data, version) {
   const runner = data.runner || {};
@@ -72,12 +73,15 @@ export function headerRows(c, wide, data, version) {
     if (rows.at(-1).length && used() + 3 + width(fact.text) > room) rows.push([]);
     rows.at(-1).push(fact);
   }
-  return rows.slice(0, 2).map((row, index) => {
+  const lines = rows.slice(0, 2).map((row, index) => {
     const parts = row.flatMap((part, i) => (i ? [{ text: ' · ', styles: ['grey'] }, part] : [part]));
     const left = painted(c, parts);
     if (index) return `  ${left}`;
     return `  ${left}${' '.repeat(Math.max(2, wide - 2 - width(painted(c, parts).replace(/\u001b\[[0-9;]*m/gu, '')) - action.length))}${c(action, 'cyan')}`;
   });
+  detail(lines, c, wide, 2, `MODEL PRIORITY  ${data.providerPriority || 'auto'}`, []);
+  detail(lines, c, wide, 2, `PROVIDERS  ${data.billing || 'usage unknown'}`, []);
+  return lines;
 }
 
 /* ----------------------------------------------------------------- Sessions */

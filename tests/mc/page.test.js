@@ -3858,20 +3858,26 @@ describe('the overview: its order, its programmes and what belongs to none', () 
   const quiet = () => day({ open: 1, per: 2, none: 0, runner: 0, managers: 0, plans: 0, desk: 0, martin: false });
 
   describe('the header', () => {
-    it('is one row at 160 columns with `d  mc martin` at the right edge, and no frame', () => {
-      const lines = draw(normalDay());
+    it('keeps the compact header at 160 columns and shows priority and provider usage below it', () => {
+      const lines = draw({ ...normalDay(), providerPriority: 'codex', billing: 'claude 45% plan · codex 9% plan (API off)' });
       assert.match(lines[0], /^ {2}MC 0\.7\.11 · runner on · \d+\/\d+ lanes · runner ≈\$[\d.]+ today · deploy none recorded {2,}d {2}mc martin$/u, lines[0]);
       assert.equal(width(lines[0]), 160 - 2 + 0, 'the action stands at the right edge');
-      assert.equal(lines[1], '', 'one blank row follows');
+      assert.equal(lines[1], '  MODEL PRIORITY  codex');
+      assert.equal(lines[2], '  PROVIDERS  claude 45% plan · codex 9% plan (API off)');
+      assert.equal(lines[3], '', 'one blank row follows provider status');
       assert.ok(!lines[0].includes('┌') && !lines[1].includes('─'), 'no frame');
     });
 
-    it('takes a second row, and then the blank row, only where the facts do not fit one', () => {
-      const lines = draw(normalDay(), { columns: 60 });
+    it('wraps the header and provider status on narrow terminals without hiding either provider', () => {
+      const billing = 'claude 99% (stale) plan · codex 100% API (read failed)';
+      const lines = draw({ ...normalDay(), billing }, { columns: 60 });
       assert.match(lines[0], /d {2}mc martin$/u);
       assert.ok(/^ {2}\S/u.test(lines[1]) && !lines[1].includes('d  mc martin'), lines[1]);
-      assert.equal(lines[2], '');
-      assert.ok(!lines[3].startsWith('  MC'), 'never a third row');
+      assert.equal(lines[2], '  MODEL PRIORITY  auto');
+      const end = lines.indexOf('');
+      assert.ok(end > 3);
+      assert.ok(lines.slice(3, end).join(' ').replace(/\s+/gu, ' ').includes(billing));
+      assert.ok(lines.slice(0, end).every((line) => width(line) <= 58));
     });
 
     it('leaves the hero frame, the 24-hour figures and the pipeline to the operations view', () => {
