@@ -409,7 +409,7 @@ export function overviewLines(c, wide, data, { version = '', expand = false, dra
     }
     if (!expand && asleep.length) {
       const fold = `${asleep.length} programme${asleep.length === 1 ? '' : 's'} with nothing under way`;
-      const hint = `${fold} · a shows them`;
+      const hint = `${fold}  ·  a shows them`;
       if (width(hint) <= childWide - 8) drawChild([frameTop(c, childWide, hint)]);
       else {
         const rows = [frameTop(c, childWide, '')];

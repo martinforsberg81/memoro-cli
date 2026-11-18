@@ -181,7 +181,7 @@ describe('The programmes\' phase tree', () => {
       assert.deepEqual(colourLines.map(plain), plainLines);
       assert.ok(plainLines.some((line) => /^ {6}┌─ inbox /u.test(line)), 'programme has a boundary');
       assert.ok(plainLines.some((line) => /^ {6}└/u.test(line)), 'programme closes before the next unit');
-      assert.match(plainLines.join('\n'), /stage build · status ready(?: · |\n {16})criteria 0\/1/u);
+      assert.match(plainLines.join('\n'), /^ {15}stage build · status ready(?: · |\n {15})criteria 0\/1/mu);
       // The pipeline's box borders and arrows are the real grey by contract (mc-ui.md, Pipeline); nothing else is.
       const text = (line) => line.replace(/\u001b\[90m[┌┐└┘│─▶ ]+\u001b\[0m/gu, '');
       assert.ok(!colourLines.some((line) => /\u001b\[(?:90|2)m/u.test(text(line))), 'secondary text is not dark grey or dim');

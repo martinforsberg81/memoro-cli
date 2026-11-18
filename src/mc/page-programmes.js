@@ -40,7 +40,7 @@ function prLines(c, wide, pr) {
  * what waits on someone (Martin, blocked, a malformed goal, `note`). `saidHolds` carries the hold reasons a programme's
  * tree has already drawn, so a reason shared by several goals is written once and then `as above`.
  */
-function goalLines(lines, c, wide, goal, expand, sessions = [], note = null, { paused = false, saidHolds = null } = {}) {
+function goalLines(lines, c, wide, goal, expand, sessions, note, { paused, saidHolds, stateIndent }) {
   const isFinished = finished(goal);
   const stage = goal.stage || '—';
   const waits = goal.status === 'Martin' || goal.status === 'blocked';
@@ -50,13 +50,13 @@ function goalLines(lines, c, wide, goal, expand, sessions = [], note = null, { p
   const number = String(goal.number ?? '').padStart(3);
   line(lines, c, wide, 6, `${number} ${goal.title || goal.name}`, goal.running ? ['bold'] : []);
   const criteria = goal.criteria ? `${goal.criteria.met}/${goal.criteria.all}` : '—';
-  const prefix = `          ${c(`stage ${stage}`, 'grey')} · status ${c(status, ...tone)} · `;
+  const prefix = `${' '.repeat(stateIndent)}${c(`stage ${stage}`, 'grey')} · status ${c(status, ...tone)} · `;
   const count = `criteria ${criteria}`;
   // Keep status and criteria whole, even when counts no longer fit one row.
   if (width(prefix) + count.length <= wide) lines.push(`${prefix}${c(count, 'grey')}`);
   else {
     lines.push(prefix.replace(/ · $/u, ''));
-    line(lines, c, wide, 10, count, ['grey']);
+    line(lines, c, wide, stateIndent, count, ['grey']);
   }
   if (goal.hold) {
     const reason = goal.hold.reason ?? '—';
@@ -121,14 +121,14 @@ export function attentionGoals(group, sessions = []) {
  * runner refused to archive (`archive_refused`) and a finished goal with an
  * open pull request, each with its line and its pull requests as child rows.
  */
-export function programmeTreeLines(c, wide, group, { expand = false, sessions = [] } = {}) {
+export function programmeTreeLines(c, wide, group, { expand = false, sessions = [], stateIndent = 10 } = {}) {
   const lines = [];
   const owned = (goal) => sessions.filter((s) => sessionGoal(s) === `${group.programme}/${goal.name}`);
   const atWork = (goal) => goal.running || owned(goal).length > 0;
   const attention = (goal) => finished(goal) && !atWork(goal) && notArchived(goal) !== null;
   const needing = attentionGoals(group, sessions);
   const saidHolds = new Set();
-  const draft = group.record_state === 'draft';
+  const goalOptions = { paused: group.record_state === 'draft', saidHolds, stateIndent };
   for (const phase of group.phases || []) {
     if (phase.number == null) continue;
     const visible = phase.goals.filter((goal) => !attention(goal) && (expand || !finished(goal) || atWork(goal)));
@@ -137,7 +137,7 @@ export function programmeTreeLines(c, wide, group, { expand = false, sessions = 
     line(lines, c, wide, 4, `Phase ${phase.number}${phaseWaits(phase, group)}`, ['cyan', 'bold']);
     for (const [index, goal] of visible.entries()) {
       if (index > 0) lines.push('');
-      goalLines(lines, c, wide, goal, expand, owned(goal), null, { paused: draft, saidHolds });
+      goalLines(lines, c, wide, goal, expand, owned(goal), null, goalOptions);
     }
   }
   if (needing.length) {
@@ -145,7 +145,7 @@ export function programmeTreeLines(c, wide, group, { expand = false, sessions = 
     line(lines, c, wide, 4, 'NEEDS ATTENTION', ['red', 'bold']);
     for (const [index, goal] of needing.entries()) {
       if (index > 0) lines.push('');
-      goalLines(lines, c, wide, goal, expand, owned(goal), finished(goal) ? notArchived(goal) : null, { paused: draft, saidHolds });
+      goalLines(lines, c, wide, goal, expand, owned(goal), finished(goal) ? notArchived(goal) : null, goalOptions);
     }
   }
   if (group.prs?.length) {

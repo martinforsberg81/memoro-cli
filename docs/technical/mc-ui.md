@@ -100,9 +100,11 @@ joins the rest: `28  inbox-library-chat-repairs  ·  no horizon  ·  phase 1 of 
 goal) and the programme's plan sessions are drawn in its frame, so nothing is repeated
 in a separate attention list. Something under way is a `draft` record, an unfinished goal, a
 session, an open pull request or an item needing attention. The programmes with nothing under
-way are folded in their own group as `<n> programmes with nothing under way · a shows them`;
+way are folded in their own group as `<n> programmes with nothing under way  ·  a shows them`;
 `a` draws them as frames after the ones under way. Programme headings and tree text,
-including pull request titles, wrap within the inset at narrow widths.
+including pull request titles, wrap within the inset at narrow widths. In an inset
+card, the goal's stage row and its criteria continuation start three columns to
+the right of the goal row.
 
 **MAINTENANCE** is the last frame of the overview, headed `MAINTENANCE  <n> sources`. It has one row
 per source, in this order: user feedback, proposals, lessons, errors, tests, dependencies, intake,
@@ -236,7 +238,7 @@ Programmes not assigned to an open horizon are in OTHER PROGRAMMES, omitted when
 empty. A readable empty or missing store shows `0 open`; if the section data is
 absent, the groups start with Other. Horizon store and record read failures are red
 immediately below the roll-up, within its frame and before the horizon frames.
-Programme headings name the open horizon by number or, in Other, say `no horizon`,
+Programme headings name the open horizon by number (by slug if unnumbered) or, in Other, say `no horizon`,
 `horizon unknown · record invalid` (with the invalid record in red), or give
 the slug and its displayed state: `reached`, `dropped`, `not held` or `unreadable`.
 The unreadable display uses the store and record warnings, not a new JSON state.

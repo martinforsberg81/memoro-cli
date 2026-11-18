@@ -91,7 +91,7 @@ const framed = (lines, name) => lines.some((line) => new RegExp(`^ {6}┌─ (?:
 describe('programmes with nothing under way on the page', () => {
   it('draws the programmes under way as frames, and the rest as one folded frame', () => {
     const lines = programmesOf(renderPageLines(pageData({ programmes: section() }), { columns: 120, now: NOW }));
-    assert.ok(lines.some((line) => /^ {6}┌─ 2 programmes with nothing under way · a shows them ─+┐$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {6}┌─ 2 programmes with nothing under way  ·  a shows them ─+┐$/u.test(line)), lines.join('\n'));
     assert.ok(lines.some((line) => line.startsWith('      ┌─ planned ')));
     assert.ok(lines.some((line) => line.includes('PLAN')));
     assert.ok(!lines.some((line) => /no goal yet/u.test(line)), lines.join('\n'));
@@ -114,9 +114,9 @@ describe('programmes with nothing under way on the page', () => {
   it('folds a programme with nothing under way, and says "1 programme" for one', () => {
     const programmes = programmesSection({ goalRows: GOALS.slice(0, 2), programmes: ['empty'] });
     const lines = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW }));
-    assert.ok(lines.some((line) => /^ {6}┌─ 2 programmes with nothing under way · a shows them ─+┐$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {6}┌─ 2 programmes with nothing under way  ·  a shows them ─+┐$/u.test(line)), lines.join('\n'));
     const one = programmesOf(renderPageLines(pageData({ programmes: programmesSection({ goalRows: GOALS.slice(0, 1), programmes: ['empty'] }) }), { columns: 120, now: NOW }));
-    assert.ok(one.some((line) => /^ {6}┌─ 1 programme with nothing under way · a shows them ─+┐$/u.test(line)), one.join('\n'));
+    assert.ok(one.some((line) => /^ {6}┌─ 1 programme with nothing under way  ·  a shows them ─+┐$/u.test(line)), one.join('\n'));
   });
 
   it('draws no folded frame when every programme is under way', () => {

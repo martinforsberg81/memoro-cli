@@ -55,9 +55,8 @@ const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
  * `no horizon`, or the slug a record names that is not an open horizon, with that horizon's state. A page without
  * horizons says nothing.
  */
-export function horizonWords(data, group) {
+function horizonWords(data, group, open) {
   if (!data.horizons) return '';
-  const open = (data.horizons.open || []).find((horizon) => (horizon.programmes || []).includes(group.programme));
   if (open) return open.position != null ? `horizon ${open.position}` : `horizon ${open.slug}`;
   if (group.record_invalid) return 'horizon unknown';
   if (!group.horizon) return 'no horizon';
@@ -112,17 +111,18 @@ export function programmeHeading(c, wide, data, group, facts, continuation = nul
     facts.done ? `${facts.done} done` : '',
   ].filter(Boolean).map((text) => ({ text, styles: ['grey'] }));
   // With no horizons read there is no horizon to set apart: the facts follow the name as any frame's do.
-  const horizon = horizonWords(data, group);
+  const open = data.horizons?.open?.find((horizon) => horizon.programmes?.includes(group.programme));
+  const horizon = horizonWords(data, group, open);
   const parts = [];
   const warning = { text: 'record invalid', styles: ['red'] };
-  const invalidHorizon = horizon === 'horizon unknown';
+  const warningAfterHorizon = group.record_invalid && data.horizons && !open;
   if (horizon) {
     parts.push({ text: horizon, styles: ['grey'], sep: '·  ' });
-    if (invalidHorizon) parts.push(warning);
+    if (warningAfterHorizon) parts.push(warning);
     rest[0].sep = '  ·  ';
   }
   parts.push(...rest);
-  if (group.record_invalid && !invalidHorizon) parts.push(warning);
+  if (group.record_invalid && !warningAfterHorizon) parts.push(warning);
   const number = group.number != null ? `${group.number}  ` : '';
   const title = `${number}${group.programme}`;
   const words = parts.map((part, i) => `${separator(part, i)}${part.text}`).join('');

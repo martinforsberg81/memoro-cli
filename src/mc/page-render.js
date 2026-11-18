@@ -440,7 +440,7 @@ function programmeLine(c, wide, group, expand, numbered = false) {
  * its goals by phase, then the border. A programme with nothing to draw is its heading row alone.
  */
 function programmeFrame(lines, c, wide, data, group, expand, runnerSessions) {
-  const body = programmeBody(c, wide - 2, group, expand, runnerSessions);
+  const body = programmeBody(c, wide - 2, group, expand, runnerSessions, { insetCard: true });
   const continuation = [];
   lines.push(programmeHeading(c, wide, data, group, programmeFacts(group, runnerSessions), continuation));
   if (!body.length && !continuation.length) return;
@@ -449,11 +449,11 @@ function programmeFrame(lines, c, wide, data, group, expand, runnerSessions) {
 }
 
 /** What a programme's block holds under its heading: its plan and programme sessions, then its goals by phase. */
-function programmeBody(c, wide, group, expand, runnerSessions) {
+function programmeBody(c, wide, group, expand, runnerSessions, { insetCard = false } = {}) {
   return [
     ...(group.planning_sessions || []).flatMap((session) => activityLines(c, wide, { ...session, kind: 'plan' }, { indent: 4, expand })),
     ...(group.sessions || []).flatMap((session) => activityLines(c, wide, session, { indent: 4, expand })),
-    ...programmeTreeLines(c, wide, group, { expand, sessions: runnerSessions }),
+    ...programmeTreeLines(c, wide, group, { expand, sessions: runnerSessions, stateIndent: insetCard ? 9 : 10 }),
   ];
 }
 
