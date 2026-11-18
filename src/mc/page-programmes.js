@@ -30,11 +30,19 @@ function prLine(c, wide, pr) {
   return `${prefix}${clipCell(pr.title || pr.branch || '', Math.max(0, wide - width(prefix)))}`.trimEnd();
 }
 
-function goalLines(lines, c, wide, goal, expand, sessions = [], note = null) {
+/**
+ * One goal's rows. `paused` is why an unfinished goal gets no session although nothing is wrong with it (its
+ * programme is draft, or it is held): its `ready` reads `paused`, grey, and its hold is a grey row. Red is kept for
+ * what waits on someone (Martin, blocked, a malformed goal, `note`). `saidHolds` carries the hold reasons a programme's
+ * tree has already drawn, so a reason shared by several goals is written once and then `as above`.
+ */
+function goalLines(lines, c, wide, goal, expand, sessions = [], note = null, { paused = false, saidHolds = null } = {}) {
   const isFinished = finished(goal);
   const stage = goal.stage || '—';
-  const status = goal.status || '—';
-  const tone = status === 'Martin' || status === 'blocked' ? ['red'] : isFinished ? ['grey'] : ['green'];
+  const waits = goal.status === 'Martin' || goal.status === 'blocked';
+  const pausedNow = !isFinished && !waits && (paused || Boolean(goal.hold));
+  const status = pausedNow && goal.status === 'ready' ? 'paused' : goal.status || '—';
+  const tone = waits ? ['red'] : isFinished || pausedNow ? ['grey'] : ['green'];
   const number = String(goal.number ?? '').padStart(3);
   lines.push(line(c, wide, 6, `${number} ${goal.title || goal.name}`, goal.running ? ['bold'] : []));
   const criteria = goal.criteria ? `${goal.criteria.met}/${goal.criteria.all}` : '—';
@@ -46,7 +54,12 @@ function goalLines(lines, c, wide, goal, expand, sessions = [], note = null) {
     lines.push(prefix.replace(/ · $/u, ''));
     lines.push(line(c, wide, 10, count, ['grey']));
   }
-  if (goal.hold) lines.push(line(c, wide, 10, `held by ${goal.hold.by ?? '—'} since ${goal.hold.at ?? '—'} — ${goal.hold.reason ?? '—'}`, ['red']));
+  if (goal.hold) {
+    const reason = goal.hold.reason ?? '—';
+    const said = saidHolds?.has(reason);
+    saidHolds?.add(reason);
+    lines.push(line(c, wide, 10, `held by ${goal.hold.by ?? '—'} since ${goal.hold.at ?? '—'} — ${said ? 'as above' : reason}`, ['grey']));
+  }
   if (goal.problems?.length) lines.push(line(c, wide, 10, `GOAL.json: ${goal.problems[0]}`, ['red']));
   else if (note) lines.push(line(c, wide, 10, note, ['red']));
   else if (['blocked', 'Martin'].includes(goal.status)) {
@@ -110,6 +123,8 @@ export function programmeTreeLines(c, wide, group, { expand = false, sessions = 
   const atWork = (goal) => goal.running || owned(goal).length > 0;
   const attention = (goal) => finished(goal) && !atWork(goal) && notArchived(goal) !== null;
   const needing = attentionGoals(group, sessions);
+  const saidHolds = new Set();
+  const draft = group.record_state === 'draft';
   for (const phase of group.phases || []) {
     if (phase.number == null) continue;
     const visible = phase.goals.filter((goal) => !attention(goal) && (expand || !finished(goal) || atWork(goal)));
@@ -118,7 +133,7 @@ export function programmeTreeLines(c, wide, group, { expand = false, sessions = 
     lines.push(line(c, wide, 4, `Phase ${phase.number}${phaseWaits(phase, group)}`, ['cyan', 'bold']));
     for (const [index, goal] of visible.entries()) {
       if (index > 0) lines.push('');
-      goalLines(lines, c, wide, goal, expand, owned(goal), !finished(goal) && group.record_state === 'draft' ? `${group.programme} is draft` : null);
+      goalLines(lines, c, wide, goal, expand, owned(goal), null, { paused: draft, saidHolds });
     }
   }
   if (needing.length) {
@@ -126,7 +141,7 @@ export function programmeTreeLines(c, wide, group, { expand = false, sessions = 
     lines.push(line(c, wide, 4, 'NEEDS ATTENTION', ['red', 'bold']));
     for (const [index, goal] of needing.entries()) {
       if (index > 0) lines.push('');
-      goalLines(lines, c, wide, goal, expand, owned(goal), finished(goal) ? notArchived(goal) : null);
+      goalLines(lines, c, wide, goal, expand, owned(goal), finished(goal) ? notArchived(goal) : null, { paused: draft, saidHolds });
     }
   }
   if (group.prs?.length) {

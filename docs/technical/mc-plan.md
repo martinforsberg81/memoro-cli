@@ -182,7 +182,12 @@ write of the file (`programme-file`, [mc-hooks.md](mc-hooks.md)).
 `mc programs state <programme> draft|ready` is available only to interactive Martin:
 exactly `MC_ROLE=martin` and `MC_HEADLESS` not `1`. Every other caller exits 2
 before effects. It sets `draft` or `ready` without condition on the document,
-the directory or any reading.
+the directory or any reading. Setting `ready` also releases the holds the desk placed
+(`by: martin`, not a creation hold) on the programme's unfinished goals, each with the log
+entry `mc goal release` writes and a line `<programme>/<goal> released (held since <at>: <reason>)`;
+setting the order ready is Martin's word that its work goes on. Any other hold is kept and named,
+`<programme>/<goal> still held by <by> — mc goal release <programme>/<goal> frees it`. Setting
+`draft` releases nothing.
 
 `mc programs review <programme>` is an in-session call, not a runner lane or scheduled turn.
 It is advice: Martin's interactive session calls it when he wants, it writes its report

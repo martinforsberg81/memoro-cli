@@ -240,10 +240,15 @@ null. Each programme in `programmes.programmes` gains `number`, `horizon` (the
 slug its valid record names, else null) and `horizon_state` (`open`, `reached`,
 `dropped`, `not held` for a slug the store holds no horizon for, or null),
 and `record_state` (a valid record's state, otherwise null).
-In a draft programme an unfinished goal's line in its own view says
-`<programme> is draft`, derived from the group's record state
-without changing the goal-row JSON contract. This does not cancel a running
-session or stop queued merges.
+Red in a programme's frame means that someone must act: status `Martin` or `blocked`, a
+malformed goal, a refused archive, a failed merge. A goal that gets no session although
+nothing is wrong with it is paused, and a pause is grey: in a draft programme, and on a held
+goal, an unfinished goal whose status is `ready` reads `status paused`, and its hold is a grey
+row `held by <by> since <at> — <reason>`. The programme's heading alone says `draft`; no goal
+repeats it. A hold reason already drawn for an earlier goal in the same frame reads `as above`.
+`Martin` and `blocked` stay red in a draft programme. All of it is derived at render time from
+the group's record state and the goal's hold, without changing the goal-row JSON contract.
+A pause does not cancel a running session or stop queued merges.
 
 ### PROGRAMMES
 

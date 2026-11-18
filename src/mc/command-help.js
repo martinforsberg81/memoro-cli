@@ -619,7 +619,7 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc programs create <programme> --end \"…\" [--horizon <slug>] [--purpose \"…\"]   a new programme with its record\n",
     "        mc programs create <programme> --end \"…\" --area <repo>/<id> [--purpose \"…\"] [--from-proposal <path>]   a repair programme for an area, no horizon\n",
     "        mc programs record <programme> --end \"…\" [--horizon <slug>]   the record of a directory without one\n",
-    "        mc programs state <programme> draft|ready   interactive Martin sets the programme state\n",
+    "        mc programs state <programme> draft|ready   interactive Martin sets the programme state; ready releases the desk's holds on its goals\n",
     "        mc programs review <programme>   one advisory reading of the current document\n",
     "        mc programs after <programme> <phase> <phase>…   the first phase waits for the phases after it, replacing what it waited for\n",
     "        mc programs after <programme> <phase> --none   the phase waits for no phase\n",
