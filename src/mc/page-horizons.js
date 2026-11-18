@@ -112,7 +112,7 @@ export function programmeHeading(c, wide, data, group, facts, continuation = nul
   ].filter(Boolean).map((text) => ({ text, styles: ['grey'] }));
   // With no horizons read there is no horizon to set apart: the facts follow the name as any frame's do.
   const open = data.horizons?.open?.find((horizon) => horizon.programmes?.includes(group.programme));
-  const horizon = horizonWords(data, group, open);
+  const horizon = open ? '' : horizonWords(data, group, open);
   const parts = [];
   const warning = { text: 'record invalid', styles: ['red'] };
   const warningAfterHorizon = group.record_invalid && data.horizons && !open;
