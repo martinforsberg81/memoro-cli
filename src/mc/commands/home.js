@@ -165,7 +165,7 @@ export async function run(argv, deps = {}) {
   const reader = typeof deps.reader === 'function' ? deps.reader({ page, first }) : deps.reader || readerFor({ stdout, lines: first.lines, page, key: first.key });
   return menu(first.data, {
     stdout, stderr, env, page, reader, expand: (on) => { expand = on; }, fresh: () => { freshOnce = true; },
-    current: () => latest, show: (name) => { view = name; operations = false; maintenance = false; },
+    showGoal: deps.showGoal, current: () => latest, show: (name) => { view = name; operations = false; maintenance = false; },
     operate: (on) => { operations = on; if (on) maintenance = false; },
     maintain: (on) => { maintenance = on; if (on) operations = false; },
     restart: () => (deps.restartPage || restartPage)({ stdout, env, from: startedOn, to: movedTo }),
@@ -416,16 +416,14 @@ export async function menu(first, {
     const groups = shown.programmes?.programmes || [];
     const goals = groups.flatMap((group) => group.goals || []);
 
-    // The page again with every phase, finished goal and dormant programme. `a`
-    // again folds them.
+    // Expand operations and Manager details; `a` again collapses them.
     if (answer === 'a' || answer === 'all') {
       all = !all;
       expand(all);
       data = await redraw();
       continue;
     }
-    // The operations view: the hero frame and the panels the overview leaves out. No programme's name is `o`
-    // or `operations`: a programme opens by its number or by any other name (below).
+    // The operations view: the hero frame and the panels the overview leaves out.
     if (answer === 'o' || answer === 'operations') {
       operate(true);
       data = await redraw();

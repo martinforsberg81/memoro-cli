@@ -1832,7 +1832,7 @@ describe('the page', () => {
    * the live loop refreshes through, so the mode has to survive the redraw
    * rather than live inside one call.
    */
-  it('a expands programme and operational details together, then collapses them again', async () => {
+  it('a expands operational details while programme cards remain inline', async () => {
     const shown = [];
     const asked = ['a', 'a', 'q'];
     const data = { ...DATA,
@@ -1862,123 +1862,47 @@ describe('the page', () => {
     assert.match(shown[1], /New sessions paused — runner stopping/u, 'runner stop remains visible when details collapse');
   });
 
-  /**
-   * A programme's view lives in run()'s closure beside `expand`, because the live loop draws through it, and what the
-   * prompt resolves is the page the last frame drew. Here a "frame" is a call of run()'s own `page`, which the reader is
-   * handed (a test's reader may be a function of it); the collect is injected.
-   */
-  describe('a programme view and the numbers, across live frames', () => {
-    const horizonRoot = () => mkdtempSync(join(tmpdir(), 'mc-page-view-'));
+  describe('overview and operations across live frames', () => {
     const dataWith = (rows, root) => {
       const programmes = programmesSection({ goalRows: rows });
-      horizonsSection({ programmes, env: { MC_WORK_ROOT: root, MC_HOME: root } });
       return { ...pageData({ programmes }), horizons: horizonsSection({ programmes, env: { MC_WORK_ROOT: root, MC_HOME: root } }) };
     };
-    const FIRST = [goalRow('mc-ui', 'mc'), goalRow('docx-editor', 'docx-editing-surface')];
-    const SECOND = [goalRow('new-goal', 'aaa-new'), ...FIRST];
-    const numberOf = (data, name) => data.programmes.programmes.find((group) => group.programme === name).number;
-
-    /** Run the page with `steps`: each is called with `{ page }` and returns the answer to give (a promise is awaited). */
-    async function drive(collect, steps) {
-      const frames = [];
-      const queue = [...steps];
-      const code = await page([], {
-        collect, stdout: { columns: 120, write: () => {} }, stderr: { write: () => {} }, env: {}, interactive: () => true,
-        reader: ({ page: frame }) => ({
-          ask: async () => { const step = queue.shift(); return step ? step({ frame, frames }) : null; },
-          show: (lines) => frames.push(lines.join('\n')),
-        }),
-        checkAndPrintFreshInstall: async () => {},
-      });
-      return { code, frames };
-    }
-
-    it('keeps the programme open through a live frame, and h goes home', async (t) => {
-      const root = horizonRoot();
+    it('uses the newest displayed goal numbers even when an older collect finishes late', async (t) => {
+      const root = mkdtempSync(join(tmpdir(), 'mc-page-view-'));
       t.after(() => rmSync(root, { recursive: true, force: true }));
-      const data = dataWith(FIRST, root);
-      const live = [];
-      const { code, frames } = await drive(async () => data, [
-        () => String(numberOf(data, 'mc')),
-        async ({ frame }) => { live.push((await frame()).lines.join('\n')); return 'a'; },
-        async ({ frame }) => { live.push((await frame()).lines.join('\n')); return 'h'; },
-        async ({ frame }) => { live.push((await frame()).lines.join('\n')); return 'q'; },
-      ]);
-      assert.equal(code, 0);
-      assert.match(frames[0], new RegExp(`┌─ ${numberOf(data, 'mc')} mc`, 'u'));
-      assert.doesNotMatch(frames[0], /HORIZONS/u);
-      assert.match(live[0], new RegExp(`┌─ ${numberOf(data, 'mc')} mc`, 'u'), 'a live frame keeps the programme open');
-      assert.doesNotMatch(live[0], /HORIZONS/u);
-      // `a` in the programme view expands that block; the frame after it keeps both.
-      assert.match(frames[1], /mc-ui · /u);
-      assert.match(live[1], /mc-ui · /u);
-      assert.match(frames[2], /HORIZONS/u, 'h is the overview again');
-      assert.match(live[2], /HORIZONS/u, 'and a live frame keeps it');
-    });
-
-    it('keeps the operations view through a live frame; h, a number or a programme view each leave it, and o opens it from a programme', async (t) => {
-      const root = horizonRoot();
-      t.after(() => rmSync(root, { recursive: true, force: true }));
-      const data = dataWith(FIRST, root);
-      const live = [];
-      const seen = async (frame) => { live.push((await frame()).lines.join('\n')); };
-      const { code, frames } = await drive(async () => data, [
-        () => 'o',
-        async ({ frame }) => { await seen(frame); return 'a'; },
-        async ({ frame }) => { await seen(frame); return 'o'; },
-        async ({ frame }) => { await seen(frame); return 'h'; },
-        async ({ frame }) => { await seen(frame); return String(numberOf(data, 'mc')); },
-        async ({ frame }) => { await seen(frame); return 'operations'; },
-        async ({ frame }) => { await seen(frame); return String(numberOf(data, 'docx-editing-surface')); },
-        async ({ frame }) => { await seen(frame); return 'q'; },
-      ]);
-      assert.equal(code, 0);
-      const operations = (text) => /MERGE & DEPLOY/u.test(text) && /SYSTEM/u.test(text) && !/HORIZONS|IN FLIGHT|NEEDS ATTENTION|┌─ DESK/u.test(text);
-      assert.ok(operations(frames[0]), 'o draws the operations view');
-      assert.ok(operations(live[0]), 'a live frame keeps it');
-      assert.ok(operations(frames[1]) && operations(live[1]), 'a keeps it and expands its panels');
-      assert.ok(operations(frames[2]), 'o again keeps it');
-      assert.match(frames[3], /HORIZONS/u, 'h is the overview again');
-      assert.ok(/HORIZONS/u.test(live[3]) && !operations(live[3]), 'and a live frame keeps the overview');
-      assert.match(frames[4], new RegExp(`┌─ ${numberOf(data, 'mc')} mc`, 'u'), 'a number opens a programme');
-      assert.ok(operations(frames[5]), 'o from a programme\'s view opens the operations view');
-      assert.ok(operations(live[5]));
-      assert.match(frames[6], new RegExp(`┌─ ${numberOf(data, 'docx-editing-surface')} docx-editing-surface`, 'u'), 'a number from the operations view opens a programme');
-      assert.ok(!operations(live[6]), 'and the operations view is closed');
-    });
-
-    it('opens by the numbers of the frame on the screen after a frame added a goal', async (t) => {
-      const root = horizonRoot();
-      t.after(() => rmSync(root, { recursive: true, force: true }));
-      const first = dataWith(FIRST, root);
-      const second = dataWith(SECOND, root);
-      let now = first;
-      const { frames } = await drive(async () => now, [
-        async ({ frame }) => { now = second; await frame(); return String(numberOf(second, 'aaa-new')); },
-        () => 'q',
-      ]);
-      // A number that named `mc` a frame ago is `aaa-new`'s now, and the prompt goes by the frame on the screen.
-      assert.notEqual(numberOf(first, 'mc'), numberOf(second, 'mc'));
-      assert.match(frames[0], new RegExp(`┌─ ${numberOf(second, 'aaa-new')} aaa-new`, 'u'));
-    });
-
-    it('does not let a collect that started before a redraw, and finished after it, replace the redraw\'s data', async (t) => {
-      const root = horizonRoot();
-      t.after(() => rmSync(root, { recursive: true, force: true }));
-      const older = dataWith(FIRST, root);
-      const newer = dataWith(SECOND, root);
-      let release;
-      const slow = new Promise((resolve) => { release = resolve; });
-      const calls = [async () => older, () => slow, async () => newer, async () => newer]; // start, the live frame, `r`, then the redraw that opens a programme
-      let slowFrame;
-      const { frames } = await drive(() => calls.shift()(), [
-        // A live frame starts collecting, and before it is back the menu redraws on newer data.
+      const older = dataWith([goalRow('mc-ui', 'mc')], root);
+      const newer = dataWith([goalRow('aaa', 'aaa'), goalRow('mc-ui', 'mc')], root);
+      const number = newer.programmes.programmes.flatMap((g) => g.goals).find((g) => g.name === 'aaa').number;
+      let release; const slow = new Promise((resolve) => { release = resolve; });
+      const calls = [async () => older, () => slow, async () => newer, async () => newer];
+      let slowFrame; const opened = []; const steps = [
         ({ frame }) => { slowFrame = frame(); return 'r'; },
-        async () => { release(older); await slowFrame; return String(numberOf(newer, 'aaa-new')); },
+        async () => { release(older); await slowFrame; return String(number); },
         () => 'q',
-      ]);
-      assert.equal(frames.length, 2);
-      assert.match(frames[1], new RegExp(`┌─ ${numberOf(newer, 'aaa-new')} aaa-new`, 'u'), 'the older collect did not replace the newer numbers');
+      ];
+      const code = await page([], { collect: () => calls.shift()(), stdout: { columns: 120, write: () => {} },
+        stderr: { write: () => {} }, env: {}, interactive: () => true, checkAndPrintFreshInstall: async () => {},
+        showGoal: async (argv) => { opened.push(argv[1]); return 0; },
+        reader: ({ page: frame }) => ({ show: () => {}, ask: async () => steps.shift()({ frame }) }) });
+      assert.equal(code, 0);
+      assert.deepEqual(opened, ['aaa/aaa']);
+    });
+
+    it('keeps operations through refresh and returns home with inline programme cards', async (t) => {
+      const root = mkdtempSync(join(tmpdir(), 'mc-page-view-'));
+      t.after(() => rmSync(root, { recursive: true, force: true }));
+      const data = dataWith([goalRow('mc-ui', 'mc')], root);
+      const frames = []; const live = []; const steps = ['o', 'a', 'h', 'q'];
+      const code = await page([], { collect: async () => data, stdout: { columns: 120, write: () => {} },
+        stderr: { write: () => {} }, env: {}, interactive: () => true, checkAndPrintFreshInstall: async () => {},
+        reader: ({ page: frame }) => ({ show: (lines) => frames.push(lines.join('\n')),
+          ask: async () => { if (frames.length) live.push((await frame()).lines.join('\n')); return steps.shift(); } }) });
+      assert.equal(code, 0);
+      assert.match(frames[0], /MERGE & DEPLOY/u);
+      assert.match(live[0], /MERGE & DEPLOY/u);
+      assert.match(frames[1], /MERGE & DEPLOY/u);
+      assert.match(frames[2], /HORIZONS/u);
+      assert.match(frames[2], /┌─ mc /u);
     });
   });
 
@@ -2629,37 +2553,41 @@ describe('collectPage', () => {
     }
   });
 
-  it('draws one programme alone: the desk, then its block with its number, and nothing below', async (t) => {
+  it('shows inline goal metadata and full wrapped reasons on first render at narrow and wide widths', async (t) => {
     const data = await overviewData(t);
-    const number = data.programmes.programmes.find((group) => group.programme === 'mc').number;
-    for (const columns of [160, 80]) {
-      const lines = renderPageLines(data, { columns, now: NOW, view: 'mc' });
-      const text = lines.join('\n');
-      assert.ok(lines.every((row) => width(row) <= columns));
-      assert.ok(text.includes('┌─ DESK'), 'the desk stays');
-      assert.doesNotMatch(text, /HORIZONS|Serving no horizon|UNASSIGNED ACTIVITY|MERGE & DEPLOY|MAINTENANCE|SYSTEM/u);
-      const heading = lines.findIndex((row) => row.startsWith(`  ┌─ ${number} mc`));
-      assert.ok(heading > lines.findIndex((row) => row.includes('┌─ DESK')), lines.join('\n'));
-      assert.match(lines[heading + 1], /^ {4}Phase 1$/u);
-      assert.match(lines[heading + 2], /^ {6} ?1 The page$/u);
-      assert.match(lines.at(-1), /^ {2}└─+┘$/u, 'the block closes the page');
-      // `a` expands the block, as it does in PROGRAMMES.
-      const wide = renderPageLines(data, { columns, now: NOW, view: 'mc', expand: true }).join('\n');
-      assert.ok(wide.length > text.length);
-      assert.match(wide, /mc-ui · memoro-cli|mc-ui · /u);
+    const group = data.programmes.programmes.find((item) => item.programme === 'mc');
+    const goal = group.goals[0];
+    const reason = 'Wait until the external service and every related dependency have been carefully checked';
+    Object.assign(goal, { repos: ['memoro-cli'], sessions: 2, hold: { by: 'plan', at: 'today', reason }, last: { next: 'Verify the complete offer' } });
+    for (const columns of [60, 160]) {
+      const lines = renderPageLines(data, { columns, now: NOW, overview: true });
+      assert.ok(lines.every((line) => width(line) <= columns));
+      const joined = lines.map((line) => line.trim()).join(' ');
+      assert.ok(joined.includes(reason), joined);
+      assert.ok(joined.includes('mc-ui · memoro-cli · 2 sessions'), joined);
+      assert.ok(joined.includes('Verify the complete offer'), joined);
     }
-    // A name the data no longer lists is the overview again.
-    assert.match(renderPageLines(data, { columns: 100, now: NOW, view: 'gone' }).join('\n'), /HORIZONS/u);
   });
 
-  it('a draws the programmes with nothing under way after the others, each in its own frame, and no folded frame', async (t) => {
+  it('ignores a former programme view and keeps the overview and its inline details', async (t) => {
+    const data = await overviewData(t);
+    for (const columns of [160, 80]) {
+      const lines = renderPageLines(data, { columns, now: NOW, view: 'mc' });
+      assert.ok(lines.every((row) => width(row) <= columns));
+      assert.ok(lines.some((row) => row.includes('HORIZONS')));
+      assert.ok(lines.some((row) => row.includes('┌─ mc ')));
+      assert.ok(lines.some((row) => /mc-ui · memoro-cli/u.test(row)));
+    }
+  });
+
+  it('a keeps all programme cards in their groups without a fold', async (t) => {
     const data = await overviewData(t);
     checkGroupedOverview(data, true);
     // A page with no horizons section data draws the same programmes, with no HORIZONS and no horizon words.
     const bare = renderPageLines({ ...data, horizons: undefined }, { columns: 160, now: NOW, expand: true, overview: true });
     assert.ok(!bare.some((row) => /HORIZONS/u.test(row)));
-    const named = programmeFramesOf(bare, /^ {6}┌─ \d+ {2}(\S+)/u);
-    assert.deepEqual([...named.keys()], ['mc', 'p-draft', 'p-pr', 'p-second', 'p-unheld', 'plan-only', 'p-broken', 'p-dormant-second', 'p-dropped', 'p-invalid', 'p-none', 'p-reached', 'p-unknown']);
+    const named = programmeFramesOf(bare, /^ {6}┌─ (\S+)/u);
+    assert.deepEqual([...named.keys()], ['mc', 'p-broken', 'p-dormant-second', 'p-draft', 'p-dropped', 'p-invalid', 'p-none', 'p-pr', 'p-reached', 'p-second', 'p-unheld', 'p-unknown', 'plan-only']);
     assert.ok([...named.values()].every((frame) => !/horizon/u.test(frame.heading)));
   });
 

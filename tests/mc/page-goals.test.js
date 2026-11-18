@@ -127,7 +127,7 @@ describe('goal rows on the page', () => {
     const cleanup = at(/^ +1 cleanup$/u);
     const rollout = at(/^ +2 rollout$/u);
     assert.ok(mcHeading >= 0 && mcHeading < cleanup, 'the goals are under their programme\'s heading');
-    assert.equal(rollout, cleanup + 4, 'rollout is drawn after cleanup, in name order');
+    assert.ok(rollout > cleanup, 'rollout is drawn after cleanup, in name order');
   });
 
   it('shows criteria met/total beside each goal in both views', () => {
@@ -139,7 +139,7 @@ describe('goal rows on the page', () => {
       assert.ok(at >= 0);
       assert.ok(lines[at + 1].endsWith(`criteria ${count}`));
     }
-    assert.doesNotMatch(lines.join('\n'), /the second repository/u);
+    assert.match(lines.join('\n'), /the second repository/u, 'the log detail is inline');
     const expanded = programmesOf(renderPageLines(data, { columns: 120, now: NOW, expand: true }));
     assert.ok(expanded.some((line) => /the second repository$/u.test(line)));
     for (const [name, count] of [['cleanup', '1/2'], ['rollout', '2/2']]) {
@@ -162,8 +162,8 @@ describe('goal rows on the page', () => {
 
   it('a done or dropped goal\'s tail is its last Gjort, never a Nästa that is over', () => {
     const finished = [
-      { name: 'landed', programme: 'mc', repos: ['memoro-cli'], stage: 'done', status: 'ready', sessions: 2, last: { done: 'landed #1235 as 60e9f82', next: 'Merge #1235', comment: null }, running: false, problems: [] },
-      { name: 'letgo', programme: 'mc', repos: ['memoro-cli'], stage: 'dropped', status: 'ready', sessions: 0, last: { done: null, next: 'build it', comment: 'wrong goal' }, running: false, problems: [] },
+      { name: 'landed', programme: 'mc', repos: ['memoro-cli'], stage: 'done', status: 'ready', sessions: 2, archive_refused: 'waiting on archive', last: { done: 'landed #1235 as 60e9f82', next: 'Merge #1235', comment: null }, running: false, problems: [] },
+      { name: 'letgo', programme: 'mc', repos: ['memoro-cli'], stage: 'dropped', status: 'ready', sessions: 0, archive_refused: 'waiting on archive', last: { done: null, next: 'build it', comment: 'wrong goal' }, running: false, problems: [] },
     ];
     const data = pageData({ programmes: programmesSection({ goalRows: finished.map(goalRow), programmes: PROGRAMMES }) });
     const lines = programmesOf(renderPageLines(data, { columns: 160, now: NOW, expand: true })).map(plain);

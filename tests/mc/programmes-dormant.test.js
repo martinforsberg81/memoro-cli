@@ -89,15 +89,14 @@ describe('dormant programmes in the collector', () => {
 const framed = (lines, name) => lines.some((line) => new RegExp(`^ {6}┌─ (?:\\d+ {2})?${name}(?: |$)`, 'u').test(line));
 
 describe('programmes with nothing under way on the page', () => {
-  it('draws the programmes under way as frames, and the rest as one folded frame', () => {
+  it('draws all programmes in name order on first render', () => {
     const lines = programmesOf(renderPageLines(pageData({ programmes: section() }), { columns: 120, now: NOW }));
-    assert.ok(lines.some((line) => /^ {6}┌─ 2 programmes with nothing under way  ·  a shows them ─+┐$/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => line.startsWith('      ┌─ planned ')));
+    const names = ['done-only', 'empty', 'goal-only', 'mc', 'planned'];
+    const positions = names.map((name) => lines.findIndex((line) => new RegExp(`^ {6}┌─ ${name}(?: |$)`, 'u').test(line)));
+    assert.ok(positions.every((at) => at >= 0));
+    assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
     assert.ok(lines.some((line) => line.includes('PLAN')));
-    assert.ok(!lines.some((line) => /no goal yet/u.test(line)), lines.join('\n'));
-    for (const name of ['mc', 'goal-only', 'planned']) assert.ok(framed(lines, name), `${name} has its frame`);
-    // A programme whose goals are all done, or with no goal at all, has nothing under way.
-    for (const name of ['empty', 'done-only']) assert.ok(!framed(lines, name), `${name} is folded`);
+    assert.ok(!lines.some((line) => /nothing under way/u.test(line)));
   });
 
   it('shows no proposal count on a heading: proposals wait in the areas, not in a programme', () => {
@@ -111,12 +110,14 @@ describe('programmes with nothing under way on the page', () => {
     for (const name of ['mc', 'empty']) assert.doesNotMatch(wide.find((line) => line.startsWith(`      ┌─ ${name} `)), /proposal/u, name);
   });
 
-  it('folds a programme with nothing under way, and says "1 programme" for one', () => {
-    const programmes = programmesSection({ goalRows: GOALS.slice(0, 2), programmes: ['empty'] });
-    const lines = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW }));
-    assert.ok(lines.some((line) => /^ {6}┌─ 2 programmes with nothing under way  ·  a shows them ─+┐$/u.test(line)), lines.join('\n'));
-    const one = programmesOf(renderPageLines(pageData({ programmes: programmesSection({ goalRows: GOALS.slice(0, 1), programmes: ['empty'] }) }), { columns: 120, now: NOW }));
-    assert.ok(one.some((line) => /^ {6}┌─ 1 programme with nothing under way  ·  a shows them ─+┐$/u.test(line)), one.join('\n'));
+  it('keeps dormant cards identical under a', () => {
+    const data = pageData({ programmes: section() });
+    const normal = programmesOf(renderPageLines(data, { columns: 120, now: NOW }));
+    const expanded = programmesOf(renderPageLines(data, { columns: 120, now: NOW, expand: true }));
+    for (const name of ['empty', 'done-only']) {
+      assert.ok(framed(normal, name));
+      assert.ok(framed(expanded, name));
+    }
   });
 
   it('draws no folded frame when every programme is under way', () => {

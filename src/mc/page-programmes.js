@@ -114,8 +114,8 @@ export function attentionGoals(group, sessions = []) {
 /**
  * The goals of one programme, by phase. The default view draws every unfinished
  * goal and, of the finished ones, only a goal still at work (running, or owning
- * a live session), which stays in its phase until the session ends; `expand`
- * (`a`) draws them all. A phase none of whose goals is drawn is not drawn.
+ * a live session), which stays in its phase until the session ends. A phase none of whose goals
+ * is drawn is not drawn; `expand` controls session metadata.
  * Under NEEDS ATTENTION, in both views: a malformed goal, a finished goal the
  * runner refused to archive (`archive_refused`) and a finished goal with an
  * open pull request, each with its line and its pull requests as child rows.

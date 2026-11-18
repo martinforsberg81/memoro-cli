@@ -564,13 +564,13 @@ describe('a page taller than the screen', () => {
    * which has the same arithmetic and had the same fault.
    */
   function tall({
-    answers = true, pages = [], key = null, first = tallPage(TALL),
+    answers = true, pages = [], key = null, first = tallPage(TALL), columns = WIDTH,
     page = async () => {
       const next = pages.shift();
       return Array.isArray(next) ? { data: {}, lines: next } : { data: {}, ...next };
     },
   } = {}) {
-    const term = new Terminal({ cols: WIDTH, rows: HEIGHT, scrollback: 500, allowProposedApi: true });
+    const term = new Terminal({ cols: columns, rows: HEIGHT, scrollback: 500, allowProposedApi: true });
     const input = keyboard();
     // The terminal's reply arrives on the stream the typing arrives on, which
     // is where a real one puts it and why `readLine` is what reads it.
@@ -578,7 +578,7 @@ describe('a page taller than the screen', () => {
 
     const written = [];
     const stdout = {
-      columns: WIDTH,
+      columns,
       rows: HEIGHT,
       write(text) {
         written.push(String(text));
@@ -748,6 +748,55 @@ describe('a page taller than the screen', () => {
 
     it_.input.type('q\r');
     assert.equal(await answer, 'q');
+  });
+
+  it('refreshes inline facts independently above the screen without losing typed input', async () => {
+    const reason = 'A long hold reason explains why the work must wait until every dependency has been carefully checked';
+    const makeData = ({ log = 'old log', hold = reason, draft = false, question = 'old question', advisor = 'old' } = {}) => {
+      const goal = { programme: 'active', name: 'work', number: 1, title: 'The work', phase: 1,
+        stage: 'build', status: 'Martin', question, repos: ['memoro'], sessions: 1,
+        hold: { by: 'plan', at: 'today', reason: hold }, last: { next: log },
+        prs: [{ repo: 'memoro', number: 7, title: 'Change', draft }] };
+      const active = { programme: 'active', goals: [goal], phases: [{ number: 1, goals: [goal] }] };
+      const dormant = { programme: 'aaa-dormant', goals: [], phases: [] };
+      const tail = Array.from({ length: 55 }, (_, i) => ({ programme: `tail-${i}`, goals: [], phases: [] }));
+      return { programmes: { programmes: [active, dormant, ...tail] },
+        horizons: { open: [], none: ['active', 'aaa-dormant', ...tail.map((g) => g.programme)], unreadable: [] },
+        runner: { sessions: [{ goal: 'active/work', kind: 'build', pid: 7, tool: 'codex', model: 'sol', advisor, repo: 'memoro', check_ins: 0 }] } };
+    };
+    const variants = [
+      [{ log: 'new log' }, 'old log', 'new log'],
+      [{ log: 'new log', hold: reason.replace('carefully', 'properly ') }, 'carefully', 'properly'],
+      [{ log: 'new log', hold: reason.replace('carefully', 'properly '), draft: true }, '· open', '· draft'],
+      [{ log: 'new log', hold: reason.replace('carefully', 'properly '), draft: true, question: 'new question' }, 'old question', 'new question'],
+      [{ log: 'new log', hold: reason.replace('carefully', 'properly '), draft: true, question: 'new question', advisor: 'new' }, 'old advisor', 'new advisor'],
+    ];
+    const frameFor = (data) => ({ data, key: pageKey(data), lines: renderPageLines(data, { columns: 60, now: 0 }) });
+    const first = frameFor(makeData());
+    assert.ok(first.lines.every((line) => [...line].length <= 60));
+    assert.ok(first.lines.findIndex((line) => line.includes('aaa-dormant')) < first.lines.findIndex((line) => line.includes('┌─ active')));
+    const holdAt = first.lines.findIndex((line) => line.includes('held by plan'));
+    const holdRows = first.lines.slice(holdAt, first.lines.findIndex((line, i) => i > holdAt && line.includes('old question')));
+    assert.ok(holdRows.map((line) => line.trim()).join(' ').includes(reason));
+    let refresh = 0;
+    const it_ = tall({ columns: 60, first: first.lines, key: first.key, page: async () => {
+      const frame = frameFor(makeData(variants[refresh++][0]));
+      assert.equal(frame.lines.length, first.lines.length);
+      return frame;
+    } });
+    const answer = it_.reader.ask(TAIL, '>');
+    await it_.flush(); await settle();
+    it_.input.type('pending');
+    for (const [i, [, before, after]] of variants.entries()) {
+      assert.ok(it_.screen().every((row) => !row.includes(before)), `${before} is above the screen`);
+      await it_.advance(31_000);
+      assert.equal(refresh, i + 1);
+      assert.equal(it_.everything().filter((row) => row.includes(after)).length, 1);
+      assert.ok(it_.everything().every((row) => !row.includes(before)));
+      assert.equal(it_.screen().at(-1), '> pending');
+    }
+    it_.input.type('\r');
+    assert.equal(await answer, 'pending');
   });
 
   it('live redraw: changes horizon label, reference state and warnings independently above the screen at fixed height', async () => {
