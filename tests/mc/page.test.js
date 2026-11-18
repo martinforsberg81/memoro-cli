@@ -56,13 +56,13 @@ const NOW = new Date('2026-08-29T12:00:00Z');
  * The programme frames of a page by programme name: `{ heading, body }` for every frame whose heading names a programme
  * (its number when it has one, then its horizon words), the body being the rows up to the frame's bottom rule.
  */
-const programmeFramesOf = (lines, pattern = /^ {2}┌─ (?:\d+ {2})?(\S+) {2}· {2}(?:horizon|no horizon)/u) => {
+const programmeFramesOf = (lines, pattern = /^ {6}┌─ (?:\d+ {2})?(\S+)(?: {2}| ─)/u) => {
   const frames = new Map();
   lines.forEach((row, i) => {
     const head = pattern.exec(row);
     if (!head) return;
     let end = i + 1;
-    while (end < lines.length && !/^ {2}[┌└]/u.test(lines[end])) end += 1;
+    while (end < lines.length && !/^ {6}└/u.test(lines[end])) end += 1;
     frames.set(head[1], { heading: row, body: lines.slice(i + 1, end) });
   });
   return frames;
@@ -177,7 +177,7 @@ describe('SESSIONS', () => {
       assert.match(activity.join('\n'), /pid 98765/u);
       // A goal's session is drawn once, under its goal, its kind first; a project's two sessions are MAINTENANCE rows, each once.
       for (const [name, kind] of [['runner-sessions', 'BUILD'], ['review-and-land', 'REVIEW'], ['headless-plan', 'PLAN']]) {
-        const at = activity.findIndex((line) => new RegExp(`^ {6}\\d+ ${name}$`, 'u').test(line));
+        const at = activity.findIndex((line) => new RegExp(`^ {10}\\d+ ${name}$`, 'u').test(line));
         assert.ok(at >= 0, `${columns}: goal ${name}`);
         assert.match(activity[at + 3], new RegExp(`● · ${kind} · `, 'u'), `${columns}: ${name} draws its ${kind} session`);
       }
@@ -820,7 +820,7 @@ describe('LANGUAGE — the cached readings, the last run, and an open gap', () =
     assert.equal(signature(gap), 'red+bold');
     // Above every section of the overview and of the operations view alike.
     const home = paintedPage(pageData({ programmes: goalsFor('p/g'), language: { languages: [], last_run: LAST, open_gap: { manifest: 'sv-forms-cutover', act: 'purge-wiktionary-forms', says: 'sv has no forms', started: LAST.started } } }), { overview: true });
-    assert.ok(home.indexOf(rowWith(home, 'mc language resume')) < home.findIndex((line) => strip(line).startsWith('  ┌─ p ')), 'above the first programme');
+    assert.ok(home.indexOf(rowWith(home, 'mc language resume')) < home.findIndex((line) => strip(line).startsWith('      ┌─ p ')), 'above the first programme');
     assert.ok(lines.indexOf(gap) < lines.findIndex((line) => strip(line).startsWith('  ┌─ MERGE & DEPLOY')), 'above the panels');
   });
 
@@ -1764,9 +1764,9 @@ describe('the page', () => {
     assert.match(text, /runner running · 1\/2 lanes/u);
     // The overview: the programmes under way in name order, the folded frame, then what belongs to no programme.
     const home = renderPage({ ...DATA, billing: 'plan · available' }, { columns: 120, version: '0.7.11', now: NOW, overview: true });
-    const order = ['┌─ assistant-avatar', '┌─ docx-editing-surface', '┌─ mc ', '┌─ 1 programme with nothing under way', '┌─ MAINTENANCE', '┌─ MERGE'].map((head) => home.indexOf(`\n  ${head}`));
+    const order = ['┌─ assistant-avatar', '┌─ docx-editing-surface', '┌─ mc ', '┌─ 1 programme with nothing under way', '┌─ MAINTENANCE', '┌─ MERGE'].map((head) => home.indexOf(head));
     assert.ok(order.every((index, n) => index >= 0 && (n === 0 || index > order[n - 1])), home);
-    assert.doesNotMatch(home, /IN FLIGHT|PROGRAMMES|UNASSIGNED ACTIVITY|NEEDS ATTENTION/u);
+    assert.doesNotMatch(home, /IN FLIGHT|UNASSIGNED ACTIVITY|NEEDS ATTENTION/u);
     assert.match(home, /^ {6}mc-ui {2}build · open 20 min · claude · opus · on no goal of a programme$/mu);
     assert.match(text, /start takes over now/u);
     // The helper is a desk session: DESK counts it; its box was the operations MAINTENANCE's, which `a` no longer draws.
@@ -1825,9 +1825,9 @@ describe('the page', () => {
     const all = renderPageLines(DATA, { columns: 120, now: NOW, expand: true, overview: true });
     assert.deepEqual(names(all), ['avatar-self-serve', 'docx-editor', 'mc-ui']);
     assert.deepEqual(names(folded), ['avatar-self-serve', 'docx-editor', 'mc-ui']);
-    assert.ok(folded.some((line) => /^ {2}┌─ 1 programme with nothing under way ─+ a {2}shows them ┐$/u.test(line)), folded.join('\n'));
-    assert.ok(!folded.some((line) => /^ {2}┌─ dormant-one /u.test(line)));
-    assert.ok(all.some((line) => /^ {2}┌─ dormant-one {2}0 goals ─+┐$/u.test(line)), all.join('\n'));
+    assert.ok(folded.some((line) => /^ {6}┌─ 1 programme with nothing under way · a shows them ─+┐$/u.test(line)), folded.join('\n'));
+    assert.ok(!folded.some((line) => /^ {6}┌─ dormant-one /u.test(line)));
+    assert.ok(all.some((line) => /^ {6}┌─ dormant-one {2}0 goals ─+┐$/u.test(line)), all.join('\n'));
   });
 
   /**
@@ -1852,7 +1852,7 @@ describe('the page', () => {
     });
     assert.equal(code, 0);
     assert.equal(shown.length, 2);
-    assert.match(shown[0], /^ {2}┌─ dormant-one {2}0 goals ─+┐$/mu);
+    assert.match(shown[0], /^ {6}┌─ dormant-one {2}0 goals ─+┐$/mu);
     assert.match(shown[0], /#14008 +queued/u);
     assert.match(shown[0], /goal\/preview-only/u);
     assert.doesNotMatch(shown[1], /dormant-one|goal\/preview-only/u);
@@ -2495,25 +2495,23 @@ describe('collectPage', () => {
       const text = lines.join('\n');
       assert.ok(lines.every((row) => width(row) <= columns), `${columns}: ${lines.filter((row) => width(row) > columns).join('\n')}`);
       assert.ok(text.indexOf('┌─ DESK') < text.indexOf('HORIZONS'), 'the desk is above HORIZONS');
-      assert.doesNotMatch(text, /PROGRAMMES|Serving no horizon|UNASSIGNED ACTIVITY|IN FLIGHT|NEEDS ATTENTION/u);
+      assert.doesNotMatch(text, /Serving no horizon|UNASSIGNED ACTIVITY|IN FLIGHT|NEEDS ATTENTION/u);
       const section = between(lines, '┌─ HORIZONS', '┌─ ').map((row) => row.trimEnd());
       assert.match(section[0], /^ {2}┌─ HORIZONS {2}2 open · 3 programmes under way · 1 goal open/u);
       assert.match(section[1], /^ {4}1 horizon record cannot be read: broken$/u);
-      // One row per open horizon, in the desk's order: its number and title, its programmes, its goals.
-      assert.match(section[2], /^ {4}1 {2}Title of first +1 programme +1 open$/u);
-      assert.match(section[3], /^ {4}2 {2}Title of second +1 programme · nothing open +0 goals open$/u);
-      // Below it, every programme with something under way, in name order: a plan-PR-only programme and one naming a horizon nobody holds too.
-      const frames = programmeFramesOf(lines);
-      assert.deepEqual([...frames.keys()], ['mc', 'p-unheld', 'plan-only']);
-      assert.match(frames.get('mc').heading, /^ {2}┌─ \d+ {2}mc {2}· {2}horizon 1 {2}· {2}phase 1 of 1 · 1 goal/u);
-      assert.match(frames.get('p-unheld').heading, /^ {2}┌─ \d+ {2}p-unheld {2}· {2}horizon ghost \(not held\)/u);
-      assert.match(frames.get('plan-only').heading, /^ {2}┌─ \d+ {2}plan-only {2}· {2}no horizon/u);
-      assert.ok(frames.get('plan-only').body.some((row) => /PRs without a goal/u.test(row)), 'its plan pull request is in its frame');
-      // The ones with nothing under way are folded into one frame that says how many, and where they are.
-      assert.ok(!/p-second|p-none/u.test(text), 'nothing under way is folded, not drawn');
-      assert.ok(lines.some((row) => /^ {2}┌─ 2 programmes with nothing under way/u.test(row)), text);
-      if (columns === 160) assert.match(text, /a {2}shows them/u);
-      assert.ok(lines.findIndex((row) => /with nothing under way/u.test(row)) > lines.findIndex((row) => /┌─ \d+ {2}plan-only/u.test(row)), 'the folded frame comes after the programmes under way');
+      const first = between(lines, '┌─ 1  Title of first', '┌─ 2  Title of second');
+      const second = between(lines, '┌─ 2  Title of second', '┌─ OTHER PROGRAMMES');
+      const other = between(lines, '┌─ OTHER PROGRAMMES', '┌─ MAINTENANCE');
+      assert.ok(first.some((row) => /1 programme · 1 goal open/u.test(row)));
+      assert.ok(second.some((row) => /1 programme · 0 goals open/u.test(row)));
+      assert.deepEqual([...programmeFramesOf(first).keys()], ['mc']);
+      assert.deepEqual([...programmeFramesOf(second).keys()], []);
+      assert.deepEqual([...programmeFramesOf(other).keys()], ['p-unheld', 'plan-only']);
+      assert.match(programmeFramesOf(other).get('p-unheld').heading, /horizon ghost \(not held\)/u);
+      assert.match(programmeFramesOf(other).get('plan-only').heading, /no horizon/u);
+      assert.ok(programmeFramesOf(other).get('plan-only').body.some((row) => /PRs without a goal/u.test(row)));
+      assert.ok(!/p-second|p-none/u.test(text));
+      for (const group of [second, other]) assert.ok(group.some((row) => /1 programme with nothing under way · a shows them/u.test(row)));
     }
   });
 
@@ -2544,17 +2542,17 @@ describe('collectPage', () => {
       assert.ok(lines.every((row) => width(row) <= columns), `${columns}: ${lines.filter((row) => width(row) > columns).join('\n')}`);
       const frame = programmeFramesOf(lines).get('mc');
       const body = frame.body.join('\n');
-      assert.match(body, /^ {10}held by martin since 2026-11-14T10:00:00Z — wait for the deploy$/mu, `${columns}: the held goal`);
-      assert.match(body, /^ {10}stage build · status blocked/mu, `${columns}: the blocked goal`);
-      assert.match(body, /^ {10}waits on Martin$/mu, `${columns}: the goal waiting on Martin`);
+      assert.match(body, /^ {14}held by martin since 2026-11-14T10:00:00Z — wait for the deploy$/mu, `${columns}: the held goal`);
+      assert.match(body, /^ {14}stage build · status blocked/mu, `${columns}: the blocked goal`);
+      assert.match(body, /^ {14}waits on Martin$/mu, `${columns}: the goal waiting on Martin`);
       assert.match(body, /NEEDS ATTENTION[\s\S]*GOAL\.json: GOAL\.json does not parse/u, `${columns}: the malformed goal`);
       assert.match(body, /runner pid 4000/u, `${columns}: the runner session sits under its goal`);
       assert.equal(body.match(/runner pid 4000/gu).length, 1);
       assert.match(body, /PLAN/u, `${columns}: the plan session`);
       if (columns === 160) assert.match(frame.heading, / {2}· {2}horizon 1 {2}· {2}phase 1 of 3 · 6 goals · priority 5 · 1 done · record invalid/u, frame.heading);
       // HORIZONS counts the same goals: open, landed, held, and a mark while a session works.
-      const row = lines.find((line) => /Title of first/u.test(line));
-      assert.match(row, /1 programme +4 open · 1 landed · ⊘ 1 +●$/u, `${columns}: ${row}`);
+      const row = lines[lines.findIndex((line) => /Title of first/u.test(line)) + 1];
+      assert.match(row, /1 programme · 4 goals open · 1 finished in tree · 1 held · 2 running/u, `${columns}: ${row}`);
     }
   });
 
@@ -2587,7 +2585,7 @@ describe('collectPage', () => {
       const lines = renderPageLines(data, { columns, now: NOW, expand: true, overview: true });
       assert.ok(lines.every((row) => width(row) <= columns));
       const frames = programmeFramesOf(lines);
-      assert.deepEqual([...frames.keys()], ['mc', 'p-unheld', 'plan-only', 'p-none', 'p-second'], 'those under way first, then the rest, each in name order');
+      assert.deepEqual([...frames.keys()], ['mc', 'p-second', 'p-unheld', 'plan-only', 'p-none'], 'groups stay in desk order and dormant members follow their own group');
       assert.match(frames.get('p-second').heading, /horizon 2/u);
       assert.match(frames.get('p-none').heading, /no horizon/u);
       assert.ok(!lines.some((row) => /with nothing under way|┌─ PROGRAMMES/u.test(row)), 'no folded frame and no PROGRAMMES frame');
@@ -2595,7 +2593,7 @@ describe('collectPage', () => {
     // A page that has no horizon store draws the same programmes, with no HORIZONS and no horizon words.
     const bare = renderPageLines({ ...data, horizons: undefined }, { columns: 160, now: NOW, expand: true, overview: true });
     assert.ok(!bare.some((row) => /HORIZONS/u.test(row)));
-    const named = programmeFramesOf(bare, /^ {2}┌─ \d+ {2}(\S+)/u);
+    const named = programmeFramesOf(bare, /^ {6}┌─ \d+ {2}(\S+)/u);
     assert.deepEqual([...named.keys()], ['mc', 'p-unheld', 'plan-only', 'p-none', 'p-second']);
     assert.ok([...named.values()].every((frame) => !/horizon/u.test(frame.heading)));
   });
@@ -3140,7 +3138,7 @@ describe('the palette', () => {
     assert.ok(lines.some((line) => /\x1b\[31mMartin/u.test(line)));
     assert.ok(lines.some((line) => /\x1b\[32mready/u.test(line)));
     assert.match(rowWith(lines, 'assistant-avatar'), /\x1b\[38;5;208m┌─ \x1b\[0m\x1b\[1massistant-avatar/u);
-    assert.ok(lines.some((line) => /^  ┌─ mc /u.test(strip(line))), 'programme boundary stays visible');
+    assert.ok(lines.some((line) => /^ {6}┌─ mc /u.test(strip(line))), 'programme boundary stays visible');
   });
 
   it('adds every escape outside the width: a coloured row is as wide as its plain twin', () => {
@@ -3781,7 +3779,7 @@ describe('the overview: its order, its programmes and what belongs to none', () 
 
   const WIDTHS = [60, 80, 100, 120, 160];
   const draw = (data, options = {}) => renderPageLines(data, { columns: 160, now: NOW, version: '0.7.11', overview: true, ...options }).map(TEXT);
-  const PROGRAMME = /^ {2}┌─ (prog-\d+) /u;
+  const PROGRAMME = /^ {6}┌─ (prog-\d+) /u;
   const framesOf = (lines) => programmeFramesOf(lines, PROGRAMME);
 
   it('draws the normal day in order — header, DESK, HORIZONS, every programme under way in name order, MERGE — at every width', () => {
@@ -3792,12 +3790,12 @@ describe('the overview: its order, its programmes and what belongs to none', () 
       const lines = draw(data, { columns });
       assert.ok(lines.every((row) => width(row) <= columns), `${columns}: a row over the width`);
       const at = (pattern) => lines.findIndex((row) => pattern.test(row));
-      const order = [/^ {2}MC /u, /^ {2}┌─ DESK/u, /^ {2}┌─ HORIZONS/u, /^ {2}┌─ prog-01 /u, /^ {2}┌─ prog-14 /u, /^ {2}┌─ MERGE/u].map(at);
+      const order = [/^ {2}MC /u, /^ {2}┌─ DESK/u, /^ {2}┌─ HORIZONS/u, /^ {6}┌─ prog-01 /u, /^ {6}┌─ prog-14 /u, /^ {2}┌─ MERGE/u].map(at);
       assert.ok(order.every((i) => i >= 0), `${columns}: ${order}\n${lines.join('\n')}`);
       assert.deepEqual(order, [...order].sort((a, b) => a - b), `${columns}: in order ${order}`);
       assert.deepEqual([...framesOf(lines).keys()], names, `${columns}: every programme, in name order`);
-      assert.doesNotMatch(lines.join('\n'), /IN FLIGHT|NEEDS ATTENTION|Serving no horizon|PROGRAMMES|▸|nothing under way/u, `${columns}: none of the sections that are gone, no fold`);
-      assert.equal(lines.filter((row) => /^ {4}\d {2}Horizon \d/u.test(row)).length, 3, `${columns}: a row for each open horizon`);
+      assert.doesNotMatch(lines.join('\n'), /IN FLIGHT|NEEDS ATTENTION|Serving no horizon|▸|nothing under way/u, `${columns}: none of the sections that are gone, no fold`);
+      assert.equal(lines.filter((row) => /^ {2}┌─ \d {2}Horizon \d/u.test(row)).length, 3, `${columns}: a row for each open horizon`);
     }
     const lines = draw(data);
     assert.ok(lines.some((row) => /^ {2}┌─ DESK {2}2 waiting for you · 3 desk sessions open ─/u.test(row)), lines.join('\n'));
@@ -3806,7 +3804,7 @@ describe('the overview: its order, its programmes and what belongs to none', () 
     const frames = framesOf(lines);
     assert.match(frames.get('prog-01').heading, /prog-01 {2}· {2}horizon 1 {2}· {2}phase 1 of 1/u);
     assert.match(frames.get('prog-10').heading, /no horizon/u);
-    assert.match(lines.find((row) => /Horizon 1 /u.test(row)), /3 programmes +3 open · ⊘ 1 +●$/u);
+    assert.match(lines[lines.findIndex((row) => /Horizon 1 /u.test(row)) + 1], /3 programmes · 3 goals open · 1 held · 3 running/u);
   });
 
   it('has no row budget and no fold: the heavy day draws every programme and every session whole, at every width', () => {
@@ -3839,9 +3837,9 @@ describe('the overview: its order, its programmes and what belongs to none', () 
     const data = patch(quiet(), 'prog-02/goal-02', { stage: 'done', status: 'done' });
     const lines = draw(data);
     assert.deepEqual([...framesOf(lines).keys()], ['prog-01']);
-    assert.ok(lines.some((row) => /^ {2}┌─ 1 programme with nothing under way ─+ a {2}shows them ┐$/u.test(row)), lines.join('\n'));
+    assert.ok(lines.some((row) => /^ {6}┌─ 1 programme with nothing under way · a shows them ─+┐$/u.test(row)), lines.join('\n'));
     assert.match(lines.find((row) => /┌─ HORIZONS/u.test(row)), /1 programme under way/u);
-    assert.match(lines.find((row) => /Horizon 1 /u.test(row)), /2 programmes/u, 'HORIZONS still counts the programme that sleeps');
+    assert.match(lines[lines.findIndex((row) => /Horizon 1 /u.test(row)) + 1], /2 programmes · 1 goal open/u, 'the horizon counts the programme that sleeps');
     const all = draw(data, { expand: true });
     assert.deepEqual([...framesOf(all).keys()], ['prog-01', 'prog-02']);
     assert.ok(!all.some((row) => /with nothing under way/u.test(row)));
@@ -3909,12 +3907,12 @@ describe('the overview: its order, its programmes and what belongs to none', () 
 
     it('draws a held goal, a blocked goal and a goal stopped for no progress under their goal', () => {
       const held = framed(patch(quiet(), 'prog-01/goal-01', { hold: ago }));
-      assert.ok(held.body.some((row) => /^ {10}held by martin since 2026-08-28T10:00:00Z — wait$/u.test(row)), held.body.join('\n'));
-      assert.ok(held.body.some((row) => /^ {10}stage \S+ · status paused/u.test(row)), `a held ready goal reads paused\n${held.body.join('\n')}`);
+      assert.ok(held.body.some((row) => /^ {14}held by martin since 2026-08-28T10:00:00Z — wait$/u.test(row)), held.body.join('\n'));
+      assert.ok(held.body.some((row) => /^ {14}stage \S+ · status paused/u.test(row)), `a held ready goal reads paused\n${held.body.join('\n')}`);
       const blocked = framed(patch(quiet(), 'prog-01/goal-01', { status: 'blocked' }));
-      assert.ok(blocked.body.some((row) => /^ {10}stage build · status blocked/u.test(row)) && blocked.body.some((row) => /^ {10}a mend session resolves the obstacle$/u.test(row)), blocked.body.join('\n'));
+      assert.ok(blocked.body.some((row) => /^ {14}stage build · status blocked/u.test(row)) && blocked.body.some((row) => /^ {14}a mend session resolves the obstacle$/u.test(row)), blocked.body.join('\n'));
       const stopped = framed(patch(quiet(), 'prog-01/goal-01', { status: 'Martin', last: { next: 'x', comment: 'no progress: three sessions in a row' } }));
-      assert.ok(stopped.body.some((row) => /^ {10}no progress: three sessions in a row$/u.test(row)), stopped.body.join('\n'));
+      assert.ok(stopped.body.some((row) => /^ {14}no progress: three sessions in a row$/u.test(row)), stopped.body.join('\n'));
       assert.deepEqual(maintenanceItems(patch(quiet(), 'prog-01/goal-01', { hold: ago, status: 'blocked' })), [], 'a goal is the programme\'s, never MAINTENANCE\'s');
     });
 
@@ -3926,12 +3924,12 @@ describe('the overview: its order, its programmes and what belongs to none', () 
         if (at >= 0) group.phases.push({ number: null, goals: phase.goals.splice(at, 1) });
       }
       const malformed = framed(data);
-      assert.ok(malformed.body.some((row) => /^ {4}NEEDS ATTENTION$/u.test(row)) && malformed.body.some((row) => /^ {10}GOAL\.json: criterion 2 has no check$/u.test(row)), malformed.body.join('\n'));
+      assert.ok(malformed.body.some((row) => /^ {8}NEEDS ATTENTION$/u.test(row)) && malformed.body.some((row) => /^ {14}GOAL\.json: criterion 2 has no check$/u.test(row)), malformed.body.join('\n'));
       const refused = patch(quiet(), 'prog-02/goal-02', { stage: 'done', status: 'done', archive_refused: 'a review is open' });
-      assert.ok(framed(refused, 'prog-02').body.some((row) => /^ {10}not archived — a review is open$/u.test(row)));
+      assert.ok(framed(refused, 'prog-02').body.some((row) => /^ {14}not archived — a review is open$/u.test(row)));
       assert.ok(!draw(refused).some((row) => /with nothing under way/u.test(row)), 'a programme that holds a goal nobody has archived is not asleep');
       const open = patch(quiet(), 'prog-02/goal-02', { stage: 'done', status: 'done', prs: [{ repo: 'memoro-cli', number: 5 }] });
-      assert.ok(framed(open, 'prog-02').body.some((row) => /^ {10}not archived — memoro-cli#5 is open/u.test(row)));
+      assert.ok(framed(open, 'prog-02').body.some((row) => /^ {14}not archived — memoro-cli#5 is open/u.test(row)));
     });
 
     it('draws a failed merge in its goal\'s programme, and in MAINTENANCE only when no goal\'s pull request carries it', () => {
@@ -4061,7 +4059,7 @@ describe('the overview: its order, its programmes and what belongs to none', () 
       assert.ok(all.some((row) => /SYSTEM/u.test(row)), 'the operations sections follow');
       // The operations sections begin, as in `o`, with the hero frame: its 24-hour figures and the pipeline boxes.
       const at = (pattern) => all.findIndex((row) => pattern.test(row));
-      const order = [/^ {2}┌─ HORIZONS/u, /^ {2}┌─ prog-30 /u, /Programs: \d+ active/u, /Landed 24 h/u, /┌─ proposals/u, /MERGE & DEPLOY/u, /SYSTEM/u].map(at);
+      const order = [/^ {2}┌─ HORIZONS/u, /^ {6}┌─ prog-30 /u, /Programs: \d+ active/u, /Landed 24 h/u, /┌─ proposals/u, /MERGE & DEPLOY/u, /SYSTEM/u].map(at);
       assert.ok(order.every((i) => i >= 0), `${order}\n${all.join('\n')}`);
       assert.deepEqual(order, [...order].sort((a, b) => a - b), `in order: ${order}`);
       // Each Manager keeps its frame and pid under `a`, below the hero frame (D6).
