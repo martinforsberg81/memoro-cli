@@ -57,7 +57,7 @@ frame with nothing beyond its title and facts — MERGE and DEPLOY with no detai
 rule alone, with no bottom rule. In the overview a wrapped heading
 inside a frame uses continuation rows and a bottom rule. The frame rules are orange
 (256-colour SGR 38;5;208); red stays for what is broken. The rounded session
-frames (`╭╮`) outside the programme groups and the pipeline's stage boxes use their own drawing.
+frames (`╭╮`) and the pipeline's stage boxes use their own drawing.
 The frame primitives are `frameTop`, `panelHeading` and `panelEnd`
 (`page-operations.js`).
 
@@ -310,11 +310,14 @@ visibility of finished goals; a number shows that goal's detail.
 Each live runner session is matched by its explicit programme/goal identity
 (`goal`, or the legacy `goal:` name) and shown beneath that goal, before its
 PRs. The activity row carries kind, elapsed time, tool/model and credits when
-used. A green dot leads the activity row. Long activity wraps within the
-terminal width with a hanging indent. Positive check-in counts appear
-at the end of the activity, in yellow, and its yellow clock remains visible
-without expansion. The activity includes a known PID. Repository, advisor and
-zero check-ins when present appear below the activity
+used. A tight rounded frame encloses just this live session data, with green
+borders for build, magenta for review, blue for repair (and for `finish` in
+lane files from before, and for the interactive plan session) and yellow for
+mend. Long activity wraps
+inside the frame within the terminal width. Positive check-in counts appear
+at the end of the activity inside the frame, in yellow, and its yellow clock
+remains visible without expansion; a known PID also appears in the frame.
+Repository, advisor and zero check-ins when present appear below the frame
 and wrap at the same inset. A session
 with no matching goal is a MAINTENANCE row, with its PR references as child rows, so
 removing SESSIONS cannot hide it. Rendering joins the
@@ -555,7 +558,7 @@ bookkeeping tone to standard ANSI white (SGR 37), not dark grey (SGR 90),
 so secondary text stays legible on dark backgrounds. There is no dim text.
 Frame rules use orange (256-colour SGR 38;5;208). The horizon heading rule uses
 ANSI bright black (SGR 90). In the programme tree `ready` uses the secondary
-text tone and the live session has a green dot. Other colours still
+text tone. Other colours still
 depend on the terminal palette; NO_COLOR and non-TTY output carry no escapes. Painting
 happens after clipping plain text so no escape sequence is cut. Plain and
 painted rows occupy the same columns.

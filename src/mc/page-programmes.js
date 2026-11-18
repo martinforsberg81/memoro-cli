@@ -71,7 +71,7 @@ function goalLines(lines, c, wide, goal, sessions, note, { paused, saidHolds }) 
     const reason = goal.question || goal.last?.comment || (goal.status === 'Martin' ? 'waits on Martin' : 'a mend session resolves the obstacle');
     line(lines, c, wide, GOAL_DETAIL, goal.stage === 'merge' && goal.status === 'blocked' ? mergeFailureSummary(reason) : reason, ['red']);
   }
-  for (const session of sessions) lines.push(...activityLines(c, wide, session, { indent: GOAL_DETAIL, expand: true, inline: true }));
+  for (const session of sessions) lines.push(...activityLines(c, wide, session, { indent: GOAL_DETAIL, expand: true }));
   for (const pr of goal.prs || []) {
     lines.push(...prLines(c, wide, pr));
     if (pr.merge_red) line(lines, c, wide, GOAL_DETAIL + 2, mergeFailureSummary(pr.merge_red), ['red']);

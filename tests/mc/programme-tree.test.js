@@ -140,26 +140,33 @@ describe('The programmes\' phase tree', () => {
       assert.deepEqual(painted.map(plain), lines);
       // The plan session on no goal is a MAINTENANCE row, not a box: its colours are held by page.test.js.
       for (const [kind, code] of [['BUILD', 32], ['REVIEW', 35]]) {
-        const at = lines.findIndex((line) => line.includes(`● ${kind}`));
-        assert.ok(at >= 0, kind);
-        assert.ok(painted[at].includes('\u001b[32m●'), 'every running session has a green dot');
-        assert.ok(painted[at].includes(`\u001b[${code}m${kind}`), kind);
+        const at = lines.findIndex((line) => line.includes(`● · ${kind}`));
+        assert.ok(painted[at - 1].includes(`\u001b[${code}m╭`), `${kind} top border`);
+        const bottom = lines.findIndex((line, index) => index > at && line.trimStart().startsWith('╰'));
+        assert.ok(bottom > at, `${kind} bottom border`);
+        assert.ok(painted[bottom].includes(`\u001b[${code}m╰`), `${kind} bottom border colour`);
+        for (let row = at; row < bottom; row++) {
+          assert.ok(painted[row].includes(`\u001b[${code}m│`), `${kind} side border colour`);
+          assert.equal(width(lines[row]), width(lines[at - 1]), `${kind} wrapped frame width`);
+        }
       }
       assert.ok(!lines.some((line) => /^  SESSIONS/u.test(line)));
       for (const title of ['Title parallel-a', 'Title far-future']) {
         const at = lines.findIndex((line) => line.includes(title));
         assert.ok(at >= 0, title);
         const top = lines[at + 2].includes('criteria ') ? at + 3 : at + 2;
-        assert.match(lines[top], /^ {13}● (BUILD|REVIEW)/u);
-        const detail = lines.findIndex((line, index) => index > top && line === '               memoro');
-        assert.ok(detail > top, 'repository detail follows activity');
-        const content = lines.slice(top, detail).map((line) => line.trim()).join(' ');
-        assert.match(content, /^● (BUILD|REVIEW) · 12 min · codex · sol(?: ·)? 1 check-in(?: ·)? runner pid 7$/u);
+        assert.match(lines[top], /^ {13}╭─+╮$/u);
+        const bottom = lines.findIndex((line, index) => index > top && line.trimStart().startsWith('╰'));
+        const content = lines.slice(top + 1, bottom).map((line) => line.trim().slice(1, -1).trim()).join(' ');
+        assert.match(content, /^● · (BUILD|REVIEW) · 12 min · codex · sol(?: ·)? 1 check-in(?: ·)? runner pid 7$/u);
+        assert.equal(width(lines[top]), width(lines[top + 1]), 'frame hugs the session');
+        assert.equal(width(lines[top + 1]), width(lines[bottom]));
+        assert.ok(!lines[bottom + 1]?.includes('check-in'), 'no separate check-in below the frame');
       }
       const unmatched = lines.findIndex((line) => line.startsWith('  ┌─ MAINTENANCE'));
       assert.ok(unmatched > 0);
       assert.ok(lines.slice(unmatched).some((line) => /^ {6}inbox\/missing-goal {2}/u.test(line)), 'a session on no goal is a MAINTENANCE row');
-      assert.equal(lines.filter((line) => line.includes('● REVIEW')).length, 1);
+      assert.equal(lines.filter((line) => line.includes('● · REVIEW')).length, 1);
       assert.ok(lines.every((line) => width(line) <= columns));
     }
   });

@@ -429,7 +429,7 @@ export function statusRollup(statuses = {}) {
 
 /** What a programme's block holds under its heading: its plan and programme sessions, then its goals by phase. */
 function programmeBody(c, wide, group, runnerSessions) {
-  const sessionOptions = { indent: 2, expand: true, inline: true };
+  const sessionOptions = { indent: 2, expand: true };
   return [
     ...(group.planning_sessions || []).flatMap((session) => activityLines(c, wide, { ...session, kind: 'plan' }, sessionOptions)),
     ...(group.sessions || []).flatMap((session) => activityLines(c, wide, session, sessionOptions)),
