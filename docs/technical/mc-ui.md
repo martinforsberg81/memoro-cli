@@ -29,13 +29,19 @@ the operations view behind `o`. A programme has a third, its own view (HORIZONS,
 below).
 
 **The overview** (`page-overview.js`, `overviewLines`) is as long as the work
-(No budget, below). In order: the header (two rows), DESK, the warnings, HORIZONS, the programmes
+(No budget, below). In order: the compact header (up to two rows), MODEL PRIORITY and PROVIDERS, DESK, the warnings, HORIZONS, the programmes
 with something under way (each its own frame, in name order), one folded frame for
 the others, MAINTENANCE, then one MERGE row per repository with a landing or a queue
 and a DEPLOY row while a deploy or its preparation runs. It draws from `data` alone,
 which is what `mc --json` prints. A stopped language run inside an open gap
 puts its warning above everything else, and the runner's pause and not-running
 warnings follow it.
+
+The header always shows MODEL PRIORITY (the preference set by `mc model priority`)
+and PROVIDERS (each provider's cached percentage used and plan/API route, including
+API-off and stale/read-failed markers). These rows wrap at the terminal width and
+remain visible without `a` or `o`. A change to priority or provider status redraws
+the live page; displaying them starts no provider request.
 
 **The operations view** (`o`, below) draws FIGURES 24 h, PIPELINE, MERGE & DEPLOY, DEV
 and SYSTEM, which the overview no longer carries, each in its own frame and with no

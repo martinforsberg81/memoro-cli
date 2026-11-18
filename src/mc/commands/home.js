@@ -295,7 +295,7 @@ export function pageKey(data) {
     // The sources MAINTENANCE draws: which are read and how many wait, not how long ago they were collected.
     (data?.maintenance?.sources || []).map((source) => `${source.id}:${source.state}:${source.count ?? ''}`).join(','),
   ].join('/');
-  return [goalKey, activityKey, priorityKey, data?.providerPriority || '', deskKey(data?.desk), horizonKey === '/' ? '' : horizonKey, overviewKey === '///' ? '' : overviewKey].filter(Boolean).join('|');
+  return [goalKey, activityKey, priorityKey, data?.providerPriority || '', data?.billing || '', deskKey(data?.desk), horizonKey === '/' ? '' : horizonKey, overviewKey === '///' ? '' : overviewKey].filter(Boolean).join('|');
 }
 
 export function parsePageArgs(argv) {

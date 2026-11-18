@@ -94,7 +94,7 @@ import { watcherState } from './repo-watch.js';
 import { billingStatus } from './billing-route.js';
 import { readCapacity } from './model-capacity.js';
 import { readModels } from './model-config.js';
-import { readBillingState } from './billing.js';
+import { readBillingApi, readBillingState } from './billing.js';
 import { controlPaths, drainState, mcCheckout } from './run-control.js';
 import {
   PRS_STALE_SECONDS, ageWords, loadPrs, mergePrs, savePrs,
@@ -1779,7 +1779,7 @@ export async function collectPage({
 
   const page = {
     runner,
-    billing: billingStatus({ capacity: readCapacity({ root: join(root, 'runner') }), state: readBillingState({ root: join(root, 'runner') }), now }),
+    billing: billingStatus({ capacity: readCapacity({ root: join(root, 'runner') }), state: readBillingState({ root: join(root, 'runner') }), api: readBillingApi({ root: join(root, 'runner') }), now }),
     providerPriority,
     // What waits for Martin, as the last sync left it: file reads only, no sync and no lock (page-desk.js).
     desk: readPageDesk({ env, home: programsHome(env), now }),
