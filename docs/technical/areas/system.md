@@ -23,6 +23,13 @@ Measured, with the baselines of 2026-11-14 (programme `mc`):
 - Every programme page says where it stands. Baseline: nearly every README described landed work as under way.
 - Work lands the first time and is verified where users meet it. Baseline: 50 % of merge attempts passed first time, 4.4 sessions per goal, and done meant merged, not deployed and checked.
 
+On main now:
+
+- Opening or resuming the desk supplies a fresh snapshot and tells the session to wait for Martin's instruction. The overview groups programmes under their open horizons and shows the rest separately.
+- The desk checks that the current order has been reviewed and its necessary investigations are complete before bringing it to Martin to set ready. The ordinary `state ready` command does not enforce either check.
+- A waiting deploy reserves the next opening for a full run when a different commit is being measured. It can still join a measurement of its own commit.
+- The helper preserves anonymous app suggestions in intake before it acknowledges their receipt. Collection does not create a programme or goal.
+
 ## Decisions
 
 - Three kinds of thing reach Martin: a product choice, a judgement (look, listen, try; superseded for orders by the 2026-11-17 decision below) and a reserved act (deploy, money, credentials, production data). Every technical question is decided by the system, by the goal, the standards, the app's pattern and established practice, and reported afterwards in a record he can read and overturn; a question that established practice answers is never his, also when it concerns privacy, security or cost (Martin, 2026-11-14; programme `mc`).
