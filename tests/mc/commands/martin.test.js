@@ -315,7 +315,8 @@ describe('mc martin launch', () => {
     assert.equal(opened.overlay, 'Martin role instructions'); assert.equal(opened.defaultModel, 'opus');
     assert.equal(opened.pick, 'abc'); assert.equal(opened.tool, 'codex'); assert.equal(opened.model, 'gpt-6.2-sol');
     assert.match(opened.prompt, /^Martin's desk, opened 2026-11-14T12:00:00\.000Z\./u); assert.match(opened.prompt, /### 1\. alpha\/one/u);
-    assert.match(opened.resumePrompt, /Refresh from the desk now/u); assert.ok(opened.resumePrompt.endsWith(opened.prompt));
+    assert.match(opened.prompt, /wait for Martin's instruction before choosing a topic or doing any work/u);
+    assert.ok(opened.resumePrompt.endsWith(opened.prompt));
   });
   it('writes last-open only after a successful launch, and the next opening starts from that time', async () => {
     const d = openingStore({ lastOpen: null }); const lastFile = join(d.env.MC_WORK_ROOT, 'martin', 'last-open.json'); const captured = [];
@@ -1105,10 +1106,12 @@ describe('mc martin brief with horizons', () => {
     assert.equal(readFileSync(join(broken, 'horizon.json'), 'utf8'), bytes);
   });
 
-  it('(f) the launch hands the opening model the text brief prints', async () => {
+  it('(f) the launch gives the model the printed snapshot as context for waiting', async () => {
     const d = openingStore(); await withHorizons(d); const printed = await brief(d); const prompts = [];
     const r = await launch(d, NOW, { open: async (spec) => { prompts.push(spec.prompt); return { ok: true, code: 0 }; } });
-    assert.equal(r.code, 0, r.out.stderr); assert.equal(prompts.length, 1); assert.equal(prompts[0], printed);
+    assert.equal(r.code, 0, r.out.stderr); assert.equal(prompts.length, 1);
+    assert.ok(prompts[0].startsWith(printed));
+    assert.match(prompts[0].slice(printed.length), /wait for Martin's instruction/u);
   });
 });
 

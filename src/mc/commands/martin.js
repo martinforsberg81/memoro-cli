@@ -89,14 +89,14 @@ export async function run(argv, deps = {}) {
   const data = openingFor({ env, home, now, last, deps, stderr });
   if (!data) return 1;
   const opening = renderOpening(data);
-  const launch = { overlay: role.overlay, prompt: opening, model: role.model || null };
+  const prompt = `${opening}\n## Desk instruction\n\nThis snapshot is reference material. Acknowledge that the desk is ready in one short Swedish sentence, then wait for Martin's instruction before choosing a topic or doing any work.\n`;
   const opened = await (deps.open || openInWorkArea)({
     env, areaRoot: root, conversationRoots: [root],
     worktree: { repo: null, path: root, is_git: false }, tool,
     pick: flags.new ? 'new' : flags.resume ? positional[0] || true : null,
     resumeTool: flags.tool, stdout, stderr, verb: 'martin', areaName: 'martin', bg: flags.bg,
     roleName: role.name || 'martin', roleSource: roleSourceOf(role), cache: role.cache,
-    model: flags.model, overlay: launch.overlay, prompt: launch.prompt, resumePrompt: `Refresh from the desk now; what you remember of earlier openings is not current.\n\n${opening}`,
+    model: flags.model, overlay: role.overlay, prompt, resumePrompt: `Current desk snapshot for this resumed conversation.\n\n${prompt}`,
     defaultModel: role.model, defaultModelTool: role.tools?.[0] || null,
   });
   if (!opened.ok) { stderr.write(`mc: ${opened.reason}${opened.hint ? ` — ${opened.hint}` : ''}\n`); return opened.code ?? 1; }
