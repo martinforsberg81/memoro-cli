@@ -44,6 +44,7 @@ const lesson = (name, state, days, extra = {}) => ({ name, state, at: new Date(a
 
 /** A fixture for every source's reading. */
 const FIXTURE = {
+  feedback: () => ({ count: 0, summary: "suggest_improvement — collected; 0 receipt pending", tone: ["grey"] }),
   proposals: () => proposalsReading({
     now: NOW,
     areas: [
@@ -83,13 +84,13 @@ const FIXTURE = {
 };
 
 describe('the maintenance collector', () => {
-  it('has one row per source in the order the programme states, and user feedback says it has no source', () => {
+  it('has one row per source in the order the programme states, and user feedback reports the current suggestion source', () => {
     const { sources } = maintenanceSection({ readers: FIXTURE });
     assert.deepEqual(sources.map((s) => s.id), ['feedback', 'proposals', 'lessons', 'errors', 'tests', 'deps', 'intake', 'areas', 'strays']);
     assert.deepEqual(SOURCES.map((s) => s.id), sources.map((s) => s.id));
     const [feedback] = sources;
-    assert.equal(feedback.state, 'none');
-    assert.equal(feedback.summary, "no source — memoro's product feedback was retired (migration 0213)");
+    assert.equal(feedback.state, 'ok');
+    assert.match(feedback.summary, /suggest_improvement/u);
     assert.ok(sources.slice(1).every((s) => s.state === 'ok'), sources.map((s) => `${s.id}:${s.state}`).join(' '));
   });
 
@@ -112,7 +113,7 @@ describe('the maintenance collector', () => {
       assert.match(row.summary, /^unreadable — /u);
       assert.deepEqual(row.tone, ['red']);
       assert.ok(row.error);
-      assert.deepEqual(sources.filter((s) => s.id !== 'proposals').map((s) => s.state), ['none', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok']);
+      assert.deepEqual(sources.filter((s) => s.id !== 'proposals').map((s) => s.state), ['ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok']);
       for (const columns of [60, 100, 140]) {
         const painted = renderPageLines(pageData({ sources }), { columns, now: NOW, overview: true, colour: true });
         const rows = painted.filter((line) => strip(line).includes('Proposals'));
@@ -240,7 +241,7 @@ describe('the maintenance frame and view', () => {
     const row = (label) => lines.slice(top).find((line) => line.startsWith(`    ${label}`));
     assert.match(row('Proposals'), /6 waiting in 3 areas · oldest 40 days +mc proposals$/u);
     assert.match(row('Lessons'), /2 open · 1 in a goal · 1 late · 1 landed this week +mc martin$/u);
-    assert.match(row('User feedback'), /no source — memoro's product feedback was retired \(migration 0213\)/u);
+    assert.match(row('User feedback'), /suggest_improvement/u);
     assert.match(row('Intake'), /nothing waiting +~\/mc\/intake$/u);
     assert.match(row('Strays'), /none/u);
   });

@@ -110,7 +110,7 @@ reader, which `collectPage` wires and `maintenanceSection` calls:
 
 | source | what waits | oldest | verb |
 |---|---|---|---|
-| User feedback | no reader: `no source — memoro's product feedback was retired (migration 0213)` | — | — |
+| User feedback | anonymous `suggest_improvement`: last collection, saved copies and pending receipts; unavailable reads are errors | collection time in the reading | `mc helper --collect` |
 | Proposals | the `.md` files directly in each area's `~/mc/areas/<repo>/<area>/proposals/` (every area folder on disk; no archive), counted and aged by area | the file name's date, else its mtime | `mc proposals` |
 | Lessons | `mc martin lessons`' own list: open, in a goal, late (older than 14 days) and landed this week | the oldest open or carried lesson | `mc martin` |
 | Errors | the helper's newest digest of each repository: new errors, critical and high | when the digest was collected | `mc helper --intake` |

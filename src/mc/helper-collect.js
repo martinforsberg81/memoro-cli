@@ -44,8 +44,9 @@
  * is — which makes this file's own format the state, and is why it carries a
  * machine-readable block at the end.
  *
- * The helper reads production and never writes to it. That is the Contract,
- * and it is why `/ping-kv` is not called: it writes a probe key and deletes it
+ * Error collection only reads production. The sole write is the receipt for
+ * suggestion ids durably copied and verified locally (Martin, 2026-11-16
+ * and 2026-11-18). `/ping-kv` is not called: it writes a probe key and deletes it
  * again. `/admin/health` reads KV with a `get` of a key that does not exist,
  * so KV is reported from there.
  */
@@ -58,6 +59,7 @@ import { lastDeploy } from './deploys.js';
 import { runAsync as runGitAsync } from './git.js';
 import { defaultRepos } from './repos.js';
 import { cliFailing, cliRows as cliCollect, renderCliSections } from './helper-cli-collect.js';
+import { collectImprovementSuggestions, receiptJson } from './helper-suggestions.js';
 import { writeLiveVersion } from './live-version.js';
 import { programsHome, workRoot } from './paths.js';
 
@@ -784,7 +786,7 @@ function runScriptDefault(cwd, args, timeout) {
 /**
  * A GET against a memoro route. `token` is null for the public probes; a
  * route that wants one and does not get one is reported, not attempted.
- * Every call here is a GET — the helper has no write path at all.
+ * Every call through this reader is a GET; suggestion receipts have their own bounded writer.
  */
 async function getJsonDefault(url, token) {
   if (token === null) return { ok: false, error: NO_TOKEN };
@@ -830,6 +832,7 @@ export async function collectHelper({
   memoro = memoroRoot(env),
   script = runScriptDefault,
   getJson = getJsonDefault,
+  postJson = receiptJson,
   git = runGitDefault,
   // Which repository's production to read. memoro's is four remote sources;
   // memoro-cli's is this machine (helper-cli-collect.js). Same delta, same
@@ -850,6 +853,8 @@ export async function collectHelper({
   if (!haveCheckout) notes.push(`${where} — the two admin scripts cannot run`);
   const token = readAdminToken(memoro, env);
   const base = baseUrl(env);
+  const suggestions = await collectImprovementSuggestions({ env, now, base, token, getJson, postJson });
+  if (suggestions.error) notes.push(suggestions.error);
   const missing = { ok: false, error: where };
 
   const [survey, providerRaw, analysisRaw, servicesRaw, operationsRaw, pingRaw, versionRaw, mainCommit] = await Promise.all([
@@ -925,7 +930,7 @@ export async function collectHelper({
     repo,
     data: {
       since: windowStart, previous, delta, errors, analysis, provider, health, services, operations,
-      deploy, live, mainCommit, notes, offline,
+      deploy, live, mainCommit, notes, offline, suggestions,
     },
   };
 }
