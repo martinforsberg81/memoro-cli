@@ -2924,6 +2924,38 @@ describe('a repository that selects by diff', () => {
       });
     }
 
+    it('a file that failed to load is red with its error, not an output cut', async () => {
+      const fx = selecting({ files: [scanner, own], full: true });
+      const loadFailed = ({ cwd }) => ({ code: 1, cut: [own], tap: [
+        'TAP version 13',
+        `# file://${cwd}/${own}:1`,
+        "# SyntaxError: The requested module './lib.mjs' does not provide an export named 'NOPE'",
+        `# Subtest: ${own}`, `not ok 1 - ${own}`, '  ---', "  type: 'test'", `  location: '${cwd}/${own}:1:1'`,
+        "  failureType: 'testCodeFailure'", '  exitCode: 1', '  signal: ~', "  error: 'test failed'", '  ...',
+        '1..1', '# tests 1', '# pass 0', '# fail 1',
+      ].join('\n') });
+      try {
+        const report = await fx.report({ suite: async options => loadFailed(options), tests: async options => loadFailed(options),
+          readMainEvidence: async () => ({ red_on_main: [], breaks: [] }) });
+        assert.equal(report.stopped_at, 'red', report.reason);
+        assert.doesNotMatch(report.reason ?? '', /output cut/u);
+        assert.match(report.candidate.red_tests.map(test => test.error.join(' ')).join(' '), /does not provide an export named 'NOPE'/u);
+      } finally { fx.cleanup(); }
+    });
+
+    it('a whole-suite output cut names its files and carries what the run said of them', async () => {
+      const fx = selecting({ files: [scanner, own], full: true });
+      try {
+        const report = await fx.report({
+          suite: async () => ({ code: 0, tap: '# tests 3\n# pass 3\n# fail 0\n', stderr: `starting\n${own}: worker exited with code 134\nbye\n`, cut: [own] }),
+          readMainEvidence: async () => ({ red_on_main: [], breaks: [] }),
+        });
+        assert.equal(report.stopped_at, 'suite');
+        assert.deepEqual(report.cut_files, [own]);
+        assert.match(report.reason ?? '', /it said: .*worker exited with code 134/u);
+      } finally { fx.cleanup(); }
+    });
+
     /** The pull request's last round, as `gate-rounds.jsonl` keeps it. */
     function lastRound(fx, line) {
       writeFileSync(join(fx.mcHome, 'gate-rounds.jsonl'), `${JSON.stringify({

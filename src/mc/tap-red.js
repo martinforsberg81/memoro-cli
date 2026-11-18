@@ -291,6 +291,29 @@ export function killedFiles(tap, files) {
 }
 
 /**
+ * Which of `files` failed before any test in them ran: an import that did not
+ * resolve, a syntax error, a throw at the top of the module. node writes such a
+ * file as one top-level failing entry under its own path, `failureType:
+ * 'testCodeFailure'` with an exit code and no signal, and the error as the
+ * comments before it. Its process ended without a summary, so the times reporter
+ * cannot tell it from a file cut short; the TAP can, and the file is red with
+ * that error (memoro, 2026-11-18: a removed export left
+ * `my-inbox-badge-terms.test.js` failing to load, and seven full runs read it as
+ * output cut). With `files` null every such location is named as it was written.
+ */
+export function loadFailedFiles(tap, files) {
+  const owner = ownerIn(files);
+  const failed = new Set();
+  for (const block of failingBlocks(tap)) {
+    if (block.signal || block.failureType !== 'testCodeFailure' || block.name !== block.own) continue;
+    if (!TEST_FILE.test(block.own)) continue;
+    const file = [...block.locations, block.own].map(owner).find(Boolean);
+    if (file) failed.add(file);
+  }
+  return [...failed];
+}
+
+/**
  * Which of `files` had tests cancelled and none failed in this run.
  *
  * A `before` hook that runs past its timeout fails its suite with
