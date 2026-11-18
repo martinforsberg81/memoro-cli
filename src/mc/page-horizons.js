@@ -68,8 +68,9 @@ const GAP = '  ';
  */
 export function horizonWords(data, group) {
   if (!data.horizons) return '';
-  const open = (data.horizons.open || []).find((horizon) => (horizon.programmes || []).includes(group.programme) || (group.horizon && horizon.slug === group.horizon));
+  const open = (data.horizons.open || []).find((horizon) => (horizon.programmes || []).includes(group.programme));
   if (open) return open.position != null ? `horizon ${open.position}` : `horizon ${open.slug}`;
+  if (group.record_invalid) return 'horizon unknown · record invalid';
   return group.horizon ? `horizon ${group.horizon}${group.horizon_state ? ` (${group.horizon_state})` : ''}` : 'no horizon';
 }
 
@@ -87,7 +88,7 @@ export function programmeHeading(c, wide, data, group, facts) {
     group.priority ? `priority ${group.priority}` : '',
     facts.done ? `${facts.done} done` : '',
   ].filter(Boolean).map((text) => ({ text, styles: ['grey'] }));
-  if (group.record_invalid) rest.push({ text: 'record invalid', styles: ['red'] });
+  if (group.record_invalid && (!data.horizons || (data.horizons.open || []).some((item) => (item.programmes || []).includes(group.programme)))) rest.push({ text: 'record invalid', styles: ['red'] });
   // With no horizons read there is no horizon to set apart: the facts follow the name as any frame's do.
   const horizon = horizonWords(data, group);
   if (horizon && rest.length) rest[0] = { ...rest[0], sep: '  ·  ' };

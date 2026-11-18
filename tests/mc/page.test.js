@@ -2429,6 +2429,7 @@ describe('collectPage', () => {
     fx.record('p-reached', 'done-one');
     fx.record('p-dropped', 'gone');
     fx.record('p-unheld', 'ghost');
+    fx.record('p-broken', 'broken');
     fx.record('p-none', null);
     mkdirSync(join(programsHome(fx.env), 'p-invalid'), { recursive: true });
     writeFileSync(join(programsHome(fx.env), 'p-invalid', 'PROGRAMME.json'), '{ "schema": "nope" }');
@@ -2446,6 +2447,7 @@ describe('collectPage', () => {
 
     assert.deepEqual(Object.fromEntries(groups.map((group) => [group.programme, [group.horizon, group.horizon_state]])), {
       mc: [null, null],
+      'p-broken': ['broken', 'unreadable'],
       'p-dropped': ['gone', 'dropped'],
       'p-first': ['first', 'open'],
       'p-invalid': [null, null],
@@ -2461,7 +2463,7 @@ describe('collectPage', () => {
     assert.deepEqual(data.horizons.open.map((item) => [item.slug, item.position, item.programmes]), [
       ['first', 1, ['p-first']], ['second', 2, ['p-second']],
     ]);
-    assert.deepEqual(data.horizons.none, ['mc', 'p-dropped', 'p-invalid', 'p-none', 'p-reached', 'p-unheld', 'plan-only']);
+    assert.deepEqual(data.horizons.none, ['mc', 'p-broken', 'p-dropped', 'p-invalid', 'p-none', 'p-reached', 'p-unheld', 'plan-only']);
     assert.deepEqual(data.horizons.unreadable, ['broken']);
     assert.equal(data.horizons.error, null);
   });
@@ -2629,7 +2631,7 @@ describe('collectPage', () => {
     assert.deepEqual(data.horizons.open, []);
     assert.deepEqual(data.horizons.none, data.programmes.programmes.map((group) => group.programme));
     assert.ok(data.programmes.programmes.every((group) => Number.isInteger(group.number)));
-    assert.equal(data.programmes.programmes.find((group) => group.programme === 'p-one').horizon_state, 'not held');
+    assert.equal(data.programmes.programmes.find((group) => group.programme === 'p-one').horizon_state, 'unreadable');
     const lines = renderPageLines(data, { columns: 100, now: NOW, overview: true });
     assert.ok(lines.some((line) => /horizons unreadable/u.test(line)), lines.join('\n'));
   });

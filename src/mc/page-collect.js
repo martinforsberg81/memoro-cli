@@ -1534,7 +1534,7 @@ export function horizonsSection({ programmes, found = () => ({ status: 'none' })
       }
     } catch { named = null; }
     group.horizon = named;
-    group.horizon_state = named === null ? null : held.get(named)?.state ?? 'not held';
+    group.horizon_state = named === null ? null : held.get(named)?.state ?? (error || read.unreadable.includes(named) ? 'unreadable' : 'not held');
   }
   const open = read.horizons.filter((item) => item.state === 'open');
   return {

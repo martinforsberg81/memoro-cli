@@ -244,7 +244,8 @@ none: [<programme names serving no open horizon>], unreadable: [<directory
 names>], error }`, `error` being the reason the store could not be listed, else
 null. Each programme in `programmes.programmes` gains `number`, `horizon` (the
 slug its valid record names, else null) and `horizon_state` (`open`, `reached`,
-`dropped`, `not held` for a slug the store holds no horizon for, or null),
+`dropped`, `unreadable` when the store or named record cannot be read,
+`not held` for a slug a readable store does not hold, or null),
 and `record_state` (a valid record's state, otherwise null).
 Red in a programme's frame means that someone must act: status `Martin` or `blocked`, a
 malformed goal, a refused archive, a failed merge. A goal that gets no session although
