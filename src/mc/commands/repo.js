@@ -414,8 +414,12 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
       const taken = claimFullRun({ repo: repoRef.name, sha: null, verb: 'mc test --full', root: historyRoot, ...claims });
       if (taken.claimed) { claim = taken.claim; break; }
       if (taken.waitFor) {
-        stderr.write(`mc: a full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} is using the full-run checkout (pid ${taken.waitFor.pid}) — waiting for it\n`);
-        await awaitClaim(taken.waitFor, { root: historyRoot, ...claims, onWait: (ms) => stderr.write(`mc: still waiting for the full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} (pid ${taken.waitFor.pid}), ${Math.round(ms / 60000)} min so far\n`) });
+        const blocker = taken.waitFor.waiting ? 'deploy preparation' : 'full run';
+        const otherSha = taken.waitFor.sha?.slice(0, 7) || 'main';
+        stderr.write(taken.waitFor.waiting
+          ? `mc: waiting for the deploy preparation of ${otherSha} (pid ${taken.waitFor.pid})\n`
+          : `mc: a full run of ${otherSha} is using the full-run checkout (pid ${taken.waitFor.pid}) — waiting for it\n`);
+        await awaitClaim(taken.waitFor, { root: historyRoot, ...claims, onWait: (ms) => stderr.write(`mc: still waiting for the ${blocker} of ${otherSha} (pid ${taken.waitFor.pid}), ${Math.round(ms / 60000)} min so far\n`) });
         continue;
       }
       const other = taken.joined;

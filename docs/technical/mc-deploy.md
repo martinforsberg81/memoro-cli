@@ -475,7 +475,11 @@ without writing one is no answer, and the follower starts its own. A claim
 whose pid is gone is no claim. A known, different sha is another tree and
 waits for the run in flight (`waitFor`), then claims: a repository has one
 checkout for its full run (`<slug>/full`), and a second run must never prepare
-it under the first. `mc test <repo> --full` with no pull request is the same
+it under the first. A deploy waiting for another commit's full run reserves
+the next opening under the same lock. Waiting deploys take openings in arrival
+order. The runner and manual runs can still follow an active measurement of the
+same commit. A reservation is removed when its process exits or when the deploy
+starts or joins a measurement. `mc test <repo> --full` with no pull request is the same
 kind of run as the runner's full run — beside the merge lane, in its own checkout, no
 lease, written to the history (2026-11-14: it stopped twice at `lease` because
 the merger held memoro.git).

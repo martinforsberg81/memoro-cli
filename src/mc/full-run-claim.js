@@ -18,7 +18,8 @@
  * the same and the shas are equal or either is unknown; a known, different sha
  * is another tree, and waits its turn: a repository has one checkout for its
  * full run (`<slug>/full`), and a second run preparing it under the first would
- * pull the tree from under the measurement. A claim whose pid is gone is a
+ * pull the tree from under the measurement. Waiting deploys reserve the next
+ * available turn in arrival order. A claim whose pid is gone is a
  * run that died, and is no claim: it is dropped at the next write and ignored
  * at every read. The file lives with the history it points to, in mc's home.
  */
@@ -50,7 +51,7 @@ function readAll(root) {
 
 /** The full runs in flight: claims whose process is alive. */
 export function liveClaims({ root = mcHome(), alive = processAlive } = {}) {
-  return readAll(root).filter((claim) => alive(claim.pid));
+  return readAll(root).filter((claim) => !claim.waiting && alive(claim.pid));
 }
 
 /** Whether a run claimed as `claim` is the measurement a starter of `repo` at `sha` wants. */
@@ -69,16 +70,31 @@ export function overlaps(claim, { repo, sha = null }) {
  */
 export function claimFullRun({
   repo, sha = null, verb = 'full run', root = mcHome(), alive = processAlive,
-  lock = realLock, pid = process.pid, now = () => new Date(),
+  lock = realLock, pid = process.pid, now = () => new Date(), deploy = false,
 }) {
   return lock(root, () => {
     const live = readAll(root).filter((claim) => alive(claim.pid));
-    const joined = live.find((claim) => overlaps(claim, { repo, sha }));
-    if (joined) return { claimed: false, joined };
-    const waitFor = live.find((claim) => claim.repo === repo);
-    if (waitFor) return { claimed: false, waitFor };
-    const claim = { repo, sha: sha || null, pid, started: now().toISOString(), verb };
-    try { writeJsonAtomic(claimsPath(root), { schema: CLAIMS_SCHEMA, claims: [...live, claim] }, { mode: 0o600 }); } catch { /* a claim that cannot be written leaves the run unclaimed, not unrun */ }
+    const reservation = deploy && live.find((claim) => claim.waiting && claim.repo === repo && claim.pid === pid && claim.sha === sha);
+    const active = live.find((claim) => !claim.waiting && claim.repo === repo);
+    const firstDeploy = live.find((claim) => claim.waiting && claim.repo === repo);
+    const write = (claims) => writeJsonAtomic(claimsPath(root), { schema: CLAIMS_SCHEMA, claims }, { mode: 0o600 });
+    const others = live.filter((claim) => claim !== reservation);
+
+    if (active && overlaps(active, { repo, sha })) {
+      if (reservation) write(others);
+      return { claimed: false, joined: active };
+    }
+
+    const waitFor = active || (firstDeploy !== reservation && firstDeploy);
+    if (waitFor) {
+      if (deploy && !reservation) {
+        write([...live, { repo, sha, pid, started: now().toISOString(), verb, waiting: true }]);
+      }
+      return { claimed: false, waitFor };
+    }
+
+    const claim = { repo, sha, pid, started: now().toISOString(), verb };
+    write([...others, claim]);
     return { claimed: true, claim };
   }, { name: 'full-run-claim' });
 }
@@ -120,7 +136,7 @@ export async function awaitClaim(claim, {
   });
   for (;;) {
     if (signal?.aborted) return;
-    const held = readAll(root).some((other) => other.pid === claim.pid && other.started === claim.started);
+    const held = readAll(root).some((other) => other.pid === claim.pid && other.started === claim.started && other.waiting === claim.waiting);
     if (!held || !alive(claim.pid)) return;
     await nap(pollMs);
     if (signal?.aborted) return;

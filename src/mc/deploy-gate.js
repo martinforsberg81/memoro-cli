@@ -185,7 +185,7 @@ export async function measureFull({
     }
     say(`mc: full run — none of ${short(sha)}; starting one (mc test memoro --full, the round the daily run takes) and following it`);
     const start = () => (deps.fullRun || fullRun)({ name: REPO, path }, {
-      root, env, sha, say: (line) => say(`mc:   ${line}`), narrate: (line) => say(`mc:   ${line}`),
+      root, env, sha, deploy: true, say: (line) => say(`mc:   ${line}`), narrate: (line) => say(`mc:   ${line}`),
     });
     let given = await start();
     // A run this one followed measured what its starter found, which may be a
