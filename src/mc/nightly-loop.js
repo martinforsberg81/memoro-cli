@@ -219,6 +219,8 @@ export function runOfReport(repo, report, { startedAt = Date.now(), clock = () =
     verdict: report.verdict,
     stopped_at: report.stopped_at,
     reason: report.reason,
+    // The files a run never finished, for the deploy's repair of the stop (`repairFromStop`).
+    ...(report.cut_files?.length ? { cut_files: [...report.cut_files] } : {}),
     // The failing names, for whoever asks "since when". Names only: output
     // and stack traces turn a meter into an archive.
     red: failedCommands.length
@@ -321,9 +323,12 @@ export function repairFromRun(repo, report, run, {
   // as stalled names the files still in flight (`repo-gate.js`, `stopStalled`),
   // and each goes to the same main-red mend, with the stall as its failure.
   // A stall that names no file has nothing to repair; the next run, when main has moved, measures again.
-  const hung = [...new Set(report.stalled_files || [])].filter(Boolean).sort();
-  if (repair && report.stopped_at === 'stalled' && run.commit && hung.length) {
-    const error = [`never ended in the full run: ${report.reason || 'stalled'}`];
+  // A file the run never finished (`output cut`, `cut_files`) is the same red: a test that never ended,
+  // or a file that died without a word; it goes to the mend with what the run said of it.
+  const cut = report.stopped_at === 'suite' ? report.cut_files || [] : [];
+  const hung = [...new Set(report.stopped_at === 'stalled' ? report.stalled_files || [] : cut)].filter(Boolean).sort();
+  if (repair && run.commit && hung.length) {
+    const error = [cut.length ? `did not finish in the full run: ${report.reason || 'output cut'}` : `never ended in the full run: ${report.reason || 'stalled'}`];
     const asked = repair({ repo: repo.name, base: run.commit, files: hung, tests: hung.map((file) => ({ file, name: null, error })),
       contains: (commit, base) => {
         try { const result = git(repo.path, ['merge-base', '--is-ancestor', commit, base]); return result?.status === 0 ? true : result?.status === 1 ? false : null; }
@@ -378,10 +383,11 @@ export function repairFromStop(repo, full, {
   const names = run.red || [];
   const commands = names.filter((name) => String(name).startsWith('command:')).map((name) => name.slice('command:'.length));
   const report = {
-    stopped_at: full.state === 'stalled' ? 'stalled' : null, reason: run.reason,
+    stopped_at: full.state !== 'stalled' ? null : run.cut_files?.length ? 'suite' : 'stalled', reason: run.reason,
     candidate: { red_files: evidence?.files || [], red_tests: evidence?.tests || [] },
     extra_gates: commands.map((name) => ({ name, id: name, ok: false, command: null, exit_code: null, failure: `red in the full run of ${run.commit.slice(0, 7)}`, output_path: full.output || null })),
     stalled_files: [],
+    cut_files: run.cut_files || [],
   };
   const requests = [];
   const asks = repairFromRun(repo, report, { ...run, red: names }, { repair: (request) => { const asked = repair(request); requests.push(asked); return asked; }, say, ...(git ? { git } : {}) });

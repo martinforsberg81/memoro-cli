@@ -51,7 +51,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { claimLease, releaseLease } from './repo-lease.js';
-import { cancelledFiles, killedFiles, redFiles, redNames, redNamesIn, redTests, sameFailure, tapTotals } from './tap-red.js';
+import { cancelledFiles, killedFiles, loadFailedFiles, redFiles, redNames, redNamesIn, redTests, sameFailure, tapTotals } from './tap-red.js';
 import { mainsOf, redAtFrozenBase } from './gate-settle.js';
 import { readMainRed, recordMainRed, redAt } from './selector-miss.js';
 import { shapeMainRedTest } from './main-repair.js';
@@ -1251,6 +1251,8 @@ export async function runGate({
     let failedGates = selectedGates.filter(gate => !gate.ok && !gateInterrupted(gate));
 
     // The suite and every selected gate have now finished; a process bound is stalled.
+    // A cut file is red on main as a stalled one is (`repairFromRun`): its names go with the stop.
+    if (!after.ok && after.cut?.length) report.cut_files = after.cut;
     if (!after.ok) return finish(after.stalled ? 'stalled' : 'suite', `the run ${after.reason}${after.stalled ? `; files in flight: ${nameSome(pendingFiles()) || 'none named'}; load ${loadavg()[0]}` : ''}`);
     report.candidate = after.result;
     if (classifiedEmptyChange(selection)) report.candidate.empty_change = true;
@@ -1571,7 +1573,7 @@ async function measure({ suite, git, cwd, command, say, is }) {
   const totals = tapTotals(run.tap);
   if (run.timedOut) return { ok: false, stalled: true, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };
   const cut = unexplainedCuts(run, null, cwd);
-  if (cut.length) return { ok: false, reason: cutReason(cut) };
+  if (cut.length) return { ok: false, cut, reason: cutReason(cut, run) };
   if (!totals.finished) {
     return { ok: false, reason: 'never reached its own summary — the suite did not run to the end' };
   }
@@ -1928,7 +1930,7 @@ async function measureSelected({ tests, git, cwd, files, flags, say, is, signal 
   const totals = tapTotals(run.tap);
   if (run.timedOut) return { ok: false, stalled: true, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };
   const cut = unexplainedCuts(run, files, cwd);
-  if (cut.length) return { ok: false, reason: cutReason(cut) };
+  if (cut.length) return { ok: false, cut, reason: cutReason(cut, run) };
   if (!totals.finished) {
     return { ok: false, reason: 'never reached its own summary — the selected files did not run to the end' };
   }
@@ -1965,8 +1967,13 @@ function killedOf(tap, files) {
  * still refuses measurement. Callers separately require nonempty TAP totals.
  */
 function unexplainedCuts(run, files, cwd) {
-  const killed = new Set(killedFiles(run.tap, files).map(one => resolve(cwd, one.file)));
-  return (run.cut || []).filter(file => !killed.has(resolve(cwd, file)));
+  // A killed file is measured again; a file that failed to load is red with
+  // its error in the TAP (`loadFailedFiles`). Neither is a cut.
+  const explained = new Set([
+    ...killedFiles(run.tap, files).map(one => resolve(cwd, one.file)),
+    ...loadFailedFiles(run.tap, files).map(file => resolve(cwd, file)),
+  ]);
+  return (run.cut || []).filter(file => !explained.has(resolve(cwd, file)));
 }
 
 /**
@@ -2375,7 +2382,7 @@ async function ownTests({ tests, cwd, changed, say, flags = [], classify = null 
     red = result.red;
   }
   const cut = unexplainedCuts(run, files, cwd);
-  if (cut.length) return { ok: false, reason: cutReason(cut), result };
+  if (cut.length) return { ok: false, cut, reason: cutReason(cut, run), result };
   if (!totals.finished) return { ok: false, reason: 'the pull request\'s own tests never reached their summary', result };
   if (!totals.tests) return { ok: false, reason: 'the pull request\'s own test files reported no tests at all', result };
   if (red.length) {
@@ -2980,9 +2987,26 @@ function gateSide(outcome) {
   };
 }
 
-/** A run whose output was cut short names the files it never finished: a file never started, or a test in it never ended. */
-function cutReason(files) {
-  return `output cut: ${files.join(', ')} — the run did not finish ${files.length === 1 ? 'this file' : 'these files'}`;
+/**
+ * A run whose output was cut short names the files it never finished: a file
+ * never started, or a test in it never ended. What the run said of them is
+ * carried with it — the lines of its output that name one of them, else its
+ * last lines — so whoever repairs it reads why without running it again.
+ */
+export function cutReason(files, run = null) {
+  const head = `output cut: ${files.join(', ')} — the run did not finish ${files.length === 1 ? 'this file' : 'these files'}`;
+  const said = cutOutput(files, run);
+  return said ? `${head}; it said: ${said}` : head;
+}
+
+/** At most eight lines of a run's stderr and TAP comments about the cut files, joined; empty when it said nothing. */
+export function cutOutput(files, run) {
+  const lines = [String(run?.stderr || ''), String(run?.tap || '').split('\n').filter(line => /^#\s/u.test(line) && !/^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) /u.test(line)).map(line => line.slice(2)).join('\n')]
+    .join('\n').split('\n').map(line => line.trim()).filter(Boolean);
+  if (!lines.length) return '';
+  const names = files.map(file => basename(String(file)));
+  const about = lines.flatMap((line, at) => (names.some(name => line.includes(name)) ? lines.slice(at, at + 4) : []));
+  return [...new Set(about.length ? about : lines.slice(-8))].slice(0, 8).join(' | ');
 }
 
 /** A few names, and how many were not named. */

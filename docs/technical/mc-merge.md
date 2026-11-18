@@ -110,8 +110,18 @@ which remain named as not measured beside the red. A thrown hook is red with
 its own message; cancellation by itself is not evidence of a hook timeout.
 A killed file cannot finish its reporter output: a signal naming that same
 file in the parent TAP explains that file's output cut in suite, selected,
-own-test and alone runs. Other cut files still refuse measurement, even beside
-a named kill; nonempty completed TAP totals remain required.
+own-test and alone runs. A file that failed before any test in it ran (an
+import that did not resolve, a syntax error) also ends without a reporter
+summary; its own top-level `testCodeFailure` entry with an exit code and no
+signal explains its cut too, and it is **red**, with the error node wrote
+before the entry as its failure (`loadFailedFiles`, `src/mc/tap-red.js`).
+Other cut files still refuse measurement, even beside a named kill; nonempty
+completed TAP totals remain required. The stop's reason carries what the run
+said of them: the lines of its stderr and TAP comments that name a cut file,
+else its last lines (`cutReason`). A full run stopped this way names them as
+`cut_files`, and they go to the main-red mend as a stalled file does, with that
+reason as their failure: a file that never finished is red on main (Martin,
+2026-11-14 and 2026-11-18), and the mend reads why without running it again.
 
 After tests (and command gates in a full run), the round measures each
 unmeasured file alone, one at a time with `MC_TEST_LANES=1`. Declared loaders

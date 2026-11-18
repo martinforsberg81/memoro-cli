@@ -71,6 +71,8 @@ function normalized(run) {
     measured,
     // Who held the checkout of a run that could not start: the deploy mend names them.
     ...(Array.isArray(run?.holders) && run.holders.length ? { holders: run.holders } : {}),
+    // The files a run never finished: a stall as surely as a run stopped as one (`classify`).
+    ...(Array.isArray(run?.cut_files) && run.cut_files.length ? { cut_files: [...run.cut_files] } : {}),
   };
 }
 
@@ -97,7 +99,7 @@ export function fullRunVerdict(runs, sha) {
 /** The state of one run of the commit. */
 function classify(run) {
   if (run.measured) return run.red.length ? 'red' : 'green';
-  return run.stopped_at === 'stalled' ? 'stalled' : 'unmeasured';
+  return run.stopped_at === 'stalled' || run.cut_files?.length ? 'stalled' : 'unmeasured';
 }
 
 /**

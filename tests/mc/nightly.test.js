@@ -779,6 +779,7 @@ describe('repairFromRun stale report wiring', () => {
   for (const [label, file, report] of [
     ['ordinary red', 'tests/stale.test.js', { candidate: { red_files: ['tests/stale.test.js'], red_tests: [{ file: 'tests/stale.test.js', name: 'red', error: ['bad'] }] } }],
     ['stalled file', 'tests/stalled.test.js', { stopped_at: 'stalled', stalled_files: ['tests/stalled.test.js'], reason: 'timeout' }],
+    ['cut file', 'tests/cut.test.js', { stopped_at: 'suite', cut_files: ['tests/cut.test.js'], reason: 'the run output cut: tests/cut.test.js' }],
     ['command member', 'command:ci:fast', { extra_gates: [{ id: 'ci-fast', name: 'ci:fast', command: 'npm run ci:fast', ok: false }] }],
   ]) {
     it(`stale report ${label} with exit 1 opens nothing and names the landed repair`, () => {
@@ -800,6 +801,18 @@ describe('repairFromRun stale report wiring', () => {
       assert.equal(mem.entries()[1].state, 'queued');
     });
   }
+
+  it('a file the full run never finished goes to the main-red mend with what the run said', () => {
+    const file = 'tests/cut.test.js'; let entries = [];
+    const reason = 'the run output cut: tests/cut.test.js — the run did not finish this file; it said: Error: boom';
+    repairFromRun(repo, { stopped_at: 'suite', cut_files: [file], reason }, { commit: reported, red: null }, {
+      repair: (request) => requestMainRepair({ ...request, root: '/fixture/home', repo: repo.name,
+        read: () => ({ version: 1, entries }), write: (_path, value) => { entries = value.entries; }, lock: (_root, fn) => fn() }),
+      git: () => ({ status: 1 }) });
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].file, file);
+    assert.match(JSON.stringify(entries[0]), /did not finish in the full run: .*it said: Error: boom/u);
+  });
 
   it('full-run place and stack reach the entry through the measured evidence shaper', () => {
     const file = 'tests/stack.test.js'; let entries = [];

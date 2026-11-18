@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { cancelledFiles, killedFiles, redFiles, redNames, redNamesIn, redTests, tapTotals } from '../../src/mc/tap-red.js';
+import { cancelledFiles, killedFiles, loadFailedFiles, redFiles, redNames, redNamesIn, redTests, tapTotals } from '../../src/mc/tap-red.js';
 
 /** TAP the shape node emits it: `# Subtest:` announcements, four-space nesting. */
 function tap({ suites = [], totals = { tests: 0, pass: 0, fail: 0 } } = {}) {
@@ -123,6 +123,50 @@ describe('the red set of a suite run', () => {
     const batched = ['# tests 100', '# fail 4', '# tests 20', '# fail 0'].join('\n');
     assert.equal(tapTotals(batched).fail, 4);
     assert.equal(tapTotals(batched).tests, 120);
+  });
+});
+
+describe('loadFailedFiles — a file that failed before any test ran', () => {
+  // node 24.10's own shape for a file whose import does not resolve.
+  const loadTap = [
+    'TAP version 13',
+    '# file:///w/candidate/tests/bad.test.mjs:1',
+    "# SyntaxError: The requested module './lib.mjs' does not provide an export named 'NOPE'",
+    '# Subtest: tests/bad.test.mjs',
+    'not ok 1 - tests/bad.test.mjs',
+    '  ---',
+    "  type: 'test'",
+    "  location: '/w/candidate/tests/bad.test.mjs:1:1'",
+    "  failureType: 'testCodeFailure'",
+    '  exitCode: 1',
+    '  signal: ~',
+    "  error: 'test failed'",
+    "  code: 'ERR_TEST_FAILURE'",
+    '  ...',
+    '# Subtest: a test in own',
+    'not ok 2 - a test in own',
+    '  ---',
+    "  location: '/w/candidate/tests/own.test.js:3:1'",
+    "  failureType: 'testCodeFailure'",
+    '  exitCode: 1',
+    '  signal: ~',
+    '  ...',
+    '# tests 2',
+    '# fail 2',
+  ].join('\n');
+
+  it('names the file that failed to load, not a file with an ordinary failing test', () => {
+    assert.deepEqual(loadFailedFiles(loadTap, ['tests/bad.test.mjs', 'tests/own.test.js']), ['tests/bad.test.mjs']);
+  });
+
+  it('a killed file is not a load failure', () => {
+    assert.deepEqual(loadFailedFiles(loadTap.replace('  signal: ~', "  signal: 'SIGTERM'"), ['tests/bad.test.mjs']), []);
+  });
+
+  it('its error is the red test\'s error, from the comments before it', () => {
+    const [red] = redTests(loadTap, ['tests/bad.test.mjs', 'tests/own.test.js']);
+    assert.equal(red.file, 'tests/bad.test.mjs');
+    assert.match(red.error.join(' '), /does not provide an export named 'NOPE'/u);
   });
 });
 

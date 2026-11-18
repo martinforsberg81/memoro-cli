@@ -341,7 +341,7 @@ stop, not from a list of notes: a row `failed` at any `stopped_at`, and a refusa
 (the deploy worktree could not be made or placed, `git status` failed where `main` is, mc's own deploy worktree is dirty or
 ahead of `origin/main` — state mc owns, which a repair may mend — the preparation could not run, a gate suite *cannot run*, the suites could not start, or the full run of the pick could not start or finish for a reason of
 mc's own — code `full-run`). These are not: a usage error, `--dry-run`, the headless refusal, another deploy or a language run
-in progress, a pick that would move production backwards, no green commit with a red or unmeasured tip, a red gate suite or a red or stalled full run (code `red`: a measured red is
+in progress, a pick that would move production backwards, no green commit with a red or unmeasured tip, a red gate suite or a red or stalled full run (a run that names `cut_files`, files it never finished, is read as stalled) (code `red`: a measured red is
 memoro's and goes to the main-red mend, below; `red` stays outside the classification so a refusal on it starts no deploy retry), a
 replaced preparation, and `main` dirty or ahead of `origin/main` in a worktree that is not mc's own (it may be somebody's). A
 stop nobody has classified is technical. Only a technical stop queues a deploy repair ([A stop that is repaired](#a-stop-that-is-repaired)); a `red` stop queues
