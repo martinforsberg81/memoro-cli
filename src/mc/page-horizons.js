@@ -103,11 +103,15 @@ export function programmeHeading(c, wide, data, group, facts, continuation = nul
   const phase = group.record_state === 'draft' ? 'draft' : facts.unfinished && facts.current != null ? `phase ${facts.current}${facts.last != null ? ` of ${facts.last}` : ''}` : group.record_state === 'ready' ? 'ready' : '';
   const goals = group.goals?.length || 0;
   const rest = [
-    phase,
-    plural(goals, 'goal'),
-    group.priority ? `priority ${group.priority}` : '',
-    facts.done ? `${facts.done} finished in tree` : '',
-  ].filter(Boolean).map((text) => ({ text, styles: ['grey'] }));
+    phase && { text: phase, styles: ['grey'] },
+    { text: plural(goals, 'goal'), styles: ['grey'] },
+    group.archive?.status && {
+      text: group.archive.status === 'pending' ? 'archive pending' : 'archive needs attention',
+      styles: [group.archive.status === 'pending' ? 'grey' : 'red'],
+    },
+    group.priority && { text: `priority ${group.priority}`, styles: ['grey'] },
+    facts.done && { text: `${facts.done} finished in tree`, styles: ['grey'] },
+  ].filter(Boolean);
   // With no horizons read there is no horizon to set apart: the facts follow the name as any frame's do.
   const open = data.horizons?.open?.find((horizon) => horizon.programmes?.includes(group.programme));
   const horizon = open ? '' : horizonWords(data, group);

@@ -140,9 +140,10 @@ export function programmeTreeLines(c, wide, group, { sessions = [] } = {}) {
       goalLines(lines, c, wide, goal, owned(goal), null, goalOptions);
     }
   }
-  if (needing.length) {
+  if (needing.length || group.archive?.status === 'attention') {
     if (lines.length) lines.push('');
     line(lines, c, wide, 4, 'NEEDS ATTENTION', ['red', 'bold']);
+    if (group.archive?.status === 'attention') line(lines, c, wide, 6, group.archive.reason, ['red']);
     for (const [index, goal] of needing.entries()) {
       if (index > 0) lines.push('');
       goalLines(lines, c, wide, goal, owned(goal), finished(goal) ? notArchived(goal) : null, goalOptions);
