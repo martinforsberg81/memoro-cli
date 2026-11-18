@@ -651,7 +651,7 @@ export const COMMAND_USAGE = Object.freeze({
     "mc goal new refuses a draft record (exit 1: mc programs show <programme>); headless recordless creation is desk-only.\n",
     "Version 1 reads stay byte-identical; only actual writes upgrade to version 2.\n",
     "A programme is active with at least one project or goal, of any status; every other is dormant.\n",
-    "The page draws the active ones and one line for the dormant; --json prints this list as data.\n",
+    "mc programs list --json prints this list as data.\n",
     "Higher priority wins within a scheduling stage; default/reset is 0, a non-negative whole number.\n",
     "Merge-failure and main-red mend, then a repair build, review, build; repository fairness within a rank.\n",
     "Stored per programme in PRIORITY.json; read live for the next choice, without interrupting sessions.\n",
