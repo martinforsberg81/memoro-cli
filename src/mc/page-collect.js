@@ -1,3 +1,4 @@
+import { suggestionReading } from './helper-suggestions.js';
 /**
  * The page — the sections `mc` prints, gathered from files the runner, the
  * helper and the sessions already write. No model, nothing started; the only
@@ -1856,6 +1857,7 @@ export async function collectPage({
   };
   page.maintenance = maintenanceSection({
     readers: {
+      feedback: () => suggestionReading({ env }),
       proposals: () => proposalsReading({ areas: readProposals({ env }), now }),
       lessons: () => lessonsReading({ lessons: readLessons({ env }), now }),
       errors: () => errorsReading({ intake: page.intake }),

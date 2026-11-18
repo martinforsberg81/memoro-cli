@@ -45,7 +45,8 @@ import { withoutSessionIdentity } from './session-role.js';
 import { readModels } from './model-config.js';
 import { readCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
-import { runnerDir } from './paths.js';
+import { runnerDir, workRoot } from './paths.js';
+import { realLock } from './runner-lock.js';
 import { declared, requireCapability, resolveLaunch, toolShortName } from '../adapters/index.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
@@ -452,7 +453,13 @@ export async function drainIntake({
       // threw did not judge the file, but the file has had its turn.
       turn = { ok: false, reason: 'turn-threw', note: clip(error?.message || String(error), 120), wrote: [], waiting: [] };
     }
-    const archived = (deps.move || moveFile)(join(dir, file), join(intakeArchiveDir(env, now()), file));
+    const move = () => (deps.move || moveFile)(join(dir, file), join(intakeArchiveDir(env, now()), file));
+    let archived = false;
+    try {
+      // A collector retry must not recreate the inbox file as the drain moves it.
+      archived = file.startsWith('suggestion-')
+        ? realLock(workRoot(env), move, { strict: true, name: 'suggestions-archive' }) : move();
+    } catch { /* keep the file for the next drain when its archive lock is unavailable */ }
     const result = { file, turn, archived, seconds: Math.round((now().getTime() - started) / 1000) };
     done.push(result);
     if (deps.onTurn) await deps.onTurn(result);

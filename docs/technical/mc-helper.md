@@ -458,7 +458,7 @@ No session turns a proposal into work on its own, with one bounded exception.
 
 ## The Contract
 
-- The eye **reads** production. It never writes to it — no purge, no status
+- The eye **reads** production; its sole write is the receipt of verified local suggestion copies. No other purge or status
   change on an error, no deploy, not even `/ping-kv`'s probe key.
 - The eye never lists, edits or deletes a proposal that is already waiting.
   It only adds.
@@ -539,3 +539,11 @@ production sentinels in `~/memoro` still exist. Decision `mc-2` retires them
 once the helper has run for a week: two systems doing the same thing, and
 this is the one that puts proposals where the manager and Martin can see them instead of
 making a human in a terminal into the queue. The helper has to earn it first.
+
+## Anonymous app suggestions
+
+`collectHelper` for memoro also collects `suggest_improvement` through the ledgered token-only `GET /api/admin/suggestions`. This is the suggestion exception in memoro's production-data-access standard; it grants no access to account content. It runs on the existing runner collection cadence and on `mc helper --collect`. The retired user_feedback form is unrelated.
+
+Each exact kind/text pair becomes one `intake/suggestion-<sha256>.md`, retaining every original id, kind, text, build and UTC day. Existing copies are found in the inbox and the intake archive, so retries do not requeue an already judged file. Atomic write, file/directory sync and exact read-back precede `POST /api/admin/suggestions/receipt`, which names only that batch's copied ids. A receipt is a transfer acknowledgement, not a new approval request (Martin, 2026-11-16 and 2026-11-18). An unavailable list, invalid row, failed copy or unconfirmed receipt is visible in collection notes and the User feedback maintenance row; unrelated error collection continues. Next collection retries unacknowledged ids. No new programme or goal is created by collection. The intake role routes the original report to its area and preserves provenance.
+
+The local status in `helper/suggestions/status.json` describes the last collection and pending receipts, not a live server backlog count. A successful empty list is zero; a failed read is an error, never proof that no feedback exists. At most three batches of 200 are fetched per collection (the app admits 500 waiting rows).

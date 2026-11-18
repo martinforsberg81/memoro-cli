@@ -22,7 +22,7 @@ const WEEK_S = 7 * 24 * 60 * 60;
 
 /** The sources in the order the frame draws them. `verb` is what handles one; `none` is the row of a source with no reader. */
 export const SOURCES = [
-  { id: 'feedback', label: 'User feedback', verb: '', none: "no source — memoro's product feedback was retired (migration 0213)" },
+  { id: 'feedback', label: 'User feedback', verb: 'mc helper --collect' },
   { id: 'proposals', label: 'Proposals', verb: 'mc proposals' },
   { id: 'lessons', label: 'Lessons', verb: 'mc martin' },
   { id: 'errors', label: 'Errors', verb: 'mc helper --intake' },

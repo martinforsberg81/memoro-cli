@@ -204,8 +204,8 @@ describe('mc helper --collect — the sources', () => {
     const g = ground();
     const { calls } = await collect(g);
     const paths = calls.urls.map((u) => new URL(u).pathname).sort();
-    assert.deepEqual(paths, ['/admin/analysis', '/admin/health', '/admin/operations/status', '/api/version', '/ping-d1']);
-    assert.ok(!paths.some((p) => p.startsWith('/api/admin/')), '/api/admin/* answers 401 to a bearer token');
+    assert.deepEqual(paths, ['/admin/analysis', '/admin/health', '/admin/operations/status', '/api/admin/suggestions', '/api/version', '/ping-d1']);
+    assert.deepEqual(paths.filter((p) => p.startsWith('/api/admin/')), ['/api/admin/suggestions'], 'only the token-admitted suggestion route uses /api/admin');
   });
 
   it('sends the token to the admin routes and nothing to the public probe', async () => {

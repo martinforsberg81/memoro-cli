@@ -9,7 +9,7 @@
  * already records into `~/mc/intake/errors-<repo>-<date>.md`, and then the
  * inbox drained — one headless turn with the `intake` role per file, oldest
  * first, each file archived after its turn. `--collect` stops after the digest
- * — no model, no network writes. `mc run` runs both halves on its own cadence,
+ * — no model; only verified suggestion receipts write to production. `mc run` runs both halves on its own cadence,
  * through the modules, not this verb.
  *
  * The verb keeps the name `helper` for the eye's sake: the intake turn

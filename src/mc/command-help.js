@@ -38,7 +38,7 @@ export const COMMAND_USAGE = Object.freeze({
     "\n",
     "The desk is mc martin; a call with neither --collect nor --intake is refused.\n",
     "--collect writes one errors-<repo>-<date>.md digest per repository under ~/mc/intake/,\n",
-    "with no model and no production writes. --since changes the window; --limit and\n",
+    "with no model; saved app suggestions are acknowledged automatically. --since changes the window; --limit and\n",
     "--threshold are positive counts for fingerprints and their attention marker.\n",
     "--intake collects, then drains the inbox oldest first: one headless turn per file,\n",
     "archived after its turn. --collect stops before the drain; --model selects its model.\n",
