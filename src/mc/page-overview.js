@@ -16,7 +16,7 @@ import { mergeFailureSummary } from './merge-red.js';
 import { ageWords } from './page-cache.js';
 import { deskLines } from './page-desk.js';
 import { clipCell } from './page-grid.js';
-import { horizonsLines, programmeFacts } from './page-horizons.js';
+import { horizonFacts, horizonFigures, horizonsLines, programmeFacts } from './page-horizons.js';
 import { dayWords, howLong, straysReading } from './page-maintenance.js';
 import { detail, frameTop, panelEnd } from './page-operations.js';
 import { sessionGoal } from './page-activity.js';
@@ -390,14 +390,30 @@ export function overviewLines(c, wide, data, { version = '', expand = false, dra
   if (data.horizons) { horizonsLines(lines, c, wide, data, { sessions }); gap(); }
 
   const groups = [...(data.programmes?.programmes || [])].sort((a, b) => String(a.programme).localeCompare(String(b.programme)));
-  const underway = groups.filter((group) => programmeFacts(group, sessions).underway);
-  const asleep = groups.filter((group) => !programmeFacts(group, sessions).underway);
-  for (const group of [...underway, ...(expand ? asleep : [])]) { drawProgramme(lines, group); gap(); }
-  if (!expand && asleep.length) {
-    // One folded frame, its top rule alone.
-    lines.push(frameTop(c, wide, `${asleep.length} programme${asleep.length === 1 ? '' : 's'} with nothing under way`, '', 'a  shows them'));
+  const assigned = new Set();
+  const drawGroup = (title, members, facts = '') => {
+    lines.push(frameTop(c, wide, title));
+    if (facts) detail(lines, c, wide, 5, facts);
+    const underway = members.filter((group) => programmeFacts(group, sessions).underway);
+    const asleep = members.filter((group) => !programmeFacts(group, sessions).underway);
+    for (const group of [...underway, ...(expand ? asleep : [])]) drawProgramme(lines, group, 4);
+    if (!expand && asleep.length) {
+      const fold = `${asleep.length} programme${asleep.length === 1 ? '' : 's'} with nothing under way`;
+      const nested = frameTop(c, wide - 4, fold, '', 'a  shows them');
+      lines.push(`    ${nested}`);
+      if (!nested.includes('shows them')) detail(lines, c, wide, 8, 'a shows them');
+    }
+    panelEnd(lines, c, wide);
     gap();
+  };
+  for (const figure of horizonFigures(data, sessions)) {
+    const members = groups.filter((group) => !assigned.has(group.programme) && (figure.horizon.programmes || []).includes(group.programme));
+    for (const group of members) assigned.add(group.programme);
+    const title = `${figure.horizon.position != null ? `${figure.horizon.position}  ` : ''}${figure.horizon.title || figure.horizon.slug}`;
+    drawGroup(title, members, horizonFacts(figure));
   }
+  const other = groups.filter((group) => !assigned.has(group.programme));
+  if (other.length) drawGroup('OTHER PROGRAMMES', other);
 
   const rows = maintenanceRows(data);
   if (rows.length) { maintenanceLines(lines, c, wide, rows); gap(); }

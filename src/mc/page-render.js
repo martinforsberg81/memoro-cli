@@ -864,7 +864,11 @@ export function renderPageLines(data, {
   lines.push(...overviewLines(c, wide, data, {
     version,
     expand,
-    drawProgramme: (into, group) => programmeFrame(into, c, wide, data, group, expand, runnerSessions),
+    drawProgramme: (into, group, indent = 0) => {
+      const nested = [];
+      programmeFrame(nested, c, wide - indent, data, group, expand, runnerSessions);
+      into.push(...nested.map((line) => `${' '.repeat(indent)}${line}`));
+    },
   }));
   if (expand) {
     // `a` holds what the single page held (D10): the operations view's sections expanded, beginning with its hero

@@ -8,11 +8,10 @@
  *
  * The module draws with its own small pieces and imports nothing from page-render.js, which imports it.
  */
-import { PR_TONE, clipCell, kindTone } from './page-grid.js';
 import { frameEnd, frameTop } from './page-operations.js';
 import { attentionGoals } from './page-programmes.js';
 import { sessionGoal } from './page-activity.js';
-import { clip, width } from './status-render.js';
+import { clip } from './status-render.js';
 
 const FINISHED = ['done', 'dropped'];
 
@@ -57,9 +56,7 @@ export function programmeFacts(group, sessions = []) {
 }
 
 /** A run of `{ text, styles }` parts, painted. */
-const painted = (c, parts) => parts.map((part) => (part.styles?.length ? c(part.text, ...part.styles) : part.text)).join('');
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-const GAP = '  ';
 
 /**
  * The words for a programme's horizon: `horizon 5` (its number among the open horizons, in the desk's order),
@@ -143,34 +140,18 @@ export function horizonsLines(lines, c, wide, data, { sessions = [] } = {}) {
   if (horizons.error) lines.push(`    ${c(clip(`horizons unreadable — ${horizons.error}`, wide - 4), 'red')}`);
   if (horizons.unreadable?.length) lines.push(`    ${c(clip(`${horizons.unreadable.length} horizon record${horizons.unreadable.length === 1 ? '' : 's'} cannot be read: ${horizons.unreadable.join(', ')}`, wide - 4), 'red')}`);
 
-  const rows = figures.map((figure) => {
-    const state = [
-      figure.programmes ? plural(figure.programmes, 'programme') : 'no programme',
-      figure.drafts ? `${figure.drafts} draft` : null,
-      !figure.open && !figure.drafts && figure.programmes ? (figure.landed ? 'done' : 'nothing open') : null,
-    ].filter(Boolean).join(' · ');
-    const goals = [
-      figure.open ? { text: `${figure.open} open`, styles: [] } : null,
-      figure.landed ? { text: `${figure.landed} landed`, styles: ['grey'] } : null,
-      figure.held ? { text: `⊘ ${figure.held}`, styles: ['red'] } : null,
-      figure.prs ? { text: `${figure.prs} PR`, styles: [...PR_TONE] } : null,
-    ].filter(Boolean);
-    if (!figure.open && !figure.landed && !figure.held && !figure.prs) goals.push({ text: '0 goals open', styles: ['grey'] });
-    if (figure.running) goals.push({ text: '●', styles: kindTone('build') });
-    const joined = goals.flatMap((part, i) => (i && part.text !== '●' ? [{ text: ' · ', styles: ['grey'] }, part] : i ? [{ text: '  ' }, part] : [part]));
-    return { figure, state, joined, goalsWidth: joined.reduce((n, part) => n + width(part.text), 0) };
-  });
-  const places = rows.map(({ figure }) => (figure.horizon.position != null ? `${figure.horizon.position}` : ''));
-  const placeWidth = Math.max(0, ...places.map((place) => place.length));
-  const stateWidth = Math.max(0, ...rows.map((row) => width(row.state)));
-  const goalsWidth = Math.max(0, ...rows.map((row) => row.goalsWidth));
-  const titleRoom = Math.max(8, wide - 4 - placeWidth - (placeWidth ? 2 : 0) - stateWidth - goalsWidth - 2 * GAP.length);
-  const titleWidth = Math.min(titleRoom, Math.max(0, ...rows.map(({ figure }) => width(figure.horizon.title || figure.horizon.slug))));
-  rows.forEach((row, index) => {
-    const title = clipCell(row.figure.horizon.title || row.figure.horizon.slug, titleWidth);
-    const text = `    ${c(places[index].padStart(placeWidth), 'grey')}${placeWidth ? GAP : ''}${c(title, 'bold')}${' '.repeat(Math.max(0, titleWidth - width(title)))}${GAP}${row.state}${' '.repeat(Math.max(0, stateWidth - width(row.state)))}${GAP}${painted(c, row.joined)}`;
-    // The last resort: whatever still runs past the width is cut by the terminal's measure.
-    lines.push(width(text) > wide ? clip(text.replace(/\u001b\[[0-9;]*m/gu, ''), wide) : text);
-  });
   frameEnd(lines, c, wide, top);
+}
+
+/** Facts belonging to one horizon, including programmes hidden by the fold. */
+export function horizonFacts(figure) {
+  return [
+    figure.programmes ? plural(figure.programmes, 'programme') : 'No programmes',
+    figure.drafts ? `${figure.drafts} draft` : null,
+    `${plural(figure.open, 'goal')} open`,
+    figure.landed ? `${figure.landed} finished in tree` : null,
+    figure.held ? `${figure.held} held` : null,
+    figure.prs ? `${figure.prs} PR` : null,
+    figure.running ? `${figure.running} running` : null,
+  ].filter(Boolean).join(' · ');
 }
