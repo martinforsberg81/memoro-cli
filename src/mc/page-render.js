@@ -441,9 +441,10 @@ function programmeLine(c, wide, group, expand, numbered = false) {
  */
 function programmeFrame(lines, c, wide, data, group, expand, runnerSessions) {
   const body = programmeBody(c, wide, group, expand, runnerSessions);
-  lines.push(programmeHeading(c, wide, data, group, programmeFacts(group, runnerSessions)));
-  if (!body.length) return;
-  lines.push(...body);
+  const continuation = [];
+  lines.push(programmeHeading(c, wide, data, group, programmeFacts(group, runnerSessions), continuation));
+  if (!body.length && !continuation.length) return;
+  lines.push(...continuation, ...body);
   panelEnd(lines, c, wide);
 }
 

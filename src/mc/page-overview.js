@@ -1,8 +1,7 @@
 /**
  * The page's overview: what a person reads first, as long as the work (docs/technical/mc-ui.md, The overview).
  *
- * In order: the compact header (at most two rows), DESK, the warnings, HORIZONS, the programmes with something under
- * way, one folded frame for the programmes with nothing under way (`a` draws them), MAINTENANCE for what belongs to no
+ * In order: the compact header (at most two rows), DESK, the warnings, HORIZONS, its horizon groups and OTHER PROGRAMMES, each with its own fold (`a` draws those programmes), MAINTENANCE for what belongs to no
  * programme, and one row for each merge and deploy that is queued or running. The operational panels, the hero frame and
  * the pipeline are the operations view (`o`), drawn by page-render.js.
  *
@@ -374,8 +373,8 @@ function mergeDeployLines(lines, c, wide, rows) {
 
 /**
  * The overview, as lines. `drawProgramme(lines, group)` draws one programme's frame (page-render.js owns the body).
- * The programmes with something under way are drawn in name order below HORIZONS; the others are one folded frame,
- * or, under `a` (`expand`), their own frames after the ones under way. `version` is mc's.
+ * Each group draws programmes under way in name order, then a fold or, under `a` (`expand`), the remaining frames.
+ * `version` is mc's.
  */
 export function overviewLines(c, wide, data, { version = '', expand = false, drawProgramme = () => {} } = {}) {
   const sessions = data.runner?.sessions || [];
@@ -392,16 +391,26 @@ export function overviewLines(c, wide, data, { version = '', expand = false, dra
   const groups = [...(data.programmes?.programmes || [])].sort((a, b) => String(a.programme).localeCompare(String(b.programme)));
   const assigned = new Set();
   const drawGroup = (title, members, facts = '') => {
-    lines.push(frameTop(c, wide, title));
-    if (facts) detail(lines, c, wide, 5, facts);
+    if (width(title) <= wide - 8) lines.push(frameTop(c, wide, title));
+    else {
+      lines.push(frameTop(c, wide, ''));
+      detail(lines, c, wide - 2, 5, title, ['bold']);
+    }
+    if (facts) detail(lines, c, wide - 2, 5, facts);
     const underway = members.filter((group) => programmeFacts(group, sessions).underway);
     const asleep = members.filter((group) => !programmeFacts(group, sessions).underway);
     for (const group of [...underway, ...(expand ? asleep : [])]) drawProgramme(lines, group, 4);
     if (!expand && asleep.length) {
       const fold = `${asleep.length} programme${asleep.length === 1 ? '' : 's'} with nothing under way`;
-      const nested = frameTop(c, wide - 4, fold, '', 'a  shows them');
-      lines.push(`    ${nested}`);
-      if (!nested.includes('shows them')) detail(lines, c, wide, 8, 'a shows them');
+      const hint = `${fold} · a shows them`;
+      if (width(hint) <= wide - 12) lines.push(`    ${frameTop(c, wide - 4, hint)}`);
+      else {
+        lines.push(`    ${frameTop(c, wide - 4, '')}`);
+        detail(lines, c, wide - 2, 9, hint);
+        const end = [];
+        panelEnd(end, c, wide - 4);
+        lines.push(`    ${end[0]}`);
+      }
     }
     panelEnd(lines, c, wide);
     gap();

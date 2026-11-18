@@ -87,9 +87,9 @@ reads `MC <version> · runner on|off · <n>/<m> lanes · runner ≈$<x> today ·
 <when>`, with `d  mc martin` at the right edge. FIGURES 24 h and PIPELINE are in the operations view and under `a`,
 which have no header of their own. A programme's own view keeps the header and the frame it had.
 
-**The programmes.** Below HORIZONS every programme with something under way is drawn as
+**The programmes.** Within each horizon, and within OTHER PROGRAMMES for programmes outside open horizons, every programme with something under way is drawn as
 `a` has always drawn a programme (a frame with its phases, goals, sessions and pull
-requests), in name order, not in the horizons' order. Its heading is its number and name in
+requests), in name order within its group. Programme frames are inset four columns inside the group. Its heading is its number and name in
 the title and, in the top rule, its horizon (`horizon 5`, the number the HORIZONS row gives, or
 `no horizon`), then its phase (`phase 2 of 4`, `draft`), its goal count, priority
 and done count; `  ·  ` sets the horizon apart from the name and from the phase, and ` · `
@@ -98,7 +98,7 @@ joins the rest: `28  inbox-library-chat-repairs  ·  no horizon  ·  phase 1 of 
 goal) and the programme's plan sessions are drawn in its frame, so nothing is repeated
 in a separate attention list. Something under way is a `draft` record, an unfinished goal, a
 session, an open pull request or an item needing attention. The programmes with nothing under
-way are one frame, `<n> programmes with nothing under way`, in its top rule alone with `a  shows them`;
+way are folded in their own group as `<n> programmes with nothing under way · a shows them`;
 `a` draws them as frames after the ones under way.
 
 **MAINTENANCE** is the last frame of the overview, headed `MAINTENANCE  <n> sources`. It has one row
@@ -218,15 +218,7 @@ so the page and the desk agree on what waits, in what order and what was decided
 The default page draws HORIZONS below DESK and the warnings (`page-horizons.js`,
 `horizonsLines`, from `data.horizons` and `data.programmes` alone). The heading counts
 the open horizons, the programmes under way, the goals open and the sessions at work.
-One row for every open horizon, in the desk's order (`position`, then set time, then slug):
-its number and title, its programmes and their state (`2 programmes · 1 draft`,
-`nothing open`, `done`) and its goals: `<n> open`, `<n> landed`, `⊘ <n>` held, `<n> PR` open
-pull requests, and `●` while a session works on one of its programmes. A horizon store
-that cannot be listed is a red line under the heading, and so is each horizon record that
-cannot be read; the page draws no horizon from either. The programmes themselves are
-below, in their frames; `programmeHeading` draws each one's number, horizon and phase
-(`page-horizons.js`; `horizonWords` gives `horizon <n>`, `no horizon`, or the slug a record
-names that is not an open horizon, with its state).
+Each open horizon has a frame in desk order (`position`, then set time, then slug), with its number and title and a facts row counting its programmes, drafts, open goals, finished goals still in the tree, explicit holds, associated PRs and sessions. Counts include folded programmes. A horizon without programmes says `No programmes`; programme and open goal counts remain visible at zero. Programmes not assigned to an open horizon are in OTHER PROGRAMMES, omitted when empty. A readable empty or missing store has no open horizons; absent section data starts with Other. A horizon store or record read failure is red beneath the roll-up, which closes before the horizon frames. Programme headings name the open horizon or their reference state in Other (`reached`, `dropped`, `not held`, `unreadable`, or `horizon unknown · record invalid`).
 
 **Numbers.** Goals keep the numbers 1..N. The programmes are N+1..N+M in name
 order, in every listed programme including the folded ones, and the number is on

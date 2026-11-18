@@ -1,17 +1,10 @@
-/**
- * The page's HORIZONS section and the programme headings (docs/technical/mc-ui.md, The sections). `horizonsLines` draws
- * one row for every open horizon in the desk's order: its number and title, how many programmes it has and in what
- * state, and its goals (open, landed, held, open pull requests, a mark while a session works). The programmes are
- * drawn below it, each in its own frame (page-render.js), headed by `programmeHeading`: its number, its horizon and its
- * phase. Both draw from `data.horizons` and `data.programmes` alone, so what `mc --json` says and what the page draws
- * cannot differ.
- *
- * The module draws with its own small pieces and imports nothing from page-render.js, which imports it.
+/** Horizon roll-up, per-horizon figures and programme headings for the overview.
+ * Both the grouped renderer and its counts use the collected section membership.
  */
-import { frameEnd, frameTop } from './page-operations.js';
+import { detail, frameEnd, frameTop } from './page-operations.js';
 import { attentionGoals } from './page-programmes.js';
 import { sessionGoal } from './page-activity.js';
-import { clip } from './status-render.js';
+import { clip, width } from './status-render.js';
 
 const FINISHED = ['done', 'dropped'];
 
@@ -75,7 +68,7 @@ export function horizonWords(data, group) {
  * A programme's frame heading: its number and name in the title; in the top rule its horizon, its phase and its goals,
  * then the figures it has always had (priority, done, an invalid record).
  */
-export function programmeHeading(c, wide, data, group, facts) {
+export function programmeHeading(c, wide, data, group, facts, continuation = null) {
   const phase = group.record_state === 'draft' ? 'draft' : facts.unfinished && facts.current != null ? `phase ${facts.current}${facts.last != null ? ` of ${facts.last}` : ''}` : '';
   const goals = group.goals?.length || 0;
   // README.md Part 2: `28  name  ·  no horizon  ·  phase 1 of 2 · 2 goals`. Proposals are the areas', not a programme's.
@@ -91,7 +84,17 @@ export function programmeHeading(c, wide, data, group, facts) {
   if (horizon && rest.length) rest[0] = { ...rest[0], sep: '  ·  ' };
   const parts = horizon ? [{ text: horizon, styles: ['grey'], sep: '·  ' }, ...rest] : rest;
   const number = group.number != null ? `${group.number}  ` : '';
-  return frameTop(c, wide, `${number}${group.programme}`, parts);
+  const title = `${number}${group.programme}`;
+  const words = parts.map((part, i) => `${part.sep ?? (i ? ' · ' : '')}${part.text}`).join('');
+  if (continuation && width(title) + width(words) + 10 > wide) {
+    if (width(title) <= wide - 8) {
+      detail(continuation, c, wide - 2, 5, words);
+      return frameTop(c, wide, title);
+    }
+    detail(continuation, c, wide - 2, 5, `${title}  ${words}`, ['grey']);
+    return frameTop(c, wide, '');
+  }
+  return frameTop(c, wide, title, parts);
 }
 
 /**
@@ -131,12 +134,17 @@ export function horizonsLines(lines, c, wide, data, { sessions = [] } = {}) {
   const goalsOpen = figures.reduce((n, item) => n + item.open, 0);
   const running = groups.reduce((n, group) => n + programmeFacts(group, sessions).sessions, 0);
   const top = lines.length;
-  lines.push(frameTop(c, wide, 'HORIZONS', [
+  const summary = [
     `${figures.length} open`,
     `${underway} ${underway === 1 ? 'programme' : 'programmes'} under way`,
     `${goalsOpen} ${goalsOpen === 1 ? 'goal' : 'goals'} open`,
     running ? `${running} running` : '',
-  ].filter(Boolean).map((text) => ({ text, styles: ['grey'] }))));
+  ].filter(Boolean).join(' · ');
+  if (summary.length + 'HORIZONS'.length + 10 <= wide) lines.push(frameTop(c, wide, 'HORIZONS', summary));
+  else {
+    lines.push(frameTop(c, wide, 'HORIZONS'));
+    detail(lines, c, wide - 2, 4, summary);
+  }
   if (horizons.error) lines.push(`    ${c(clip(`horizons unreadable — ${horizons.error}`, wide - 4), 'red')}`);
   if (horizons.unreadable?.length) lines.push(`    ${c(clip(`${horizons.unreadable.length} horizon record${horizons.unreadable.length === 1 ? '' : 's'} cannot be read: ${horizons.unreadable.join(', ')}`, wide - 4), 'red')}`);
 
