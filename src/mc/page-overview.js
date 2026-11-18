@@ -15,7 +15,7 @@ import { mergeFailureSummary } from './merge-red.js';
 import { ageWords } from './page-cache.js';
 import { deskLines } from './page-desk.js';
 import { clipCell } from './page-grid.js';
-import { horizonFacts, horizonFigures, horizonsLines, programmeFacts } from './page-horizons.js';
+import { horizonFacts, horizonFigures, horizonsLines } from './page-horizons.js';
 import { dayWords, howLong, straysReading } from './page-maintenance.js';
 import { detail, frameTop, panelEnd } from './page-operations.js';
 import { sessionGoal } from './page-activity.js';
@@ -372,11 +372,10 @@ function mergeDeployLines(lines, c, wide, rows) {
 /* ----------------------------------------------------------------- overview */
 
 /**
- * The overview, as lines. `drawProgramme(lines, group)` draws one programme's frame (page-render.js owns the body).
- * Each group draws programmes under way in name order, then a fold or, under `a` (`expand`), the remaining frames.
- * `version` is mc's.
+ * The overview, as lines. `drawProgramme(lines, group, childWide)` draws each
+ * programme's frame in name order within its group. `version` is mc's.
  */
-export function overviewLines(c, wide, data, { version = '', expand = false, drawProgramme = () => {} } = {}) {
+export function overviewLines(c, wide, data, { version = '', drawProgramme = () => {} } = {}) {
   const sessions = data.runner?.sessions || [];
   const flight = flightRows(data);
   const lines = headerRows(c, wide, data, version);
@@ -400,23 +399,10 @@ export function overviewLines(c, wide, data, { version = '', expand = false, dra
       detail(lines, c, wide - 2, 5, title, ['bold']);
     }
     if (facts) detail(lines, c, wide - 2, 5, facts);
-    const underway = members.filter((group) => programmeFacts(group, sessions).underway);
-    const asleep = members.filter((group) => !programmeFacts(group, sessions).underway);
-    for (const group of [...underway, ...(expand ? asleep : [])]) {
+    for (const group of members) {
       const rows = [];
       drawProgramme(rows, group, childWide);
       drawChild(rows);
-    }
-    if (!expand && asleep.length) {
-      const fold = `${asleep.length} programme${asleep.length === 1 ? '' : 's'} with nothing under way`;
-      const hint = `${fold}  ·  a shows them`;
-      if (width(hint) <= childWide - 8) drawChild([frameTop(c, childWide, hint)]);
-      else {
-        const rows = [frameTop(c, childWide, '')];
-        detail(rows, c, childWide - 2, 5, hint);
-        panelEnd(rows, c, childWide);
-        drawChild(rows);
-      }
     }
     panelEnd(lines, c, wide);
     gap();

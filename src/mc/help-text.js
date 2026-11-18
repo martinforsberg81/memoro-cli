@@ -57,12 +57,12 @@ WHO USES THE VERBS
 
   mc                               The one page: what is running now, how deep
                                     the queue is, the decisions waiting on
-                                    you, what waits in intake, and the open
-                                    horizons with one numbered row per
-                                    programme. At a terminal it ends in a
-                                    way in — a number shows that goal or
-                                    opens that programme (h returns), a
-                                    name opens it, a unfolds every goal.
+                                    you, what waits in intake, and programme
+                                    work trees inline under their horizons
+                                    or in Other. At the prompt, a goal number
+                                    shows that goal, o opens operations, h
+                                    returns home, and a toggles operations
+                                    and Manager details, not programme cards.
                                     No model; reads only
   mc --json [--fresh]              The same page as one object. The page is
                                     offline and instant; --fresh fetches and

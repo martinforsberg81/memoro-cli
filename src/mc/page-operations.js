@@ -28,8 +28,8 @@ export function detail(lines, c, wide, indent, value, tone = ['grey']) {
  * component and are drawn by their own functions.
  *
  * `facts` is a string, or parts `{ text, styles, sep }` joined by ` · `; a part's `sep` replaces what goes before it
- * (for the first part, what follows the two spaces after the title), as a programme's heading sets its horizon and its
- * phase apart with `  ·  `. They give way to the width: clipped to what the rule leaves, grey when clipped.
+ * (for the first part, what follows the two spaces after the title).
+ * They give way to the width: clipped to what the rule leaves, grey when clipped.
  */
 export function frameTop(c, wide, title, facts = '', key = '') {
   const parts = (Array.isArray(facts) ? facts : [{ text: facts, styles: ['grey'] }]).filter((part) => part && part.text);

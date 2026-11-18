@@ -427,20 +427,12 @@ export function statusRollup(statuses = {}) {
   return Object.entries(statuses).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
-function programmeLine(c, wide, group, expand, numbered = false) {
-  const metadata = expand ? ` · ${group.goals?.length || 0} goal${group.goals?.length === 1 ? '' : 's'}` : '';
-  // The goals done or dropped and still under `goals/`: the count `a` shows.
-  const done = group.finished ?? (group.goals || []).filter((goal) => ['done', 'dropped'].includes(goal.stage)).length;
-  const facts = `${group.priority ? `priority ${group.priority}` : ''}${done ? `${group.priority ? ' · ' : ''}${done} done` : ''}${group.record_invalid ? `${group.priority || done ? ' · ' : ''}record invalid` : ''}${metadata}`.replace(/^ · /u, '');
-  return frameTop(c, wide, `${numbered && group.number != null ? `${group.number} ` : ''}${group.programme}`, facts);
-}
-
 /**
- * One programme's frame in the overview: its heading (number, horizon, phase), then its plan and programme sessions and
+ * One programme's frame in the overview: its heading, then its plan and programme sessions and
  * its goals by phase, then the border. A programme with nothing to draw is its heading row alone.
  */
-function programmeFrame(lines, c, wide, data, group, expand, runnerSessions) {
-  const body = programmeBody(c, wide - 2, group, expand, runnerSessions, { insetCard: true });
+function programmeFrame(lines, c, wide, data, group, runnerSessions) {
+  const body = programmeBody(c, wide - 2, group, runnerSessions);
   const continuation = [];
   lines.push(programmeHeading(c, wide, data, group, programmeFacts(group, runnerSessions), continuation));
   if (!body.length && !continuation.length) return;
@@ -449,24 +441,12 @@ function programmeFrame(lines, c, wide, data, group, expand, runnerSessions) {
 }
 
 /** What a programme's block holds under its heading: its plan and programme sessions, then its goals by phase. */
-function programmeBody(c, wide, group, expand, runnerSessions, { insetCard = false } = {}) {
+function programmeBody(c, wide, group, runnerSessions) {
   return [
-    ...(group.planning_sessions || []).flatMap((session) => activityLines(c, wide, { ...session, kind: 'plan' }, { indent: 4, expand })),
-    ...(group.sessions || []).flatMap((session) => activityLines(c, wide, session, { indent: 4, expand })),
-    ...programmeTreeLines(c, wide, group, { expand, sessions: runnerSessions, stateIndent: insetCard ? 9 : 10 }),
+    ...(group.planning_sessions || []).flatMap((session) => activityLines(c, wide, { ...session, kind: 'plan' }, { indent: 4, expand: true })),
+    ...(group.sessions || []).flatMap((session) => activityLines(c, wide, session, { indent: 4, expand: true })),
+    ...programmeTreeLines(c, wide, group, { sessions: runnerSessions }),
   ];
-}
-
-/**
- * One programme's block alone — the programme view: its heading with its number, then the body and the border.
- * A programme with nothing to draw is its heading row and a blank line.
- */
-function programmeViewLines(lines, c, wide, group, expand, runnerSessions) {
-  const body = programmeBody(c, wide, group, expand, runnerSessions);
-  lines.push(programmeLine(c, wide, group, expand, true));
-  if (!body.length) { lines.push(''); return; }
-  lines.push(...body);
-  panelEnd(lines, c, wide);
 }
 
 /**
@@ -823,11 +803,11 @@ function operationsBody(lines, c, wide, data, { expand, version, at }) {
  * The whole page, as lines. `data` is exactly what `--json` prints: one key
  * per section, so the two can never say different things.
  *
- * Four pages are drawn from it: the overview (the default, as long as the work; page-overview.js), the maintenance view (`maintenance`),
- * the operations view (`operations`: the hero frame and the panels), and a programme's own view (`view`).
+ * Three views are drawn from it: the overview (the default, page-overview.js),
+ * maintenance, and operations (the hero frame and the panels).
  */
 export function renderPageLines(data, {
-  columns = 100, colour = false, version = '', now = new Date(), expand = false, view = null, operations = false, maintenance = false,
+  columns = 100, colour = false, version = '', now = new Date(), expand = false, operations = false, maintenance = false,
 } = {}) {
   const paintText = painter(colour);
   // Secondary information must remain readable on dark terminal palettes.
@@ -852,20 +832,9 @@ export function renderPageLines(data, {
     operationsBody(lines, c, wide, data, body);
     return lines;
   }
-  // `view` is a programme's name: that programme's block alone, nothing below it. A name that is no longer listed is the overview.
-  const open = view == null ? null : (data.programmes?.programmes || []).find((group) => group.programme === view);
-  if (open) {
-    headerLines(lines, c, paintText, wide, data, version, { header: true });
-    deskLines(lines, c, wide, data.desk, { deskSessions: flightRows(data).desk.length });
-    managerFrames(lines, c, wide, data, expand);
-    warningLines(lines, c, wide, data);
-    programmeViewLines(lines, c, wide, open, expand, runnerSessions);
-    return lines;
-  }
   lines.push(...overviewLines(c, wide, data, {
     version,
-    expand,
-    drawProgramme: (into, group, childWide) => programmeFrame(into, c, childWide, data, group, expand, runnerSessions),
+    drawProgramme: (into, group, childWide) => programmeFrame(into, c, childWide, data, group, runnerSessions),
   }));
   if (expand) {
     // `a` holds what the single page held (D10): the operations view's sections expanded, beginning with its hero

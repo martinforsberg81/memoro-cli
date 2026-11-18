@@ -102,7 +102,7 @@ describe('The programmes\' phase tree', () => {
     assert.ok(!lines.some((line) => line.includes('phase 3 — after phase')));
   });
 
-  it('shows all unfinished phases and goals and folds history; a expands it all', () => {
+  it('shows unfinished phases and filters ordinary history in both modes', () => {
     const data = fixture();
     const folded = draw(data);
     assert.ok(folded.some((line) => line.includes('Title later')));
@@ -119,7 +119,8 @@ describe('The programmes\' phase tree', () => {
     assert.equal(folded.filter((line) => line.includes('#14858')).length, 1);
     assert.ok(folded.some((line) => line.includes('PRs without a goal')));
     const expanded = draw(data, { expand: true });
-    for (const name of ['later', 'far-future', 'finished']) assert.ok(expanded.some((line) => line.includes(`Title ${name}`)));
+    for (const name of ['later', 'far-future']) assert.ok(expanded.some((line) => line.includes(`Title ${name}`)));
+    assert.ok(!expanded.some((line) => line.includes('Title finished')));
     assert.deepEqual(data.programmes.programmes.flatMap((p) => p.goals.map((g) => g.number)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
     const withFinishedPr = draw(fixture({ finishedPr: true }));
     const finishedAt = withFinishedPr.findIndex((line) => line.includes('Title finished'));
@@ -154,7 +155,7 @@ describe('The programmes\' phase tree', () => {
         const at = lines.findIndex((line) => line.includes(title));
         assert.ok(at >= 0, title);
         const top = lines[at + 2].includes('criteria ') ? at + 3 : at + 2;
-        assert.match(lines[top], /^ {16}╭─+╮$/u);
+        assert.match(lines[top], /^ {15}╭─+╮$/u);
         const bottom = lines.findIndex((line, index) => index > top && line.trimStart().startsWith('╰'));
         const content = lines.slice(top + 1, bottom).map((line) => line.trim().slice(1, -1).trim()).join(' ');
         assert.match(content, /^● · (BUILD|REVIEW) · 12 min · codex · sol(?: ·)? 1 check-in(?: ·)? runner pid 7$/u);
@@ -223,41 +224,40 @@ describe('Programmes without finished goals', () => {
     const [group] = data.programmes.programmes;
     assert.equal(group.finished, 3);
     const lines = draw(data);
-    assert.match(lines.find((line) => line.startsWith('      ┌─ inbox')), /inbox {2}phase 2 of 2 · 4 goals · 3 done/u);
+    assert.match(lines.find((line) => line.startsWith('      ┌─ inbox')), /inbox {2}phase 2 of 2 · 4 goals · 3 finished in tree/u);
     assert.ok(lines.some((line) => line.includes('Title c')));
     for (const name of ['a', 'b', 'd']) assert.ok(!lines.some((line) => line.includes(`Title ${name}`)), `${name} is not drawn`);
     assert.ok(!lines.some((line) => /Phase 1/u.test(line)), 'phase 1 holds nothing drawn');
     assert.ok(lines.some((line) => /Phase 2/u.test(line)));
     const expanded = draw(data, { expand: true });
-    for (const name of ['a', 'b', 'c', 'd']) assert.ok(expanded.some((line) => line.includes(`Title ${name}`)), `${name} drawn under a`);
-    assert.ok(expanded.some((line) => /Phase 1/u.test(line)));
+    assert.ok(expanded.some((line) => line.includes('Title c')));
+    for (const name of ['a', 'b', 'd']) assert.ok(!expanded.some((line) => line.includes(`Title ${name}`)));
+    assert.ok(!expanded.some((line) => /Phase 1/u.test(line)));
   });
 
-  it('folds a programme with nothing unfinished, and draws it under `a` with its finished goals', () => {
+  it('draws dormant programmes but filters their ordinary finished goals in both modes', () => {
     const data = page([...goalsFor(['x', 1, { stage: 'done' }]), goal('y', 1, { programme: 'second', stage: 'dropped' }), goal('z', 1, { programme: 'third' })]);
-    const lines = draw(data);
-    assert.ok(!lines.some((line) => /^ {6}┌─ (?:inbox|second) /u.test(line)), 'neither is drawn as a frame');
-    assert.ok(lines.some((line) => /^ {6}┌─ 2 programmes with nothing under way/u.test(line)), 'both are counted in the folded frame');
-    assert.ok(programmeOf(lines, 'third').some((line) => line.includes('Title z')));
-    const expanded = draw(data, { expand: true });
-    assert.match(expanded.find((line) => /^ {6}┌─ inbox /u.test(line)), / · 1 done/u);
-    assert.match(expanded.find((line) => /^ {6}┌─ second /u.test(line)), / · 1 done/u);
-    assert.ok(programmeOf(expanded, 'inbox').some((line) => /Title x/u.test(line)), 'its finished goal is drawn under a');
-    assert.ok(width(lines[lines.findIndex((line) => /^ {6}┌─ third /u.test(line))]) <= 120);
+    for (const expand of [false, true]) {
+      const lines = draw(data, { expand });
+      for (const name of ['inbox', 'second', 'third']) assert.ok(programmeOf(lines, name).length);
+      for (const name of ['x', 'y']) assert.ok(!lines.some((line) => line.includes(`Title ${name}`)));
+      assert.ok(programmeOf(lines, 'third').some((line) => line.includes('Title z')));
+    }
   });
 
   it('draws a session on no goal after the last programme, as a MAINTENANCE row', () => {
     const currents = [{ name: 'mend:main-red', kind: 'mend', repo: 'memoro', pid: 7, tool: 'codex', model: 'sol', started: '2026-11-05T08:48:00Z', check_in_minutes: 60, check_ins: 1 }];
     const data = page([goal('z', 1, { programme: 'alpha' }), ...goalsFor(['x', 1, { stage: 'done' }])], { currents });
     const lines = draw(data);
-    const folded = lines.findIndex((line) => /^ {6}┌─ 1 programme with nothing under way/u.test(line));
+    const last = lines.findIndex((line) => /^ {6}┌─ inbox /u.test(line));
     const maintenance = lines.findIndex((line) => line.startsWith('  ┌─ MAINTENANCE'));
-    assert.ok(folded >= 0 && maintenance > folded, 'the folded programme is the last, the activity follows it');
-    assert.match(lines[folded + 1], /^ {2}└─+┘$/u, 'group closes after the fold');
-    assert.equal(lines[folded + 2], '', 'a blank line between');
-    assert.equal(maintenance, folded + 3);
-    assert.ok(lines[maintenance + 1].startsWith('    Strays'), 'the strays are the last row of MAINTENANCE');
-    assert.ok(lines[maintenance + 2].startsWith('      mend:main-red  mend · open'), 'the session is a row of MAINTENANCE');
+    assert.ok(last >= 0, 'the dormant programme is the last card');
+    assert.match(lines[last + 1], /^ {2}└─+┘$/u, 'group closes after the last card');
+    assert.equal(lines[last + 2], '', 'a blank line between');
+    assert.equal(maintenance, last + 3);
+    assert.match(lines[maintenance + 1], /^ {4}Strays/u);
+    assert.match(lines[maintenance + 2], /^ {6}mend:main-red {2}mend · open/u);
+    assert.match(lines[maintenance + 3], /^ {2}└─+┘$/u, 'the session is inside the MAINTENANCE frame');
   });
 
   it('keeps a finished goal that is running, or owns a live session, in its phase until the session ends', () => {
@@ -284,7 +284,7 @@ describe('Programmes without finished goals', () => {
       assert.ok(phase >= 0 && live > phase, `drawn in its phase, expand ${expand}`);
       assert.ok(!lines.some((line) => /NEEDS ATTENTION/u.test(line)), 'at work beats a refusal');
       // Expanded, a goal's last log comment is drawn as its detail; that is the log, not a refusal row.
-      if (!expand) assert.ok(!lines.some((line) => line.includes(REFUSAL)), 'no reason drawn while a session owns it');
+      assert.ok(lines.some((line) => line.includes(REFUSAL)), 'the latest log detail is inline while the session owns it');
     }
     const after = draw(page(goals));
     assert.ok(after.some((line) => line.includes('NEEDS ATTENTION')), 'once the session has ended the refusal is drawn');
@@ -297,9 +297,9 @@ describe('Programmes without finished goals', () => {
     const lines = draw(data);
     for (const name of ['asks', 'halted']) assert.ok(!lines.some((line) => line.includes(`Title ${name}`)), `${name} is not drawn`);
     assert.ok(!lines.some((line) => /Phase 1|NEEDS ATTENTION|▸ Finished/u.test(line)));
-    assert.match(lines.find((line) => line.startsWith('      ┌─ inbox')), / · 2 done/u);
+    assert.match(lines.find((line) => line.startsWith('      ┌─ inbox')), / · 2 finished in tree/u);
     const expanded = draw(data, { expand: true });
-    for (const name of ['asks', 'halted']) assert.ok(expanded.some((line) => line.includes(`Title ${name}`)), `${name} drawn under a`);
+    for (const name of ['asks', 'halted']) assert.ok(!expanded.some((line) => line.includes(`Title ${name}`)), `${name} remains filtered under a`);
   });
 
   it('puts a finished goal the runner refused to archive under NEEDS ATTENTION with the reason, in both views', () => {
