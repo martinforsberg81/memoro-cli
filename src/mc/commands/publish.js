@@ -75,7 +75,7 @@ export async function run(argv, deps = {}) {
     return 2;
   }
 
-  const git = deps.git || ((args) => tryGit(cwd, args));
+  const git = deps.git || ((args, options) => tryGit(cwd, args, options));
   const gh = deps.gh || ((args) => ghCommand(args, cwd));
   const root = git(['rev-parse', '--show-toplevel']);
   if (!root) { stderr.write('mc: not inside a git worktree\n'); return 2; }
@@ -214,7 +214,10 @@ function managerDiff(git, base, area) {
   const point = git(['merge-base', main, 'HEAD']);
   const names = point ? git(['diff', '--name-only', '--no-renames', point, 'HEAD']) : null;
   if (!point || names === null) return `the manager's publish cannot read what the branch changes against origin/${base}`;
-  const files = names.split('\n').filter(Boolean).map((path) => ({ path, before: git(['show', `${point}:${path}`]), after: git(['show', `HEAD:${path}`]) }));
+  // Leading whitespace can turn a heading into a code block. Use the same
+  // untrimmed reads for the learning guard and its current-main comparison.
+  const show = (ref, path) => git(['show', `${ref}:${path}`], { trim: !area });
+  const files = names.split('\n').filter(Boolean).map((path) => ({ path, before: show(point, path), after: show('HEAD', path) }));
   if (area) {
     const declared = checkAreas(git(['show', `${main}:${AREAS_PATH}`]), main);
     const areaPage = declared.areas?.find(x => x.id === area.id)?.page;
@@ -224,7 +227,7 @@ function managerDiff(git, base, area) {
     if (refused) return refused;
     const mode = (ref) => git(['ls-tree', ref, '--', areaPage])?.split(' ')[0];
     if (mode('HEAD') !== '100644' || mode(main) !== '100644') return `learning: ${areaPage} must remain a regular area document`;
-    if (git(['show', `${main}:${areaPage}`]) !== files[0].before) return `learning: ${areaPage} changed on ${main} — integrate current main, verify the facts again and run mc gate`;
+    if (show(main, areaPage) !== files[0].before) return `learning: ${areaPage} changed on ${main} — integrate current main, verify the facts again and run mc gate`;
     return null;
   }
   return managerGuard(files);

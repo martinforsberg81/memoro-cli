@@ -37,6 +37,7 @@ import { run as learningCommand } from '../../src/mc/commands/learning.js';
 import { run as programmesCommand } from '../../src/mc/commands/programs.js';
 import { run as gitRun } from '../../src/mc/git.js';
 import { lessonsReading } from '../../src/mc/page-maintenance.js';
+import { openFilesIn } from '../../src/mc/standing.js';
 
 /**
  * The project a path under the fixture's root belongs to: `/w/step/<p>/…`
@@ -733,7 +734,8 @@ function areaLearningFixture(t, ages, extraAreas = []) {
   const options = { repos, git, gh, queue: job => queued.push(job), gate: async (_argv, o) => { gates.push(g(o.cwd, ['rev-parse', 'HEAD'])); return 0; } };
   l.f.deps.deskLearning.queue = options.queue;
   // No host process inspection: the fixture owns its checkouts and simulates occupants at this boundary.
-  l.f.deps.deskLearning.cwds = () => Object.assign([], { complete: true });
+  l.f.deps.deskLearning.cwds = () => Object.assign([{ pid: 1234, cwd: l.root }], { complete: true });
+  l.f.deps.deskLearning.openIn = () => [];
   const result = JSON.stringify({ type: 'result', num_turns: 1, total_cost_usd: 0.01 });
   let clock = l.f.deps.now();
   const now = () => clock;
@@ -763,11 +765,11 @@ function areaLearningFixture(t, ages, extraAreas = []) {
     assert.equal(r.code, 0, r.stderr);
     return r.stdout.split(' · ')[0];
   }
-  async function change(env, lesson, file, content) {
+  async function change(env, lesson, file, content, publishDeps) {
     const cwd = await area(env);
     put(join(cwd, file), content);
     g(cwd, ['add', file]); g(cwd, ['commit', '-qm', 'Correct the area fact']);
-    return act(learningCommand, ['publish', AREA, '--lesson', lesson, '--source', `origin/main:${SOURCE}`], env, { cwd });
+    return act(learningCommand, ['publish', AREA, '--lesson', lesson, '--source', `origin/main:${SOURCE}`], env, { cwd, publishDeps });
   }
   const lessons = () => listLessons({ env: l.f.deps.env });
   const brief = () => act(martinCommand, ['brief'], l.f.deps.env, { home: join(l.root, 'programs'), syncDeps: { reportIssue: () => {} } });
@@ -823,6 +825,9 @@ test('learning guards both entrances and records accurate, held, repair and lega
   const manual = await l.manual(async (child, args) => {
     assert.equal(child.MC_HEADLESS, '1');
     assert.ok(args[args.indexOf('--append-system-prompt') + 1].includes(readCanonRole('learning').overlay));
+    const indented = await l.change(child, accurate.name, AREA_PAGE, `    ${STALE_AREA}`);
+    assert.equal(indented.code, 2, 'terminal: the opening heading must not turn into code');
+    assert.match(indented.stderr, /changes its Markdown structure or raw HTML/u);
     const refused = await l.change(child, accurate.name, 'docs/technical/command.md', 'Rewrite the standard.\n');
     assert.equal(refused.code, 2, refused.stderr);
     assert.match(refused.stderr, /not an edit to the declared area page/u);
@@ -832,6 +837,9 @@ test('learning guards both entrances and records accurate, held, repair and lega
   assert.match(manual.stdout, /learning worktree .* — its branch .* is not published/u);
   assert.match(manual.stdout, /mc: no area information to update\n$/u);
   l.schedule(async (child) => {
+    const indented = await l.change(child, held.name, AREA_PAGE, `    ${STALE_AREA}`);
+    assert.equal(indented.code, 2, 'scheduled: the opening heading must not turn into code');
+    assert.match(indented.stderr, /changes its Markdown structure or raw HTML/u);
     // The old line scanner reads the same Decisions heading and body despite the fence.
     const fenced = STALE_AREA.replace('## Decisions', '~~~markdown\n## Decisions').replace('## Store', '## Store\n~~~');
     const hidden = await l.change(child, held.name, AREA_PAGE, fenced);
@@ -878,13 +886,44 @@ test('learning guards both entrances and records accurate, held, repair and lega
   assert.deepEqual(maintenance.groups.slice(0, 2).map(x => x.items), [[unsupported.name], [asGoal.name]]);
 });
 
-test('learning retires an empty terminal checkout but reports dirty, unpushed, occupied and unowned checkouts', async (t) => {
-  const l = areaLearningFixture(t, [1], ['dirty', 'unpushed', 'occupied', 'detached']);
+test('learning refuses a correction when the current main page changed only in outer whitespace', async (t) => {
+  const l = areaLearningFixture(t, [1]);
+  const [lesson] = l.lessons();
+  const result = await l.manual(async (child) => {
+    const cwd = await l.area(child);
+    l.put(join(l.checkout, AREA_PAGE), `\n${STALE_AREA}`);
+    l.g(l.checkout, ['commit', '-qam', 'Add a leading newline to the area page']);
+    l.g(l.checkout, ['push', '-q', 'origin', 'main']);
+    l.g(cwd, ['fetch', '-q', 'origin']);
+    // The repository model does not merge nonoverlapping edits within one
+    // file. Supply the clean conflict-check result to exercise the next guard.
+    const refused = await l.change(child, lesson.name, AREA_PAGE, STALE_AREA.replace('The source records eight attempts.', CORRECTION),
+      { mainCheck: () => ({ fetch: { ok: true }, paths: [] }) });
+    assert.equal(refused.code, 2, 'a clean merge is not permission to publish against a stale page');
+    assert.match(refused.stderr, /changed on origin\/main — integrate current main/u);
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(l.gates, []);
+  assert.equal(l.remote.size, 0);
+});
+
+test('learning retires an empty terminal checkout but retains dirty, unpushed, occupied, uncertain and unowned checkouts', async (t) => {
+  const l = areaLearningFixture(t, [1], ['dirty', 'unpushed', 'occupied', 'detached', 'open-file', 'unknown', 'malformed']);
   const paths = {};
-  l.f.deps.deskLearning.cwds = () => Object.assign([{ pid: 1234, cwd: join(paths.occupied, 'src') }], { complete: true });
+  l.f.deps.deskLearning.cwds = () => Object.assign([
+    { pid: 1234, cwd: join(paths.occupied, 'src') },
+    { pid: 5678, cwd: l.root },
+  ], { complete: true });
+  l.f.deps.deskLearning.openIn = path => openFilesIn(path, { run: (_bin, args) => {
+    assert.equal(args.at(-1), path);
+    if (path === paths['open-file']) return { status: 0, stdout: '5678\n', stderr: '' };
+    if (path === paths.unknown) return { status: 1, stdout: '', stderr: 'lsof: cannot read directory' };
+    if (path === paths.malformed) return { status: 0, stdout: 'not a PID\n', stderr: '' };
+    return { status: 1, stdout: '', stderr: '' };
+  } });
   const branches = {};
   const answer = await l.manual(async child => {
-    for (const id of ['system', 'dirty', 'unpushed', 'occupied', 'detached']) {
+    for (const id of ['system', 'dirty', 'unpushed', 'occupied', 'detached', 'open-file', 'unknown', 'malformed']) {
       paths[id] = await l.area(child, id);
       branches[id] = l.g(paths[id], ['branch', '--show-current']);
     }
@@ -898,14 +937,17 @@ test('learning retires an empty terminal checkout but reports dirty, unpushed, o
   const registered = l.g(l.checkout, ['worktree', 'list', '--porcelain']);
   assert.ok(!registered.includes(paths.system));
   assert.deepEqual(l.g(l.checkout, ['branch', '--list', 'learning/*']).split('\n').map(line => line.trim()).sort(),
-    [branches.dirty, branches.unpushed, branches.occupied, branches.detached].sort());
+    Object.entries(branches).filter(([id]) => id !== 'system').map(([, branch]) => branch).sort());
   for (const [id, reason] of [['dirty', /uncommitted work/u], ['unpushed', /not published/u],
-    ['occupied', /no process stands in it/u], ['detached', /could not verify its registered path and branch/u]]) {
+    ['occupied', /no process stands in it/u], ['detached', /could not verify its registered path and branch/u],
+    ['open-file', /files are open in it \(PIDs: 5678\)/u], ['unknown', /could not establish that no files are open in it/u],
+    ['malformed', /could not establish that no files are open in it/u]]) {
     assert.ok(registered.includes(paths[id]), registered);
     const report = answer.stdout.split('\n').find(line => line.includes(paths[id]));
     assert.ok(report, answer.stdout);
     assert.match(report, reason);
   }
+  assert.ok(existsSync(join(paths['open-file'], SOURCE)));
   assert.equal(readFileSync(join(paths.dirty, 'notes.md'), 'utf8'), 'Keep the uncommitted evidence.\n');
   assert.equal(l.g(paths.unpushed, ['log', '-1', '--format=%s']), 'Local investigation');
 });

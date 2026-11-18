@@ -9,7 +9,7 @@ import { GIT_TIMEOUT_MS, run, runAsync, useGitRunner } from '../lib/git-process.
 
 export { GIT_TIMEOUT_MS, run, runAsync, useGitRunner };
 
-export function git(cwd, args, { allowFailure = false, timeoutMs = GIT_TIMEOUT_MS } = {}) {
+export function git(cwd, args, { allowFailure = false, timeoutMs = GIT_TIMEOUT_MS, trim = true } = {}) {
   const r = run(cwd, args, { timeoutMs });
   if (r.error?.code === 'ETIMEDOUT') {
     if (allowFailure) return null;
@@ -30,11 +30,12 @@ export function git(cwd, args, { allowFailure = false, timeoutMs = GIT_TIMEOUT_M
     err.stderr = r.stderr;
     throw err;
   }
-  return (r.stdout || '').trim();
+  const output = r.stdout || '';
+  return trim ? output.trim() : output;
 }
 
-export function tryGit(cwd, args, { timeoutMs } = {}) {
-  return git(cwd, args, { allowFailure: true, timeoutMs });
+export function tryGit(cwd, args, { timeoutMs, trim } = {}) {
+  return git(cwd, args, { allowFailure: true, timeoutMs, trim });
 }
 
 function seconds(ms) {

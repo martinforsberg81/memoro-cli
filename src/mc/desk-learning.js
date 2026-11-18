@@ -26,7 +26,7 @@ import { defaultRepos } from './repos.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 import { withoutSessionIdentity } from './session-role.js';
 import { releaseClaim, takeClaim } from './resource-claim.js';
-import { cwdsOfUser, processesStandingIn } from './standing.js';
+import { cwdsOfUser, openFilesIn, processesStandingIn } from './standing.js';
 
 /** Five open lessons, or one this old, start the pass. */
 export const LEARNING_OPEN = 5;
@@ -135,11 +135,18 @@ function settleLearningWorktrees({ env, run, deps }) {
         report(path, `could not verify its registered path and branch ${branch}`);
         continue;
       }
-      if (!cwds?.complete || processesStandingIn([path], { cwds }).length) {
+      if (!cwds?.complete || !cwds.length || processesStandingIn([path], { cwds }).length) {
         report(path, 'could not establish that no process stands in it');
         continue;
       }
-      const settled = settleCurationWorktrees({ git, repos: [repo], paths: { [repo.name]: path }, branches: { [repo.name]: branch }, preserveIgnored: true });
+      const settled = settleCurationWorktrees({
+        git, repos: [repo], paths: { [repo.name]: path }, branches: { [repo.name]: branch }, preserveIgnored: true,
+        beforeRemove: (candidate) => {
+          const open = (deps.openIn || openFilesIn)(candidate);
+          if (!open) return 'could not establish that no files are open in it';
+          return open.length ? `files are open in it (PIDs: ${open.join(', ')})` : null;
+        },
+      });
       for (const keep of settled.kept) report(keep.path, keep.why);
     }
   }

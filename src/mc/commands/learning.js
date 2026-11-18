@@ -90,7 +90,7 @@ export async function run(argv, deps = {}) {
   }
   if (resolve(cwd) !== path) return fail(`publish from the assigned worktree: mc learning area ${name}`);
   try {
-    return await publishCorrection({ env, now, claim, path, branch, repo, id, page, flags, stdout, stderr, git, gh, say, deps });
+    return await publishCorrection({ env, now, claim, path, branch, repo, id, page, flags, stdout, stderr, gh, say, deps });
   } catch (err) { return fail(err.message, 1); }
 }
 
@@ -130,7 +130,6 @@ async function publishCorrection({ env, now, claim, path, branch, repo, id, page
   const code = await (deps.publish || publishRun)(['--json'], {
     cwd: path, env, stdout: { write: text => { receipt += text; } }, stderr,
     ...deps.publishDeps,
-    git: deps.publishDeps?.git || (args => tryGit(path, args)),
     gh: (args) => gh(path, args),
     learningArea: { repo: repo.name, id, page, branch },
     beforeLearningPush: async ({ head }) => {

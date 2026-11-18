@@ -702,8 +702,10 @@ accepts a committed, factual edit to that one declared area page. Pass another
 manager's publication guard is narrowed for this role: it refuses changes to
 other files, Aim, Decisions and dated decisions. To keep the held sections
 visible, it also preserves the blocks containing headings, possible fences,
-raw HTML or reference definitions, in their original order. If the area's
-page changed on main, the command requires a new check against current main.
+raw HTML or reference definitions, in their original order. Both the guard
+and the comparison with current main read area page blobs without trimming.
+If the page changed on main, even only at its edges, the command requires a
+new check against current main.
 It gates the commit, publishes without force and hands the immutable PR
 branch to the ordinary merger. It says published for the handoff and on main only after a merge into
 main is observed. Bare `mc publish` and mutations through the old lesson and
@@ -712,8 +714,11 @@ goal verbs are refused to this role. No reserved act is granted.
 Both entrances retire their own area worktrees when the turn ends, before
 releasing its reservation. A checkout under
 `runner/work/learning/<run-id>-<area>/<repo>` must still be registered on its
-assigned branch, unoccupied and clean, including untracked and ignored files.
-Its head must be reachable from `origin/main` or its published tracking branch.
+assigned branch, clean (including untracked and ignored files), and have
+complete cwd evidence that no process stands in it. Its head must be reachable
+from `origin/main` or its published tracking branch. Immediately before
+removal, the same `lsof +D` check as [tidy](mc-tidy.md) must show that no file
+in the checkout is open, even by a process standing elsewhere.
 Removal is through Git without force, then the local branch is retired;
 the remote branch is not changed. Uncertain, occupied, dirty or unpushed
 checkouts are kept and reported with their paths. Older or interrupted runs'

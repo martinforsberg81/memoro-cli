@@ -161,10 +161,11 @@ export function setUpCurationWorktrees({ git, root, stamp, repos, kind = 'manage
 
 /**
  * The curation worktrees after the session: one that holds nothing (clean, no commit beyond origin/main) or whose
- * branch is published (clean, HEAD on `origin/<branch>`) is removed, with its branch; any other is kept. Returns
+ * branch is published (clean, HEAD on `origin/<branch>`) is removed, with its branch; any other is kept.
+ * An optional final check can return a reason to keep a candidate immediately before removal. Returns
  * `{ removed: [repo], kept: [{ repo, path, why }] }`.
  */
-export function settleCurationWorktrees({ git, repos, paths, branches, preserveIgnored = false }) {
+export function settleCurationWorktrees({ git, repos, paths, branches, preserveIgnored = false, beforeRemove }) {
   const removed = []; const kept = [];
   for (const repo of repos) {
     const path = paths[repo.name]; const branch = branches[repo.name];
@@ -173,6 +174,8 @@ export function settleCurationWorktrees({ git, repos, paths, branches, preserveI
     const empty = ahead.ok && String(ahead.stdout ?? '').trim() === '0';
     const published = !empty && git(path, ['rev-parse', '--verify', '-q', `origin/${branch}`]).ok && reachable({ git, path, ref: `origin/${branch}` });
     if (!empty && !published) { kept.push({ repo: repo.name, path, why: `its branch ${branch} is not published` }); continue; }
+    const why = beforeRemove?.(path);
+    if (why) { kept.push({ repo: repo.name, path, why }); continue; }
     if (!git(repo.path, ['worktree', 'remove', path]).ok) { kept.push({ repo: repo.name, path, why: 'it could not be removed' }); continue; }
     if (!git(repo.path, ['branch', '-D', branch]).ok) {
       kept.push({ repo: repo.name, path, why: `the worktree was removed but its local branch ${branch} could not be deleted` });

@@ -20,7 +20,7 @@
  * The directory reported is the *known* path that matched, so every caller's
  * map keyed on its own paths keeps working; the actual cwd rides along.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { userInfo } from 'node:os';
 
 /**
@@ -79,4 +79,21 @@ export function processesStandingIn(paths, { cwds = null, run, uid } = {}) {
     if (directory) found.push({ pid, directory, cwd });
   }
   return found;
+}
+
+/** PIDs with a file open under this directory, or null if the scan cannot establish that. */
+export function openFilesIn(path, { run = spawnSync } = {}) {
+  let r;
+  try {
+    r = run('lsof', ['-nP', '-t', '+D', path], { encoding: 'utf8', timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
+  } catch { return null; }
+  if (r.error || r.signal || String(r.stderr || '').trim()) return null;
+  const output = String(r.stdout || '').trim();
+  // lsof uses exit 1 both for no matches and for failure. Only a silent
+  // exit 1 is evidence of no open files.
+  if (r.status === 1 && !output) return [];
+  if (r.status !== 0 || !output) return null;
+  const pids = output.split('\n').map(line => Number(line));
+  if (pids.some(pid => !Number.isSafeInteger(pid) || pid <= 0)) return null;
+  return [...new Set(pids)];
 }
