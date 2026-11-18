@@ -269,7 +269,7 @@ export function pageKey(data) {
   // What waits for Martin changes what the top of the page says; its ages and its cost do not.
   // Track programme membership, heading facts and the horizon groups.
   const horizonKey = [
-    (data?.programmes?.programmes || []).map((group) => [group.number, group.programme, group.horizon, group.horizon_state, group.record_state, group.record_invalid, group.prs?.length, (group.goals || []).map((goal) => [goal.hold, goal.prs?.length])]),
+    (data?.programmes?.programmes || []).map((group) => [group.number, group.programme, group.horizon, group.horizon_state, group.record_state, group.record_invalid, group.archive, group.prs?.length, (group.goals || []).map((goal) => [goal.hold, goal.prs?.length])]),
     data?.horizons ?? null,
   ];
   // The overview's sessions, MAINTENANCE, MERGE and DEPLOY rows: which sessions, items and runs there are, not how old or dear.
