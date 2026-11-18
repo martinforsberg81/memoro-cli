@@ -31,11 +31,19 @@ Per done goal decide one of three:
 - it made something true that no page says: `<goal>: NOT OK — <what is true that
   no page says>`, naming the fact and where a reader would look for it.
 
+When the prompt names a horizon directory, read the programme's documents and
+evidence for material a later programme serving that horizon still needs. Check
+that the horizon's basis or supporting files contain the material and that its
+references resolve without the active programme directory. Judge that handoff
+once for the whole programme, including material shared by goals.
+
 Write `WRITE-BACK.md` in the programme's directory (the prompt names the path).
 Its lines are, in this order: one `read: <repo> <sha>` per checkout the prompt
 names (the sha its `HEAD` is at: `git -C <checkout> rev-parse HEAD`); one line
 per done goal in the forms above, the goal's name as its directory under
-`goals/.archive/`; and a last line `verdict: OK` when no goal is NOT OK, else
+`goals/.archive/`; an `@horizon: OK — <evidence or reason>` or `@horizon: NOT OK — <missing material>`
+line when the prompt names a horizon; and a last line `verdict: OK` when every
+check is OK, else
 `verdict: NOT OK`. A done goal with no line, a line for a goal that is not done,
 a `read:` line with another sha, or `verdict: OK` beside a NOT OK line is a
 reading that failed. Nothing else is in the file; a reader of it needs no more.

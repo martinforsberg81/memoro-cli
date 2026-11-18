@@ -1037,12 +1037,12 @@ each goal's own review (`write-back:` line, [mc-goals.md](mc-goals.md#the-verdic
 is due when all hold:
 
 - the record is valid and `ready`;
-- `goals/` holds no live goal (a dot-entry is none), and `goals/.archive/` holds at
+- `goals/` holds no live goal (dot-entries and `goal_log.md` are archive metadata), and `goals/.archive/` holds at
   least one done goal: a programme whose goals were all dropped made nothing true
   and is never read or archived;
 - no desk item of kind `archive` with the reference `archive:<p>` is open;
 - no reading of it runs (the claim `archive:<p>`);
-- no OK reading is kept for exactly the current done goals (then only the archive
+- no OK reading is kept for exactly the current done goals and horizon (then only the archive
   is retried, below).
 
 **The reading.** One headless read-only session per programme, role
@@ -1058,7 +1058,13 @@ nothing, a dirty or unreachable leftover is never touched). The session writes
 checkout (the sha the runner read at the checkout, so a reading is of a known
 tree), one line per done goal (`<goal>: OK — <repo>/docs/technical/<page>.md §
 <section>[, …]`, `<goal>: OK — none — <reason>` or `<goal>: NOT OK — <what is true
-that no page says>`) and a last `verdict: OK` or `verdict: NOT OK`. A line is
+that no page says>`) and a last `verdict: OK` or `verdict: NOT OK`. When the record names a horizon, the
+reader also checks that investigations, references and other material needed
+by later programmes are usable from that horizon's basis or supporting files,
+independently of the active programme directory. The reading must then include
+one `@horizon: OK — <evidence or reason>` or
+`@horizon: NOT OK — <missing material>` line before the verdict.
+A line is
 parsed without a model (`parseWriteBack`); a missing or malformed file, a done
 goal with no line, a wrong sha or `verdict: OK` beside a NOT OK line is a failed
 reading.
@@ -1070,7 +1076,7 @@ reading.
 - *NOT OK:* a finding, not a counted failure. It opens one desk item of kind
   `archive`, reference `archive:<p>`, `prepared`, sort `mechanical`, with a
   model-free `prepared.md` carrying the NOT OK lines: a decision session writes
-  the missing statement and closes it by decision, and the programme is read
+  the missing statement or preserves the material under the recorded horizon and closes it by decision, and the programme is read
   again. A NOT OK reading after an item was closed by decision opens it
   `for-martin` (sort `mechanical`, `reversible: false`, with a Swedish `brief.md`).
 - *A failed reading* (malformed file, no file, a session that ended without
