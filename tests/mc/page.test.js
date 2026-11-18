@@ -2387,7 +2387,9 @@ describe('collectPage', () => {
     assert.equal(group.record_state, 'draft');
     for (const columns of [160, 80]) {
       const lines = renderPageLines(data, { columns, now: NOW, view: 'mc' });
-      assert.ok(lines.some(line => line.includes('mc is draft')));
+      assert.ok(!lines.some(line => line.includes('mc is draft')), 'the heading says draft; no goal repeats it');
+      assert.ok(lines.some(line => /status paused/u.test(line)), 'a ready goal of a draft programme reads paused');
+      assert.ok(!lines.some(line => /status ready/u.test(line)));
       assert.ok(lines.every(line => width(line) <= columns));
     }
     const recordPath = join(programsHome(fx.env), 'mc', 'PROGRAMME.json');
@@ -2396,6 +2398,7 @@ describe('collectPage', () => {
     const free = ready.programmes.programmes.find(group => group.programme === 'mc');
     assert.equal(free.record_state, 'ready');
     assert.ok(!renderPageLines(ready, { columns: 80, now: NOW, view: 'mc' }).some(line => line.includes('mc is draft')));
+    assert.ok(!renderPageLines(ready, { columns: 80, now: NOW, view: 'mc' }).some(line => /status paused/u.test(line)), 'ready restores the goal\'s status');
     assert.equal(free.goals[0].phase, group.goals[0].phase);
     assert.notEqual(pageKey(data), pageKey(ready), 'ready redraws');
   });
@@ -3886,6 +3889,7 @@ describe('the overview: its order, its programmes and what belongs to none', () 
     it('draws a held goal, a blocked goal and a goal stopped for no progress under their goal', () => {
       const held = framed(patch(quiet(), 'prog-01/goal-01', { hold: ago }));
       assert.ok(held.body.some((row) => /^ {10}held by martin since 2026-08-28T10:00:00Z — wait$/u.test(row)), held.body.join('\n'));
+      assert.ok(held.body.some((row) => /^ {10}stage \S+ · status paused/u.test(row)), `a held ready goal reads paused\n${held.body.join('\n')}`);
       const blocked = framed(patch(quiet(), 'prog-01/goal-01', { status: 'blocked' }));
       assert.ok(blocked.body.some((row) => /^ {10}stage build · status blocked/u.test(row)) && blocked.body.some((row) => /^ {10}a mend session resolves the obstacle$/u.test(row)), blocked.body.join('\n'));
       const stopped = framed(patch(quiet(), 'prog-01/goal-01', { status: 'Martin', last: { next: 'x', comment: 'no progress: three sessions in a row' } }));

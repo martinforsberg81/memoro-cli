@@ -5,7 +5,7 @@
  *   mc programs priority <programme>... --set <n>    prefer work within a stage
  *   mc programs create <programme> --end "…" [--horizon <slug> | --area <repo>/<id>] [--purpose "…"] [--from-proposal <path>]    a new programme with its record
  *   mc programs record <programme> --end "…" [--horizon <slug>]    the record of an existing one
- *   mc programs state <programme> draft|ready    set draft or ready (interactive Martin only)
+ *   mc programs state <programme> draft|ready    set draft or ready (interactive Martin only); ready releases the desk's holds on its unfinished goals
  *   mc programs review <programme>    one independent advisory reading of the current document
  *   mc programs after <programme> <phase> <phase>… | --none    what a phase of a stated programme waits for
  *   mc programs show <programme> [--json]    one programme's record
@@ -29,7 +29,7 @@ import { setProgrammePriorities, validPriority } from '../programme-priority.js'
 import {
   AREA_RE, RECORD_FILE, changePhases, cycleOf, newRecord, readRecord, recordPage, recordPageTemplate, recordView, setRecordState, writeRecord,
 } from '../programme-record.js';
-import { PLAN_ROLE, listDirsOf, programsGoals, readTextOrNull } from '../goals.js';
+import { GOAL_FILE, HOLD_FILE, PLAN_ROLE, appendEntry, listDirsOf, logStamp, parseGoal, programsGoals, readHold, readTextOrNull } from '../goals.js';
 import { NAME_RE } from '../plan-schema.js';
 import { reservedRoleHint, reservedRoleName } from '../roles.js';
 import { normalizeSessionRole } from '../session-role.js';
@@ -343,7 +343,7 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
 }
 
 /** `state`: sets a programme's state to draft or ready. Interactive Martin only. */
-function stateVerb({ positional }, { env, stdout, stderr, lock }) {
+function stateVerb({ positional }, { env, stdout, stderr, lock, now = new Date() }) {
   if (env.MC_ROLE !== 'martin' || env.MC_HEADLESS === '1') {
     stderr.write('mc: only Martin at the desk sets a programme state — mc martin opens the desk\n');
     return 2;
@@ -362,12 +362,42 @@ function stateVerb({ positional }, { env, stdout, stderr, lock }) {
       return 1;
     }
     stdout.write(`mc: ${name} · state ${targetState}\n`);
-    if (targetState === 'ready') wakeRunner(workRoot(env));
+    if (targetState === 'ready') {
+      const { released, kept } = releaseDeskHolds(dir, { env, now: now instanceof Date ? now : new Date() });
+      for (const goal of released) stdout.write(`  ${name}/${goal.name} released (held since ${goal.hold.at ?? '—'}: ${goal.hold.reason ?? '—'})\n`);
+      for (const goal of kept) stdout.write(`  ${name}/${goal.name} still held by ${goal.hold.by ?? '—'} — mc goal release ${name}/${goal.name} frees it\n`);
+      wakeRunner(workRoot(env));
+    }
     return 0;
   } catch (error) {
     stderr.write(`mc: could not set ${name} state: ${error.message}\n`);
     return 1;
   }
+}
+
+/**
+ * The holds on a programme's unfinished goals when Martin sets it ready: a hold the desk (`by: martin`) placed is
+ * released, with the log entry `mc goal release` writes, since setting the order ready is his word that its work
+ * goes on; a creation hold and a hold by anyone else are kept and named. A finished or unreadable goal is left alone.
+ */
+export function releaseDeskHolds(dir, { env = {}, now = new Date(), read = readTextOrNull, write = writeFileAtomic, remove = unlinkSync } = {}) {
+  const released = [];
+  const kept = [];
+  const goalsDir = join(dir, 'goals');
+  for (const name of listDirsOf(goalsDir)) {
+    const goalDir = join(goalsDir, name);
+    const hold = readHold(goalDir, read);
+    if (!hold) continue;
+    const text = read(join(goalDir, GOAL_FILE));
+    const goal = text === null ? null : parseGoal(text);
+    if (!goal || goal.problems || ['done', 'dropped'].includes(goal.stage)) continue;
+    if (hold.by !== 'martin' || hold.created) { kept.push({ name, hold }); continue; }
+    const comment = `released: held by ${hold.by} since ${hold.at ?? '—'} (${hold.reason ?? '—'}) — the programme was set ready`;
+    appendEntry({ dir: goalDir, entry: { at: logStamp(now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: 'martin', stage: goal.stage, status: goal.status, done: null, comment, next: null }, read, write });
+    remove(join(goalDir, HOLD_FILE));
+    released.push({ name, hold });
+  }
+  return { released, kept };
 }
 
 /** `show`: one programme's record, or that it has none. Any caller may read. */

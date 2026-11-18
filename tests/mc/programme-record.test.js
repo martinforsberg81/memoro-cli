@@ -229,6 +229,40 @@ describe('mc programs create and state', () => {
     } finally { a.done(); }
   });
 
+  it('releases the desk\'s holds on unfinished goals when Martin sets state ready, and keeps every other hold', async () => {
+    const a = area();
+    try {
+      await call(['create', 'alpha', '--end', 'e'], a.env);
+      const goals = join(a.home, 'alpha', 'goals');
+      const put = (name, fields, hold) => {
+        mkdirSync(join(goals, name), { recursive: true });
+        writeFileSync(join(goals, name, 'GOAL.json'), goalJson(fields));
+        writeFileSync(join(goals, name, 'LOG.md'), '');
+        if (hold) writeFileSync(join(goals, name, '.hold.json'), JSON.stringify(hold));
+      };
+      const desk = { by: 'martin', tool: 'claude', at: '2026-11-18T10:24Z', reason: 'taken back' };
+      put('desk-held', {}, desk);
+      put('waits-martin', { status: 'Martin' }, desk);
+      put('created', { stage: 'draft' }, { ...desk, created: true });
+      put('other', {}, { ...desk, by: 'manager' });
+      put('finished', { stage: 'done', status: 'done' }, desk);
+      put('free', {}, null);
+      const res = await call(['state', 'alpha', 'ready'], { ...a.env, MC_ROLE: 'martin' });
+      assert.equal(res.code, 0, res.err);
+      for (const name of ['desk-held', 'waits-martin']) {
+        assert.equal(existsSync(join(goals, name, '.hold.json')), false, name);
+        assert.match(res.out, new RegExp(`alpha/${name} released \\(held since 2026-11-18T10:24Z: taken back\\)`, 'u'));
+        assert.match(readFileSync(join(goals, name, 'LOG.md'), 'utf8'), /released: held by martin since 2026-11-18T10:24Z \(taken back\) — the programme was set ready/u);
+      }
+      for (const name of ['created', 'other', 'finished']) assert.ok(existsSync(join(goals, name, '.hold.json')), name);
+      assert.match(res.out, /alpha\/created still held by martin/u);
+      assert.match(res.out, /alpha\/other still held by manager — mc goal release alpha\/other frees it/u);
+      assert.doesNotMatch(res.out, /alpha\/(finished|free)\b/u);
+      const back = await call(['state', 'alpha', 'draft'], { ...a.env, MC_ROLE: 'martin' });
+      assert.doesNotMatch(back.out, /released|still held/u, 'draft releases nothing');
+    } finally { a.done(); }
+  });
+
   it('sets state and admits goal new the same with or without a PROGRAMME-REVIEW.md report on disk, and leaves the report as it was', async () => {
     for (const report of [null, 'NOT OK\n\nfindings: 3\n', 'OK\n\nfindings: 0\n', 'findings: 1\n\nPart 1 — narrow it.\n']) {
       const label = report === null ? 'no report' : JSON.stringify(report.split('\n', 1)[0]);
