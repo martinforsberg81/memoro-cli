@@ -10,6 +10,8 @@ The enduring direction in this historical quotation is the area direction. Its
 programme-survival implication is superseded by the 2026-11-15 bounded-programme
 decision below; it is not an active programme lifetime instruction.
 
+- "Every mc session can be opened from any computer, survives a lost connection and feels local." (Martin, 2026-11-14; programme `mc-server`)
+
 ## Closer
 
 Measured, with the baselines of 2026-11-14 (programme `mc`):
