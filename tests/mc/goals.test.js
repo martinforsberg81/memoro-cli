@@ -283,7 +283,7 @@ test('lastBuildEntry is the last entry a build session wrote: not the runner\'s,
   const log = parseLog([
     '## 2026-11-02T09:00Z · person · plan · ready', '', 'Done: created', '',
     '## 2026-11-02T10:00Z · claude opus · review · ready', '', 'Done: built', '',
-    '## 2026-11-02T11:00Z · codex gpt-6.1-sol · finish · ready', '', 'Done: REVIEW.md, proposal', '',
+    '## 2026-11-02T11:00Z · codex gpt-6.2-sol · finish · ready', '', 'Done: REVIEW.md, proposal', '',
     '## 2026-11-02T12:00Z · runner · finish · ready', '', 'Comment: x', '',
   ].join('\n'));
   assert.equal(lastBuildEntry(log).model, 'opus');
@@ -298,8 +298,8 @@ test('lastBuildEntry is the last entry a build session wrote: not the runner\'s,
     '## 2026-11-03T11:00Z · claude opus · review · ready · by review', '', 'Done: judged', '',
   ].join('\n');
   assert.equal(lastBuildEntry(parseLog(byPlan)), null);
-  const builtAfter = `${byPlan}\n## 2026-11-03T12:00Z · codex gpt-6.1-sol · review · ready · by build\n\nDone: built\n`;
-  assert.equal(lastBuildEntry(parseLog(builtAfter)).model, 'gpt-6.1-sol');
+  const builtAfter = `${byPlan}\n## 2026-11-03T12:00Z · codex gpt-6.2-sol · review · ready · by build\n\nDone: built\n`;
+  assert.equal(lastBuildEntry(parseLog(builtAfter)).model, 'gpt-6.2-sol');
 });
 
 /** A goal as `programsGoals` gives it, in `stage · status`, with `log`. */

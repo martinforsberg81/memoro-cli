@@ -3659,7 +3659,7 @@ test('a codex session records no plan windows, and neither does a claude stream 
   for (const codex of [true, false]) {
     const f = goalFixture({ r: {} });
     // A catalog whose large class is codex alone routes the goal to codex.
-    if (codex) f.deps.catalog = () => ({ ...DEFAULT_CATALOG, large: [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }] });
+    if (codex) f.deps.catalog = () => ({ ...DEFAULT_CATALOG, large: [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }] });
     if (codex) f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.1 }));
     const patches = [];
     f.deps.billing = { readMode: () => 'plan', readState: () => ({}), patchState: (patch) => { patches.push(patch); } };
@@ -3742,7 +3742,7 @@ test('an agy goal session launches without the Gemini keys or its own dropped va
 
 test('a full Codex plan uses the same gateway route', async () => {
   const { f, calls } = onBilling('plan');
-  f.deps.catalog = () => ({ ...DEFAULT_CATALOG, large: [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }] });
+  f.deps.catalog = () => ({ ...DEFAULT_CATALOG, large: [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }] });
   f.deps.capacity.read = () => capacityWith({ codex: 1 });
   await createRunner({ deps: f.deps }).pass();
   assert.equal(calls[0].call.bin, process.execPath);
@@ -4408,7 +4408,7 @@ test('only a build routes on the goal\'s class: finish, mend and plan run on the
       let capacity = capacityWith({ claude: tool === 'claude' ? 0.1 : 0.9 });
       capacity = applyObservation(capacity, 'codex', {
         windows: { primary: windowAt(tool === 'codex' ? 0.1 : 0.9) },
-        models: [{ id: 'gpt-6.1-sol', efforts: ['high', 'medium'] }],
+        models: [{ id: 'gpt-6.2-sol', efforts: ['high', 'medium'] }],
       }, ROUTING_NOW);
       f.deps.capacity.write(capacity);
       const launch = f.deps.launch;
@@ -4422,7 +4422,7 @@ test('only a build routes on the goal\'s class: finish, mend and plan run on the
       assert.equal(result.ran, 1, `${stage} on ${tool}`);
       const [call] = f.calls.sessions;
       assert.equal(call.env.MC_ROLE, role);
-      assert.equal(call.env.MC_MODEL, tool === 'claude' ? claudeModel : 'gpt-6.1-sol', `${stage} on a fast goal is not haiku`);
+      assert.equal(call.env.MC_MODEL, tool === 'claude' ? claudeModel : 'gpt-6.2-sol', `${stage} on a fast goal is not haiku`);
       assert.equal(call.env.MC_TOOL, tool);
       assert.equal(call.cwd, `${GOALS}/stuck/memoro`, 'in the goal\'s worktree, not the programme directory');
       assert.deepEqual([call.env.MC_REPO, call.env.MC_WORKAREA], ['memoro', `${GOALS}/stuck/memoro`]);
@@ -4446,11 +4446,11 @@ test('only a build routes on the goal\'s class: finish, mend and plan run on the
 test('a repair whose finish list has no usable subscription never borrows a class: its own API reserve, or it waits', async () => {
   const f = goalFixture({ stuck: { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
   f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { class: 'fast' });
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), finish: [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }] });
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), finish: [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }] });
   f.deps.capacity.write(capacityWith({ claude: 0.1 }));
   f.answer = plans(f, 'stuck', 'review');
   assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
-  assert.deepEqual([f.calls.sessions[0].env.MC_TOOL, f.calls.sessions[0].env.MC_MODEL], ['codex', 'gpt-6.1-sol'], 'the repair\'s own reserve, though haiku has room');
+  assert.deepEqual([f.calls.sessions[0].env.MC_TOOL, f.calls.sessions[0].env.MC_MODEL], ['codex', 'gpt-6.2-sol'], 'the repair\'s own reserve, though haiku has room');
   const off = goalFixture({ stuck: { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
   off.files[`${GOALS}/stuck/GOAL.json`] = withGoal(off.files[`${GOALS}/stuck/GOAL.json`], { class: 'fast' });
   off.deps.catalog = f.deps.catalog;
@@ -4519,11 +4519,11 @@ test('one runner applies changed provider priority to finish and mend launches',
   let priority = 'codex';
   f.deps.catalog = () => ({ ...DEFAULT_CATALOG, providerPriority: priority });
   let capacity = capacityWith({ claude: 0.1 });
-  capacity = applyObservation(capacity, 'codex', { windows: { primary: windowAt(0.9) }, models: [{ id: 'gpt-6.1-sol', efforts: ['high'] }] }, ROUTING_NOW);
+  capacity = applyObservation(capacity, 'codex', { windows: { primary: windowAt(0.9) }, models: [{ id: 'gpt-6.2-sol', efforts: ['high'] }] }, ROUTING_NOW);
   f.deps.capacity.write(capacity);
   const runner = createRunner({ deps: f.deps });
   await runner.pass({ repo: 'memoro' });
-  assert.deepEqual([f.calls.sessions.at(-1).env.MC_ROLE, f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['build-session:goal', 'codex', 'gpt-6.1-sol']);
+  assert.deepEqual([f.calls.sessions.at(-1).env.MC_ROLE, f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['build-session:goal', 'codex', 'gpt-6.2-sol']);
   f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { stage: 'build', status: 'blocked' });
   priority = 'claude';
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'legacy blocked work migrates without launching');
@@ -4908,7 +4908,7 @@ const HEAD = 'abc1234def5678';
 const builtBy = (who, at = '2026-08-28T10:00Z') => `## ${at} · ${who} · review · ready\n\nDone: built it\n`;
 
 /** A goal in review whose branch has `pr` open at `head` (null: none), as `gh pr list --head` answers. */
-function reviewFixture({ log = builtBy('codex gpt-6.1-sol'), pr = 31, head = HEAD, goals = {} } = {}) {
+function reviewFixture({ log = builtBy('codex gpt-6.2-sol'), pr = 31, head = HEAD, goals = {} } = {}) {
   const f = goalFixture({ judged: { stage: 'review', log }, ...goals });
   const { gh } = f.deps;
   f.head = head;
@@ -5001,7 +5001,7 @@ test('a goal whose every review candidate is its build model is reviewed on that
 test('a review\'s own entry is no build entry: the build entry before it is the model passed over', async () => {
   // Built on codex sol, then a review that died: sol is still the builder,
   // so the next review passes sol (candidate 1) for opus (candidate 2).
-  const reviewed = `${builtBy('codex gpt-6.1-sol', '2026-08-20T10:00Z')}\n## 2026-08-21T10:00Z · runner · review · ready\n\nComment: the review ended with the goal still in review — a review runs again\n`;
+  const reviewed = `${builtBy('codex gpt-6.2-sol', '2026-08-20T10:00Z')}\n## 2026-08-21T10:00Z · runner · review · ready\n\nComment: the review ended with the goal still in review — a review runs again\n`;
   const f = reviewList(reviewFixture({ log: reviewed }));
   f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.1 }));
   f.answer = judges(f, 'merge');
@@ -5020,7 +5020,7 @@ test('a goal built on the second review candidate is reviewed on it when the fir
   assert.equal(f.log.some((line) => /its review waits/u.test(line)), false);
 });
 
-const SOL_REVIEW = { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' };
+const SOL_REVIEW = { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' };
 const OPUS_REVIEW = { tool: 'claude', model: 'opus', effort: 'high' };
 const LUNA_REVIEW = { tool: 'codex', model: 'gpt-6-luna', effort: 'high' };
 /** A catalog whose review list is codex sol then claude opus, and a billing whose codex API is `codexApi`. */
@@ -5042,12 +5042,12 @@ test('a goal review passes a first candidate at 100 % with its API off for the n
 });
 
 test('a goal built on the first review candidate is reviewed by the next one when both have plan left', async () => {
-  const f = reviewList(reviewFixture({ log: builtBy('codex gpt-6.1-sol') }));
+  const f = reviewList(reviewFixture({ log: builtBy('codex gpt-6.2-sol') }));
   f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.1 }));
   f.answer = judges(f, 'merge');
   await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
   assert.deepEqual([f.calls.sessions[0].env.MC_TOOL, f.calls.sessions[0].env.MC_MODEL], ['claude', 'opus']);
-  assert.ok(f.log.some((line) => /review starting .* review list: preferred \(review candidate 2 — codex gpt-6\.1-sol built it\)/u.test(line)));
+  assert.ok(f.log.some((line) => /review starting .* review list: preferred \(review candidate 2 — codex gpt-6\.2-sol built it\)/u.test(line)));
 });
 
 test('goal review rereads the catalog: priority outranks headroom when the first candidate built it, and the first choice outranks priority', async () => {
@@ -5183,7 +5183,7 @@ test('a review without a pull request returns once to build, then stops for Mart
 test('a review after a rejection is told the first review\'s heads and failed items; the first review, and one after an old-form REVIEW.md, is not', async () => {
   const prompts = [];
   for (const verdict of [VERDICT, null, 'Found: the page is slow.\n']) {
-    const f = reviewFixture({ log: verdict === null ? builtBy('codex gpt-6.1-sol') : `${rejectedLog()}\n${builtBy('codex gpt-6.1-sol')}` });
+    const f = reviewFixture({ log: verdict === null ? builtBy('codex gpt-6.2-sol') : `${rejectedLog()}\n${builtBy('codex gpt-6.2-sol')}` });
     if (verdict !== null) f.files[`${GOALS}/judged/REVIEW.md`] = verdict;
     await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
     prompts.push(f.calls.sessions.find((call) => call.env.MC_ROLE === 'review-session:goal').prompt);
@@ -5379,7 +5379,7 @@ test('a goal driven through a red review, a red merge and a moved head reaches m
     f.files[`${GOALS}/judged/GOAL.json`] = withGoal(f.files[`${GOALS}/judged/GOAL.json`], { stage: 'merge', status: blocked ? 'blocked' : 'ready' });
   };
   // 1. The build session ends the task: review.
-  f.answer = (call) => { f.files[`${GOALS}/judged/LOG.md`] += `\n${builtBy('codex gpt-6.1-sol')}`; f.files[`${GOALS}/judged/GOAL.json`] = withGoal(f.files[`${GOALS}/judged/GOAL.json`], { stage: 'review' }); return okSession()(call); };
+  f.answer = (call) => { f.files[`${GOALS}/judged/LOG.md`] += `\n${builtBy('codex gpt-6.2-sol')}`; f.files[`${GOALS}/judged/GOAL.json`] = withGoal(f.files[`${GOALS}/judged/GOAL.json`], { stage: 'review' }); return okSession()(call); };
   await runner.pass({ repo: 'memoro' }); note();
   // 2. The review is red: build, with REVIEW.md.
   f.answer = judges(f, 'build');

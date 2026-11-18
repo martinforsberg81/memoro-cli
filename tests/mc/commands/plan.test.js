@@ -597,7 +597,7 @@ for (const tool of ['codex', 'claude']) {
     writeFileSync(join(directory, tool === 'codex' ? `rollout-${id}.jsonl` : `${id}.jsonl`), `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
     assert.equal(await run(['mc', `--${tool}`], deps), 0);
     assert.ok(calls[1].args.includes(id), 'compatible plan conversation must resume');
-    assert.ok(calls[1].args.includes(tool === 'claude' ? 'opus' : 'gpt-6.1-sol'), 'planning keeps its provider default model');
+    assert.ok(calls[1].args.includes(tool === 'claude' ? 'opus' : 'gpt-6.2-sol'), 'planning keeps its provider default model');
     assert.ok(!calls[1].args.some((arg) => arg.includes('Wait for him.')), 'no intro on continuation');
     assert.equal(await run(['mc', `--${tool}`, '--new'], deps), 0);
     assert.ok(!calls[2].args.includes(id));

@@ -59,11 +59,11 @@ describe('manual headless manager', () => {
     for (const command of [run]) {
       const { out, stdout, stderr } = io();
       let seen;
-      assert.equal(await command(['--headless', '--new', '--prompt', 'Resolve the blocked merge', '--codex', '--model', 'gpt-6.1-sol', '--minutes', '12'], {
+      assert.equal(await command(['--headless', '--new', '--prompt', 'Resolve the blocked merge', '--codex', '--model', 'gpt-6.2-sol', '--minutes', '12'], {
         stdout, stderr, open: () => assert.fail('interactive launch'),
         turn: async options => { seen = options; return { ok: true, answer: 'Merge resolved', note: 'success', log: '/receipt.json' }; },
       }), 0);
-      assert.deepEqual(seen, { prompt: 'Resolve the blocked merge', tool: 'codex', model: 'gpt-6.1-sol', minutes: 12 });
+      assert.deepEqual(seen, { prompt: 'Resolve the blocked merge', tool: 'codex', model: 'gpt-6.2-sol', minutes: 12 });
       assert.match(out.stdout, /Merge resolved/u);
       assert.match(out.stdout, /receipt.json/u);
     }

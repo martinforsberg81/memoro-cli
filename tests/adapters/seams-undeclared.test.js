@@ -68,7 +68,7 @@ describe('a tool with no declaration is refused where it would launch, bill or a
 describe('a tool with no declaration is read as unknown where a seam only reads', () => {
   it('gives no context usage and no last model', () => {
     const entries = [{ type: 'assistant', message: { model: 'claude-opus-5-5', usage: { input_tokens: 10 } } },
-      { type: 'turn_context', payload: { model: 'gpt-6.1-sol' } }];
+      { type: 'turn_context', payload: { model: 'gpt-6.2-sol' } }];
     assert.equal(contextUsage('cursor', entries), null);
     assert.equal(lastModel('cursor', entries), null);
   });

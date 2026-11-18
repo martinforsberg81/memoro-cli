@@ -24,9 +24,9 @@ import { TIMEOUT_EXIT } from '../../src/mc/run-plan.js';
 const NOW = new Date('2026-11-15T10:00:00Z');
 const AFTER_START = NOW.getTime() + 60_000;
 const AHEAD = '2026-11-15T15:00:00.000Z';
-const SOL = Object.freeze({ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' });
+const SOL = Object.freeze({ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' });
 const OPUS = Object.freeze({ tool: 'claude', model: 'opus', effort: 'high' });
-const LISTED = [{ id: 'gpt-6.1-sol', efforts: ['high'] }];
+const LISTED = [{ id: 'gpt-6.2-sol', efforts: ['high'] }];
 const win = (fraction_used, resets_at = AHEAD) => ({ fraction_used, resets_at });
 const capacityOf = (claudeUsed, codexUsed) => {
   let state = applyObservation(normaliseCapacity(null), 'claude', { windows: { five_hour: win(claudeUsed), seven_day: win(claudeUsed) } }, NOW);
@@ -97,7 +97,7 @@ test('programme review: real command launches its own identity on named origin/m
     assert.deepEqual([spawned.env.MC_ROLE, spawned.env.MC_PROGRAMME, spawned.env.MC_HEADLESS], ['programme-review', 'p', '1']);
     for (const key of ['MC_GOAL', 'MC_STEP', 'MC_PROJECT', 'MC_REPO', 'MC_SESSION_STARTED', 'MC_SCRATCH']) assert.equal(spawned.env[key], undefined, key);
     assert.equal(spawned.env.MC_PROGRAMME_REVIEW_TOKEN, 'a'.repeat(48));
-    assert.deepEqual([spawned.env.MC_TOOL, spawned.env.MC_MODEL], ['codex', 'gpt-6.1-sol'], 'shared author exclusion');
+    assert.deepEqual([spawned.env.MC_TOOL, spawned.env.MC_MODEL], ['codex', 'gpt-6.2-sol'], 'shared author exclusion');
     assert.ok(spawned.args.includes('--add-dir') && spawned.args.includes(f.checkout));
     const prompt = JSON.stringify(spawned.args);
     for (const repo of ['memoro-cli', 'memoro']) {

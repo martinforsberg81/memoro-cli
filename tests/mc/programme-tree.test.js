@@ -30,12 +30,12 @@ describe('The programmes\' phase tree', () => {
     const runner = runnerSection({ now: NOW, alive: () => true, currents: [
       ...['inbox', 'empty'].map((programme, index) => ({ name: `plan:${programme}`, programme,
         kind: 'plan', reason: 'daily_proposals', pid: 200 + index, session_pid: 300 + index,
-        tool: 'codex', model: 'gpt-6.1-sol', started: '2026-11-05T08:45:00Z' })),
+        tool: 'codex', model: 'gpt-6.2-sol', started: '2026-11-05T08:45:00Z' })),
       { name: 'goal:inbox/missing', kind: 'plan', reason: 'blocked', pid: 202, session_pid: 302,
         started: '2026-11-05T08:45:00Z' },
     ] });
     const sessions = sessionsSection({ now: NOW, alive: () => true, foreground: [
-      { verb: 'manager', pid: 400, reason: 'manual_task', tool: 'codex', model: 'gpt-6.1-sol', started: '2026-11-05T08:30:00Z' },
+      { verb: 'manager', pid: 400, reason: 'manual_task', tool: 'codex', model: 'gpt-6.2-sol', started: '2026-11-05T08:30:00Z' },
       { verb: 'brief', pid: 401, tool: 'claude', model: 'opus', started: '2026-11-05T08:40:00Z' },
       { verb: 'plan', programme: 'inbox', pid: 402, tool: 'codex', started: '2026-11-05T08:50:00Z' },
     ] });

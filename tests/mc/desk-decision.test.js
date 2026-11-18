@@ -133,13 +133,13 @@ test('a reached daily desk ceiling starts no decision session, including after a
 
 test('decision uses its first usable candidate, falling back within its own list', async t => {
   const f = fixture(t), item = f.add('decision:record');
-  let capacity = applyObservation(normaliseCapacity(null), 'codex', { windows:{primary:{fraction_used:0.1,resets_at:'2026-11-14T15:00:00Z'}}, models:[{id:'gpt-6.1-sol',efforts:['high']}] },NOW);
+  let capacity = applyObservation(normaliseCapacity(null), 'codex', { windows:{primary:{fraction_used:0.1,resets_at:'2026-11-14T15:00:00Z'}}, models:[{id:'gpt-6.2-sol',efforts:['high']}] },NOW);
   f.deps.capacity = {read:()=>capacity,write(){}};
   f.deps.session = async call => { assert.equal(call.env.MC_MODEL,'opus','catalog order wins over measured fallback capacity'); await f.close(item); return result; };
   assert.equal((await f.runner().pass()).ran,1);
   capacity = applyRefusal(capacity,'claude','2026-11-14T15:00:00Z');
   const fallback = f.add('decision:fallback');
-  f.deps.session = async call => { assert.equal(call.env.MC_MODEL,'gpt-6.1-sol'); assert.equal(call.env.MC_TOOL,'codex'); assert.equal(call.prompt,undefined); assert.ok(call.args.at(-1).includes(fallback.id)); await f.close(fallback); return {status:0,stdout:'',stderr:''}; };
+  f.deps.session = async call => { assert.equal(call.env.MC_MODEL,'gpt-6.2-sol'); assert.equal(call.env.MC_TOOL,'codex'); assert.equal(call.prompt,undefined); assert.ok(call.args.at(-1).includes(fallback.id)); await f.close(fallback); return {status:0,stdout:'',stderr:''}; };
   assert.equal((await f.runner().pass()).ran,1);
 });
 

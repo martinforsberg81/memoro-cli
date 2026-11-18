@@ -91,7 +91,7 @@ describe('openInWorkArea and --model', () => {
         const { calls, options } = opening({ verb: 'plan', programme: 'x', tool });
         const result = await openInWorkArea({ areaRoot, worktree, env, ...options });
         assert.equal(result.ok, true);
-        assert.ok(calls[0].args.includes(tool === 'claude' ? 'opus' : 'gpt-6.1-sol'));
+        assert.ok(calls[0].args.includes(tool === 'claude' ? 'opus' : 'gpt-6.2-sol'));
         if (tool === 'claude') assert.deepEqual(calls[0].args.slice(-2), ['--effort', 'medium']);
         else assert.ok(calls[0].args.includes('model_reasoning_effort="medium"'));
       }

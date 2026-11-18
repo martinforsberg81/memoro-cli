@@ -305,7 +305,7 @@ describe('mc martin launch', () => {
   it('advertises durable item commands and the opening brief in the routed help', () => { assert.match(usage(),/mc martin items/u); assert.match(usage(),/mc martin item <id>/u); assert.match(usage(),/mc martin brief \[--json\]/u); });
   it('opens a distinct role/path with the opening as first prompt and launcher conventions', async () => {
     const d = openingStore(); const { out, stdout, stderr } = io(); let opened;
-    const code = await run(['--resume', 'abc', '--codex', '--model', 'gpt-6.1-sol'], {
+    const code = await run(['--resume', 'abc', '--codex', '--model', 'gpt-6.2-sol'], {
       stdout, stderr, env: d.env, home: d.home, interactive: () => true, now: () => new Date(NOW), role: ROLE,
       open: async (options) => { opened = options; return { ok: true, code: 0 }; },
     });
@@ -313,7 +313,7 @@ describe('mc martin launch', () => {
     assert.equal(opened.areaName, 'martin'); assert.equal(opened.verb, 'martin');
     assert.equal(opened.areaRoot, join(d.env.MC_WORK_ROOT, 'martin')); assert.equal(opened.roleName, 'martin');
     assert.equal(opened.overlay, 'Martin role instructions'); assert.equal(opened.defaultModel, 'opus');
-    assert.equal(opened.pick, 'abc'); assert.equal(opened.tool, 'codex'); assert.equal(opened.model, 'gpt-6.1-sol');
+    assert.equal(opened.pick, 'abc'); assert.equal(opened.tool, 'codex'); assert.equal(opened.model, 'gpt-6.2-sol');
     assert.match(opened.prompt, /^Martin's desk, opened 2026-11-14T12:00:00\.000Z\./u); assert.match(opened.prompt, /### 1\. alpha\/one/u);
     assert.match(opened.resumePrompt, /Refresh from the desk now/u); assert.ok(opened.resumePrompt.endsWith(opened.prompt));
   });

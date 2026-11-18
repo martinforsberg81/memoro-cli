@@ -45,7 +45,7 @@ describe('model args', () => {
   });
 
   it('codex takes the gpt-6.1 names as they are, and its effort as a config override', () => {
-    assert.deepEqual(codex.modelArgs('gpt-6.1-sol'), ['-m', 'gpt-6.1-sol']);
+    assert.deepEqual(codex.modelArgs('gpt-6.2-sol'), ['-m', 'gpt-6.2-sol']);
     assert.deepEqual(codex.modelArgs('gpt-6-luna'), ['-m', 'gpt-6-luna']);
     assert.deepEqual(codex.effortArgs('medium'), ['-c', 'model_reasoning_effort=medium']);
     assert.deepEqual(codex.effortArgs('high'), ['-c', 'model_reasoning_effort=high']);

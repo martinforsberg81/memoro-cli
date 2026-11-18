@@ -55,7 +55,7 @@ it('starts a new unattended session every time for either provider and isolates 
       if (tool === 'codex') {
         assert.equal(call.args[0], 'exec');
         assert.ok(call.args.includes('--skip-git-repo-check'));
-        assert.ok(call.args.includes('gpt-6.1-sol'));
+        assert.ok(call.args.includes('gpt-6.2-sol'));
       } else assert.ok(call.args.includes('-p'));
     }
     assert.equal(JSON.parse(readFileSync(first.log)).ok, true);
@@ -72,21 +72,21 @@ it('unattended Manager honors saved Codex priority with a valid catalog model an
   }, now);
   capacity = applyObservation(capacity, 'codex', {
     windows: { primary: { fraction_used: 0.1, resets_at: '2026-11-05T22:00:00Z' } },
-    models: [{ id: 'gpt-6.1-sol', efforts: ['high'] }],
+    models: [{ id: 'gpt-6.2-sol', efforts: ['high'] }],
   }, now);
   const result = await runManagerTurn({
     ...f.options, now, tool: null, model: null,
-    deps: { ...f.options.deps, catalog: () => ({ providerPriority: priority, manager: [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }] }), capacity: () => capacity,
+    deps: { ...f.options.deps, catalog: () => ({ providerPriority: priority, manager: [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }] }), capacity: () => capacity,
       launch: (tool) => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: getAdapter(tool === 'codex' ? 'codex' : 'claude-code'), spec: { bin: '/fake/model' } }),
       session: async (call) => { seen = call; return { status: 0, stdout: '{"type":"thread.started","thread_id":"fresh"}\n{"type":"item.completed","item":{"type":"agent_message","text":"Done"}}\n{"type":"turn.completed","usage":{}}\n', stderr: '' }; } },
   });
   assert.equal(result.tool, 'codex');
-  assert.equal(result.model, 'gpt-6.1-sol');
+  assert.equal(result.model, 'gpt-6.2-sol');
   assert.ok(seen.args.includes('model_reasoning_effort=high'));
   assert.equal(result.providerPriority, 'codex');
   priority = 'claude';
   const fallback = await runManagerTurn({ ...f.options, now, tool: null, model: null, deps: { ...f.options.deps,
-    catalog: () => ({ providerPriority: priority, manager: [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }] }), capacity: () => capacity,
+    catalog: () => ({ providerPriority: priority, manager: [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }] }), capacity: () => capacity,
     launch: (tool) => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: getAdapter(tool === 'codex' ? 'codex' : 'claude-code'), spec: { bin: '/fake/model' } }),
   } });
   assert.deepEqual([fallback.tool, fallback.model, fallback.providerPriority], ['claude', 'opus', 'claude']);
@@ -139,8 +139,8 @@ it('preserves the API reserve decision for an unusable subscription and refuses 
   }, now);
   for (const observation of [
     { models: [] },
-    { models: [{ id: 'gpt-6.1-sol', efforts: ['low'] }] },
-    { models: [{ id: 'gpt-6.1-sol', efforts: ['high'] }], observed_at: '2026-11-01T18:00:00Z' },
+    { models: [{ id: 'gpt-6.2-sol', efforts: ['low'] }] },
+    { models: [{ id: 'gpt-6.2-sol', efforts: ['high'] }], observed_at: '2026-11-01T18:00:00Z' },
   ]) {
     const capacity = applyObservation(fullClaude, 'codex', {
       windows: { primary: { fraction_used: 0.1, resets_at: '2026-11-05T22:00:00Z' } },
@@ -163,7 +163,7 @@ it('preserves the API reserve decision for an unusable subscription and refuses 
     assert.equal(calls.length, 1);
     assert.equal(calls[0].bin, process.execPath, 'API reserve must not launch the unusable subscription directly');
     assert.match(calls[0].args[0], /billing-gateway-session\.js$/u);
-    assert.deepEqual(calls[0].args.slice(1, 4), ['codex', 'gpt-6.1-sol', '/fake/provider']);
+    assert.deepEqual(calls[0].args.slice(1, 4), ['codex', 'gpt-6.2-sol', '/fake/provider']);
     assert.equal(result.billing, 'credits');
     assert.match(result.routeWhy, /API reserve/u);
     writeBillingApi('codex', false, { root });
