@@ -21,9 +21,13 @@ The document binds what the user gets, how it looks and how one sees that it wor
   layer. It can land by itself, and it keeps its number.
 - Order says the sequence of the parts and what the desk does beside the build; it holds no step of Martin's.
 - Three to eight parts.
-- At most 1,500 words. What runs today is written as a user meets it, from
-  the app and the standards; code is read only for a fact the order depends
-  on. If it does not fit, it is two orders, or construction has come in.
+- About 1,500 words. The length is a recommendation, not a limit (Martin,
+  2026-11-18): a document that needs more to state every case the user meets
+  takes it, and no case is cut to fit. Split it into several programmes where
+  that makes each clearer to say yes or no to, and look for construction that
+  has come in before either. What runs today is written as a user meets it,
+  from the app and the standards; code is read only for a fact the order
+  depends on.
 
 ## A part
 
