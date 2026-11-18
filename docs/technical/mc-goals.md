@@ -452,6 +452,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 
 - **`new <p>/<g> --repo <r>[,<r>] --class fast|medium|large --title "…" [--phase <n>] [--stage draft] [--structure 1|2]`** — makes a
   goal, refused unless its flags are valid and its names are new.
+  The learning role is refused every mutation (exit 2); it uses `mc learning` for dispositions.
   Before fetching or writing, a draft programme record refuses (exit 1):
   `mc: <programme> is draft — mc programs show <programme>`.
   Without a record, `MC_HEADLESS=1` refuses (exit 1): `mc: <programme> has no
@@ -498,8 +499,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   names the declared rule areas that still have no obligation.
   The item and obligation verbs write the brief like `set`: a build, review
   or mend session is refused (exit 2, nothing written), and so is the
-  learning role on a goal it did not create; it may use them on a goal it
-  created in its session, as it may `set` and `criterion add`. Plan,
+  learning role on any goal: it reads only. Plan,
   interactive Martin, decision and a person may. A version 1 goal is refused
   them.
 - **`document add <p>/<g> --label "…" --path "…"`** — appends a document;

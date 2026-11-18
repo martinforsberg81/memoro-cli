@@ -78,7 +78,7 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
 | `decision` | opus | `decision` | runner lane or a person’s `mc decision [<id>]`, unattended on its own `decision` list; full goal desk authority within headless hooks ([mc-martin.md](mc-martin.md)) |
 | `desk-prepare` | sonnet | `desk-prepare` | chores or the person’s `mc martin prepare`, one fresh headless evidence-only turn per new item on the `medium` list; no goal identity or mutation authority ([mc-martin.md](mc-martin.md)) |
-| `learning` | opus | `learning` | chores, at most once a UTC day when five lessons are open or the oldest is seven days old; one headless session in `~/mc/martin/lessons/` on the `decision` list. It may create goals and write the ones it created in the session, and nothing else ([mc-martin.md](mc-martin.md) § *Lessons and the learning pass*) |
+| `learning` | opus | `learning` | `mc learning` or chores, one headless session on the `decision` list in `~/mc/martin/lessons/`. It updates factual area information and records dispositions, never creates a programme or goal ([mc-martin.md](mc-martin.md) § *Lessons and the learning pass*) |
 
 `programme-review` reads the document, horizon playback/basis, cited code and
 standards, unread places and pictures at origin/main. Its eight questions and
@@ -109,14 +109,9 @@ mark criteria met administratively. The unattended `decision` role has the same 
 
 Horizons, what the desk holds as worked toward, are set, moved, reopened and dropped only by the interactive Martin role or a person; the unattended manager may mark one reached and may propose one as a text item, and never creates one. [mc-martin.md](mc-martin.md) § Horizons holds the rest.
 
-`MC_ROLE=learning` is refused every goal verb except reading (`show`, `list`),
-`new`, and `set`, `document add`, `criterion add`, `item add|set|remove`,
-`obligation set|remove` and `stage <programme>/<goal> build` on a goal it created in the running session (`learningRefusal`, and
-`refusedMove` allows only draft → build for it). `stage` to anything else,
-`ready`, `drop`, `criterion set|remove|met`, `log`, `pr`, `martin` and every verb on a
-goal it did not create exit 2 and change nothing. It adds lessons, carries and
-dismisses them (one in five); the `review-session:goal` role may only add
-one.
+`MC_ROLE=learning` only reads goals (`show`, `list`, `areas`) and programme
+records. Its dispositions and area publications use `mc learning`'s own
+subcommands. Headless refusals still apply when started from the terminal.
 
 Martin investigates source questions against shared technical standards and
 programme design before raising a choice. Resolved details are not escalated.

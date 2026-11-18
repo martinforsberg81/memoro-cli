@@ -112,7 +112,7 @@ reader, which `collectPage` wires and `maintenanceSection` calls:
 |---|---|---|---|
 | User feedback | anonymous `suggest_improvement`: last collection, saved copies and pending receipts; unavailable reads are errors | collection time in the reading | `mc helper --collect` |
 | Proposals | the `.md` files directly in each area's `~/mc/areas/<repo>/<area>/proposals/` (every area folder on disk; no archive), counted and aged by area | the file name's date, else its mtime | `mc proposals` |
-| Lessons | `mc martin lessons`' own list: open, in a goal, late (older than 14 days) and landed this week | the oldest open or carried lesson | `mc martin` |
+| Lessons | `mc martin lessons`' own list: open evidence, in a goal, late (open and older than 14 days) and landed this week (including merged area corrections) | the oldest open or carried lesson | `mc martin` |
 | Errors | the helper's newest digest of each repository: new errors, critical and high | when the digest was collected | `mc helper --intake` |
 | Tests | the last full test of each repository, from the nightly record | the oldest run | `mc gate` |
 | Dependencies | the last audit of each repository: critical and high | the oldest read | `mc deps` |

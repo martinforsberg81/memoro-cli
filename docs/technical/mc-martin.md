@@ -634,12 +634,10 @@ pass handles what they leave rather than moving their ownership into the runner.
 
 ## Lessons and the learning pass
 
-Learning has happened only when one of three things has changed on main: the
-code of how mc works (`src/mc/`), the prompts of the sessions (`canon/`), or a
-technical standard (`docs/technical/` of memoro-cli or memoro) (Martin,
-2026-11-14). A lesson is the input to that, never the result: it is general form
-of what a missing or wrong rule looked like, and it leaves the list only by
-landing a change or by a dismissal with a reason. mc never deletes a lesson.
+A lesson is evidence of a missing or wrong rule, not a build order. Learning
+updates verified facts in permanent areas; repair of functionality is
+separate (Martin, 2026-11-18, [system decisions](areas/system.md#decisions)).
+mc never deletes a lesson.
 
 **Store.** A lesson is `~/mc/martin/lessons/<date>-<slug>.md` (`desk-lessons.js`):
 a header, then exactly three parts, `## What happened`, `## The rule` and
@@ -664,10 +662,11 @@ and needs a reason from every role; `lesson brief <name> --text '<the text>' --f
 a lesson that contradicts a dated decision of Martin's: it writes an item of
 kind `lesson`, sort `text`, with the brief in the form above (exactly the three
 Swedish parts; a brief not in it is refused with exit 2 and the lesson left open),
-and dismisses the lesson with the item as its reason. Writers: a person and the roles `martin`, `decision` and
-`learning` for every verb; `review-session:goal` for `add` only. Any other role
-is refused with exit 2 and nothing is written. **No verb sets `landed`.**
-`reconcileLessons` is the only way: each chores round the runner reads every
+and uses the original dismissal field to link it. Writers: a person and the
+roles `martin` and `decision` for these verbs; `review-session:goal` for
+`add` only. Other roles are refused with exit 2 and nothing is written.
+
+**Legacy goal links.** Each chores round the runner reads every
 goal (the archive included); an `in-goal` lesson whose goal is `done` becomes
 `landed` with the goal's last registered pull request and the time, and one
 whose goal was `dropped` becomes `open` again with no goal. A goal that cannot
@@ -683,41 +682,60 @@ written leaves the item open. (3) `overturned`: the interactive desk, when Marti
 decided without him or a rule the learning pass landed. (4) `review-finding`:
 the review session, for a session's technical decision it finds wrong.
 (5) `unsettled`: the runner, when the decision pass has failed on an item twice
-and gives it to Martin (`decision_failures`); one per item. (6) `repeat`: the
-learning pass, for three or more items within thirty days whose preparation names
-the same rule.
+and gives it to Martin (`decision_failures`); one per item. (6) `repeat` is read
+from existing records.
 
-**The pass.** Each chores round, after preparation, `runLearningPass`
-(`desk-learning.js`) starts one session when it is due: five or more lessons are
-`open`, or the oldest open lesson is seven days old. It starts none when it
-already started one on the UTC day (`~/mc/runner/learning.json`, written when a
-session starts, so a crashed one counts), none while the desk ceiling is set and
-reached, and none without a usable first `decision` candidate (`routeClass`,
-never another list). The session has `MC_ROLE=learning`, `MC_HEADLESS=1`, the
-canon role `canon/roles/learning.md`, stands in `~/mc/martin/lessons/`, has a
-sixty-minute limit and writes a `runs.tsv` row of kind `learning` named
-`learning` (class `decision`). Quota endings pause the runner as the other desk
-passes do.
+**Area learning.** A person runs `mc learning` or the runner starts a scheduled
+turn. Both use `canon/roles/learning.md` with `MC_ROLE=learning` and
+`MC_HEADLESS=1`. This role makes no programme or goal and does not repeat the
+manager's curation. It reads evidence and decisions and records dispositions:
+`mc learning record <name> --accurate <source>`, `--missing <reason>`,
+`--proposal <path>`, or `--held <id>`. The last two require an existing area
+proposal or desk text item; use the existing text brief to propose changing
+held wording. Reuse the previously linked proposal or item when applicable.
 
-**Authority.** The learning role may read, create goals (`mc goal new`), write
-the ones it created in this session (`set`, `document add`, `criterion add`,
-`item add|set|remove` and `obligation set|remove`) and
-move such a goal from `draft` to `build` (`stage <programme>/<goal> build`). A
-goal was created in this session when its first LOG.md entry is by role
-`learning` from a session tool and is stamped no earlier than the minute
-`MC_SESSION_STARTED` names. Every other verb, and every verb on another goal,
-is refused with exit 2 and changes nothing; the role writes no programme README
-and no file in a repository. The role never starts another session and runs no
-reserved act. It may dismiss at most one lesson in five of those it was given
-(the open ones plus those it carried or dismissed since its session started).
+For a correction, `mc learning area <repo>/<area>` opens a worktree on a fresh
+branch from origin/main with the manager's worktree setup. From that checkout,
+`mc learning publish <repo>/<area> --lesson <name> --source <reference>`
+accepts a committed, factual edit to that one declared area page. Pass another
+`--lesson` to link another lesson addressed by the same correction. The
+manager's publication guard is narrowed for this role: it refuses changes to
+other files, Aim, Decisions and dated decisions, and requires a new check
+against current main if the area's page changed. The command gates the commit,
+publishes without force and hands the immutable PR branch to the ordinary
+merger. It says published for the handoff and on main only after a merge into
+main is observed. Bare `mc publish` and mutations through the old lesson and
+goal verbs are refused to this role. No reserved act is granted.
 
-**Figures.** Computed by `buildChanges` from the item store and the lessons,
-without a model. The part shows: each change landed since the last opening, as
-one line (the goal's title, where — code, prompt or standard — and its pull
-request; lessons landed by one goal and pull request are one line); then counts
-only: lessons `open` and `in-goal`, with the age in days of the oldest of each;
-a lesson `open` or `in-goal` for more than fourteen days, named as late; the
-lessons dismissed since the last opening, with their reasons. Then four
+**Disposition records.** Each processed lesson has a versioned JSON sidecar
+at `lessons/.learning/<name>.json`; its Markdown, legacy state and goal links
+stay intact. The sidecar holds a digest of the lesson's evidence fields and
+the referenced desk item's evidence (including its brief and preparation).
+Whitespace alone and repository movement are not evidence changes. The
+snapshot offered to the session must match at the write. The record keeps
+the disposition, supporting reference, time and any linked proposal or held
+item. A publication records its area, source, branch, head and attempt, then
+its PR and observed state. Ordinary chores reconcile outstanding PRs; a
+closed unmerged PR is failed and not landed. A further attempt on the same
+evidence has one scheduled retry; after that failure it says
+`retry pending; run mc learning`. A manual turn bypasses the cadence and may
+try again, but uses the same desk budget and claim. Material evidence changes
+make the lesson actionable again under the normal trigger. Unchanged missing
+evidence remains open but does not wake a session
+([runner cadence](mc-run.md#what-runs-beside-it)). Old dismissal-based text links read
+as held and acquire an evidence baseline at reconciliation; an older mc ignores
+the sidecars and still reads the original Markdown.
+
+**Figures.** The terminal `What the system changed` shows the legacy goal
+landings since the last opening and an area-learning account: landed corrections,
+pending and failed publications, already accurate facts, linked repairs, and
+held decisions. `mc martin lessons` exposes the same projected state and the
+disposition; MAINTENANCE uses that projection for open, in-goal, late and
+landed this week. Only undisposed and insufficient evidence is open; only
+open evidence older than fourteen days is late. Legacy live goal links remain
+in-goal, and an area correction counts as landed only once its merge is
+observed. Dismissal-based text links count as held, not as dismissals.
+The desk retains the oldest ages and the dismissal reasons, then shows four
 weeks, oldest first, each week `(now − 7(w+1) days, now − 7w days]` and each
 with five numbers: items opened (`opened_at` in the week); the share of them
 that reached Martin (state `for-martin`, or closed by `martin`, or in an older store `default`); of

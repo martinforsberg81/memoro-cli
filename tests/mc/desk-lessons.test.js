@@ -9,7 +9,7 @@ import { deskItemId, itemDirectory, listDeskItems, readDeskItem, syncDeskItems, 
 import { goalJson } from './_helpers/goal-file.js';
 import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { decisionFailure } from '../../src/mc/desk-decision.js';
-import { briefLesson, carryLesson, dismissLesson, lessonsDir, listLessons, reconcileLessons, renderLesson } from '../../src/mc/desk-lessons.js';
+import { briefLesson, carryLesson, lessonsDir, listLessons, reconcileLessons, renderLesson } from '../../src/mc/desk-lessons.js';
 
 const roots = [];
 after(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -49,12 +49,12 @@ function briefedItem(h, { recommend = 'keep' } = {}) {
 describe('who records, carries and dismisses a lesson', () => {
   it('lets a person and the roles martin, decision and review-session:goal add one, and refuses any other role with the home unchanged', async () => {
     const h = home();
-    for (const role of ['person', 'martin', 'decision', 'learning', 'review-session:goal']) {
+    for (const role of ['person', 'martin', 'decision', 'review-session:goal']) {
       const r = await call(h, role, addArgs);
       assert.equal(r.code, 0, `${role}: ${r.stderr}`);
     }
-    assert.equal(listLessons({ env: h.env }).length, 5);
-    assert.deepEqual(listLessons({ env: h.env }).map((x) => x.by), ['person', 'martin', 'decision', 'learning', 'review-session:goal']);
+    assert.equal(listLessons({ env: h.env }).length, 4);
+    assert.deepEqual(listLessons({ env: h.env }).map((x) => x.by), ['person', 'martin', 'decision', 'review-session:goal']);
     for (const role of ['desk-prepare', 'build-session:goal', 'finish-session:goal', 'plan-session', 'session']) {
       const before = tree(h.root);
       const r = await call(h, role, addArgs);
@@ -78,7 +78,7 @@ describe('who records, carries and dismisses a lesson', () => {
 
   it('needs a reason to dismiss from everyone, and dismisses with one', async () => {
     const h = home(); const [name] = await open(h);
-    for (const role of ['person', 'martin', 'decision', 'learning']) {
+    for (const role of ['person', 'martin', 'decision']) {
       for (const argv of [['lesson', 'dismiss', name], ['lesson', 'dismiss', name, '--reason', '   ']]) {
         const before = tree(h.root);
         const r = await call(h, role, argv);
@@ -92,12 +92,16 @@ describe('who records, carries and dismisses a lesson', () => {
     assert.deepEqual([lesson.state, lesson.reason, lesson.dismissed_at], ['dismissed', 'One accident that no change would have prevented.', NOW.toISOString()]);
   });
 
-  it('lets the learning pass dismiss at most one lesson in five of those it was given', async () => {
-    const h = home(); const names = await open(h, 5);
-    assert.equal(dismissLesson({ env: h.env, name: names[0], reason: 'one accident', role: 'learning', since: '2026-11-14T00:00:00Z', now: NOW }).lesson.state, 'dismissed');
-    const before = tree(h.root);
-    assert.match(dismissLesson({ env: h.env, name: names[1], reason: 'another', role: 'learning', since: '2026-11-14T00:00:00Z', now: NOW }).error, /at most one lesson in 5/u);
-    assert.deepEqual(tree(h.root), before);
+  it('refuses legacy mutations from learning and points to dispositions, with nothing written', async () => {
+    const h = home(); const [name] = await open(h);
+    for (const argv of [addArgs, ['lesson', 'dismiss', name, '--reason', 'an accident'],
+      ['lesson', 'carry', name, '--goal', 'mc/x'], ['lesson', 'brief', name, '--text', 'x', '--file', '-']]) {
+      const before = tree(h.root);
+      const r = await call(h, 'learning', argv, FORM);
+      assert.equal(r.code, 2, argv.join(' '));
+      assert.match(r.stderr, /mc learning record/u);
+      assert.deepEqual(tree(h.root), before);
+    }
   });
 });
 
@@ -321,7 +325,7 @@ describe('a lesson given its place at carry is marked as a repeat as at add', ()
     parts: { happened: HAPPENED, rule: 'The rule.', where: 'Where.' }, ...fields,
   })); };
   const read = (h, name) => listLessons({ env: h.env }).find((x) => x.name === name);
-  const carry = (h, name, place) => { const out = io(); return martin(['lesson', 'carry', name, '--goal', 'mc/learned', ...(place ? ['--place', place] : [])], { ...out, env: { ...h.env, MC_ROLE: 'learning' }, now: () => NOW, home: join(h.root, 'programs') }).then((code) => ({ code, ...out.o })); };
+  const carry = (h, name, place) => { const out = io(); return martin(['lesson', 'carry', name, '--goal', 'mc/learned', ...(place ? ['--place', place] : [])], { ...out, env: { ...h.env, MC_ROLE: 'martin' }, now: () => NOW, home: join(h.root, 'programs') }).then((code) => ({ code, ...out.o })); };
   const live1 = (h) => { const dir = join(h.root, 'programs', 'mc', 'goals', 'learned'); mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'GOAL.json'), goalJson({})); writeFileSync(join(dir, 'LOG.md'), ''); };
   const landed = (h, fields = {}) => put(h, '2026-11-01-landed', { state: 'landed', goal: 'mc/old', pr: 'memoro-cli#9', place: PLACE, at: '2026-11-01T10:00:00Z', landed_at: '2026-11-10T10:00:00Z', ...fields });
 

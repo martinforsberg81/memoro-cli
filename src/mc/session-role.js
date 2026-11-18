@@ -13,7 +13,7 @@ export const MERGE_HANDOFF_FILE = '.mc-merge-handoff.json';
  * MC_HEADLESS is the runner's and the intake turn's mark on a session nobody
  * watches; an interactive session opened from inside one must not inherit it.
  */
-export const SESSION_IDENTITY_ENV = ['MC_ROLE', 'MC_PROGRAMME', 'MC_GOAL', 'MC_STEP', 'MC_PROJECT', 'MC_HEADLESS'];
+export const SESSION_IDENTITY_ENV = ['MC_ROLE', 'MC_PROGRAMME', 'MC_GOAL', 'MC_STEP', 'MC_PROJECT', 'MC_HEADLESS', 'MC_LEARNING_RUN'];
 
 export function withoutSessionIdentity(env) {
   const next = { ...env };

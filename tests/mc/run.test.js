@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { attemptDeadline, deployCheckTick, killGroup, statePath as deployCheckState, writeVerdictFile } from '../../src/mc/deploy-check.js';
 import { DEPLOYED as DEPLOY_ROW, readDeploys, recordEnd, recordStart } from '../../src/mc/deploys.js';
@@ -33,6 +33,10 @@ import { readCanonRole } from '../../src/mc/roles.js';
 import { deskItemId, itemDirectory, writeDeskItem, listDeskItems, syncDeskItems } from '../../src/mc/desk-items.js';
 import { deskItemQuestion } from '../../src/mc/desk-items.js';
 import { addLesson, lessonsDir, listLessons, renderLesson } from '../../src/mc/desk-lessons.js';
+import { run as learningCommand } from '../../src/mc/commands/learning.js';
+import { run as programmesCommand } from '../../src/mc/commands/programs.js';
+import { run as gitRun } from '../../src/mc/git.js';
+import { lessonsReading } from '../../src/mc/page-maintenance.js';
 
 /**
  * The project a path under the fixture's root belongs to: `/w/step/<p>/…`
@@ -671,6 +675,257 @@ test('chores marks a carried lesson landed with the goal\'s pull request once it
   assert.deepEqual([after['mc/made'].landed_at, after['mc/made'].pr], ['2026-08-29T10:00:00.000Z', 'memoro-cli#1507'], "the goal's last registered pull request");
   const reopened = listLessons({ env: l.f.deps.env }).find(x => x.name === second.name);
   assert.deepEqual([reopened.state, reopened.goal], ['open', null]);
+});
+
+const AREA = 'memoro-cli/system';
+const AREA_PAGE = 'docs/technical/areas/system.md';
+const HELD = 'Keep the original design (Martin, 2026-11-18).';
+const STALE_AREA = `# System\n\n## Aim\n\nKeep work bounded.\n\n## Decisions\n\n${HELD}\n\n## Store\n\nThe source records eight attempts.\n`;
+const SOURCE = 'src/actual.mjs';
+const CORRECTION = 'The source records three attempts (see [the source](../../../src/actual.mjs)).';
+
+/** Real area worktree/branch/diff/push, with GitHub and the already-tested gate/merger at their boundaries. */
+function areaLearningFixture(t, ages) {
+  const l = learningFixture(t, { ages });
+  const checkout = join(l.root, 'memoro-cli');
+  const upstream = join(l.root, 'upstream', 'memoro-cli.git');
+  const git = (path, args) => {
+    const r = gitRun(path, args);
+    return { ...r, ok: r.status === 0 };
+  };
+  const g = (path, args) => {
+    const r = git(path, args);
+    assert.equal(r.ok, true, `git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  g(l.root, ['init', '-q', '--bare', '--initial-branch=main', upstream]);
+  g(l.root, ['init', '-q', '--initial-branch=main', checkout]);
+  for (const [key, value] of [['user.name', 'Fixture'], ['user.email', 'test@example.invalid'], ['commit.gpgsign', 'false'], ['core.hooksPath', '/dev/null']]) g(checkout, ['config', key, value]);
+  const put = (file, content) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, content); };
+  put(join(checkout, AREA_PAGE), STALE_AREA);
+  put(join(checkout, '.mc/areas.json'), JSON.stringify({ schema_version: 1, areas: [
+    { id: 'system', name: 'System', covers: 'mc', paths: ['src/'], questions: [], standards: [], page: AREA_PAGE },
+  ] }));
+  put(join(checkout, SOURCE), 'export const attempts = 3;\n');
+  put(join(checkout, 'docs/technical/command.md'), 'An ordinary standard.\n');
+  g(checkout, ['add', '.']); g(checkout, ['commit', '-qm', 'Seed source and stale area']);
+  g(checkout, ['remote', 'add', 'origin', upstream]); g(checkout, ['push', '-qu', 'origin', 'main']);
+  l.f.deps.env.MC_REPOS_HOME = l.root;
+  const repos = [{ name: 'memoro-cli', path: checkout }];
+  const remote = new Map(), queued = [], gates = [];
+  const originalGh = l.f.deps.gh;
+  function gh(path, args) {
+    const ok = value => ({ ok: true, stdout: JSON.stringify(value) });
+    const [_, action, number] = args;
+    if (args[0] !== 'pr') return originalGh(path, args);
+    if (action === 'create') {
+      const branch = args[args.indexOf('--head') + 1], n = remote.size + 1;
+      const url = `https://example.invalid/fixture/pull/${n}`;
+      const headRefOid = g(checkout, ['rev-parse', `refs/remotes/origin/${branch}`]);
+      remote.set(n, { number: n, branch, state: 'OPEN', url, headRefOid, baseRefName: args[args.indexOf('--base') + 1] });
+      return { ok: true, stdout: url };
+    }
+    if (action === 'list' && args.includes('--head')) return ok([...remote.values()].filter(pr => pr.branch === args[args.indexOf('--head') + 1] && (pr.state === 'OPEN' || args.includes('all'))));
+    if (action === 'view' && remote.has(Number(number))) return ok(remote.get(Number(number)));
+    return originalGh(path, args);
+  }
+  l.f.deps.gh = gh;
+  const options = { repos, git, gh, queue: job => queued.push(job), gate: async (_argv, o) => { gates.push(g(o.cwd, ['rev-parse', 'HEAD'])); return 0; } };
+  l.f.deps.deskLearning.queue = options.queue;
+  const result = JSON.stringify({ type: 'result', num_turns: 1, total_cost_usd: 0.01 });
+  let clock = l.f.deps.now();
+  const now = () => clock;
+  const next = () => { clock = new Date(clock.getTime() + 86_400_000); };
+  const chores = () => createRunner({ deps: { ...l.f.deps, now } }).chores();
+  const act = async (handler, argv, env, extra = {}) => {
+    let stdout = '', stderr = '';
+    const code = await handler(argv, { ...options, ...extra, env, now, stdout: { write: s => { stdout += s; } }, stderr: { write: s => { stderr += s; } } });
+    return { code, stdout, stderr };
+  };
+  const session = (work) => async (call) => {
+    l.calls.push(call);
+    // Propagate fixture assertions without leaving a provider-boundary error as the only signal.
+    try { await work(call.env, call.args); }
+    catch (error) { failures.push(error); return { status: 1, stdout: result, stderr: error.message }; }
+    return { status: 0, stdout: result, stderr: '' };
+  };
+  const failures = [];
+  const manual = async (work) => {
+    const answer = await act(learningCommand, [], l.f.deps.env, { ...l.f.deps.deskLearning, logRun: () => {}, session: session(work) });
+    if (failures.length) throw failures.shift();
+    return answer;
+  };
+  const schedule = (work) => { l.f.deps.deskLearning.session = session(work); };
+  async function area(env) {
+    const r = await act(learningCommand, ['area', AREA], env);
+    assert.equal(r.code, 0, r.stderr);
+    return r.stdout.split(' · ')[0];
+  }
+  async function change(env, lesson, file, content) {
+    const cwd = await area(env);
+    put(join(cwd, file), content);
+    g(cwd, ['add', file]); g(cwd, ['commit', '-qm', 'Correct the area fact']);
+    return act(learningCommand, ['publish', AREA, '--lesson', lesson, '--source', `origin/main:${SOURCE}`], env, { cwd });
+  }
+  const lessons = () => listLessons({ env: l.f.deps.env });
+  const brief = () => act(martinCommand, ['brief'], l.f.deps.env, { home: join(l.root, 'programs'), syncDeps: { reportIssue: () => {} } });
+  const list = async (state) => JSON.parse((await act(martinCommand, ['lessons', '--state', state, '--json'], l.f.deps.env)).stdout);
+  return { ...l, checkout, g, now, next, chores, options, act, manual, schedule, change, lessons, brief, list, remote, queued, gates, put, failures };
+}
+
+test('learning publishes a sourced area correction, then ordinary chores confirm its merge with no session due', async (t) => {
+  const l = areaLearningFixture(t, [16]);
+  const [lesson] = l.lessons();
+  l.schedule(async (env) => {
+    assert.match(l.g(l.checkout, ['show', `origin/main:${SOURCE}`]), /attempts = 3/u);
+    const answer = await l.change(env, lesson.name, AREA_PAGE, STALE_AREA.replace('The source records eight attempts.', CORRECTION));
+    assert.equal(answer.code, 0, answer.stderr);
+    assert.match(answer.stdout, /system — update published in .*\/pull\/1/u);
+    assert.doesNotMatch(answer.stdout, /on main/u);
+  });
+  await l.chores();
+  assert.deepEqual(l.failures, []);
+  assert.equal(l.calls.length, 1);
+  assert.deepEqual(l.queued.map(({ repo, pr }) => [repo, pr]), [['memoro-cli', 1]]);
+  assert.deepEqual(l.gates, [l.remote.get(1).headRefOid]);
+  assert.equal(l.lessons()[0].learning.source, `origin/main:${SOURCE}`);
+  assert.deepEqual((await l.list('publication-pending')).map(x => x.name), [lesson.name]);
+  assert.deepEqual(await l.list('landed'), []);
+  assert.match((await l.brief()).stdout, /Area learning: 1 publication pending\./u);
+  assert.equal(lessonsReading({ lessons: l.lessons(), now: l.now() }).summary, '0 open · 0 in a goal · 0 late · 0 landed this week');
+  const pr = l.remote.get(1);
+  l.g(l.checkout, ['merge', '--ff-only', pr.headRefOid]);
+  l.g(l.checkout, ['push', '-q', 'origin', 'main']);
+  assert.match(l.g(l.checkout, ['show', `origin/main:${AREA_PAGE}`]), /three attempts \(see \[the source\]/u);
+  assert.ok(l.g(l.checkout, ['show', `origin/main:${AREA_PAGE}`]).includes(HELD));
+  pr.state = 'MERGED'; pr.mergedAt = l.now().toISOString();
+  l.next();
+  await l.chores();
+  assert.equal(l.calls.length, 1, 'the merge was recorded without a learning session');
+  assert.deepEqual((await l.list('landed')).map(x => [x.name, x.pr, x.learning.source]), [[lesson.name, 'memoro-cli#1', `origin/main:${SOURCE}`]]);
+  assert.match((await l.brief()).stdout, /Area learning: 1 correction landed\./u);
+  assert.equal(lessonsReading({ lessons: l.lessons(), now: l.now() }).summary, '0 open · 0 in a goal · 0 late · 1 landed this week');
+  assert.ok(l.f.log.some(line => /system — update on main in .*\/pull\/1/u.test(line)));
+});
+
+test('learning guards both entrances and records accurate, held, repair and legacy dispositions in one projection', async (t) => {
+  const l = areaLearningFixture(t, [20, 19, 18, 17, 16, 15]);
+  const [accurate, held, defect, unsupported, asGoal, legacy] = l.lessons();
+  const link = `## Vad den säger\nBehåll A.\n\n## Vad som föreslås\nByt till B.\n\n## Vad som hittades\nEtt fall strider mot A.\n`;
+  const env = l.f.deps.env;
+  l.put(join(lessonsDir(env), `${asGoal.name}.md`), renderLesson({ ...asGoal, state: 'in-goal', goal: 'fixture/old-order' }));
+  assert.equal((await l.act(martinCommand, ['lesson', 'brief', legacy.name, '--text', 'legacy text', '--file', '-'], env, { readStdin: () => link })).code, 0);
+  const manual = await l.manual(async (child, args) => {
+    assert.equal(child.MC_HEADLESS, '1');
+    assert.ok(args[args.indexOf('--append-system-prompt') + 1].includes(readCanonRole('learning').overlay));
+    const refused = await l.change(child, accurate.name, 'docs/technical/command.md', 'Rewrite the standard.\n');
+    assert.equal(refused.code, 2, refused.stderr);
+    assert.match(refused.stderr, /not an edit to the declared area page/u);
+    assert.equal((await l.act(learningCommand, ['record', accurate.name, '--accurate', SOURCE], child)).code, 0);
+  });
+  assert.equal(manual.code, 0, manual.stderr);
+  assert.equal(manual.stdout, 'mc: no area information to update\n');
+  l.schedule(async (child) => {
+    const refused = await l.change(child, held.name, AREA_PAGE, STALE_AREA.replace(HELD, 'Replace the decision.'));
+    assert.equal(refused.code, 2, refused.stderr);
+    assert.match(refused.stderr, /changes its ## Decisions/u);
+    const brief = await l.act(martinCommand, ['propose', '--text', `${AREA_PAGE}#Decisions`, '--file', '-'], child, { readStdin: () => link });
+    assert.equal(brief.code, 0, brief.stderr);
+    for (const argv of [['record', held.name, '--held', brief.stdout.trim()], ['record', unsupported.name, '--missing', 'Need a reproducible source.']]) {
+      assert.equal((await l.act(learningCommand, argv, child)).code, 0, argv.join(' '));
+    }
+    const proposal = join(env.MC_WORK_ROOT, 'areas', AREA, 'proposals', '2026-08-29-mc-defect.md');
+    l.put(proposal, 'The code retries when it should stop. Evidence: src/actual.mjs.\n');
+    assert.equal((await l.act(learningCommand, ['record', defect.name, '--proposal', proposal], child)).code, 0);
+    assert.equal((await l.act(goalCommand, ['new', 'fixture/not-allowed', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Do not order'], child)).code, 2);
+    assert.equal((await l.act(programmesCommand, ['create', 'not-allowed', '--end', 'Do not order'], child)).code, 2);
+  });
+  await l.chores();
+  assert.deepEqual(l.failures, []);
+  assert.deepEqual(l.queued, []);
+  assert.equal(l.remote.size, 0);
+  assert.deepEqual(l.gates, [], 'policy refuses before gate or publication');
+  assert.equal(l.g(l.checkout, ['show', `origin/main:${AREA_PAGE}`]), STALE_AREA.trim());
+  const rows = l.lessons().map(x => [x.name, x.learning?.state]);
+  assert.deepEqual(rows, [[accurate.name, 'already-accurate'], [held.name, 'held-decision'], [defect.name, 'repair-proposal'],
+    [unsupported.name, 'insufficient-evidence'], [asGoal.name, undefined], [legacy.name, 'held-decision']]);
+  assert.deepEqual((await l.list('open')).map(x => x.name), [unsupported.name]);
+  assert.deepEqual((await l.list('in-goal')).map(x => [x.name, x.goal]), [[asGoal.name, 'fixture/old-order']]);
+  assert.deepEqual((await l.list('held-decision')).map(x => x.name), [held.name, legacy.name]);
+  assert.ok(l.f.log.some(x => /mc: holding decision at the desk/u.test(x)));
+  assert.ok(l.f.log.some(x => /mc: repair proposal .*defect\.md/u.test(x)));
+  const account = (await l.brief()).stdout;
+  assert.match(account, /Area learning: 1 already accurate, 1 repair proposal, 2 held decisions\./u);
+  assert.match(account, /In a goal that has not landed: 1, oldest 16 days/u);
+  assert.match(account, new RegExp(`Late .*: ${unsupported.name} \\(open, 17 days\\)\\.`, 'u'));
+  const maintenance = lessonsReading({ lessons: l.lessons(), now: l.now() });
+  assert.equal(maintenance.summary, '1 open · 1 in a goal · 1 late · 0 landed this week');
+  assert.deepEqual(maintenance.groups.slice(0, 2).map(x => x.items), [[unsupported.name], [asGoal.name]]);
+});
+
+test('closed unmerged learning publications get one scheduled retry and then wait for a manual run', async (t) => {
+  const l = areaLearningFixture(t, [1]);
+  const [lesson] = l.lessons();
+  const correct = async env => {
+    const answer = await l.change(env, lesson.name, AREA_PAGE, STALE_AREA.replace('The source records eight attempts.', CORRECTION));
+    assert.equal(answer.code, 0, answer.stderr);
+  };
+  assert.equal((await l.manual(correct)).code, 0);
+  l.remote.get(1).state = 'CLOSED';
+  l.schedule(correct);
+  await l.chores();
+  assert.deepEqual(l.failures, []);
+  assert.equal(l.calls.length, 2, 'a single young failed lesson is sufficient');
+  l.remote.get(2).state = 'CLOSED';
+  l.next(); await l.chores();
+  assert.equal(l.calls.length, 2, 'the same evidence does not trigger another scheduled retry');
+  const [failed] = l.lessons();
+  assert.deepEqual([failed.learning.state, failed.learning.attempts, failed.learning.reference], ['publication-failed', 2, 'memoro-cli#2']);
+  assert.match((await l.brief()).stdout, /Area learning: 1 publication failed; correction pending\./u);
+  assert.deepEqual(await l.list('landed'), []);
+  assert.equal(lessonsReading({ lessons: l.lessons(), now: l.now() }).summary, '0 open · 0 in a goal · 0 late · 0 landed this week');
+  assert.ok(l.f.log.some(x => /system — retry pending; run mc learning/u.test(x)));
+  assert.equal((await l.manual(correct)).code, 0);
+  assert.deepEqual(l.queued.map(job => job.pr), [1, 2, 3]);
+});
+
+test('unchanged insufficient evidence stays open but only changed evidence on the same lesson wakes learning again', async (t) => {
+  const l = learningFixture(t, { ages: [] });
+  const env = l.f.deps.env;
+  const at = '2026-08-03T10:00:00.000Z';
+  const id = deskItemId('text', 'text:area', at);
+  const item = { id, kind: 'text', reference: 'text:area', text: 'area', sort: 'text', state: 'for-martin', at };
+  writeDeskItem(item, { env });
+  const prepared = join(itemDirectory(item, env), 'prepared.md');
+  writeFileSync(prepared, 'The report lacks a source.\n');
+  const { lesson } = addLesson({ env, kind: 'review-finding', item: id, parts: { happened: 'A fact might be stale.', rule: 'Check the source.', where: AREA_PAGE }, by: 'decision', now: new Date(at) });
+  const records = [];
+  let clock;
+  l.f.deps.deskLearning.session = async (call) => {
+    l.calls.push(call);
+    const status = await learningCommand(['record', lesson.name, '--missing', 'Need the source revision.'], {
+      env: call.env, now: () => clock, stdout: { write: () => {} }, stderr: { write: () => {} },
+    });
+    records.push(status);
+    return { status, stdout: JSON.stringify({ type: 'result' }), stderr: '' };
+  };
+  const chores = day => {
+    clock = new Date(`2026-08-${day}T10:00:00Z`);
+    return createRunner({ deps: { ...l.f.deps, now: () => clock } }).chores();
+  };
+  await chores(29);
+  const [first] = listLessons({ env, state: 'open' });
+  assert.equal(first.learning.state, 'insufficient-evidence');
+  writeFileSync(prepared, '\nThe report lacks a source. \n');
+  await chores(30);
+  assert.deepEqual(records, [0]);
+  assert.deepEqual(listLessons({ env, state: 'open' })[0].learning, first.learning, 'unchanged evidence does not write another disposition');
+  writeFileSync(prepared, 'The report now names src/actual.mjs, but not its revision.\n');
+  await chores(31);
+  assert.deepEqual(records, [0, 0]);
+  const [second] = listLessons({ env, state: 'open' });
+  assert.equal(second.name, lesson.name);
+  assert.notEqual(first.learning.evidence, second.learning.evidence);
 });
 
 /** The helper's two halves, faked: a digest that was written and a turn that ran. */

@@ -21,7 +21,10 @@ The page is `mc`: a numbered item shows a goal or opens a programme (HORIZONS dr
 brief, criteria, phase, stage and log; `mc plan` and `mc martin` are the person's interactive entrances
 (`mc helper` is the eye and has none); `mc manager` is headless only
 (`mc manager --headless --prompt`, [mc-manager.md](mc-manager.md)) and the runner starts it itself. A session already
-running uses the goal verbs, not an entrance that starts another session.
+running uses its own verbs, not an entrance that starts another session.
+`mc learning` is a terminal command for factual area updates, starting the
+same headless role as chores; its in-session routes and refusal rules are in
+[mc-martin.md](mc-martin.md#lessons-and-the-learning-pass).
 Projects went on 2026-11-03; migration is described in
 [mc-goals.md § From a project](mc-goals.md#from-a-project).
 

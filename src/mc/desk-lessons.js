@@ -1,7 +1,6 @@
 /**
  * The desk's lessons: what a rule that was missing or wrong looked like, in
- * general form, until a landed change makes it unnecessary. A lesson is input
- * to a goal, never the result; mc never deletes one.
+ * general form. A lesson is evidence, never the result; mc never deletes one.
  *
  * A lesson is `~/mc/martin/lessons/<date>-<slug>.md`: a small header, then
  * three prose parts. Everything here is model-free. The verbs live in
@@ -14,19 +13,18 @@ import { writeFileAtomic } from './atomic-write.js';
 import { deskItemId, itemDirectory, updateDeskItem } from './desk-items.js';
 import { textForm } from './desk-texts.js';
 import { goalReferences, isGoalRef, prRef, REVIEW_ROLE } from './goals.js';
+import { LEARNING_STATES, lessonLandedAt, lessonVersion, projectedLessonState, readLearning } from './lesson-learning.js';
 import { martinDir, programsHome } from './paths.js';
 
 export const LESSON_KINDS = ['not-martins', 'wrong-question', 'answer-differs', 'overturned', 'review-finding', 'unsettled', 'repeat'];
 export const LESSON_STATES = ['open', 'in-goal', 'landed', 'dismissed'];
 /** Who may do what to a lesson. The runner writes `unsettled`, `answer-differs` and `landed` itself. */
 export const LESSON_WRITERS = {
-  add: ['person', 'martin', 'decision', 'learning', REVIEW_ROLE],
-  carry: ['person', 'martin', 'decision', 'learning'],
-  dismiss: ['person', 'martin', 'decision', 'learning'],
-  brief: ['person', 'martin', 'decision', 'learning'],
+  add: ['person', 'martin', 'decision', REVIEW_ROLE],
+  carry: ['person', 'martin', 'decision'],
+  dismiss: ['person', 'martin', 'decision'],
+  brief: ['person', 'martin', 'decision'],
 };
-/** The learning pass may dismiss at most this share of the lessons it was given: one in five. */
-export const DISMISS_ONE_IN = 5;
 export const LATE_DAYS = 14;
 export const PARTS = [['happened', 'What happened'], ['rule', 'The rule'], ['where', 'Where the change belongs']];
 
@@ -89,9 +87,16 @@ export function listLessons({ env = process.env, state = null } = {}) {
   try { names = readdirSync(dir).filter((file) => file.endsWith('.md')).map((file) => file.slice(0, -3)).filter((name) => NAME.test(name)); } catch { return []; }
   const lessons = [];
   for (const name of names) {
-    try { const lesson = parseLesson(name, readFileSync(join(dir, `${name}.md`), 'utf8')); if (lesson && (!state || lesson.state === state)) lessons.push(lesson); } catch { /* unreadable: omitted */ }
+    const lesson = lessonWithLearning(readLesson(name, { env }), env);
+    if (lesson && (!state || projectedLessonState(lesson) === state)) lessons.push(lesson);
   }
   return lessons.sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.name.localeCompare(b.name));
+}
+
+export function lessonWithLearning(lesson, env) {
+  if (!lesson) return null;
+  const learning = readLearning(lesson, env);
+  return { ...lesson, learning, evidence: lessonVersion(lesson, env) };
 }
 
 export function readLesson(name, { env = process.env } = {}) {
@@ -131,7 +136,8 @@ export function parseLessonInput(text) {
 /** The last, in `listLessons` order, of the landed lessons of this kind and place whose `landed_at` is not after `at`; or null. */
 function earlierLanded({ env, kind, place, at }) {
   if (!place) return null;
-  return listLessons({ env }).filter((x) => x.state === 'landed' && x.kind === kind && x.place === place && Date.parse(x.landed_at) <= Date.parse(at)).at(-1) ?? null;
+  return listLessons({ env, state: 'landed' }).filter((x) => x.kind === kind && x.place === place && Date.parse(lessonLandedAt(x)) <= Date.parse(at))
+    .map((x) => ({ ...x, pr: x.pr ?? x.learning?.reference })).at(-1) ?? null;
 }
 
 /** The first part with the sentence that says the lesson repeats `earlier`; `once` leaves a part that already ends with it as it is. */
@@ -165,6 +171,7 @@ export function addLesson({ env = process.env, kind, item = null, programme = nu
 
 /** The refusal for a role that may not do `verb`, or null. */
 export function lessonRefusal(verb, role) {
+  if (role === 'learning') return 'learning records dispositions with mc learning record or mc learning publish';
   return LESSON_WRITERS[verb]?.includes(role) ? null : `role ${role} cannot ${verb} lessons`;
 }
 
@@ -186,23 +193,12 @@ export function carryLesson({ env = process.env, name, goal, place = null, now =
   return { lesson };
 }
 
-/**
- * open → dismissed, with a reason. The learning pass may dismiss at most one lesson in five of those
- * it was given: the lessons it carried or dismissed since `since` plus those still open are what it
- * was given.
- */
-export function dismissLesson({ env = process.env, name, reason, role, since = null, now = new Date() }) {
+/** open → dismissed, with a reason. */
+export function dismissLesson({ env = process.env, name, reason, now = new Date() }) {
   const lesson = readLesson(name, { env });
   if (!lesson) return { error: `unknown lesson ${name}` };
   if (lesson.state !== 'open') return { error: `lesson ${name} is ${lesson.state}; only an open lesson is dismissed` };
   if (!String(reason ?? '').trim()) return { error: 'dismiss needs --reason, in a sentence: the accident no change would have prevented' };
-  if (role === 'learning') {
-    const from = Date.parse(since ?? '') || 0;
-    const all = listLessons({ env });
-    const given = all.filter((x) => x.state === 'open' || (x.state === 'in-goal' && Date.parse(x.carried_at) >= from) || (x.state === 'dismissed' && Date.parse(x.dismissed_at) >= from)).length;
-    const dismissed = all.filter((x) => x.state === 'dismissed' && Date.parse(x.dismissed_at) >= from).length;
-    if ((dismissed + 1) * DISMISS_ONE_IN > given) return { error: `the learning pass may dismiss at most one lesson in ${DISMISS_ONE_IN}: ${dismissed} of ${given} are dismissed already` };
-  }
   Object.assign(lesson, { state: 'dismissed', dismissed_at: now.toISOString(), reason: String(reason).trim().replace(/\s+/gu, ' ') });
   writeLesson(lesson, { env });
   return { lesson };
@@ -284,8 +280,8 @@ export function recordAnswerDiffers({ env = process.env, item, brief, now = new 
     env, kind: 'answer-differs', item: item.id, programme: programmeOfItem(item), by, now,
     parts: {
       happened: `Item ${item.id} (${item.reference}): the brief recommended "${item.recommend}": ${text(item.recommend)}\nMartin chose "${item.chose}": ${text(item.chose)}`,
-      rule: 'Not yet in general form: the learning pass derives, from this item\'s brief and Martin\'s answer, the rule that would have made the recommendation his.',
-      where: 'Not yet named: the learning pass names the code, canon page or technical standard where that rule belongs.',
+      rule: 'Not yet in general form: compare this item\'s brief and Martin\'s answer with the current rule.',
+      where: 'Not yet named: the area, existing functionality or held decision the evidence concerns.',
     },
   });
 }
@@ -297,8 +293,8 @@ export function recordUnsettled({ env = process.env, item, failures, now = new D
     env, kind: 'unsettled', item: item.id, programme: programmeOfItem(item), by: 'runner', now,
     parts: {
       happened: `Item ${item.id} (${item.reference}): the decision pass ended twice without settling it, and the runner gave it to Martin as a mechanical brief.\n${failures.map((x) => `- ${x.at}: ${String(x.reason).split('\n')[0].slice(0, 300)}`).join('\n')}`,
-      rule: 'Not yet in general form: the learning pass derives from the two endings what the pass lacked (a rule, a check or a refusal) to settle such an item.',
-      where: 'Not yet named: the learning pass names the code, canon page or technical standard where that rule belongs.',
+      rule: 'Not yet in general form: compare the two endings with how the pass is supposed to settle such an item.',
+      where: 'Not yet named: the area, existing functionality or held decision the evidence concerns.',
     },
   });
 }
@@ -326,7 +322,8 @@ function goalOfLesson(goals, lesson) {
  */
 export function buildChanges({ lessons, items, goals = [], since, now }) {
   const nowMs = now.getTime(), sinceMs = Date.parse(since) || 0;
-  const live = lessons.filter((x) => x.state === 'open'), carried = lessons.filter((x) => x.state === 'in-goal');
+  const by = (state) => lessons.filter((x) => projectedLessonState(x) === state);
+  const live = by('open'), carried = by('in-goal');
   const oldest = (list) => (list.length ? Math.max(...list.map((x) => ageDays(x.at, nowMs))) : null);
   const between = (at) => Date.parse(at) > sinceMs && Date.parse(at) <= nowMs;
 
@@ -339,9 +336,11 @@ export function buildChanges({ lessons, items, goals = [], since, now }) {
   }
   const landed = [...groups.values()].sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || String(a.pr).localeCompare(String(b.pr)));
 
-  const late = lessons.filter((x) => ['open', 'in-goal'].includes(x.state) && ageDays(x.at, nowMs) > LATE_DAYS)
+  const late = live.filter((x) => ageDays(x.at, nowMs) > LATE_DAYS)
     .map((x) => ({ name: x.name, state: x.state, days: ageDays(x.at, nowMs) }));
-  const dismissed = lessons.filter((x) => x.state === 'dismissed' && between(x.dismissed_at)).map((x) => ({ name: x.name, reason: x.reason, at: x.dismissed_at }));
+  const dismissed = by('dismissed').filter((x) => between(x.dismissed_at)).map((x) => ({ name: x.name, reason: x.reason, at: x.dismissed_at }));
+  const area = Object.fromEntries(LEARNING_STATES.map((state) => [state, state === 'corrected'
+    ? by('landed').filter((x) => x.state !== 'landed').length : by(state).length]));
 
   const weeks = [3, 2, 1, 0].map((w) => {
     const end = nowMs - w * 7 * DAY_MS, start = end - 7 * DAY_MS;
@@ -350,7 +349,7 @@ export function buildChanges({ lessons, items, goals = [], since, now }) {
     const toMartin = opened.filter(reached);
     const notHis = toMartin.filter((item) => lessons.some((x) => NOT_MARTINS.includes(x.kind) && x.item === item.id));
     const overturned = lessons.filter((x) => x.kind === 'overturned' && inWeek(x.at)).length;
-    const repeats = lessons.filter((x) => inWeek(x.at) && x.place && lessons.some((y) => y.state === 'landed' && y.kind === x.kind && y.place === x.place && Date.parse(y.landed_at) <= Date.parse(x.at))).length;
+    const repeats = lessons.filter((x) => inWeek(x.at) && x.place && by('landed').some((y) => y.kind === x.kind && y.place === x.place && Date.parse(lessonLandedAt(y)) <= Date.parse(x.at))).length;
     return {
       from: new Date(start).toISOString(), to: new Date(end).toISOString(),
       items_opened: opened.length,
@@ -364,17 +363,25 @@ export function buildChanges({ lessons, items, goals = [], since, now }) {
     landed,
     open: { count: live.length, oldest_days: oldest(live) },
     in_goal: { count: carried.length, oldest_days: oldest(carried) },
-    late, dismissed, weeks,
+    late, dismissed, weeks, area,
   };
 }
 
 /** The part What the system changed, as text. */
 export function renderChanges(changes) {
   const out = ['## What the system changed', ''];
-  if (!changes.landed.length) out.push('No change has landed from lessons since the last opening.');
+  if (!changes.landed.length && !changes.area?.corrected) out.push('No change has landed from lessons since the last opening.');
   for (const change of changes.landed) out.push(`- ${change.what} — ${change.where ?? 'unplaced'}${change.place ? ` (${change.place})` : ''} — ${change.pr ?? 'no pull request recorded'}`);
   const age = (n) => (n === null ? '' : `, oldest ${n} day${n === 1 ? '' : 's'}`);
   out.push('', `Lessons still open: ${changes.open.count}${age(changes.open.oldest_days)}. In a goal that has not landed: ${changes.in_goal.count}${age(changes.in_goal.oldest_days)}.`);
+  const labels = [['corrected', 'correction landed', 'corrections landed'], ['publication-pending', 'publication pending', 'publications pending'],
+    ['publication-failed', 'publication failed; correction pending', 'publications failed; corrections pending'],
+    ['already-accurate', 'already accurate'], ['repair-proposal', 'repair proposal', 'repair proposals'], ['held-decision', 'held decision', 'held decisions']];
+  const account = labels.flatMap(([state, one, many = one]) => {
+    const count = changes.area?.[state];
+    return count ? [`${count} ${count === 1 ? one : many}`] : [];
+  });
+  if (account.length) out.push(`Area learning: ${account.join(', ')}.`);
   if (changes.late.length) out.push(`Late (older than ${LATE_DAYS} days, neither landed nor dismissed): ${changes.late.map((x) => `${x.name} (${x.state}, ${x.days} days)`).join('; ')}.`);
   out.push(changes.dismissed.length ? `Dismissed since the last opening: ${changes.dismissed.length}. ${changes.dismissed.map((x) => `${x.name}: ${x.reason}`).join(' ')}` : 'Dismissed since the last opening: 0.');
   const pct = (value) => (value === null ? '-' : `${value}%`);

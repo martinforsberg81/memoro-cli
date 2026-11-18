@@ -225,7 +225,7 @@ export async function run(argv, deps = {}) {
   const { flags } = scanned;
 
   if (env.MC_ROLE === LEARNING_ROLE) {
-    const refused = learningRefusal(verb, rest, ctx, flags);
+    const refused = learningRefusal(verb);
     if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
   }
 
@@ -1842,10 +1842,7 @@ export function refusedMove({ from, to = null, status = null, env }) {
     if (to === 'done') return 'Martin does not mark a goal done administratively — preserve the normal review, publish and merger handoff';
     return null;
   }
-  if (env.MC_ROLE === LEARNING_ROLE) {
-    if (status !== null || to !== 'build' || from !== 'draft') return 'the learning role only moves a goal it created from draft to build';
-    return null;
-  }
+  if (env.MC_ROLE === LEARNING_ROLE) return learningRefusal('stage');
   if (!isSession(env)) return null;
   const moves = to !== null && to !== from;
   const rejects = env.MC_ROLE === REVIEW_ROLE && from === 'review' && to === 'build';
@@ -1875,35 +1872,10 @@ export function refusedMove({ from, to = null, status = null, env }) {
   return null;
 }
 
-/** The learning pass's role (`desk-learning.js`): it creates goals and writes the ones it created, nothing else. */
 const LEARNING_ROLE = 'learning';
-const LEARNING_VERBS = ['show', 'list', 'areas', 'new', 'set', 'document add', 'criterion add', 'item add', 'item set', 'item remove', 'obligation set', 'obligation remove', 'stage'];
-
-/**
- * Whether the goal was created by the running learning session: its first LOG.md entry is a learning
- * session's (not a person's) and is stamped no earlier than the minute the session started
- * (`MC_SESSION_STARTED`, set by the pass). A goal with no such entry is somebody else's.
- */
-function createdInThisSession(target, ctx) {
-  const started = Date.parse(ctx.env.MC_SESSION_STARTED || '');
-  if (!Number.isFinite(started)) return false;
-  const first = parseLog(ctx.read(join(target.dir, LOG_FILE)) ?? '')[0];
-  return Boolean(first) && first.role === LEARNING_ROLE && first.tool !== 'person' && first.at >= logStamp(new Date(started));
-}
-
-/**
- * Why the learning role may not make this call, or null. It may read, make a goal, write one it made in this
- * session (`set`, `document add`, `criterion add`) and move that goal draft → build; a refused call changes nothing.
- */
-function learningRefusal(verb, rest, ctx, flags = {}) {
-  if (!LEARNING_VERBS.includes(verb)) return `the learning role cannot use ${verb} — it creates and writes new goals, nothing else`;
-  if (['show', 'list', 'areas', 'new'].includes(verb)) return null;
-  if (verb === 'stage' && rest.length !== 2) return 'the learning role moves a goal it created with mc goal stage <programme>/<goal> build';
-  const target = goalNamed(rest[0], ctx);
-  if (target.error) return target.error;
-  if (!createdInThisSession(target, ctx)) return `the learning role writes only goals it created in this session, and ${target.name} is not one`;
-  if (verb === 'stage' && rest[1] !== 'build') return `the learning role moves a new goal to build, not ${rest[1]}`;
-  return null;
+function learningRefusal(verb) {
+  return ['show', 'list', 'areas'].includes(verb) ? null
+    : `the learning role cannot use mc goal ${verb} — use mc learning record or mc learning publish for lesson evidence`;
 }
 
 /** Whether the caller is a session: MC_GOAL or MC_ROLE set, MC_TOOL not `person`. */

@@ -30,7 +30,7 @@ export const horizonStatePath = (root, slug) => join(root, 'runner', 'manager-tu
 /** `runner/manager-turn/curation.json` under the work root. */
 export const curationStatePath = (root) => join(root, 'runner', 'manager-turn', 'curation.json');
 /** `runner/work/manager-curation/<stamp>`: one curation turn's branch worktrees, one per repository that declares areas. */
-export const curationWorktreesDir = (root, stamp) => join(root, 'runner', 'work', 'manager-curation', stamp);
+export const curationWorktreesDir = (root, stamp, kind = 'manager-curation') => join(root, 'runner', 'work', kind, stamp);
 
 const lastLine = (text) => String(text ?? '').trim().split('\n').at(-1) || '';
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -140,8 +140,8 @@ const reachable = ({ git, path, ref }) => git(path, ['merge-base', '--is-ancesto
  * from a fresh origin/main in its own worktree. `{ ok: true, paths, branches, heads }` — `heads` the commit each
  * branch starts at, which is what the turn read — or `{ ok: false, reason, fetch? }`, with what was made removed.
  */
-export function setUpCurationWorktrees({ git, root, stamp, repos }) {
-  const base = curationWorktreesDir(root, stamp);
+export function setUpCurationWorktrees({ git, root, stamp, repos, kind = 'manager-curation' }) {
+  const base = curationWorktreesDir(root, stamp, kind);
   const paths = {}; const branches = {}; const heads = {}; const made = [];
   const undo = () => { for (const repo of made) { git(repo.path, ['worktree', 'remove', '--force', paths[repo.name]]); git(repo.path, ['branch', '-D', branches[repo.name]]); } };
   for (const repo of repos) {
@@ -150,7 +150,7 @@ export function setUpCurationWorktrees({ git, root, stamp, repos }) {
   }
   for (const repo of repos) {
     const path = join(base, repo.name);
-    const branch = `manager/curation-${stamp}`;
+    const branch = kind === 'manager-curation' ? `manager/curation-${stamp}` : `learning/${stamp}`;
     const added = git(repo.path, ['worktree', 'add', '-q', '-b', branch, path, 'origin/main']);
     if (!added.ok) { undo(); return { ok: false, reason: `setup: ${lastLine(added.stderr) || 'git worktree add failed'}` }; }
     paths[repo.name] = path; branches[repo.name] = branch; made.push(repo);

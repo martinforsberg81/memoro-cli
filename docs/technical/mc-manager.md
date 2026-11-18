@@ -64,7 +64,10 @@ decision of Martin's (a list item with its continuation lines, or a paragraph up
 block is superseded by that later block; the manager may then remove it or correct it, keeping its citation (the
 last `Martin, YYYY-MM-DD` in it, as written). Everything else is refused with the one message that sends a text of
 Martin's to the desk with `mc martin propose`. That is a list of where curation may write, not a proof that what it
-writes is true: whether a statement is a fact stays the session's judgement. Other roles are unaffected (`managerGuard` in `src/mc/publish.js`).
+writes is true: whether a statement is a fact stays the session's judgement. The learning role reuses `managerGuard` with the narrower scope of a single
+declared area page and no edits to held sections or dated blocks. Its
+work and cadence are separate from curation; see
+[area learning](mc-martin.md#lessons-and-the-learning-pass). Other roles are unaffected.
 
 The manager writes no programme: `mc programs create`, `record` and `state` refuse it with exit 2, as they refuse
 every headless role ([mc-plan.md](mc-plan.md)). Work the manager finds that needs a programme, a repair included,

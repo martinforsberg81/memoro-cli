@@ -819,18 +819,22 @@ The off-by-default shared daily desk ceiling is checked before every turn; a
 hold is said once per round. Failed-attempt fallback, manual preparation, role
 authority and the setting are defined in [mc-martin.md](mc-martin.md).
 
-Right after preparation each chores round reconciles lessons with their goals
-(`reconcileLessons`: an `in-goal` lesson whose goal is done becomes `landed`
-with its pull request, one whose goal was dropped becomes `open`), then
-`runLearning` starts the learning pass when it is due: five or more open
-lessons, or one open seven days; at most one session a UTC day (marker
-`~/mc/runner/learning.json`), none while the desk ceiling is reached. The
-session has `MC_ROLE=learning`, `MC_HEADLESS=1`, a sixty-minute limit, the first
-usable `routeClass('decision')` candidate and `~/mc/martin/lessons/` as its
-directory, and writes a `runs.tsv` row of kind `learning`. Quota endings pause
-the runner. When the decision pass has failed twice on an item the runner also
-writes its `unsettled` lesson. See [mc-martin.md](mc-martin.md) § *Lessons and the
-learning pass*.
+Right after preparation each chores round reconciles legacy goal-linked lessons
+and outstanding area corrections. Pending PRs are observed independently of
+learning admission: a PR merged into main records the correction, and a
+closed unmerged PR records a failed publication. An unknown observation leaves
+it pending. Then `runLearning` starts the shared learning role when five
+lessons are actionable or an actionable lesson is seven days old. A first
+failed publication on unchanged evidence can wake one scheduled retry even
+alone. Insufficient evidence does not wake another turn until it changes.
+A scheduled start writes `~/mc/runner/learning.json` and counts for that UTC
+day even if the session crashes; no start while the desk ceiling is reached
+or no `decision` candidate is usable. The terminal and runner exclude each
+other through a process-owned claim and pass the same canon role and evidence
+snapshot to a headless session in `~/mc/martin/lessons/`, with a sixty-minute
+limit. Each start writes `kind: learning` in `runs.tsv`; scheduled quota
+endings pause the runner. Dispositions, publication authority and desk figures
+are in [mc-martin.md](mc-martin.md#lessons-and-the-learning-pass).
 
 No external supervisor is needed. The runner's chore pass — the
 helper's collect, the intake drain, the tidying — ends with one more chore, the

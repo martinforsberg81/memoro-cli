@@ -2543,32 +2543,21 @@ test('headless Martin still cannot move, rewrite criteria or drop', async () => 
   }
 });
 
-// ---- The learning role: it creates goals and writes the ones it created, and can do nothing to any other goal ----
+// ---- The learning role can only read goals ----
 
 const LEARNING = { MC_ROLE: 'learning', MC_HEADLESS: '1', MC_TOOL: 'claude', MC_SESSION_STARTED: '2026-11-01T20:00:00.000Z' };
 const snapshot = (f) => JSON.stringify(f.store);
 
-test('the learning role creates a goal and writes it: set, criterion add and draft → build succeed on a goal it created in this session', async () => {
-  const f = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: legacyRecord() }, env: LEARNING });
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned', '--structure', '1'], f.deps), 0, f.err());
-  for (const argv of [
-    ['set', 'mc/plain', 'goal', '--text', 'A lesson becomes a change.'],
-    ['criterion', 'add', 'mc/plain', '--criterion', 'It holds', '--check', 'mc gate x'],
-  ]) assert.equal(await run(argv, f.deps), 0, `${argv.join(' ')}: ${f.err()}`);
-  assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 0, `stage: ${f.err()}`);
-  assert.equal(stateOf(f), 'build · ready');
-  assert.equal(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria.length, 1);
-});
-
-test('the learning role is refused every verb on a goal it did not create, and nothing changes', async () => {
+test('the learning role cannot create or mutate goals, including ones an older session created', async () => {
   const further = [
+    ['new', 'mc/fresh', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'],
     ['stage', 'mc/plain', 'build'], ['stage', 'mc/plain', 'review'], ['ready', 'mc/plain', '--reason', 'x'], ['drop', 'mc/plain', '--reason', 'x'],
     ['criterion', 'set', 'mc/plain', '1', '--criterion', 'Changed'], ['log', 'mc/plain', '--comment', 'x'], ['set', 'mc/plain', 'goal', '--text', 'Changed'],
     ['criterion', 'add', 'mc/plain', '--criterion', 'Extra', '--check', 'x'], ['criterion', 'met', 'mc/plain', '1'],
   ];
   for (const argv of further) {
-    // A goal made by a person, and one a learning session of an earlier day made: neither is this session's.
-    for (const files of [inStage('draft'), inStage('draft', 'ready', { [`${DIR}/LOG.md`]: '## 2026-10-31T09:00Z · claude · draft · ready · by learning\n\nDone: created\n' })]) {
+    // Even an entry stamped as its own creation by an older version conveys no authority.
+    for (const files of [inStage('draft'), inStage('draft', 'ready', { [`${DIR}/LOG.md`]: '## 2026-11-01T20:00Z · claude · draft · ready · by learning\n\nDone: created\n' })]) {
       const f = fixture({ files, env: LEARNING });
       const before = snapshot(f);
       assert.equal(await run(argv, f.deps), 2, argv.join(' '));
@@ -2579,16 +2568,9 @@ test('the learning role is refused every verb on a goal it did not create, and n
   }
 });
 
-test('the learning role moves its own goal only from draft to build', async () => {
-  const f = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: legacyRecord() }, env: LEARNING });
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'], f.deps), 0, f.err());
-  const before = snapshot(f);
-  for (const stage of ['review', 'merge', 'done']) {
-    assert.equal(await run(['stage', 'mc/plain', stage], f.deps), 2, stage);
-    assert.equal(snapshot(f), before, `${stage}: nothing written`);
-  }
+test('the learning role cannot change a goal stage through the shared guard', () => {
   assert.match(refusedMove({ from: 'build', to: 'review', env: LEARNING }), /learning role/u);
-  assert.equal(refusedMove({ from: 'draft', to: 'build', env: LEARNING }), null);
+  assert.match(refusedMove({ from: 'draft', to: 'build', env: LEARNING }), /learning role/u);
 });
 
 // ---- Version 2: numbered parts, written by item, obligation, set and criterion verbs ----
@@ -2786,24 +2768,9 @@ test('every new writing verb is refused a build, review and mend session, and wr
   }
 });
 
-test('the learning role makes a version 2 goal and adds, sets and removes an item and sets and removes an obligation on it; each of the five is refused on a goal it did not create, with nothing written', async () => {
+test('the learning role cannot mutate version 2 goal items or obligations', async () => {
   const git = areasGit({ [CLI_PATH]: DECLARATION('documentation') });
-  const f = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: legacyRecord() }, env: LEARNING, git });
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'], f.deps), 0, f.err());
-  assert.equal(v2At(f).version, 2, 'made in version 2 without a flag');
-  for (const argv of [
-    ['item', 'add', 'mc/plain', 'problem', '--text', 'A lesson.', '--basis', 'measured'],
-    ['item', 'set', 'mc/plain', 'B1', '--text', 'A lesson, reworded.'],
-    ['item', 'add', 'mc/plain', 'change', '--text', 'Fix it.', '--where', 'src/mc'],
-    ['item', 'remove', 'mc/plain', 'C1', '--reason', 'not needed'],
-    ['obligation', 'set', 'mc/plain', 'memoro-cli/documentation', '--stand', 'untouched', '--text', 'No page changes.'],
-    ['obligation', 'remove', 'mc/plain', 'memoro-cli/documentation', '--reason', 'not an area'],
-  ]) assert.equal(await run(argv, f.deps), 0, `${argv.join(' ')}: ${f.err()}`);
-  assert.deepEqual(v2At(f).problem, [{ id: 'B1', text: 'A lesson, reworded.', basis: 'measured' }]);
-  assert.deepEqual([v2At(f).change, v2At(f).obligations], [[], []]);
-
-  // The same five on a goal a person made, and on one an earlier learning session made: refused, nothing written, no git.
-  const others = [inStage('draft'), inStage('draft', 'ready', { [`${DIR}/LOG.md`]: '## 2026-10-31T09:00Z · claude · draft · ready · by learning\n\nDone: created\n' })];
+  const others = [inStage('draft'), inStage('draft', 'ready', { [`${DIR}/LOG.md`]: '## 2026-11-01T20:00Z · claude · draft · ready · by learning\n\nDone: created\n' })];
   for (const files of others) {
     for (const argv of [
       ['item', 'add', 'mc/plain', 'decision', '--text', 'x', '--by', 'm', '--on', 'd'], ['item', 'set', 'mc/plain', 'D1', '--text', 'y'], ['item', 'remove', 'mc/plain', 'D1', '--reason', 'x'],
@@ -2812,7 +2779,7 @@ test('the learning role makes a version 2 goal and adds, sets and removes an ite
       const g = fixture({ files: { ...files, [`${DIR}/GOAL.json`]: goalJsonV2() }, env: LEARNING, git });
       const before = snapshot(g);
       assert.equal(await run(argv, g.deps), 2, argv.join(' '));
-      assert.match(g.err(), /learning role writes only goals it created in this session/u, argv.join(' '));
+      assert.match(g.err(), /learning role cannot use mc goal/u, argv.join(' '));
       assert.equal(snapshot(g), before, `${argv.join(' ')}: nothing written`);
       assert.deepEqual(showCalls(g), [], `${argv.join(' ')}: no declaration read`);
     }

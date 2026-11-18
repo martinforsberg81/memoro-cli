@@ -159,6 +159,9 @@ export async function run(argv, deps = {}) {
   const error = scanned.error || route.check(scanned);
   if (error) { stderr.write(`mc: ${error}\n${usage()}`); return 2; }
   const env = deps.env || process.env;
+  if (env.MC_ROLE === 'learning' && ![undefined, 'list', 'show'].includes(verb)) {
+    stderr.write('mc: the learning role does not write programmes — record a repair proposal with mc learning record\n'); return 2;
+  }
   if (verb === 'create' || verb === 'record') return writeVerb(verb, scanned, { ...deps, env, stdout, stderr });
   if (verb === 'state') return stateVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'review') return reviewVerb(scanned, { ...deps, env, stdout, stderr });

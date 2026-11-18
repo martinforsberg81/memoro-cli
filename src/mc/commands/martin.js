@@ -22,6 +22,7 @@ import { HORIZON_STATES, PLAYBACK_PARTS, horizonsDir, parsePlaybackInput, planDr
 import { isTextSort, proposeText, textForm, textName } from '../desk-texts.js';
 import { DAY_MS, buildOpening, lastOpenPath, oneLine, readLastOpen } from '../desk-opening.js';
 import { addLesson, briefLesson, briefOptions, carryLesson, dismissLesson, lessonRefusal, listLessons, parseLessonInput, recordAnswerDiffers, renderChanges, LESSON_STATES } from '../desk-lessons.js';
+import { LEARNING_STATES, lessonLandedAt, projectedLessonState } from '../lesson-learning.js';
 
 // The opening's data moved to desk-opening.js; these stay importable from here.
 export { buildOpening, lastOpenPath, readLastOpen };
@@ -304,7 +305,7 @@ function lesson(argv, deps) {
     stdout.write(`${name} · in-goal · ${f.goal}\n`);
     return 0;
   }
-  const done = dismissLesson({ env, name, reason: f.reason, role, since: env.MC_SESSION_STARTED || null, now });
+  const done = dismissLesson({ env, name, reason: f.reason, now });
   if (done.error) return fail(done.error);
   stdout.write(`${name} · dismissed\n`);
   return 0;
@@ -316,11 +317,16 @@ function lessons(argv, deps) {
   const parsed = scanArgs(argv, ROUTES.lessons);
   const error = parsed.error || ROUTES.lessons.check(parsed);
   if (error) { stderr.write(`mc: ${error}\n`); return 2; }
-  if (parsed.flags.state && !LESSON_STATES.includes(parsed.flags.state)) { stderr.write(`mc: unknown state ${parsed.flags.state}\n`); return 2; }
-  const found = listLessons({ env, state: parsed.flags.state });
+  const states = [...LESSON_STATES, ...LEARNING_STATES.filter(x => !['publishing', 'corrected', 'insufficient-evidence'].includes(x))];
+  if (parsed.flags.state && !states.includes(parsed.flags.state)) { stderr.write(`mc: unknown state ${parsed.flags.state}\n`); return 2; }
+  const found = listLessons({ env, state: parsed.flags.state }).map(x => {
+    const state = projectedLessonState(x);
+    return { ...x, state, ...(state !== x.state ? { original_state: x.state } : {}),
+      ...(state === 'landed' ? { pr: x.pr ?? x.learning?.reference, landed_at: lessonLandedAt(x) } : {}) };
+  });
   if (parsed.flags.json) { stdout.write(`${JSON.stringify(found, null, 2)}\n`); return 0; }
   const now = (deps.now || (() => new Date()))().getTime();
-  for (const x of found) stdout.write(`${x.name} · ${x.kind} · ${x.state} · ${x.goal ?? 'no goal'}${x.pr ? ` · ${x.pr}` : ''} · ${Math.max(0, Math.floor((now - Date.parse(x.at)) / DAY_MS))} days\n`);
+  for (const x of found) stdout.write(`${x.name} · ${x.kind} · ${x.state} · ${x.goal ?? 'no goal'}${x.pr ? ` · ${x.pr}` : ''} · ${Math.max(0, Math.floor((now - Date.parse(x.at)) / DAY_MS))} days${x.learning ? ` · ${x.learning.state}${x.learning.reference ? ` (${x.learning.reference})` : ''}` : ''}\n`);
   return 0;
 }
 

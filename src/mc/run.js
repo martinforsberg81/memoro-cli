@@ -116,6 +116,7 @@ import { releaseWorkArea } from './work-area.js';
 import { finishTurn, goalCount, programmeDirs, programmeDue, readTurnState, recordTurnFailure, removeReadCheckouts, setUpReadCheckouts, turnName } from './programme-turn.js';
 import { runLearningPass } from './desk-learning.js';
 import { reconcileLessons } from './desk-lessons.js';
+import { reconcileAreaLearning } from './learning-publication.js';
 import { readProgrammePriority } from './programme-priority.js';
 import { seenAreas, trippedAreas } from './review-verdict.js';
 import { runsKind } from './session-kind.js';
@@ -1416,11 +1417,15 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } catch (error) { say(`lessons: reconcile failed — ${error?.message || error}`); }
     if (offlineHeld() || stopRequested() || updateRequested()) return;
     try {
+      reconcileAreaLearning({ env: deps.env, now: deps.now(), repos, gh: deps.gh, queue: deps.deskLearning?.queue, say });
       const out = await runLearningPass({ env: deps.env, now: deps.now, deps: {
         ...(deps.deskLearning || {}), route: routeClass, logRun,
         budget: options => deskBudget({ ...options, read: deps.read }),
       } });
-      if (out.started) say(`learning: pass ran (${out.reason}); exit ${out.ok ? 0 : 'non-zero'}`);
+      if (out.started) {
+        say(`learning: pass ran (${out.reason}); exit ${out.ok ? 0 : 'non-zero'}`);
+        for (const line of out.account) say(line);
+      }
       else if (out.reason) say(`learning: waiting — ${out.reason}`);
       if (out.quota && out.quotaScope !== 'model') await quotaPause(out.quotaReset);
     } catch (error) { say(`learning: waiting — ${error?.message || error}`); }

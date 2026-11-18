@@ -136,6 +136,23 @@ function sectionOf(text, heading) {
   return lines.slice(start + 1, end).join('\n').trim();
 }
 
+/** Keep every occurrence, including its heading, so adding a second Aim or Decisions is not a factual edit. */
+function areaHeldSections(text, title) {
+  const sections = [];
+  let current = null;
+  for (const line of text.split('\n')) {
+    const heading = /^ {0,3}(#{1,2})[ \t]+(.*)$/u.exec(line);
+    if (heading) {
+      current = null;
+      if (heading[1] === '##' && heading[2].replace(/[ \t]+#+[ \t]*$/u, '').trim().toLowerCase() === title) {
+        current = [line];
+        sections.push(current);
+      }
+    } else if (current) current.push(line);
+  }
+  return JSON.stringify(sections.map(lines => lines.join('\n').trimEnd()));
+}
+
 /**
  * The blocks of `text`, each as its lines: a list item with its continuation lines, a heading, or a paragraph up to
  * the next blank line. A line that starts a list item or a heading starts a block of its own.
@@ -219,11 +236,18 @@ function decisionsCorrected(before, after, superseded) {
  * change to its `## Decisions` other than the correction of a superseded dated block, and any removal or alteration of a
  * block that holds a dated decision of Martin's unless the same file keeps, unchanged, a dated block with a later date (D2).
  */
-export function managerGuard(files) {
+export function managerGuard(files, { areaPage = null } = {}) {
   const found = [];
   for (const { path, before, after } of files) {
     if (!path.startsWith(MANAGER_ROOT)) { found.push(`${path} is outside docs/technical/`); continue; }
     if (path === MANAGER_ME) { found.push(`${path} is Martin's own text`); continue; }
+    if (areaPage !== null) {
+      if (path !== areaPage || before === null || after === null) { found.push(`${path} is not an edit to the declared area page ${areaPage}`); continue; }
+      if (areaHeldSections(before, 'decisions') !== areaHeldSections(after, 'decisions')) found.push(`${path} changes its ## Decisions`);
+      if (areaHeldSections(before, 'aim') !== areaHeldSections(after, 'aim')) found.push(`${path} changes its ## Aim`);
+      if (JSON.stringify(martinBlocks(before)) !== JSON.stringify(martinBlocks(after))) found.push(`${path} changes a dated decision of Martin's`);
+      continue;
+    }
     const { kept, superseded } = supersession(before, after);
     if (AREA_PAGE.test(path)) {
       if (sectionOf(before, 'Aim') !== sectionOf(after, 'Aim')) found.push(`${path} changes its ## Aim`);
@@ -237,5 +261,5 @@ export function managerGuard(files) {
     }
   }
   if (!found.length) return null;
-  return `the manager publishes only what its role may change — ${found.join('; ')}; a text of Martin's goes to the desk with mc martin propose`;
+  return `the ${areaPage === null ? 'manager' : 'learning role'} publishes only what its role may change — ${found.join('; ')}; a text of Martin's goes to the desk with mc martin propose`;
 }
