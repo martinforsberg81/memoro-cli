@@ -29,9 +29,9 @@ the operations view behind `o`. A programme has a third, its own view (HORIZONS,
 below).
 
 **The overview** (`page-overview.js`, `overviewLines`) is as long as the work
-(No budget, below). In order: the compact header (up to two rows), MODEL PRIORITY and PROVIDERS, DESK, the warnings, HORIZONS, the programmes
-with something under way (each its own frame, in name order), one folded frame for
-the others, MAINTENANCE, then one MERGE row per repository with a landing or a queue
+(No budget, below). In order: the compact header (up to two rows), MODEL PRIORITY and PROVIDERS, DESK, the warnings, the HORIZONS roll-up, its horizon groups and OTHER PROGRAMMES
+when nonempty. Each group contains programmes under way in name order, followed by
+its own fold for the others. Then MAINTENANCE and one MERGE row per repository with a landing or a queue
 and a DEPLOY row while a deploy or its preparation runs. It draws from `data` alone,
 which is what `mc --json` prints. A stopped language run inside an open gap
 puts its warning above everything else, and the runner's pause and not-running
@@ -59,7 +59,8 @@ at indent 4, then the bottom rule `└────┘`. Each programme is its ow
 its name as the title and its goal count and priority as the facts. A
 frame with nothing beyond its title and facts — MERGE and DEPLOY with no detail, the
 folded `<n> programmes with nothing under way`, DEV with none running — is its top
-rule alone, with no bottom rule. There are no loose headings, no cyan rules and no
+rule alone, with no bottom rule. In the overview a wrapped heading or fold hint
+uses continuation rows and a bottom rule. There are no loose headings, no cyan rules and no
 separator before SYSTEM; the page has one style of rule. The rules are orange
 (256-colour SGR 38;5;208); red stays for what is broken. The rounded session
 frames (`╭╮`) and the pipeline's stage boxes are not sections and stay as they
@@ -78,18 +79,19 @@ remain visible in both modes. There are no repeated table headers.
 
 ### The overview
 
-**No budget.** The overview has no row budget and no fold: every section draws every
-row it has, at every width the page draws (60–160). The one fold is the frame of
-programmes with nothing under way, below.
+**No budget.** The overview has no row budget: every section draws every row it has
+at every width the page draws (60–160), except for the programmes with nothing
+under way that fold within their group.
 
 **The header** is at most two rows with no frame, then one blank row. The first
 reads `MC <version> · runner on|off · <n>/<m> lanes · runner ≈$<x> today · deploy
 <when>`, with `d  mc martin` at the right edge. FIGURES 24 h and PIPELINE are in the operations view and under `a`,
 which have no header of their own. A programme's own view keeps the header and the frame it had.
 
-**The programmes.** Below HORIZONS every programme with something under way is drawn as
+**The programmes.** Within each horizon, and within OTHER PROGRAMMES for programmes outside open horizons, every programme with something under way is drawn as
 `a` has always drawn a programme (a frame with its phases, goals, sessions and pull
-requests), in name order, not in the horizons' order. Its heading is its number and name in
+requests), in name order within its group. Programme and fold frames are inset four columns
+at both edges of the group. The programme heading is its number and name in
 the title and, in the top rule, its horizon (`horizon 5`, the number the HORIZONS row gives, or
 `no horizon`), then its phase (`phase 2 of 4`, `draft`), its goal count, priority
 and done count; `  ·  ` sets the horizon apart from the name and from the phase, and ` · `
@@ -98,8 +100,11 @@ joins the rest: `28  inbox-library-chat-repairs  ·  no horizon  ·  phase 1 of 
 goal) and the programme's plan sessions are drawn in its frame, so nothing is repeated
 in a separate attention list. Something under way is a `draft` record, an unfinished goal, a
 session, an open pull request or an item needing attention. The programmes with nothing under
-way are one frame, `<n> programmes with nothing under way`, in its top rule alone with `a  shows them`;
-`a` draws them as frames after the ones under way.
+way are folded in their own group as `<n> programmes with nothing under way  ·  a shows them`;
+`a` draws them as frames after the ones under way. Programme headings and tree text,
+including pull request titles, wrap within the inset at narrow widths. In an inset
+card, the goal's stage row and its criteria continuation start three columns to
+the right of the goal row.
 
 **MAINTENANCE** is the last frame of the overview, headed `MAINTENANCE  <n> sources`. It has one row
 per source, in this order: user feedback, proposals, lessons, errors, tests, dependencies, intake,
@@ -216,17 +221,27 @@ so the page and the desk agree on what waits, in what order and what was decided
 ### HORIZONS
 
 The default page draws HORIZONS below DESK and the warnings (`page-horizons.js`,
-`horizonsLines`, from `data.horizons` and `data.programmes` alone). The heading counts
-the open horizons, the programmes under way, the goals open and the sessions at work.
-One row for every open horizon, in the desk's order (`position`, then set time, then slug):
-its number and title, its programmes and their state (`2 programmes · 1 draft`,
-`nothing open`, `done`) and its goals: `<n> open`, `<n> landed`, `⊘ <n>` held, `<n> PR` open
-pull requests, and `●` while a session works on one of its programmes. A horizon store
-that cannot be listed is a red line under the heading, and so is each horizon record that
-cannot be read; the page draws no horizon from either. The programmes themselves are
-below, in their frames; `programmeHeading` draws each one's number, horizon and phase
-(`page-horizons.js`; `horizonWords` gives `horizon <n>`, `no horizon`, or the slug a record
-names that is not an open horizon, with its state).
+`horizonsLines`). The roll-up counts open horizons, programmes under way, open goals
+and running sessions. Its programme and session totals include Other; its open-goal
+total includes only open horizons. A zero running total is omitted.
+
+Each open horizon has a frame in desk order (`position`, then set time, then slug),
+with its number and title and a grey facts row. The facts count programmes, drafts,
+open goals, explicit goal holds, associated PRs and plan, programme and goal
+sessions in that group, including folded programmes. Done and dropped goals still
+in the live tree read `<n> finished in tree`. Programme and open-goal counts remain
+visible at zero, with `No programmes` for an empty horizon. Drafts, finished-in-tree
+goals, holds, PRs and running sessions are omitted at zero. Archive labels do not
+change the under-way totals.
+
+Programmes not assigned to an open horizon are in OTHER PROGRAMMES, omitted when
+empty. A readable empty or missing store shows `0 open`; if the section data is
+absent, the groups start with Other. Horizon store and record read failures are red
+immediately below the roll-up, within its frame and before the horizon frames.
+Programme headings name the open horizon by number (by slug if unnumbered) or, in Other, say `no horizon`,
+`horizon unknown · record invalid` (with the invalid record in red), or give
+the slug and its displayed state: `reached`, `dropped`, `not held` or `unreadable`.
+The unreadable display uses the store and record warnings, not a new JSON state.
 
 **Numbers.** Goals keep the numbers 1..N. The programmes are N+1..N+M in name
 order, in every listed programme including the folded ones, and the number is on
@@ -244,7 +259,7 @@ none: [<programme names serving no open horizon>], unreadable: [<directory
 names>], error }`, `error` being the reason the store could not be listed, else
 null. Each programme in `programmes.programmes` gains `number`, `horizon` (the
 slug its valid record names, else null) and `horizon_state` (`open`, `reached`,
-`dropped`, `not held` for a slug the store holds no horizon for, or null),
+`dropped`, `not held` for a slug without a readable horizon record, or null),
 and `record_state` (a valid record's state, otherwise null).
 Red in a programme's frame means that someone must act: status `Martin` or `blocked`, a
 malformed goal, a refused archive, a failed merge. A goal that gets no session although
@@ -619,7 +634,7 @@ The prompt answers against the page on the screen: `run()` numbers each draw as 
 
 The reader uses `/dev/tty`, not the stdin the next tool inherits. A number
 shows a goal or opens a programme; it starts no coding session. `pageKey` includes every goal's
-programme, name, title, phase, stage, status, phase hold, criteria and running mark, plus session identity and check-ins and the desk's identity (the ids waiting, the not-ready, failed and stuck counts and the decided figures; not an age and not the cost) and the overview's: each programme's number, name and horizon, and the open horizons' slugs. It also includes the overview's rows: which sessions are in flight (not their ages), each MAINTENANCE item and its text without its age (a session item by its identity alone), and each MERGE and DEPLOY row's fact. A change in any of them is a new page, so it is printed whole like any other. If
+programme, name, title, phase, stage, status, phase hold, criteria and running mark, plus session identity and check-ins and the desk's identity (the ids waiting, the not-ready, failed and stuck counts and the decided figures; not an age and not the cost) and the overview's: each programme's number, name, horizon and reference state, its explicit holds and PR counts, and the horizon section including labels, membership and read warnings. It also includes the overview's rows: which sessions are in flight (not their ages), each MAINTENANCE item and its text without its age (a session item by its identity alone), and each MERGE and DEPLOY row's fact. A change in any of them is a new page, so it is printed whole like any other. If
 that key changes while the top of the page is off-screen, the live reader
 prints the page whole so scrolling up finds the new state. Clocks alone do
 not trigger that reset.

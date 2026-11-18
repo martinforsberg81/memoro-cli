@@ -1,8 +1,7 @@
 /**
  * The page's overview: what a person reads first, as long as the work (docs/technical/mc-ui.md, The overview).
  *
- * In order: the compact header (at most two rows), DESK, the warnings, HORIZONS, the programmes with something under
- * way, one folded frame for the programmes with nothing under way (`a` draws them), MAINTENANCE for what belongs to no
+ * In order: the compact header (at most two rows), DESK, the warnings, HORIZONS, its horizon groups and OTHER PROGRAMMES, each with its own fold (`a` draws those programmes), MAINTENANCE for what belongs to no
  * programme, and one row for each merge and deploy that is queued or running. The operational panels, the hero frame and
  * the pipeline are the operations view (`o`), drawn by page-render.js.
  *
@@ -16,7 +15,7 @@ import { mergeFailureSummary } from './merge-red.js';
 import { ageWords } from './page-cache.js';
 import { deskLines } from './page-desk.js';
 import { clipCell } from './page-grid.js';
-import { horizonsLines, programmeFacts } from './page-horizons.js';
+import { horizonFacts, horizonFigures, horizonsLines, programmeFacts } from './page-horizons.js';
 import { dayWords, howLong, straysReading } from './page-maintenance.js';
 import { detail, frameTop, panelEnd } from './page-operations.js';
 import { sessionGoal } from './page-activity.js';
@@ -374,8 +373,8 @@ function mergeDeployLines(lines, c, wide, rows) {
 
 /**
  * The overview, as lines. `drawProgramme(lines, group)` draws one programme's frame (page-render.js owns the body).
- * The programmes with something under way are drawn in name order below HORIZONS; the others are one folded frame,
- * or, under `a` (`expand`), their own frames after the ones under way. `version` is mc's.
+ * Each group draws programmes under way in name order, then a fold or, under `a` (`expand`), the remaining frames.
+ * `version` is mc's.
  */
 export function overviewLines(c, wide, data, { version = '', expand = false, drawProgramme = () => {} } = {}) {
   const sessions = data.runner?.sessions || [];
@@ -390,14 +389,46 @@ export function overviewLines(c, wide, data, { version = '', expand = false, dra
   if (data.horizons) { horizonsLines(lines, c, wide, data, { sessions }); gap(); }
 
   const groups = [...(data.programmes?.programmes || [])].sort((a, b) => String(a.programme).localeCompare(String(b.programme)));
-  const underway = groups.filter((group) => programmeFacts(group, sessions).underway);
-  const asleep = groups.filter((group) => !programmeFacts(group, sessions).underway);
-  for (const group of [...underway, ...(expand ? asleep : [])]) { drawProgramme(lines, group); gap(); }
-  if (!expand && asleep.length) {
-    // One folded frame, its top rule alone.
-    lines.push(frameTop(c, wide, `${asleep.length} programme${asleep.length === 1 ? '' : 's'} with nothing under way`, '', 'a  shows them'));
+  const assigned = new Set();
+  const inset = 4;
+  const childWide = wide - 2 * inset;
+  const drawChild = (rows) => lines.push(...rows.map((row) => row ? `${' '.repeat(inset)}${row}` : row));
+  const drawGroup = (title, members, facts = '') => {
+    if (width(title) <= wide - 8) lines.push(frameTop(c, wide, title));
+    else {
+      lines.push(frameTop(c, wide, ''));
+      detail(lines, c, wide - 2, 5, title, ['bold']);
+    }
+    if (facts) detail(lines, c, wide - 2, 5, facts);
+    const underway = members.filter((group) => programmeFacts(group, sessions).underway);
+    const asleep = members.filter((group) => !programmeFacts(group, sessions).underway);
+    for (const group of [...underway, ...(expand ? asleep : [])]) {
+      const rows = [];
+      drawProgramme(rows, group, childWide);
+      drawChild(rows);
+    }
+    if (!expand && asleep.length) {
+      const fold = `${asleep.length} programme${asleep.length === 1 ? '' : 's'} with nothing under way`;
+      const hint = `${fold}  ·  a shows them`;
+      if (width(hint) <= childWide - 8) drawChild([frameTop(c, childWide, hint)]);
+      else {
+        const rows = [frameTop(c, childWide, '')];
+        detail(rows, c, childWide - 2, 5, hint);
+        panelEnd(rows, c, childWide);
+        drawChild(rows);
+      }
+    }
+    panelEnd(lines, c, wide);
     gap();
+  };
+  for (const figure of horizonFigures(data, sessions)) {
+    const members = groups.filter((group) => !assigned.has(group.programme) && (figure.horizon.programmes || []).includes(group.programme));
+    for (const group of members) assigned.add(group.programme);
+    const title = `${figure.horizon.position != null ? `${figure.horizon.position}  ` : ''}${figure.horizon.title || figure.horizon.slug}`;
+    drawGroup(title, members, horizonFacts(figure));
   }
+  const other = groups.filter((group) => !assigned.has(group.programme));
+  if (other.length) drawGroup('OTHER PROGRAMMES', other);
 
   const rows = maintenanceRows(data);
   if (rows.length) { maintenanceLines(lines, c, wide, rows); gap(); }

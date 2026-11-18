@@ -1,15 +1,7 @@
-/**
- * The page's HORIZONS section and the programme headings (docs/technical/mc-ui.md, The sections). `horizonsLines` draws
- * one row for every open horizon in the desk's order: its number and title, how many programmes it has and in what
- * state, and its goals (open, landed, held, open pull requests, a mark while a session works). The programmes are
- * drawn below it, each in its own frame (page-render.js), headed by `programmeHeading`: its number, its horizon and its
- * phase. Both draw from `data.horizons` and `data.programmes` alone, so what `mc --json` says and what the page draws
- * cannot differ.
- *
- * The module draws with its own small pieces and imports nothing from page-render.js, which imports it.
+/** Horizon roll-up, per-horizon figures and programme headings for the overview.
+ * Both the grouped renderer and its counts use the collected section membership.
  */
-import { PR_TONE, clipCell, kindTone } from './page-grid.js';
-import { frameEnd, frameTop } from './page-operations.js';
+import { detail, frameEnd, frameTop } from './page-operations.js';
 import { attentionGoals } from './page-programmes.js';
 import { sessionGoal } from './page-activity.js';
 import { clip, width } from './status-render.js';
@@ -56,44 +48,93 @@ export function programmeFacts(group, sessions = []) {
   };
 }
 
-/** A run of `{ text, styles }` parts, painted. */
-const painted = (c, parts) => parts.map((part) => (part.styles?.length ? c(part.text, ...part.styles) : part.text)).join('');
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-const GAP = '  ';
 
 /**
  * The words for a programme's horizon: `horizon 5` (its number among the open horizons, in the desk's order),
  * `no horizon`, or the slug a record names that is not an open horizon, with that horizon's state. A page without
  * horizons says nothing.
  */
-export function horizonWords(data, group) {
+function horizonWords(data, group, open) {
   if (!data.horizons) return '';
-  const open = (data.horizons.open || []).find((horizon) => (horizon.programmes || []).includes(group.programme) || (group.horizon && horizon.slug === group.horizon));
   if (open) return open.position != null ? `horizon ${open.position}` : `horizon ${open.slug}`;
-  return group.horizon ? `horizon ${group.horizon}${group.horizon_state ? ` (${group.horizon_state})` : ''}` : 'no horizon';
+  if (group.record_invalid) return 'horizon unknown';
+  if (!group.horizon) return 'no horizon';
+  const state = group.horizon_state === 'not held' && (data.horizons.error || data.horizons.unreadable?.includes(group.horizon))
+    ? 'unreadable' : group.horizon_state;
+  return `horizon ${group.horizon}${state ? ` (${state})` : ''}`;
+}
+
+const separator = (part, index) => part.sep ?? (index ? ' · ' : '');
+
+/** Wrap the unpainted heading, keeping the style of each portion of a continuation row. */
+function headingDetail(lines, c, wide, parts) {
+  const indent = 6;
+  const room = wide - indent - 2;
+  let text = '';
+  const spans = parts.map((part, index) => {
+    text += separator(part, index);
+    const from = text.length;
+    text += part.text;
+    return { from, to: text.length, styles: part.styles };
+  });
+  for (let start = 0; start < text.length;) {
+    while (text[start] === ' ') start += 1;
+    const cut = text.length - start <= room ? text.length : text.lastIndexOf(' ', start + room);
+    const end = cut > start ? cut : start + room;
+    let row = ' '.repeat(indent);
+    let at = start;
+    for (const span of spans) {
+      const from = Math.max(at, span.from);
+      const to = Math.min(end, span.to);
+      if (to <= from) continue;
+      if (from > at) row += c(text.slice(at, from), 'grey');
+      row += c(text.slice(from, to), ...span.styles);
+      at = to;
+    }
+    lines.push(row + text.slice(at, end).trimEnd());
+    start = end;
+  }
 }
 
 /**
  * A programme's frame heading: its number and name in the title; in the top rule its horizon, its phase and its goals,
  * then the figures it has always had (priority, done, an invalid record).
  */
-export function programmeHeading(c, wide, data, group, facts) {
+export function programmeHeading(c, wide, data, group, facts, continuation = null) {
   const phase = group.record_state === 'draft' ? 'draft' : facts.unfinished && facts.current != null ? `phase ${facts.current}${facts.last != null ? ` of ${facts.last}` : ''}` : '';
   const goals = group.goals?.length || 0;
-  // README.md Part 2: `28  name  ·  no horizon  ·  phase 1 of 2 · 2 goals`. Proposals are the areas', not a programme's.
   const rest = [
     phase,
     plural(goals, 'goal'),
     group.priority ? `priority ${group.priority}` : '',
     facts.done ? `${facts.done} done` : '',
   ].filter(Boolean).map((text) => ({ text, styles: ['grey'] }));
-  if (group.record_invalid) rest.push({ text: 'record invalid', styles: ['red'] });
   // With no horizons read there is no horizon to set apart: the facts follow the name as any frame's do.
-  const horizon = horizonWords(data, group);
-  if (horizon && rest.length) rest[0] = { ...rest[0], sep: '  ·  ' };
-  const parts = horizon ? [{ text: horizon, styles: ['grey'], sep: '·  ' }, ...rest] : rest;
+  const open = data.horizons?.open?.find((horizon) => horizon.programmes?.includes(group.programme));
+  const horizon = horizonWords(data, group, open);
+  const parts = [];
+  const warning = { text: 'record invalid', styles: ['red'] };
+  const warningAfterHorizon = group.record_invalid && data.horizons && !open;
+  if (horizon) {
+    parts.push({ text: horizon, styles: ['grey'], sep: '·  ' });
+    if (warningAfterHorizon) parts.push(warning);
+    rest[0].sep = '  ·  ';
+  }
+  parts.push(...rest);
+  if (group.record_invalid && !warningAfterHorizon) parts.push(warning);
   const number = group.number != null ? `${group.number}  ` : '';
-  return frameTop(c, wide, `${number}${group.programme}`, parts);
+  const title = `${number}${group.programme}`;
+  const words = parts.map((part, i) => `${separator(part, i)}${part.text}`).join('');
+  if (continuation && width(title) + width(words) + 10 > wide) {
+    if (width(title) <= wide - 8) {
+      headingDetail(continuation, c, wide, parts);
+      return frameTop(c, wide, title);
+    }
+    headingDetail(continuation, c, wide, [{ text: title, styles: ['bold'] }, { ...parts[0], sep: `  ${separator(parts[0], 0)}` }, ...parts.slice(1)]);
+    return frameTop(c, wide, '');
+  }
+  return frameTop(c, wide, title, parts);
 }
 
 /**
@@ -133,43 +174,32 @@ export function horizonsLines(lines, c, wide, data, { sessions = [] } = {}) {
   const goalsOpen = figures.reduce((n, item) => n + item.open, 0);
   const running = groups.reduce((n, group) => n + programmeFacts(group, sessions).sessions, 0);
   const top = lines.length;
-  lines.push(frameTop(c, wide, 'HORIZONS', [
+  const summary = [
     `${figures.length} open`,
     `${underway} ${underway === 1 ? 'programme' : 'programmes'} under way`,
     `${goalsOpen} ${goalsOpen === 1 ? 'goal' : 'goals'} open`,
     running ? `${running} running` : '',
-  ].filter(Boolean).map((text) => ({ text, styles: ['grey'] }))));
+  ].filter(Boolean).join(' · ');
+  if (summary.length + 'HORIZONS'.length + 10 <= wide) lines.push(frameTop(c, wide, 'HORIZONS', summary));
+  else {
+    lines.push(frameTop(c, wide, 'HORIZONS'));
+    detail(lines, c, wide - 2, 4, summary);
+  }
   if (horizons.error) lines.push(`    ${c(clip(`horizons unreadable — ${horizons.error}`, wide - 4), 'red')}`);
   if (horizons.unreadable?.length) lines.push(`    ${c(clip(`${horizons.unreadable.length} horizon record${horizons.unreadable.length === 1 ? '' : 's'} cannot be read: ${horizons.unreadable.join(', ')}`, wide - 4), 'red')}`);
 
-  const rows = figures.map((figure) => {
-    const state = [
-      figure.programmes ? plural(figure.programmes, 'programme') : 'no programme',
-      figure.drafts ? `${figure.drafts} draft` : null,
-      !figure.open && !figure.drafts && figure.programmes ? (figure.landed ? 'done' : 'nothing open') : null,
-    ].filter(Boolean).join(' · ');
-    const goals = [
-      figure.open ? { text: `${figure.open} open`, styles: [] } : null,
-      figure.landed ? { text: `${figure.landed} landed`, styles: ['grey'] } : null,
-      figure.held ? { text: `⊘ ${figure.held}`, styles: ['red'] } : null,
-      figure.prs ? { text: `${figure.prs} PR`, styles: [...PR_TONE] } : null,
-    ].filter(Boolean);
-    if (!figure.open && !figure.landed && !figure.held && !figure.prs) goals.push({ text: '0 goals open', styles: ['grey'] });
-    if (figure.running) goals.push({ text: '●', styles: kindTone('build') });
-    const joined = goals.flatMap((part, i) => (i && part.text !== '●' ? [{ text: ' · ', styles: ['grey'] }, part] : i ? [{ text: '  ' }, part] : [part]));
-    return { figure, state, joined, goalsWidth: joined.reduce((n, part) => n + width(part.text), 0) };
-  });
-  const places = rows.map(({ figure }) => (figure.horizon.position != null ? `${figure.horizon.position}` : ''));
-  const placeWidth = Math.max(0, ...places.map((place) => place.length));
-  const stateWidth = Math.max(0, ...rows.map((row) => width(row.state)));
-  const goalsWidth = Math.max(0, ...rows.map((row) => row.goalsWidth));
-  const titleRoom = Math.max(8, wide - 4 - placeWidth - (placeWidth ? 2 : 0) - stateWidth - goalsWidth - 2 * GAP.length);
-  const titleWidth = Math.min(titleRoom, Math.max(0, ...rows.map(({ figure }) => width(figure.horizon.title || figure.horizon.slug))));
-  rows.forEach((row, index) => {
-    const title = clipCell(row.figure.horizon.title || row.figure.horizon.slug, titleWidth);
-    const text = `    ${c(places[index].padStart(placeWidth), 'grey')}${placeWidth ? GAP : ''}${c(title, 'bold')}${' '.repeat(Math.max(0, titleWidth - width(title)))}${GAP}${row.state}${' '.repeat(Math.max(0, stateWidth - width(row.state)))}${GAP}${painted(c, row.joined)}`;
-    // The last resort: whatever still runs past the width is cut by the terminal's measure.
-    lines.push(width(text) > wide ? clip(text.replace(/\u001b\[[0-9;]*m/gu, ''), wide) : text);
-  });
   frameEnd(lines, c, wide, top);
+}
+
+/** Facts belonging to one horizon, including programmes hidden by the fold. */
+export function horizonFacts(figure) {
+  return [
+    figure.programmes ? plural(figure.programmes, 'programme') : 'No programmes',
+    figure.drafts ? `${figure.drafts} draft` : null,
+    `${plural(figure.open, 'goal')} open`,
+    figure.landed ? `${figure.landed} finished in tree` : null,
+    figure.held ? `${figure.held} held` : null,
+    figure.prs ? `${figure.prs} PR` : null,
+    figure.running ? `${figure.running} running` : null,
+  ].filter(Boolean).join(' · ');
 }

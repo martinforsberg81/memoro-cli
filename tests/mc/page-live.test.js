@@ -14,6 +14,8 @@ import { describe, it } from 'node:test';
 import headless from '@xterm/headless';
 
 import { RESTART, liveReader, plainReader, readLine, screenRows } from '../../src/mc/page-live.js';
+import { pageKey } from '../../src/mc/commands/home.js';
+import { renderPageLines } from '../../src/mc/page-render.js';
 
 const { Terminal } = headless;
 
@@ -561,7 +563,13 @@ describe('a page taller than the screen', () => {
    * `answers: false` is a terminal that ignores `CSI 6n` — the by-count path,
    * which has the same arithmetic and had the same fault.
    */
-  function tall({ answers = true, pages = [], key = null } = {}) {
+  function tall({
+    answers = true, pages = [], key = null, first = tallPage(TALL),
+    page = async () => {
+      const next = pages.shift();
+      return Array.isArray(next) ? { data: {}, lines: next } : { data: {}, ...next };
+    },
+  } = {}) {
     const term = new Terminal({ cols: WIDTH, rows: HEIGHT, scrollback: 500, allowProposedApi: true });
     const input = keyboard();
     // The terminal's reply arrives on the stream the typing arrives on, which
@@ -585,7 +593,6 @@ describe('a page taller than the screen', () => {
     };
 
     const time = clock();
-    const first = tallPage(TALL);
     // Printed the way `run()` prints it, before it knows anybody is watching.
     stdout.write(`${first.join('\n')}\n`);
     const reader = liveReader({
@@ -593,7 +600,7 @@ describe('a page taller than the screen', () => {
       lines: first,
       key,
       // A frame is its lines, or its lines and the key `home.js` gives it.
-      page: async () => { const next = pages.shift(); return Array.isArray(next) ? { data: {}, lines: next } : { data: {}, ...next }; },
+      page,
       intervalMs: 30_000,
       input: () => input,
       setTimer: (fn, ms) => time.set(fn, ms),
@@ -741,6 +748,77 @@ describe('a page taller than the screen', () => {
 
     it_.input.type('q\r');
     assert.equal(await answer, 'q');
+  });
+
+  it('live redraw: changes horizon label, reference state and warnings independently above the screen at fixed height', async () => {
+    // Ordinary programme cards below the rows under test push those rows into scrollback.
+    const active = (programme, number) => {
+      const goals = [{ programme, name: 'ui', number, stage: 'build', status: 'ready', phase: 1, title: 'UI Goal' }];
+      return { number: number + 20, programme, goals, phases: [{ number: 1, goals }] };
+    };
+    const tail = Array.from({ length: 12 }, (_, i) => active(`tail-${String(i).padStart(2, '0')}`, i + 3));
+    const makeData = ({ label = 'First Horizon', ref = 'reached', warning = 'unreadable-old' } = {}) => ({
+      programmes: {
+        programmes: [
+          { ...active('mc', 1), horizon: 'first', horizon_state: 'open' },
+          { ...active('p-other', 2), horizon: 'ghost', horizon_state: ref },
+          ...tail,
+        ],
+      },
+      horizons: {
+        open: [{ slug: 'first', position: 1, title: label, programmes: ['mc'] }],
+        none: ['p-other', ...tail.map(({ programme }) => programme)],
+        unreadable: [warning],
+        error: null,
+      },
+    });
+    const renamed = { label: 'Renamed First Horizon' };
+    const dropped = { ...renamed, ref: 'dropped' };
+    const updates = [
+      { data: makeData(renamed), before: '1  First Horizon', after: '1  Renamed First Horizon' },
+      { data: makeData(dropped), before: 'horizon ghost (reached)', after: 'horizon ghost (dropped)' },
+      {
+        data: makeData({ ...dropped, warning: 'unreadable-new' }),
+        before: '1 horizon record cannot be read: unreadable-old',
+        after: '1 horizon record cannot be read: unreadable-new',
+      },
+    ];
+    const frameFor = (data) => ({
+      data,
+      key: pageKey(data),
+      lines: renderPageLines(data, { columns: WIDTH, now: 0 }),
+    });
+    const first = frameFor(makeData());
+    let refresh = 0;
+    const it_ = tall({
+      first: first.lines, key: first.key,
+      page: async () => {
+        const frame = frameFor(updates[refresh++].data);
+        assert.equal(frame.lines.length, first.lines.length, 'rendered page height is fixed');
+        return frame;
+      },
+    });
+    const answer = it_.reader.ask(TAIL, '>');
+    await it_.flush();
+    await settle();
+
+    let pending = 'pending';
+    it_.input.type(pending);
+    for (const [i, { before, after }] of updates.entries()) {
+      assert.equal(it_.everything().filter((row) => row.includes(before)).length, 1, before);
+      assert.ok(it_.screen().every((row) => !row.includes(before)), `${before} is above the screen`);
+      const added = `-${i + 1}`;
+      pending += added;
+      it_.input.type(added);
+      await it_.advance(31_000);
+      assert.equal(refresh, i + 1, 'one refresh per change');
+      assert.equal(it_.everything().filter((row) => row.includes(after)).length, 1, `${after} appears once`);
+      assert.ok(it_.everything().every((row) => !row.includes(before)), `${before} is replaced`);
+      assert.equal(it_.screen().at(-1), `> ${pending}`, 'pending input survives the redraw');
+    }
+
+    it_.input.type('\r');
+    assert.equal(await answer, pending);
   });
 });
 
