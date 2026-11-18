@@ -266,7 +266,7 @@ export function readerFor({ stdout, lines, page, key = null }) {
 export function pageKey(data) {
   const goals = (data?.programmes?.programmes || []).flatMap((group) => group.goals || []);
   const goalKey = goals
-    .map((g) => [g.programme, g.name, g.stage, g.status, g.phase, g.title, g.held ? 1 : 0, g.criteria?.met ?? '', g.criteria?.all ?? '', g.running ? 1 : 0].join(':'))
+    .map((g) => [g.programme, g.name, g.stage, g.status, g.phase, g.title, g.held ? 1 : 0, g.criteria?.met ?? '', g.criteria?.all ?? '', g.running ? 1 : 0, JSON.stringify([g.hold, g.question, g.last, g.prs, g.repos, g.sessions, g.archive_refused, g.problems])].join(':'))
     .join('|');
   const foreground = (data?.programmes?.programmes || []).flatMap((group) => [
     ...(group.planning_sessions || []), ...(group.sessions || []),
@@ -275,7 +275,7 @@ export function pageKey(data) {
   // redraw when off-screen; a clock tick alone still does not.
   const activityKey = [...(data?.runner?.sessions || []), ...foreground]
     .filter((s) => s.pid || s.goal || s.name || s.area)
-    .map((s) => [s.goal || s.name || s.area, s.kind || s.verb, s.repo, s.pid, s.started, s.tool, s.model, s.check_ins || 0].join(':')).sort().join('|');
+    .map((s) => [s.goal || s.name || s.area, s.kind || s.verb, s.repo, s.pid, s.started, s.tool, s.model, s.advisor, s.check_ins || 0].join(':')).sort().join('|');
   const priorityKey = (data?.programmes?.programmes || []).filter((group) => group.priority)
     .map((group) => `${group.programme}:priority:${group.priority}`).join('|');
   // What waits for Martin changes what the top of the page says; its ages and its cost do not.
@@ -313,7 +313,7 @@ export function parsePageArgs(argv) {
 /* --------------------------------------------------------------------- menu */
 
 const KEYS = [
-  '  <n>  show a goal or open a programme   ·   a  all / collapse   ·   o  operations   ·   h  home   ·   d  desk',
+  '  <n>  show a goal   ·   a  all / collapse   ·   o  operations   ·   h  home   ·   d  desk',
   `  p  plan a programme   ·   priority <${providerPriorities().join('|')}>   ·   f  fresh from GitHub   ·   q  quit`,
   '  priority <programme>... --set <n>   higher number goes first within a stage',
   '  r  refresh   ·   m  maintenance   ·   c  clear finished goals   ·   deploy  deploy to production',
@@ -520,17 +520,6 @@ export async function menu(first, {
     if (goal) {
       stdout.write('\n');
       await (showGoal || showGoalVerb)(['show', `${goal.programme}/${goal.name}`], { stdout, stderr });
-      data = await redraw();
-      continue;
-    }
-
-    // A programme opens alone by its number (digits only, after the goals') or by its exact name, which is any other
-    // answer: no word the menu answers is a name, and a number is never a name.
-    const programme = /^\d+$/u.test(answer)
-      ? groups.find((group) => group.number === Number(answer))
-      : groups.find((group) => group.programme === answer);
-    if (programme) {
-      show(programme.programme);
       data = await redraw();
       continue;
     }

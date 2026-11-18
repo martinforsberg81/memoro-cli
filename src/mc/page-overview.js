@@ -15,7 +15,7 @@ import { mergeFailureSummary } from './merge-red.js';
 import { ageWords } from './page-cache.js';
 import { deskLines } from './page-desk.js';
 import { clipCell } from './page-grid.js';
-import { horizonFacts, horizonFigures, horizonsLines, programmeFacts } from './page-horizons.js';
+import { horizonFacts, horizonFigures, horizonsLines } from './page-horizons.js';
 import { dayWords, howLong, straysReading } from './page-maintenance.js';
 import { detail, frameTop, panelEnd } from './page-operations.js';
 import { sessionGoal } from './page-activity.js';
@@ -400,23 +400,10 @@ export function overviewLines(c, wide, data, { version = '', expand = false, dra
       detail(lines, c, wide - 2, 5, title, ['bold']);
     }
     if (facts) detail(lines, c, wide - 2, 5, facts);
-    const underway = members.filter((group) => programmeFacts(group, sessions).underway);
-    const asleep = members.filter((group) => !programmeFacts(group, sessions).underway);
-    for (const group of [...underway, ...(expand ? asleep : [])]) {
+    for (const group of members) {
       const rows = [];
       drawProgramme(rows, group, childWide);
       drawChild(rows);
-    }
-    if (!expand && asleep.length) {
-      const fold = `${asleep.length} programme${asleep.length === 1 ? '' : 's'} with nothing under way`;
-      const hint = `${fold}  ·  a shows them`;
-      if (width(hint) <= childWide - 8) drawChild([frameTop(c, childWide, hint)]);
-      else {
-        const rows = [frameTop(c, childWide, '')];
-        detail(rows, c, childWide - 2, 5, hint);
-        panelEnd(rows, c, childWide);
-        drawChild(rows);
-      }
     }
     panelEnd(lines, c, wide);
     gap();

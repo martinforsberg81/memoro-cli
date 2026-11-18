@@ -75,8 +75,7 @@ function goalLines(lines, c, wide, goal, expand, sessions, note, { paused, saidH
     lines.push(...prLines(c, wide, pr));
     if (pr.merge_red) line(lines, c, wide, 12, mergeFailureSummary(pr.merge_red), ['red']);
   }
-  if (!expand) return;
-  const metadata = [goal.name, ...(goal.repos || []), `${goal.sessions ?? 0} sessions`].filter(Boolean).join(' · ');
+  const metadata = [goal.name, ...(goal.repos || []), `${goal.sessions ?? 0} session${goal.sessions === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
   line(lines, c, wide, 10, metadata, ['grey']);
   const said = isFinished ? goal.last?.done || goal.last?.comment : goal.last?.next || goal.last?.comment;
   if (said && one(said) !== one(goal.question || (['blocked', 'Martin'].includes(goal.status) ? goal.last?.comment : ''))) {
@@ -131,7 +130,7 @@ export function programmeTreeLines(c, wide, group, { expand = false, sessions = 
   const goalOptions = { paused: group.record_state === 'draft', saidHolds, stateIndent };
   for (const phase of group.phases || []) {
     if (phase.number == null) continue;
-    const visible = phase.goals.filter((goal) => !attention(goal) && (expand || !finished(goal) || atWork(goal)));
+    const visible = phase.goals.filter((goal) => !attention(goal) && (!finished(goal) || atWork(goal)));
     if (!visible.length) continue;
     if (lines.length) lines.push('');
     line(lines, c, wide, 4, `Phase ${phase.number}${phaseWaits(phase, group)}`, ['cyan', 'bold']);

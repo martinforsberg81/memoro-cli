@@ -102,13 +102,13 @@ function headingDetail(lines, c, wide, parts) {
  * then the figures it has always had (priority, done, an invalid record).
  */
 export function programmeHeading(c, wide, data, group, facts, continuation = null) {
-  const phase = group.record_state === 'draft' ? 'draft' : facts.unfinished && facts.current != null ? `phase ${facts.current}${facts.last != null ? ` of ${facts.last}` : ''}` : '';
+  const phase = group.record_state === 'draft' ? 'draft' : facts.unfinished && facts.current != null ? `phase ${facts.current}${facts.last != null ? ` of ${facts.last}` : ''}` : group.record_state === 'ready' ? 'ready' : '';
   const goals = group.goals?.length || 0;
   const rest = [
     phase,
     plural(goals, 'goal'),
     group.priority ? `priority ${group.priority}` : '',
-    facts.done ? `${facts.done} done` : '',
+    facts.done ? `${facts.done} finished in tree` : '',
   ].filter(Boolean).map((text) => ({ text, styles: ['grey'] }));
   // With no horizons read there is no horizon to set apart: the facts follow the name as any frame's do.
   const open = data.horizons?.open?.find((horizon) => horizon.programmes?.includes(group.programme));
@@ -123,8 +123,7 @@ export function programmeHeading(c, wide, data, group, facts, continuation = nul
   }
   parts.push(...rest);
   if (group.record_invalid && !warningAfterHorizon) parts.push(warning);
-  const number = group.number != null ? `${group.number}  ` : '';
-  const title = `${number}${group.programme}`;
+  const title = group.programme;
   const words = parts.map((part, i) => `${separator(part, i)}${part.text}`).join('');
   if (continuation && width(title) + width(words) + 10 > wide) {
     if (width(title) <= wide - 8) {
