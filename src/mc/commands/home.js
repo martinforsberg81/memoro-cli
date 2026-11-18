@@ -281,9 +281,9 @@ export function pageKey(data) {
   // What waits for Martin changes what the top of the page says; its ages and its cost do not.
   // The overview is drawn from the programmes' numbers and names and from the horizons they are under, in order.
   const horizonKey = [
-    (data?.programmes?.programmes || []).map((group) => `${group.number ?? ''}:${group.programme}:${group.horizon ?? ''}:${group.record_state ?? ''}`).join(','),
-    (data?.horizons?.open || []).map((horizon) => horizon.slug).join(','),
-  ].join('/');
+    (data?.programmes?.programmes || []).map((group) => [group.number, group.programme, group.horizon, group.horizon_state, group.record_state, group.record_invalid, group.prs?.length, (group.goals || []).map((goal) => [goal.hold, goal.prs?.length])]),
+    data?.horizons ?? null,
+  ];
   // The overview's sessions, MAINTENANCE, MERGE and DEPLOY rows: which sessions, items and runs there are, not how old or dear.
   const flight = flightRows(data || {});
   const overviewKey = [
@@ -295,7 +295,7 @@ export function pageKey(data) {
     // The sources MAINTENANCE draws: which are read and how many wait, not how long ago they were collected.
     (data?.maintenance?.sources || []).map((source) => `${source.id}:${source.state}:${source.count ?? ''}`).join(','),
   ].join('/');
-  return [goalKey, activityKey, priorityKey, data?.providerPriority || '', data?.billing || '', deskKey(data?.desk), horizonKey === '/' ? '' : horizonKey, overviewKey === '///' ? '' : overviewKey].filter(Boolean).join('|');
+  return [goalKey, activityKey, priorityKey, data?.providerPriority || '', data?.billing || '', deskKey(data?.desk), data?.horizons || horizonKey[0].length ? JSON.stringify(horizonKey) : '', overviewKey === '///' ? '' : overviewKey].filter(Boolean).join('|');
 }
 
 export function parsePageArgs(argv) {
