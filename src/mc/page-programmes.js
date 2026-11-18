@@ -3,6 +3,7 @@ import { mergeFailureSummary } from './merge-red.js';
 import { clipCell, prTone, stateTone } from './page-grid.js';
 import { activityLines, sessionGoal } from './page-activity.js';
 import { width } from './status-render.js';
+import { detail } from './page-operations.js';
 
 const finished = (goal) => ['done', 'dropped'].includes(goal.stage);
 const one = (value) => String(value ?? '').replace(/\s+/gu, ' ').trim();
@@ -17,9 +18,8 @@ export function notArchived(goal) {
   return null;
 }
 
-function line(c, wide, indent, text, styles = []) {
-  const shown = clipCell(text, Math.max(0, wide - indent));
-  return `${' '.repeat(indent)}${styles.length ? c(shown, ...styles) : shown}`;
+function line(lines, c, wide, indent, text, styles = []) {
+  detail(lines, c, wide, indent, text, styles);
 }
 
 function prLine(c, wide, pr) {
@@ -44,7 +44,7 @@ function goalLines(lines, c, wide, goal, expand, sessions = [], note = null, { p
   const status = pausedNow && goal.status === 'ready' ? 'paused' : goal.status || '—';
   const tone = waits ? ['red'] : isFinished || pausedNow ? ['grey'] : ['green'];
   const number = String(goal.number ?? '').padStart(3);
-  lines.push(line(c, wide, 6, `${number} ${goal.title || goal.name}`, goal.running ? ['bold'] : []));
+  line(lines, c, wide, 6, `${number} ${goal.title || goal.name}`, goal.running ? ['bold'] : []);
   const criteria = goal.criteria ? `${goal.criteria.met}/${goal.criteria.all}` : '—';
   const prefix = `          ${c(`stage ${stage}`, 'grey')} · status ${c(status, ...tone)} · `;
   const count = `criteria ${criteria}`;
@@ -52,31 +52,31 @@ function goalLines(lines, c, wide, goal, expand, sessions = [], note = null, { p
   if (width(prefix) + count.length <= wide) lines.push(`${prefix}${c(count, 'grey')}`);
   else {
     lines.push(prefix.replace(/ · $/u, ''));
-    lines.push(line(c, wide, 10, count, ['grey']));
+    line(lines, c, wide, 10, count, ['grey']);
   }
   if (goal.hold) {
     const reason = goal.hold.reason ?? '—';
     const said = saidHolds?.has(reason);
     saidHolds?.add(reason);
-    lines.push(line(c, wide, 10, `held by ${goal.hold.by ?? '—'} since ${goal.hold.at ?? '—'} — ${said ? 'as above' : reason}`, ['grey']));
+    line(lines, c, wide, 10, `held by ${goal.hold.by ?? '—'} since ${goal.hold.at ?? '—'} — ${said ? 'as above' : reason}`, ['grey']);
   }
-  if (goal.problems?.length) lines.push(line(c, wide, 10, `GOAL.json: ${goal.problems[0]}`, ['red']));
-  else if (note) lines.push(line(c, wide, 10, note, ['red']));
+  if (goal.problems?.length) line(lines, c, wide, 10, `GOAL.json: ${goal.problems[0]}`, ['red']);
+  else if (note) line(lines, c, wide, 10, note, ['red']);
   else if (['blocked', 'Martin'].includes(goal.status)) {
     const reason = goal.question || goal.last?.comment || (goal.status === 'Martin' ? 'waits on Martin' : 'a mend session resolves the obstacle');
-    lines.push(line(c, wide, 10, goal.stage === 'merge' && goal.status === 'blocked' ? mergeFailureSummary(reason) : reason, ['red']));
+    line(lines, c, wide, 10, goal.stage === 'merge' && goal.status === 'blocked' ? mergeFailureSummary(reason) : reason, ['red']);
   }
   for (const session of sessions) lines.push(...activityLines(c, wide, session, { expand }));
   for (const pr of goal.prs || []) {
     lines.push(prLine(c, wide, pr));
-    if (pr.merge_red) lines.push(line(c, wide, 12, mergeFailureSummary(pr.merge_red), ['red']));
+    if (pr.merge_red) line(lines, c, wide, 12, mergeFailureSummary(pr.merge_red), ['red']);
   }
   if (!expand) return;
   const metadata = [goal.name, ...(goal.repos || []), `${goal.sessions ?? 0} sessions`].filter(Boolean).join(' · ');
-  lines.push(line(c, wide, 10, metadata, ['grey']));
+  line(lines, c, wide, 10, metadata, ['grey']);
   const said = isFinished ? goal.last?.done || goal.last?.comment : goal.last?.next || goal.last?.comment;
   if (said && one(said) !== one(goal.question || (['blocked', 'Martin'].includes(goal.status) ? goal.last?.comment : ''))) {
-    lines.push(line(c, wide, 10, said, isFinished ? ['grey'] : []));
+    line(lines, c, wide, 10, said, isFinished ? ['grey'] : []);
   }
 }
 
@@ -130,7 +130,7 @@ export function programmeTreeLines(c, wide, group, { expand = false, sessions = 
     const visible = phase.goals.filter((goal) => !attention(goal) && (expand || !finished(goal) || atWork(goal)));
     if (!visible.length) continue;
     if (lines.length) lines.push('');
-    lines.push(line(c, wide, 4, `Phase ${phase.number}${phaseWaits(phase, group)}`, ['cyan', 'bold']));
+    line(lines, c, wide, 4, `Phase ${phase.number}${phaseWaits(phase, group)}`, ['cyan', 'bold']);
     for (const [index, goal] of visible.entries()) {
       if (index > 0) lines.push('');
       goalLines(lines, c, wide, goal, expand, owned(goal), null, { paused: draft, saidHolds });
@@ -138,17 +138,17 @@ export function programmeTreeLines(c, wide, group, { expand = false, sessions = 
   }
   if (needing.length) {
     if (lines.length) lines.push('');
-    lines.push(line(c, wide, 4, 'NEEDS ATTENTION', ['red', 'bold']));
+    line(lines, c, wide, 4, 'NEEDS ATTENTION', ['red', 'bold']);
     for (const [index, goal] of needing.entries()) {
       if (index > 0) lines.push('');
       goalLines(lines, c, wide, goal, expand, owned(goal), finished(goal) ? notArchived(goal) : null, { paused: draft, saidHolds });
     }
   }
   if (group.prs?.length) {
-    lines.push(line(c, wide, 4, 'PRs without a goal', ['grey']));
+    line(lines, c, wide, 4, 'PRs without a goal', ['grey']);
     for (const pr of group.prs) {
       lines.push(prLine(c, wide, pr));
-      if (pr.merge_red) lines.push(line(c, wide, 12, mergeFailureSummary(pr.merge_red), ['red']));
+      if (pr.merge_red) line(lines, c, wide, 12, mergeFailureSummary(pr.merge_red), ['red']);
     }
   }
   return lines;

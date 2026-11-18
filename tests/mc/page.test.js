@@ -3859,6 +3859,19 @@ describe('the overview: its order, its programmes and what belongs to none', () 
   }
   const quiet = () => day({ open: 1, per: 2, none: 0, runner: 0, managers: 0, plans: 0, desk: 0, martin: false });
 
+  it('wraps the goal title and hold reason inside the inset programme frame at 60 columns', () => {
+    const title = 'A long goal title that must remain readable inside the nested programme frame';
+    const reason = 'Wait until the deployment has completed and the final verification has been recorded';
+    const data = patch(quiet(), 'prog-01/goal-01', {
+      title, hold: { by: 'martin', at: '2026-11-14', reason },
+    });
+    const lines = draw(data, { columns: 60 });
+    assert.ok(lines.every((row) => width(row) <= 60));
+    const text = lines.map((row) => row.trim()).join(' ');
+    assert.ok(text.includes(title), text);
+    assert.ok(text.includes(reason), text);
+  });
+
   describe('the header', () => {
     it('keeps the compact header at 160 columns and shows priority and provider usage below it', () => {
       const lines = draw({ ...normalDay(), providerPriority: 'codex', billing: 'claude 45% plan · codex 9% plan (API off)' });
