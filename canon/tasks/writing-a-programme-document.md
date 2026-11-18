@@ -10,7 +10,7 @@ An order is built to its end without him (Martin, 2026-11-17). Between ready and
 
 An order is temporary: archived when its work has landed and not read again. What must last is written where it lasts before then: what runs in `docs/technical/`, aims and decisions on the area page, findings as proposals in their area ([proposals](proposals.md)).
 
-The document binds what the user gets, how it looks and how one sees that it works. How it is built is the planner's and the builder's to settle, so leave technical detail out unless the thing ordered rests on it. Keep it short enough that he reads all of it.
+The document binds what the user gets, how it looks and how one sees that it works. How it is built is the planner's and the builder's to settle, so leave technical detail out unless the thing ordered rests on it. Which technical solution each part takes is still known before the order is ready (Martin, 2026-11-18): every investigation it depends on is finished first, its result kept in the programme's evidence or an area proposal the part names, and no part orders an investigation. Keep it short enough that he reads all of it.
 
 ## The document
 
@@ -54,6 +54,6 @@ Put under Decided every choice he could have made otherwise, one plain line each
 Where you gave one of his words a meaning, show the meaning as a picture or as a
 line there. Where you are unsure, say what you propose and that you are unsure.
 Before it is ready, read every part for a step that waits on him (a look, an acceptance, a trial, a word) and settle it: decide it now, make it measurable, or move his act before ready or after the end.
-When Martin says it is ready, the desk sets it ready with `mc programs state <programme> ready`; he never runs the verb himself.
+Before it is brought to him it has had a programme review of the text as it stands (`mc programs review <programme>`; Martin, 2026-11-18), its findings settled. When Martin says it is ready, the desk sets it ready with `mc programs state <programme> ready`; he never runs the verb himself.
 
 English, whole sentences, the plain word, each thing said once.
