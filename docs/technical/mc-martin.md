@@ -50,8 +50,9 @@ has stopped (waiting in status `Martin`, wrong, or stuck).
 
 Launch first syncs the durable desk items (below), then builds the opening from
 the item store, the item briefs, `runs.tsv` and the daily ceiling, with no
-model. The opening is the launch's first prompt; a resumed conversation gets
-it again as a refresh. `mc martin brief` prints the same opening and starts no
+model. New and resumed sessions receive the opening as reference material with
+an instruction to acknowledge readiness briefly in Swedish and wait for
+Martin to choose the work. `mc martin brief` prints the opening and starts no
 session; `brief --json` gives the same data as the text. `brief` writes nothing
 except the sync's own store writes, and neither it nor a refused or failed
 launch changes `last-open.json`.
