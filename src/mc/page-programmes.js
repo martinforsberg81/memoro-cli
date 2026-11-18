@@ -1,6 +1,6 @@
 /** PROGRAMMES' own layout: programme → phase → goal → PR, without lane cells. */
 import { mergeFailureSummary } from './merge-red.js';
-import { clipCell, prTone, stateTone } from './page-grid.js';
+import { prTone, stateTone } from './page-grid.js';
 import { activityLines, sessionGoal } from './page-activity.js';
 import { width } from './status-render.js';
 import { detail } from './page-operations.js';
@@ -22,12 +22,16 @@ function line(lines, c, wide, indent, text, styles = []) {
   detail(lines, c, wide, indent, text, styles);
 }
 
-function prLine(c, wide, pr) {
+function prLines(c, wide, pr) {
   const ref = `${pr.repo || 'unknown'}#${pr.number}`;
   const state = pr.merge_red ? 'red' : pr.merging === 'landing' ? 'landing' : pr.merging === 'queued' ? 'queued' : pr.draft ? 'draft' : 'open';
   const label = state === 'landing' ? 'merging' : state === 'queued' ? 'in queue' : state;
   const prefix = `          ↳ ${c(ref, ...prTone([pr]))} · ${c(label, ...stateTone(state))}  `;
-  return `${prefix}${clipCell(pr.title || pr.branch || '', Math.max(0, wide - width(prefix)))}`.trimEnd();
+  const title = pr.title || pr.branch || '';
+  if (width(prefix) + width(title) <= wide) return [`${prefix}${title}`.trimEnd()];
+  const rows = [prefix.trimEnd()];
+  detail(rows, c, wide, 12, title, []);
+  return rows;
 }
 
 /**
@@ -68,7 +72,7 @@ function goalLines(lines, c, wide, goal, expand, sessions = [], note = null, { p
   }
   for (const session of sessions) lines.push(...activityLines(c, wide, session, { expand }));
   for (const pr of goal.prs || []) {
-    lines.push(prLine(c, wide, pr));
+    lines.push(...prLines(c, wide, pr));
     if (pr.merge_red) line(lines, c, wide, 12, mergeFailureSummary(pr.merge_red), ['red']);
   }
   if (!expand) return;
@@ -147,7 +151,7 @@ export function programmeTreeLines(c, wide, group, { expand = false, sessions = 
   if (group.prs?.length) {
     line(lines, c, wide, 4, 'PRs without a goal', ['grey']);
     for (const pr of group.prs) {
-      lines.push(prLine(c, wide, pr));
+      lines.push(...prLines(c, wide, pr));
       if (pr.merge_red) line(lines, c, wide, 12, mergeFailureSummary(pr.merge_red), ['red']);
     }
   }

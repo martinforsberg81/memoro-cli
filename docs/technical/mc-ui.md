@@ -29,9 +29,9 @@ the operations view behind `o`. A programme has a third, its own view (HORIZONS,
 below).
 
 **The overview** (`page-overview.js`, `overviewLines`) is as long as the work
-(No budget, below). In order: the compact header (up to two rows), MODEL PRIORITY and PROVIDERS, DESK, the warnings, HORIZONS, the programmes
-with something under way (each its own frame, in name order), one folded frame for
-the others, MAINTENANCE, then one MERGE row per repository with a landing or a queue
+(No budget, below). In order: the compact header (up to two rows), MODEL PRIORITY and PROVIDERS, DESK, the warnings, the HORIZONS roll-up, its horizon groups and OTHER PROGRAMMES
+when nonempty. Each group contains programmes under way in name order, followed by
+its own fold for the others. Then MAINTENANCE and one MERGE row per repository with a landing or a queue
 and a DEPLOY row while a deploy or its preparation runs. It draws from `data` alone,
 which is what `mc --json` prints. A stopped language run inside an open gap
 puts its warning above everything else, and the runner's pause and not-running
@@ -99,7 +99,8 @@ goal) and the programme's plan sessions are drawn in its frame, so nothing is re
 in a separate attention list. Something under way is a `draft` record, an unfinished goal, a
 session, an open pull request or an item needing attention. The programmes with nothing under
 way are folded in their own group as `<n> programmes with nothing under way · a shows them`;
-`a` draws them as frames after the ones under way.
+`a` draws them as frames after the ones under way. Programme headings and tree text,
+including pull request titles, wrap within the inset at narrow widths.
 
 **MAINTENANCE** is the last frame of the overview, headed `MAINTENANCE  <n> sources`. It has one row
 per source, in this order: user feedback, proposals, lessons, errors, tests, dependencies, intake,

@@ -64,7 +64,7 @@ const goalLineOf = (lines, name) => lines.find((line) => new RegExp(`^ +\\d+ ${n
 
 /** The programmes' lines, from the first programme frame's heading to the end of the page. */
 function programmesOf(lines) {
-  const head = lines.findIndex((line) => /^ {2}┌─ (?:\d+ {2})?[a-z][a-z-]*(?: |$)/u.test(plain(line)));
+  const head = lines.findIndex((line) => /^ {6}┌─ (?:\d+ {2})?[a-z][a-z-]*(?: |$)/u.test(plain(line)));
   assert.ok(head >= 0, 'a programme frame is drawn');
   return lines.slice(head);
 }
@@ -123,7 +123,7 @@ describe('goal rows on the page', () => {
     const at = (re) => lines.findIndex((line) => re.test(line));
 
 
-    const mcHeading = at(/^ {2}┌─ mc(?: |$)/u);
+    const mcHeading = at(/^ {6}┌─ mc(?: |$)/u);
     const cleanup = at(/^ +1 cleanup$/u);
     const rollout = at(/^ +2 rollout$/u);
     assert.ok(mcHeading >= 0 && mcHeading < cleanup, 'the goals are under their programme\'s heading');
@@ -198,8 +198,8 @@ describe('goal rows on the page', () => {
   it('the programme header counts its goals, or says it has none yet', () => {
     const data = pageData({ programmes: programmesSection({ goalRows: GOALS, programmes: PROGRAMMES }) });
     const lines = programmesOf(renderPageLines(data, { columns: 120, now: NOW, expand: true }));
-    const mcHeading = lines.find((line) => /^ {2}┌─ mc(?: |$)/u.test(line));
-    const docxHeading = lines.find((line) => /^ {2}┌─ docx-editing-surface\s/u.test(line));
+    const mcHeading = lines.find((line) => /^ {6}┌─ mc(?: |$)/u.test(line));
+    const docxHeading = lines.find((line) => /^ {6}┌─ docx-editing-surface\s/u.test(line));
     assert.match(mcHeading, /2 goals/u);
     assert.match(docxHeading, /0 goals/u, 'a programme with no goal says so');
   });
@@ -350,6 +350,19 @@ describe('programme pull requests', () => {
         if (number === 34) assert.ok(lines.slice(0, lines.findIndex((line) => line.includes('MAINTENANCE'))).every((line) => !line.includes('#34')), '#34 is in no programme');
       }
     }
+  });
+
+  it('wraps the complete goal and plan PR titles within the inset at 60 columns', () => {
+    const programmes = programmesSection({ goalRows: [GOALS[0]] });
+    const title = 'A long pull request title that must stay readable in the nested programme frame';
+    const prs = [1, 2].map((number) => ({ repo: 'memoro-cli', number, title }));
+    programmes.programmes[0].goals[0].prs = [prs[0]];
+    programmes.programmes[0].prs = [prs[1]];
+    const lines = renderPageLines(pageData({ programmes }), { columns: 60, now: NOW, overview: true });
+    assert.ok(lines.every((row) => width(row) <= 60));
+    const text = lines.map((row) => plain(row).trim()).join(' ');
+    assert.equal(text.split(title).length - 1, 2, text);
+    for (const number of [1, 2]) assert.equal(lines.filter((row) => row.includes(`#${number}`)).length, 1);
   });
 
   it('draws unclaimed plan PRs under their programme, including a programme with no goals', () => {
