@@ -48,7 +48,6 @@ export function programmeFacts(group, sessions = []) {
   };
 }
 
-/** A run of `{ text, styles }` parts, painted. */
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /**
@@ -60,8 +59,43 @@ export function horizonWords(data, group) {
   if (!data.horizons) return '';
   const open = (data.horizons.open || []).find((horizon) => (horizon.programmes || []).includes(group.programme));
   if (open) return open.position != null ? `horizon ${open.position}` : `horizon ${open.slug}`;
-  if (group.record_invalid) return 'horizon unknown · record invalid';
-  return group.horizon ? `horizon ${group.horizon}${group.horizon_state ? ` (${group.horizon_state})` : ''}` : 'no horizon';
+  if (group.record_invalid) return 'horizon unknown';
+  if (!group.horizon) return 'no horizon';
+  const state = group.horizon_state === 'not held' && (data.horizons.error || data.horizons.unreadable?.includes(group.horizon))
+    ? 'unreadable' : group.horizon_state;
+  return `horizon ${group.horizon}${state ? ` (${state})` : ''}`;
+}
+
+const separator = (part, index) => part.sep ?? (index ? ' · ' : '');
+
+/** Wrap the unpainted heading, keeping the style of each portion of a continuation row. */
+function headingDetail(lines, c, wide, parts) {
+  const indent = 6;
+  const room = wide - indent - 2;
+  let text = '';
+  const spans = parts.map((part, index) => {
+    text += separator(part, index);
+    const from = text.length;
+    text += part.text;
+    return { from, to: text.length, styles: part.styles };
+  });
+  for (let start = 0; start < text.length;) {
+    while (text[start] === ' ') start += 1;
+    const cut = text.length - start <= room ? text.length : text.lastIndexOf(' ', start + room);
+    const end = cut > start ? cut : start + room;
+    let row = ' '.repeat(indent);
+    let at = start;
+    for (const span of spans) {
+      const from = Math.max(at, span.from);
+      const to = Math.min(end, span.to);
+      if (to <= from) continue;
+      if (from > at) row += c(text.slice(at, from), 'grey');
+      row += c(text.slice(from, to), ...span.styles);
+      at = to;
+    }
+    lines.push(row + text.slice(at, end).trimEnd());
+    start = end;
+  }
 }
 
 /**
@@ -71,27 +105,33 @@ export function horizonWords(data, group) {
 export function programmeHeading(c, wide, data, group, facts, continuation = null) {
   const phase = group.record_state === 'draft' ? 'draft' : facts.unfinished && facts.current != null ? `phase ${facts.current}${facts.last != null ? ` of ${facts.last}` : ''}` : '';
   const goals = group.goals?.length || 0;
-  // README.md Part 2: `28  name  ·  no horizon  ·  phase 1 of 2 · 2 goals`. Proposals are the areas', not a programme's.
   const rest = [
     phase,
     plural(goals, 'goal'),
     group.priority ? `priority ${group.priority}` : '',
     facts.done ? `${facts.done} done` : '',
   ].filter(Boolean).map((text) => ({ text, styles: ['grey'] }));
-  if (group.record_invalid && (!data.horizons || (data.horizons.open || []).some((item) => (item.programmes || []).includes(group.programme)))) rest.push({ text: 'record invalid', styles: ['red'] });
   // With no horizons read there is no horizon to set apart: the facts follow the name as any frame's do.
   const horizon = horizonWords(data, group);
-  if (horizon && rest.length) rest[0] = { ...rest[0], sep: '  ·  ' };
-  const parts = horizon ? [{ text: horizon, styles: ['grey'], sep: '·  ' }, ...rest] : rest;
+  const parts = [];
+  const warning = { text: 'record invalid', styles: ['red'] };
+  const invalidHorizon = horizon === 'horizon unknown';
+  if (horizon) {
+    parts.push({ text: horizon, styles: ['grey'], sep: '·  ' });
+    if (invalidHorizon) parts.push(warning);
+    rest[0].sep = '  ·  ';
+  }
+  parts.push(...rest);
+  if (group.record_invalid && !invalidHorizon) parts.push(warning);
   const number = group.number != null ? `${group.number}  ` : '';
   const title = `${number}${group.programme}`;
-  const words = parts.map((part, i) => `${part.sep ?? (i ? ' · ' : '')}${part.text}`).join('');
+  const words = parts.map((part, i) => `${separator(part, i)}${part.text}`).join('');
   if (continuation && width(title) + width(words) + 10 > wide) {
     if (width(title) <= wide - 8) {
-      detail(continuation, c, wide - 2, 5, words);
+      headingDetail(continuation, c, wide, parts);
       return frameTop(c, wide, title);
     }
-    detail(continuation, c, wide - 2, 5, `${title}  ${words}`, ['grey']);
+    headingDetail(continuation, c, wide, [{ text: title, styles: ['bold'] }, { ...parts[0], sep: `  ${separator(parts[0], 0)}` }, ...parts.slice(1)]);
     return frameTop(c, wide, '');
   }
   return frameTop(c, wide, title, parts);

@@ -59,7 +59,8 @@ at indent 4, then the bottom rule `└────┘`. Each programme is its ow
 its name as the title and its goal count and priority as the facts. A
 frame with nothing beyond its title and facts — MERGE and DEPLOY with no detail, the
 folded `<n> programmes with nothing under way`, DEV with none running — is its top
-rule alone, with no bottom rule. There are no loose headings, no cyan rules and no
+rule alone, with no bottom rule. In the overview a wrapped heading or fold hint
+uses continuation rows and a bottom rule. There are no loose headings, no cyan rules and no
 separator before SYSTEM; the page has one style of rule. The rules are orange
 (256-colour SGR 38;5;208); red stays for what is broken. The rounded session
 frames (`╭╮`) and the pipeline's stage boxes are not sections and stay as they
@@ -78,9 +79,9 @@ remain visible in both modes. There are no repeated table headers.
 
 ### The overview
 
-**No budget.** The overview has no row budget and no fold: every section draws every
-row it has, at every width the page draws (60–160). The one fold is the frame of
-programmes with nothing under way, below.
+**No budget.** The overview has no row budget: every section draws every row it has
+at every width the page draws (60–160), except for the programmes with nothing
+under way that fold within their group.
 
 **The header** is at most two rows with no frame, then one blank row. The first
 reads `MC <version> · runner on|off · <n>/<m> lanes · runner ≈$<x> today · deploy
@@ -89,7 +90,8 @@ which have no header of their own. A programme's own view keeps the header and t
 
 **The programmes.** Within each horizon, and within OTHER PROGRAMMES for programmes outside open horizons, every programme with something under way is drawn as
 `a` has always drawn a programme (a frame with its phases, goals, sessions and pull
-requests), in name order within its group. Programme frames are inset four columns inside the group. Its heading is its number and name in
+requests), in name order within its group. Programme and fold frames are inset four columns
+at both edges of the group. The programme heading is its number and name in
 the title and, in the top rule, its horizon (`horizon 5`, the number the HORIZONS row gives, or
 `no horizon`), then its phase (`phase 2 of 4`, `draft`), its goal count, priority
 and done count; `  ·  ` sets the horizon apart from the name and from the phase, and ` · `
@@ -217,9 +219,27 @@ so the page and the desk agree on what waits, in what order and what was decided
 ### HORIZONS
 
 The default page draws HORIZONS below DESK and the warnings (`page-horizons.js`,
-`horizonsLines`, from `data.horizons` and `data.programmes` alone). The heading counts
-the open horizons, the programmes under way, the goals open and the sessions at work.
-Each open horizon has a frame in desk order (`position`, then set time, then slug), with its number and title and a facts row counting its programmes, drafts, open goals, finished goals still in the tree, explicit holds, associated PRs and sessions. Counts include folded programmes. A horizon without programmes says `No programmes`; programme and open goal counts remain visible at zero. Programmes not assigned to an open horizon are in OTHER PROGRAMMES, omitted when empty. A readable empty or missing store has no open horizons; absent section data starts with Other. A horizon store or record read failure is red beneath the roll-up, which closes before the horizon frames. Programme headings name the open horizon or their reference state in Other (`reached`, `dropped`, `not held`, `unreadable`, or `horizon unknown · record invalid`).
+`horizonsLines`). The roll-up counts open horizons, programmes under way, open goals
+and running sessions. Its programme and session totals include Other; its open-goal
+total includes only open horizons. A zero running total is omitted.
+
+Each open horizon has a frame in desk order (`position`, then set time, then slug),
+with its number and title and a grey facts row. The facts count programmes, drafts,
+open goals, explicit goal holds, associated PRs and plan, programme and goal
+sessions in that group, including folded programmes. Done and dropped goals still
+in the live tree read `<n> finished in tree`. Programme and open-goal counts remain
+visible at zero, with `No programmes` for an empty horizon. Drafts, finished-in-tree
+goals, holds, PRs and running sessions are omitted at zero. Archive labels do not
+change the under-way totals.
+
+Programmes not assigned to an open horizon are in OTHER PROGRAMMES, omitted when
+empty. A readable empty or missing store shows `0 open`; if the section data is
+absent, the groups start with Other. Horizon store and record read failures are red
+immediately below the roll-up, within its frame and before the horizon frames.
+Programme headings name the open horizon by number or, in Other, say `no horizon`,
+`horizon unknown · record invalid` (with the invalid record in red), or give
+the slug and its displayed state: `reached`, `dropped`, `not held` or `unreadable`.
+The unreadable display uses the store and record warnings, not a new JSON state.
 
 **Numbers.** Goals keep the numbers 1..N. The programmes are N+1..N+M in name
 order, in every listed programme including the folded ones, and the number is on
@@ -237,8 +257,7 @@ none: [<programme names serving no open horizon>], unreadable: [<directory
 names>], error }`, `error` being the reason the store could not be listed, else
 null. Each programme in `programmes.programmes` gains `number`, `horizon` (the
 slug its valid record names, else null) and `horizon_state` (`open`, `reached`,
-`dropped`, `unreadable` when the store or named record cannot be read,
-`not held` for a slug a readable store does not hold, or null),
+`dropped`, `not held` for a slug without a readable horizon record, or null),
 and `record_state` (a valid record's state, otherwise null).
 Red in a programme's frame means that someone must act: status `Martin` or `blocked`, a
 malformed goal, a refused archive, a failed merge. A goal that gets no session although

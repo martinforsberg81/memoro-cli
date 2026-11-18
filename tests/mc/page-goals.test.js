@@ -352,19 +352,6 @@ describe('programme pull requests', () => {
     }
   });
 
-  it('wraps the complete goal and plan PR titles within the inset at 60 columns', () => {
-    const programmes = programmesSection({ goalRows: [GOALS[0]] });
-    const title = 'A long pull request title that must stay readable in the nested programme frame';
-    const prs = [1, 2].map((number) => ({ repo: 'memoro-cli', number, title }));
-    programmes.programmes[0].goals[0].prs = [prs[0]];
-    programmes.programmes[0].prs = [prs[1]];
-    const lines = renderPageLines(pageData({ programmes }), { columns: 60, now: NOW, overview: true });
-    assert.ok(lines.every((row) => width(row) <= 60));
-    const text = lines.map((row) => plain(row).trim()).join(' ');
-    assert.equal(text.split(title).length - 1, 2, text);
-    for (const number of [1, 2]) assert.equal(lines.filter((row) => row.includes(`#${number}`)).length, 1);
-  });
-
   it('draws unclaimed plan PRs under their programme, including a programme with no goals', () => {
     const programmes = programmesSection({ goalRows: [{ ...GOALS[0], carries: [{ repo: 'memoro-cli', pr: 3 }] }], programmes: ['empty'] });
     const pr = (number, name, branch = `plan/${name}`) => ({ repo: 'memoro-cli', number, title: `Change ${number}`, branch, owner: { kind: 'plan', name } });

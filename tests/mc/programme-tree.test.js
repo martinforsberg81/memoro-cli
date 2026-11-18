@@ -153,12 +153,13 @@ describe('The programmes\' phase tree', () => {
       for (const title of ['Title parallel-a', 'Title far-future']) {
         const at = lines.findIndex((line) => line.includes(title));
         assert.ok(at >= 0, title);
-        assert.match(lines[at + 2], /^ {14}╭─+╮$/u);
-        const bottom = lines.findIndex((line, index) => index > at + 2 && line.trimStart().startsWith('╰'));
-        const content = lines.slice(at + 3, bottom).map((line) => line.trim().slice(1, -1).trim()).join(' ');
+        const top = lines[at + 2].includes('criteria ') ? at + 3 : at + 2;
+        assert.match(lines[top], /^ {16}╭─+╮$/u);
+        const bottom = lines.findIndex((line, index) => index > top && line.trimStart().startsWith('╰'));
+        const content = lines.slice(top + 1, bottom).map((line) => line.trim().slice(1, -1).trim()).join(' ');
         assert.match(content, /^● · (BUILD|REVIEW) · 12 min · codex · sol(?: ·)? 1 check-in(?: ·)? runner pid 7$/u);
-        assert.equal(width(lines[at + 2]), width(lines[at + 3]), 'frame hugs the session');
-        assert.equal(width(lines[at + 3]), width(lines[bottom]));
+        assert.equal(width(lines[top]), width(lines[top + 1]), 'frame hugs the session');
+        assert.equal(width(lines[top + 1]), width(lines[bottom]));
         assert.ok(!lines[bottom + 1]?.includes('check-in'), 'no separate check-in below the frame');
       }
       const unmatched = lines.findIndex((line) => line.startsWith('  ┌─ MAINTENANCE'));
@@ -180,7 +181,7 @@ describe('The programmes\' phase tree', () => {
       assert.deepEqual(colourLines.map(plain), plainLines);
       assert.ok(plainLines.some((line) => /^ {6}┌─ inbox /u.test(line)), 'programme has a boundary');
       assert.ok(plainLines.some((line) => /^ {6}└/u.test(line)), 'programme closes before the next unit');
-      assert.ok(plainLines.some((line) => /stage build · status ready · criteria 0\/1/u.test(line)));
+      assert.match(plainLines.join('\n'), /stage build · status ready(?: · |\n {16})criteria 0\/1/u);
       // The pipeline's box borders and arrows are the real grey by contract (mc-ui.md, Pipeline); nothing else is.
       const text = (line) => line.replace(/\u001b\[90m[┌┐└┘│─▶ ]+\u001b\[0m/gu, '');
       assert.ok(!colourLines.some((line) => /\u001b\[(?:90|2)m/u.test(text(line))), 'secondary text is not dark grey or dim');

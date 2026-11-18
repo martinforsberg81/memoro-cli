@@ -440,11 +440,11 @@ function programmeLine(c, wide, group, expand, numbered = false) {
  * its goals by phase, then the border. A programme with nothing to draw is its heading row alone.
  */
 function programmeFrame(lines, c, wide, data, group, expand, runnerSessions) {
-  const body = programmeBody(c, wide, group, expand, runnerSessions);
+  const body = programmeBody(c, wide - 2, group, expand, runnerSessions);
   const continuation = [];
   lines.push(programmeHeading(c, wide, data, group, programmeFacts(group, runnerSessions), continuation));
   if (!body.length && !continuation.length) return;
-  lines.push(...continuation, ...body);
+  lines.push(...continuation, ...body.map((row) => row ? `  ${row}` : row));
   panelEnd(lines, c, wide);
 }
 
@@ -865,11 +865,7 @@ export function renderPageLines(data, {
   lines.push(...overviewLines(c, wide, data, {
     version,
     expand,
-    drawProgramme: (into, group, indent = 0) => {
-      const nested = [];
-      programmeFrame(nested, c, wide - indent, data, group, expand, runnerSessions);
-      into.push(...nested.map((line) => `${' '.repeat(indent)}${line}`));
-    },
+    drawProgramme: (into, group, childWide) => programmeFrame(into, c, childWide, data, group, expand, runnerSessions),
   }));
   if (expand) {
     // `a` holds what the single page held (D10): the operations view's sections expanded, beginning with its hero

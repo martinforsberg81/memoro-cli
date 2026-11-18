@@ -62,7 +62,7 @@ const programmeFramesOf = (lines, pattern = /^ {6}┌─ (?:\d+ {2})?(\S+)(?: {2
     const head = pattern.exec(row);
     if (!head) return;
     let end = i + 1;
-    while (end < lines.length && !/^ {6}└/u.test(lines[end])) end += 1;
+    while (end < lines.length && !/^ {2}(?: {4})?[┌└]/u.test(lines[end])) end += 1;
     frames.set(head[1], { heading: row, body: lines.slice(i + 1, end) });
   });
   return frames;
@@ -177,9 +177,10 @@ describe('SESSIONS', () => {
       assert.match(activity.join('\n'), /pid 98765/u);
       // A goal's session is drawn once, under its goal, its kind first; a project's two sessions are MAINTENANCE rows, each once.
       for (const [name, kind] of [['runner-sessions', 'BUILD'], ['review-and-land', 'REVIEW'], ['headless-plan', 'PLAN']]) {
-        const at = activity.findIndex((line) => new RegExp(`^ {10}\\d+ ${name}$`, 'u').test(line));
+        const at = activity.findIndex((line) => new RegExp(`^ {12}\\d+ ${name}$`, 'u').test(line));
         assert.ok(at >= 0, `${columns}: goal ${name}`);
-        assert.match(activity[at + 3], new RegExp(`● · ${kind} · `, 'u'), `${columns}: ${name} draws its ${kind} session`);
+        const box = activity[at + 2].includes('criteria ') ? at + 3 : at + 2;
+        assert.match(activity[box + 1], new RegExp(`● · ${kind} · `, 'u'), `${columns}: ${name} draws its ${kind} session`);
       }
       for (const name of ['docx-editor', 'mc-ui'])
         assert.equal(activity.filter((line) => line.startsWith(`      ${name}  build · open `)).length, 1, name);
@@ -2447,7 +2448,7 @@ describe('collectPage', () => {
 
     assert.deepEqual(Object.fromEntries(groups.map((group) => [group.programme, [group.horizon, group.horizon_state]])), {
       mc: [null, null],
-      'p-broken': ['broken', 'unreadable'],
+      'p-broken': ['broken', 'not held'],
       'p-dropped': ['gone', 'dropped'],
       'p-first': ['first', 'open'],
       'p-invalid': [null, null],
@@ -2468,97 +2469,131 @@ describe('collectPage', () => {
     assert.equal(data.horizons.error, null);
   });
 
-  /** The overview's facts, collected from real records: multiple open horizons, empty horizon, closed and unreadable references. */
+  /** The overview's facts, collected from real horizon, programme and goal records and cached plan PRs. */
   async function overviewData(t) {
-    const fx = horizonsFixture({ plan: ['plan-only', 'p-unheld'] });
+    const fx = horizonsFixture({ plan: ['plan-only', 'p-unheld', 'p-pr'] });
     t.after(() => rmSync(fx.root, { recursive: true, force: true }));
-    fx.horizon('first', 'open', 1);
-    fx.horizon('second', 'open', 2);
-    fx.horizon('third', 'open', 3);
-    fx.horizon('empty', 'open', 4);
+    for (const [slug, position] of [['pr', 4], ['second', 2], ['first', 1], ['empty', 5], ['third', 3]]) {
+      fx.horizon(slug, 'open', position);
+    }
     fx.horizon('done-one', 'reached', null, { reached_at: '2026-11-14T11:00:00.000Z' });
     fx.horizon('gone', 'dropped', null, { dropped_at: '2026-11-14T11:00:00.000Z' });
     mkdirSync(join(horizonsDir(fx.env), 'broken'), { recursive: true });
     writeFileSync(join(horizonsDir(fx.env), 'broken', 'horizon.json'), '{ not json');
-    fx.record('mc', 'first');
-    fx.record('p-second', 'second');
-    fx.record('p-dormant-second', 'second');
-    fx.record('p-third', 'third');
-    fx.record('p-unheld', 'ghost');
-    fx.record('p-none', null);
-    fx.record('p-reached', 'done-one');
-    fx.record('p-dropped', 'gone');
-    fx.record('p-broken', 'broken');
+    for (const [name, slug] of [
+      ['mc', 'first'], ['p-second', 'second'], ['p-dormant-second', 'second'], ['p-third', 'third'],
+      ['p-pr', 'pr'], ['p-unheld', 'ghost'], ['p-none', null], ['p-reached', 'done-one'],
+      ['p-dropped', 'gone'], ['p-broken', 'broken'],
+    ]) fx.record(name, slug);
+    fx.record('p-draft', 'pr', 'draft');
     mkdirSync(join(programsHome(fx.env), 'p-invalid'), { recursive: true });
     writeFileSync(join(programsHome(fx.env), 'p-invalid', 'PROGRAMME.json'), '{ "schema": "nope" }');
-    const data = await fx.collect();
-    const mcGroup = data.programmes.programmes.find((p) => p.programme === 'mc');
-    const secondGroup = data.programmes.programmes.find((p) => p.programme === 'p-second');
-    if (secondGroup && mcGroup?.goals?.[0]) {
-      const base = mcGroup.goals[0];
-      secondGroup.goals = [{ ...base, programme: 'p-second', name: 'held-goal', title: 'Held Goal', stage: 'build', status: 'ready', hold: { by: 'martin', at: '2026-11-14T10:00:00Z', reason: 'waiting' }, prs: [], running: false }];
-      secondGroup.phases = [{ number: 1, goals: secondGroup.goals }];
-      secondGroup.current_phase = 1;
-    }
-    const thirdGroup = data.programmes.programmes.find((p) => p.programme === 'p-third');
-    if (thirdGroup && mcGroup?.goals?.[0]) {
-      const base = mcGroup.goals[0];
-      thirdGroup.goals = [{ ...base, programme: 'p-third', name: 'dropped-goal', title: 'Dropped Goal', stage: 'dropped', status: 'ready', prs: [], running: false }];
-      thirdGroup.phases = [{ number: 1, goals: thirdGroup.goals }];
-      thirdGroup.current_phase = 1;
-      thirdGroup.finished = 1;
-    }
-    data.runner = {
-      ...data.runner,
-      sessions: [{ kind: 'build', goal: 'mc/page', repo: 'memoro-cli', tool: 'codex', model: 'gpt-6.2-sol', pid: 4000, started: '2026-08-29T11:55:00Z', elapsed_seconds: 300 }],
+    const goal = (programme, name, fields) => {
+      const dir = join(programsHome(fx.env), programme, 'goals', name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'GOAL.json'), goalJson(fields));
+      writeFileSync(join(dir, 'LOG.md'), '');
+      return dir;
     };
+    const held = goal('p-second', 'held-goal', { title: 'Held Goal' });
+    writeFileSync(join(held, '.hold.json'), JSON.stringify({ by: 'martin', at: '2026-11-14T10:00:00Z', reason: 'waiting' }));
+    goal('p-third', 'dropped-goal', { title: 'Dropped Goal', stage: 'dropped' });
+    goal('plan-only', 'other-goal', { title: 'Other Goal' });
+
+    const data = await fx.collect();
+    data.runner.sessions = [{
+      kind: 'build', goal: 'mc/mc-ui', repo: 'memoro-cli', tool: 'codex', model: 'gpt-6.2-sol', pid: 4000,
+      started: '2026-08-29T11:55:00Z', elapsed_seconds: 300,
+    }];
+    data.programmes.programmes.find((p) => p.programme === 'p-unheld').sessions = [{
+      kind: 'programme', name: 'p-unheld', tool: 'codex', model: 'gpt-6.2-sol', pid: 4001, started: '2026-08-29T11:50:00Z',
+    }];
     return data;
   }
-  const between = (lines, from, to) => {
-    const start = lines.findIndex((line) => line.includes(from));
-    const end = lines.findIndex((line, i) => i > start && line.includes(to));
-    if (start === -1) throw new Error(`between: could not find "from": ${from}`);
-    if (end === -1) throw new Error(`between: could not find "to": ${to}`);
-    return lines.slice(start, end);
-  };
 
-  it('draws HORIZONS in the default view, below the desk, then every programme under way in its own frame', async (t) => {
-    const data = await overviewData(t);
-    for (const columns of [160, 80, 60]) {
-      const lines = renderPageLines(data, { columns, now: NOW, overview: true });
-      const text = lines.join('\n');
+  const sectionText = (rows) => rows.map((row) => row.trim()).join(' ').replace(/ +/gu, ' ');
+
+  function checkGroupedOverview(data, expand) {
+    const expected = [
+      { title: '1  Title of first', facts: '1 programme · 1 goal open · 1 running', active: ['mc'], folded: [] },
+      { title: '2  Title of second', facts: '2 programmes · 1 goal open · 1 held', active: ['p-second'], folded: ['p-dormant-second'] },
+      { title: '3  Title of third', facts: '1 programme · 0 goals open · 1 finished in tree', active: [], folded: ['p-third'] },
+      { title: '4  Title of pr', facts: '2 programmes · 1 draft · 0 goals open · 1 PR', active: ['p-draft', 'p-pr'], folded: [] },
+      { title: '5  Title of empty', facts: 'No programmes · 0 goals open', active: [], folded: [] },
+      { title: 'OTHER PROGRAMMES', facts: '', active: ['p-unheld', 'plan-only'], folded: ['p-broken', 'p-dropped', 'p-invalid', 'p-none', 'p-reached'] },
+    ];
+    for (const columns of [160, 100, 60]) {
+      const options = { columns, now: NOW, expand, overview: true };
+      const lines = renderPageLines(data, options);
       assert.ok(lines.every((row) => width(row) <= columns), `${columns}: ${lines.filter((row) => width(row) > columns).join('\n')}`);
-      assert.ok(text.indexOf('┌─ DESK') < text.indexOf('HORIZONS'), 'the desk is above HORIZONS');
-      assert.doesNotMatch(text, /Serving no horizon|UNASSIGNED ACTIVITY|IN FLIGHT|NEEDS ATTENTION/u);
-      const section = between(lines, '┌─ HORIZONS', '┌─ ').map((row) => row.trimEnd());
-      assert.match(section.join('\n'), /4 open · 4 programmes under way · 2 goals open · 1\s+running/u);
-      assert.match(section.join('\n'), /1 horizon record cannot be read: broken/u);
-      const first = between(lines, '┌─ 1  Title of first', '┌─ 2  Title of second');
-      const second = between(lines, '┌─ 2  Title of second', '┌─ 3  Title of third');
-      const third = between(lines, '┌─ 3  Title of third', '┌─ 4  Title of empty');
-      const empty = between(lines, '┌─ 4  Title of empty', '┌─ OTHER PROGRAMMES');
-      const other = between(lines, '┌─ OTHER PROGRAMMES', '┌─ MAINTENANCE');
-      assert.ok(first.some((row) => /1 programme · 1 goal open · 1 running/u.test(row)));
-      assert.ok(second.some((row) => /2 programmes · 1 goal open · 1 held/u.test(row)));
-      assert.ok(third.some((row) => /1 programme · 0 goals open · 1 finished in tree/u.test(row)));
-      assert.ok(empty.some((row) => /No programmes · 0 goals open/u.test(row)));
-      assert.deepEqual([...programmeFramesOf(first).keys()], ['mc']);
-      assert.deepEqual([...programmeFramesOf(second).keys()], ['p-second']);
-      assert.deepEqual([...programmeFramesOf(third).keys()], []);
-      assert.deepEqual([...programmeFramesOf(empty).keys()], []);
-      assert.deepEqual([...programmeFramesOf(other).keys()], ['p-unheld', 'plan-only']);
-      const otherHeader = (name) => {
-        const frame = programmeFramesOf(other).get(name);
-        return `${frame.heading}\n${frame.body.join('\n')}`;
-      };
-      assert.match(otherHeader('p-unheld'), /horizon ghost \(not held\)/u);
-      assert.match(otherHeader('plan-only'), /no horizon/u);
-      assert.ok(programmeFramesOf(other).get('plan-only').body.some((row) => /PRs without a goal/u.test(row)));
-      assert.ok(!/p-dormant-second|p-third|p-broken|p-dropped|p-invalid|p-none|p-reached/u.test(text));
-      assert.ok(/1 programme with nothing under way[\s\S]*a\s+shows\s+them/u.test(second.join('\n')), `second fold: ${second.join('\n')}`);
-      assert.ok(/1 programme with nothing under way[\s\S]*a\s+shows\s+them/u.test(third.join('\n')), `third fold: ${third.join('\n')}`);
-      assert.ok(/5 programmes with nothing under way[\s\S]*a\s+shows\s+them/u.test(other.join('\n')), `other fold: ${other.join('\n')}`);
+      const start = lines.findIndex((line) => line.startsWith('  ┌─ HORIZONS'));
+      const end = lines.findIndex((line) => line.startsWith('  ┌─ MAINTENANCE'));
+      assert.ok(lines.findIndex((line) => line.startsWith('  ┌─ DESK')) < start && start < end);
+      const area = lines.slice(start, end);
+      assert.doesNotMatch(area.join('\n'), /Serving no horizon|UNASSIGNED ACTIVITY|IN FLIGHT|NEEDS ATTENTION/u);
+      const sections = area.map((line, i) => /^ {2}┌─ /u.test(line) ? i : -1).filter((i) => i >= 0);
+      assert.deepEqual(sections.map((i) => area[i].replace(/^ {2}┌─ | ─+┐$/gu, '').replace(/^HORIZONS  .*$/u, 'HORIZONS')),
+        ['HORIZONS', ...expected.map(({ title }) => title)]);
+      const rollup = area.slice(0, sections[1]).filter(Boolean);
+      const summary = '5 open · 6 programmes under way · 2 goals open · 2 running';
+      assert.equal(sectionText([rollup[0].replace(/^ {2}┌─ HORIZONS| ─+┐$/gu, ''), ...rollup.slice(1, -2)]).trim(), summary);
+      assert.equal(rollup.at(-2).trim(), '1 horizon record cannot be read: broken');
+      assert.match(rollup.at(-1), /^ {2}└─+┘$/u);
+
+      for (const [i, { title, facts, active, folded }] of expected.entries()) {
+        const group = area.slice(sections[i + 1], sections[i + 2]).filter(Boolean);
+        const label = `${columns} columns, ${title}, a=${expand}`;
+        assert.match(group.at(-1), /^ {2}└─+┘$/u, label);
+        const firstChild = group.findIndex((line) => line.startsWith('      ┌─'));
+        assert.equal(sectionText(group.slice(1, firstChild < 0 ? -1 : firstChild)), facts, label);
+        const childHeadings = group.filter((line) => /^ {6}┌─ \d+ {2}/u.test(line));
+        assert.deepEqual(childHeadings.map((line) => /^ {6}┌─ \d+ {2}(\S+)/u.exec(line)[1]),
+          [...active, ...(expand ? folded : [])], label);
+
+        for (const border of group.filter((line) => /^ {6}[┌└]/u.test(line))) {
+          assert.equal(width(border), width(group[0]) - 4, label);
+        }
+        const folds = group.map((row, at) => /^ {6}┌─ (?!\d+ {2})/u.test(row) ? at : -1).filter((at) => at >= 0);
+        assert.equal(folds.length, Number(!expand && folded.length > 0), label);
+        if (folds.length) {
+          const rows = group.slice(folds[0], -1).filter((row) => !/^ {6}└/u.test(row));
+          rows[0] = rows[0].replace(/^ {6}┌─ | *─+┐$/gu, '');
+          assert.equal(sectionText(rows).trim(),
+            `${folded.length} programme${folded.length === 1 ? '' : 's'} with nothing under way · a shows them`, label);
+        }
+
+        const frames = programmeFramesOf(group);
+        const heading = (name) => sectionText([frames.get(name).heading, ...frames.get(name).body]);
+        if (title.startsWith('1 ')) {
+          const mc = frames.get('mc');
+          assert.match(mc.body.join('\n'), /^ {10}Phase 1\n {12}1 The page$/mu, label);
+          assert.match(heading('mc'), /horizon 1/u);
+        }
+        if (title.startsWith('2 ')) {
+          assert.match(heading('p-second'), /horizon 2/u);
+          if (expand) assert.match(heading('p-dormant-second'), /horizon 2/u);
+        }
+        if (title.startsWith('3 ') && expand) assert.match(heading('p-third'), /horizon 3/u);
+        if (title === 'OTHER PROGRAMMES') {
+          assert.match(heading('p-unheld'), /horizon ghost \(not held\)/u);
+          assert.match(heading('plan-only'), /no horizon/u);
+          assert.ok(frames.get('plan-only').body.some((row) => /PRs without a goal/u.test(row)));
+          if (expand) {
+            assert.match(heading('p-broken'), /horizon broken \(unreadable\)/u);
+            assert.match(heading('p-dropped'), /horizon gone \(dropped\)/u);
+            assert.match(heading('p-invalid'), /horizon unknown · record invalid/u);
+            assert.match(heading('p-none'), /no horizon/u);
+            assert.match(heading('p-reached'), /horizon done-one \(reached\)/u);
+            const painted = renderPageLines(data, { ...options, colour: true });
+            assert.equal(painted.filter((row) => row.includes('\x1b[31mrecord invalid\x1b[0m')).length, 1, label);
+          }
+        }
+      }
     }
+  }
+
+  it('draws HORIZONS below the desk with exact group facts, ordered visible cards and their own folds', async (t) => {
+    checkGroupedOverview(await overviewData(t), false);
   });
 
   it("a programme's frame carries its goals' held, blocked, waiting and malformed states and its sessions, and HORIZONS counts them", async (t) => {
@@ -2588,9 +2623,9 @@ describe('collectPage', () => {
       assert.ok(lines.every((row) => width(row) <= columns), `${columns}: ${lines.filter((row) => width(row) > columns).join('\n')}`);
       const frame = programmeFramesOf(lines).get('mc');
       const body = frame.body.join('\n');
-      assert.match(body, /^ {14}held by martin since 2026-11-14T10:00:00Z — wait for the deploy$/mu, `${columns}: the held goal`);
-      assert.match(body, /^ {14}stage build · status blocked/mu, `${columns}: the blocked goal`);
-      assert.match(body, /^ {14}waits on Martin$/mu, `${columns}: the goal waiting on Martin`);
+      assert.match(body, /^ {16}held by martin since 2026-11-14T10:00:00Z — wait for the(?: |\n {16})deploy$/mu, `${columns}: the held goal`);
+      assert.match(body, /^ {16}stage build · status blocked/mu, `${columns}: the blocked goal`);
+      assert.match(body, /^ {16}waits on Martin$/mu, `${columns}: the goal waiting on Martin`);
       assert.match(body, /NEEDS ATTENTION[\s\S]*GOAL\.json: GOAL\.json does not parse/u, `${columns}: the malformed goal`);
       assert.match(body, /runner pid 4000/u, `${columns}: the runner session sits under its goal`);
       assert.equal(body.match(/runner pid 4000/gu).length, 1);
@@ -2627,41 +2662,12 @@ describe('collectPage', () => {
 
   it('a draws the programmes with nothing under way after the others, each in its own frame, and no folded frame', async (t) => {
     const data = await overviewData(t);
-    for (const columns of [160, 80, 60]) {
-      const lines = renderPageLines(data, { columns, now: NOW, expand: true, overview: true });
-      assert.ok(lines.every((row) => width(row) <= columns));
-      const first = between(lines, '┌─ 1  Title of first', '┌─ 2  Title of second');
-      const second = between(lines, '┌─ 2  Title of second', '┌─ 3  Title of third');
-      const third = between(lines, '┌─ 3  Title of third', '┌─ 4  Title of empty');
-      const empty = between(lines, '┌─ 4  Title of empty', '┌─ OTHER PROGRAMMES');
-      const other = between(lines, '┌─ OTHER PROGRAMMES', '┌─ MAINTENANCE');
-      assert.deepEqual([...programmeFramesOf(first).keys()], ['mc']);
-      assert.deepEqual([...programmeFramesOf(second).keys()], ['p-second', 'p-dormant-second']);
-      assert.deepEqual([...programmeFramesOf(third).keys()], ['p-third']);
-      assert.deepEqual([...programmeFramesOf(empty).keys()], []);
-      assert.deepEqual([...programmeFramesOf(other).keys()], ['p-unheld', 'plan-only', 'p-broken', 'p-dropped', 'p-invalid', 'p-none', 'p-reached']);
-      const headerOf = (group, name) => {
-        const frame = programmeFramesOf(group).get(name);
-        return `${frame.heading}\n${frame.body.join('\n')}`;
-      };
-      assert.match(headerOf(first, 'mc'), /horizon 1/u);
-      assert.match(headerOf(second, 'p-second'), /horizon 2/u);
-      assert.match(headerOf(second, 'p-dormant-second'), /horizon 2/u);
-      assert.match(headerOf(third, 'p-third'), /horizon 3/u);
-      assert.match(headerOf(other, 'p-broken'), /horizon broken \(unreadable\)/u);
-      assert.match(headerOf(other, 'p-dropped'), /horizon gone \(dropped\)/u);
-      assert.match(headerOf(other, 'p-invalid'), /horizon unknown · record invalid/u);
-      assert.match(headerOf(other, 'p-none'), /no horizon/u);
-      assert.match(headerOf(other, 'p-reached'), /horizon done-one \(reached\)/u);
-      assert.match(headerOf(other, 'p-unheld'), /horizon ghost \(not held\)/u);
-      assert.match(headerOf(other, 'plan-only'), /no horizon/u);
-      assert.ok(!lines.some((row) => /with nothing under way|┌─ PROGRAMMES/u.test(row)), 'no folded frame and no PROGRAMMES frame');
-    }
-    // A page that has no horizon store draws the same programmes, with no HORIZONS and no horizon words.
+    checkGroupedOverview(data, true);
+    // A page with no horizons section data draws the same programmes, with no HORIZONS and no horizon words.
     const bare = renderPageLines({ ...data, horizons: undefined }, { columns: 160, now: NOW, expand: true, overview: true });
     assert.ok(!bare.some((row) => /HORIZONS/u.test(row)));
     const named = programmeFramesOf(bare, /^ {6}┌─ \d+ {2}(\S+)/u);
-    assert.deepEqual([...named.keys()], ['mc', 'p-second', 'p-unheld', 'plan-only', 'p-broken', 'p-dormant-second', 'p-dropped', 'p-invalid', 'p-none', 'p-reached', 'p-third']);
+    assert.deepEqual([...named.keys()], ['mc', 'p-draft', 'p-pr', 'p-second', 'p-unheld', 'plan-only', 'p-broken', 'p-dormant-second', 'p-dropped', 'p-invalid', 'p-none', 'p-reached', 'p-third']);
     assert.ok([...named.values()].every((frame) => !/horizon/u.test(frame.heading)));
   });
 
@@ -2680,13 +2686,14 @@ describe('collectPage', () => {
     const lines = renderPageLines(data, { columns: 100, now: NOW, overview: true });
     const at = lines.findIndex((line) => line.startsWith('  ┌─ HORIZONS'));
     assert.ok(at >= 0, lines.join('\n'));
+    assert.match(lines[at], /^ {2}┌─ HORIZONS {2}0 open · /u);
     assert.doesNotMatch(lines[at + 1] || '', /└/u, `no bottom rule under an empty frame:\n${lines.join('\n')}`);
   });
 
   it('says a horizon store that cannot be listed in horizons.error, and still numbers the programmes', async (t) => {
     const fx = horizonsFixture();
     t.after(() => rmSync(fx.root, { recursive: true, force: true }));
-    fx.record('p-one', 'first');
+    fx.record('mc', 'first');
     // The store path is a file: it exists and cannot be listed.
     mkdirSync(dirname(horizonsDir(fx.env)), { recursive: true });
     writeFileSync(horizonsDir(fx.env), 'not a directory');
@@ -2696,16 +2703,40 @@ describe('collectPage', () => {
     assert.deepEqual(data.horizons.open, []);
     assert.deepEqual(data.horizons.none, data.programmes.programmes.map((group) => group.programme));
     assert.ok(data.programmes.programmes.every((group) => Number.isInteger(group.number)));
-    assert.equal(data.programmes.programmes.find((group) => group.programme === 'p-one').horizon_state, 'unreadable');
+    assert.equal(data.programmes.programmes.find((group) => group.programme === 'mc').horizon_state, 'not held');
     const lines = renderPageLines(data, { columns: 100, now: NOW, overview: true });
     assert.ok(lines.some((line) => /horizons unreadable/u.test(line)), lines.join('\n'));
+    const other = lines.findIndex((line) => line.startsWith('  ┌─ OTHER PROGRAMMES'));
+    assert.match(lines[other + 1], /^ {6}┌─ \d+ {2}mc {2}· {2}horizon first \(unreadable\)/u);
   });
 
-  it('a page with no horizon store has no error and nothing open, and the json keeps every key it had', async (t) => {
+  it('draws a missing and a readable empty horizon store alike, and the json keeps every key it had', async (t) => {
     const fx = horizonsFixture();
     t.after(() => rmSync(fx.root, { recursive: true, force: true }));
-    const data = await fx.collect();
-    assert.deepEqual(data.horizons, { open: [], none: data.programmes.programmes.map((group) => group.programme), unreadable: [], error: null });
+    fx.record('mc', 'ghost');
+    fx.record('p-none', null);
+    const missing = await fx.collect();
+    mkdirSync(horizonsDir(fx.env), { recursive: true });
+    const empty = await fx.collect();
+    for (const data of [missing, empty]) {
+      assert.deepEqual(data.horizons, { open: [], none: ['mc', 'p-none'], unreadable: [], error: null });
+      assert.deepEqual(data.programmes.programmes.map(({ programme, horizon_state }) => [programme, horizon_state]),
+        [['mc', 'not held'], ['p-none', null]]);
+      for (const expand of [false, true]) {
+        const lines = renderPageLines(data, { columns: 100, now: NOW, expand, overview: true });
+        const rollup = lines.findIndex((line) => line.startsWith('  ┌─ HORIZONS'));
+        assert.match(lines[rollup], /^ {2}┌─ HORIZONS {2}0 open · 1 programme under way · 0 goals open ─+┐$/u);
+        assert.equal(lines[rollup + 1], '');
+        assert.match(lines[rollup + 2], /^ {2}┌─ OTHER PROGRAMMES ─+┐$/u);
+        const other = lines.slice(rollup + 2, lines.findIndex((line) => line.startsWith('  ┌─ MAINTENANCE')));
+        const frames = programmeFramesOf(other);
+        assert.deepEqual([...frames.keys()], expand ? ['mc', 'p-none'] : ['mc']);
+        assert.match(frames.get('mc').heading, /horizon ghost \(not held\)/u);
+        if (expand) assert.match(frames.get('p-none').heading, /no horizon/u);
+        assert.equal(other.filter((line) => line.includes('1 programme with nothing under way · a shows them')).length, expand ? 0 : 1);
+      }
+    }
+    const data = missing;
     // Every top-level key `mc --json` had on origin/main is still there, and `horizons` is the one that is new.
     const had = ['runner', 'billing', 'providerPriority', 'desk', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'landed', 'desk_cost', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes'];
     for (const key of had) assert.ok(key in data, key);
@@ -3904,6 +3935,7 @@ describe('the overview: its order, its programmes and what belongs to none', () 
     const data = patch(quiet(), 'prog-02/goal-02', { stage: 'done', status: 'done' });
     const lines = draw(data);
     assert.deepEqual([...framesOf(lines).keys()], ['prog-01']);
+    assert.ok(!lines.some((row) => row.includes('OTHER PROGRAMMES')), 'the horizon owns every programme');
     assert.ok(lines.some((row) => /^ {6}┌─ 1 programme with nothing under way · a shows them ─+┐$/u.test(row)), lines.join('\n'));
     assert.match(lines.find((row) => /┌─ HORIZONS/u.test(row)), /1 programme under way/u);
     assert.match(lines[lines.findIndex((row) => /Horizon 1 /u.test(row)) + 1], /2 programmes · 1 goal open/u, 'the horizon counts the programme that sleeps');
@@ -3923,19 +3955,6 @@ describe('the overview: its order, its programmes and what belongs to none', () 
     return data;
   }
   const quiet = () => day({ open: 1, per: 2, none: 0, runner: 0, managers: 0, plans: 0, desk: 0, martin: false });
-
-  it('wraps the goal title and hold reason inside the inset programme frame at 60 columns', () => {
-    const title = 'A long goal title that must remain readable inside the nested programme frame';
-    const reason = 'Wait until the deployment has completed and the final verification has been recorded';
-    const data = patch(quiet(), 'prog-01/goal-01', {
-      title, hold: { by: 'martin', at: '2026-11-14', reason },
-    });
-    const lines = draw(data, { columns: 60 });
-    assert.ok(lines.every((row) => width(row) <= 60));
-    const text = lines.map((row) => row.trim()).join(' ');
-    assert.ok(text.includes(title), text);
-    assert.ok(text.includes(reason), text);
-  });
 
   describe('the header', () => {
     it('keeps the compact header at 160 columns and shows priority and provider usage below it', () => {
@@ -3974,12 +3993,12 @@ describe('the overview: its order, its programmes and what belongs to none', () 
 
     it('draws a held goal, a blocked goal and a goal stopped for no progress under their goal', () => {
       const held = framed(patch(quiet(), 'prog-01/goal-01', { hold: ago }));
-      assert.ok(held.body.some((row) => /^ {14}held by martin since 2026-08-28T10:00:00Z — wait$/u.test(row)), held.body.join('\n'));
-      assert.ok(held.body.some((row) => /^ {14}stage \S+ · status paused/u.test(row)), `a held ready goal reads paused\n${held.body.join('\n')}`);
+      assert.ok(held.body.some((row) => /^ {16}held by martin since 2026-08-28T10:00:00Z — wait$/u.test(row)), held.body.join('\n'));
+      assert.ok(held.body.some((row) => /^ {16}stage \S+ · status paused/u.test(row)), `a held ready goal reads paused\n${held.body.join('\n')}`);
       const blocked = framed(patch(quiet(), 'prog-01/goal-01', { status: 'blocked' }));
-      assert.ok(blocked.body.some((row) => /^ {14}stage build · status blocked/u.test(row)) && blocked.body.some((row) => /^ {14}a mend session resolves the obstacle$/u.test(row)), blocked.body.join('\n'));
+      assert.ok(blocked.body.some((row) => /^ {16}stage build · status blocked/u.test(row)) && blocked.body.some((row) => /^ {16}a mend session resolves the obstacle$/u.test(row)), blocked.body.join('\n'));
       const stopped = framed(patch(quiet(), 'prog-01/goal-01', { status: 'Martin', last: { next: 'x', comment: 'no progress: three sessions in a row' } }));
-      assert.ok(stopped.body.some((row) => /^ {14}no progress: three sessions in a row$/u.test(row)), stopped.body.join('\n'));
+      assert.ok(stopped.body.some((row) => /^ {16}no progress: three sessions in a row$/u.test(row)), stopped.body.join('\n'));
       assert.deepEqual(maintenanceItems(patch(quiet(), 'prog-01/goal-01', { hold: ago, status: 'blocked' })), [], 'a goal is the programme\'s, never MAINTENANCE\'s');
     });
 
@@ -3991,12 +4010,12 @@ describe('the overview: its order, its programmes and what belongs to none', () 
         if (at >= 0) group.phases.push({ number: null, goals: phase.goals.splice(at, 1) });
       }
       const malformed = framed(data);
-      assert.ok(malformed.body.some((row) => /^ {8}NEEDS ATTENTION$/u.test(row)) && malformed.body.some((row) => /^ {14}GOAL\.json: criterion 2 has no check$/u.test(row)), malformed.body.join('\n'));
+      assert.ok(malformed.body.some((row) => /^ {10}NEEDS ATTENTION$/u.test(row)) && malformed.body.some((row) => /^ {16}GOAL\.json: criterion 2 has no check$/u.test(row)), malformed.body.join('\n'));
       const refused = patch(quiet(), 'prog-02/goal-02', { stage: 'done', status: 'done', archive_refused: 'a review is open' });
-      assert.ok(framed(refused, 'prog-02').body.some((row) => /^ {14}not archived — a review is open$/u.test(row)));
+      assert.ok(framed(refused, 'prog-02').body.some((row) => /^ {16}not archived — a review is open$/u.test(row)));
       assert.ok(!draw(refused).some((row) => /with nothing under way/u.test(row)), 'a programme that holds a goal nobody has archived is not asleep');
       const open = patch(quiet(), 'prog-02/goal-02', { stage: 'done', status: 'done', prs: [{ repo: 'memoro-cli', number: 5 }] });
-      assert.ok(framed(open, 'prog-02').body.some((row) => /^ {14}not archived — memoro-cli#5 is open/u.test(row)));
+      assert.ok(framed(open, 'prog-02').body.some((row) => /^ {16}not archived — memoro-cli#5 is open/u.test(row)));
     });
 
     it('draws a failed merge in its goal\'s programme, and in MAINTENANCE only when no goal\'s pull request carries it', () => {

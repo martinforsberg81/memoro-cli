@@ -390,6 +390,9 @@ export function overviewLines(c, wide, data, { version = '', expand = false, dra
 
   const groups = [...(data.programmes?.programmes || [])].sort((a, b) => String(a.programme).localeCompare(String(b.programme)));
   const assigned = new Set();
+  const inset = 4;
+  const childWide = wide - 2 * inset;
+  const drawChild = (rows) => lines.push(...rows.map((row) => row ? `${' '.repeat(inset)}${row}` : row));
   const drawGroup = (title, members, facts = '') => {
     if (width(title) <= wide - 8) lines.push(frameTop(c, wide, title));
     else {
@@ -399,17 +402,20 @@ export function overviewLines(c, wide, data, { version = '', expand = false, dra
     if (facts) detail(lines, c, wide - 2, 5, facts);
     const underway = members.filter((group) => programmeFacts(group, sessions).underway);
     const asleep = members.filter((group) => !programmeFacts(group, sessions).underway);
-    for (const group of [...underway, ...(expand ? asleep : [])]) drawProgramme(lines, group, 4);
+    for (const group of [...underway, ...(expand ? asleep : [])]) {
+      const rows = [];
+      drawProgramme(rows, group, childWide);
+      drawChild(rows);
+    }
     if (!expand && asleep.length) {
       const fold = `${asleep.length} programme${asleep.length === 1 ? '' : 's'} with nothing under way`;
       const hint = `${fold} · a shows them`;
-      if (width(hint) <= wide - 12) lines.push(`    ${frameTop(c, wide - 4, hint)}`);
+      if (width(hint) <= childWide - 8) drawChild([frameTop(c, childWide, hint)]);
       else {
-        lines.push(`    ${frameTop(c, wide - 4, '')}`);
-        detail(lines, c, wide - 2, 9, hint);
-        const end = [];
-        panelEnd(end, c, wide - 4);
-        lines.push(`    ${end[0]}`);
+        const rows = [frameTop(c, childWide, '')];
+        detail(rows, c, childWide - 2, 5, hint);
+        panelEnd(rows, c, childWide);
+        drawChild(rows);
       }
     }
     panelEnd(lines, c, wide);
