@@ -51,13 +51,11 @@ export function programmeFacts(group, sessions = []) {
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /**
- * The words for a programme's horizon: `horizon 5` (its number among the open horizons, in the desk's order),
- * `no horizon`, or the slug a record names that is not an open horizon, with that horizon's state. A page without
- * horizons says nothing.
+ * The fallback horizon reference for a programme in Other: `no horizon`, an
+ * invalid record, or the slug and its state. A page without horizon data says nothing.
  */
-function horizonWords(data, group, open) {
+function horizonWords(data, group) {
   if (!data.horizons) return '';
-  if (open) return open.position != null ? `horizon ${open.position}` : `horizon ${open.slug}`;
   if (group.record_invalid) return 'horizon unknown';
   if (!group.horizon) return 'no horizon';
   const state = group.horizon_state === 'not held' && (data.horizons.error || data.horizons.unreadable?.includes(group.horizon))
@@ -98,8 +96,8 @@ function headingDetail(lines, c, wide, parts) {
 }
 
 /**
- * A programme's frame heading: its number and name in the title; in the top rule its horizon, its phase and its goals,
- * then the figures it has always had (priority, done, an invalid record).
+ * A programme's frame heading: name, fallback horizon in Other, phase or
+ * record state when applicable, goal count and nonzero figures.
  */
 export function programmeHeading(c, wide, data, group, facts, continuation = null) {
   const phase = group.record_state === 'draft' ? 'draft' : facts.unfinished && facts.current != null ? `phase ${facts.current}${facts.last != null ? ` of ${facts.last}` : ''}` : group.record_state === 'ready' ? 'ready' : '';
@@ -112,14 +110,13 @@ export function programmeHeading(c, wide, data, group, facts, continuation = nul
   ].filter(Boolean).map((text) => ({ text, styles: ['grey'] }));
   // With no horizons read there is no horizon to set apart: the facts follow the name as any frame's do.
   const open = data.horizons?.open?.find((horizon) => horizon.programmes?.includes(group.programme));
-  const horizon = open ? '' : horizonWords(data, group, open);
+  const horizon = open ? '' : horizonWords(data, group);
   const parts = [];
   const warning = { text: 'record invalid', styles: ['red'] };
   const warningAfterHorizon = group.record_invalid && data.horizons && !open;
   if (horizon) {
-    parts.push({ text: horizon, styles: ['grey'], sep: '·  ' });
+    parts.push({ text: horizon, styles: ['grey'] });
     if (warningAfterHorizon) parts.push(warning);
-    rest[0].sep = '  ·  ';
   }
   parts.push(...rest);
   if (group.record_invalid && !warningAfterHorizon) parts.push(warning);
@@ -190,7 +187,7 @@ export function horizonsLines(lines, c, wide, data, { sessions = [] } = {}) {
   frameEnd(lines, c, wide, top);
 }
 
-/** Facts belonging to one horizon, including programmes hidden by the fold. */
+/** Facts belonging to one horizon, including dormant programmes. */
 export function horizonFacts(figure) {
   return [
     figure.programmes ? plural(figure.programmes, 'programme') : 'No programmes',

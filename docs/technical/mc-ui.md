@@ -85,9 +85,10 @@ shows its name, and in Other its fallback horizon reference, then draft or phase
 when applicable, or `ready` for a ready record without a phase, goal count,
 nonzero priority and finished-in-tree count, and `record invalid` when applicable.
 Held, blocked and malformed goals and sessions are drawn in their programme.
-Programme headings and tree text, including goal titles, holds and blockers, wrap
-within the inset at narrow widths. A goal's stage row and criteria continuation
-start three columns to the right of its row.
+Programme headings and tree text, including goal titles, metadata, holds and
+blockers, wrap within the inset at narrow widths. A goal's stage, criteria,
+session frame, PR references, metadata and reasons start three columns to the
+right of its title row.
 
 **MAINTENANCE** is the last frame of the overview, headed `MAINTENANCE  <n> sources`. It has one row
 per source, in this order: user feedback, proposals, lessons, errors, tests, dependencies, intake,
@@ -145,7 +146,7 @@ repository, each with its age; intake by file; areas as a table of name, reposit
 last changed on `origin/main` (`today`, `1 day ago`) and its aims (`3 aims`, `1 aim`, `no aim`); the
 strays' items. The aims are the top-level bullets under the page's `## Aim`; `No aim stated yet.`
 is none. The view draws nothing the sources do not hold and acts on nothing: the verb at the right
-of a row is where the source is handled. `h` or a goal number leaves it; the frame's key
+of a row is where the source is handled. `h` returns to the overview; the frame's key
 reads `h  home`, and `m` again keeps it open. The operations view draws no MAINTENANCE.
 
 **The desk's sessions** are counted in DESK's title (`<n> desk sessions open`), not
@@ -300,8 +301,8 @@ warnings are separate information, not replacement goal statuses. Criteria
 met/total remain visible in both modes; narrow terminals put criteria on their
 own line when needed. Missing counts are shown as `—`, not invented zeroes.
 Repository, technical name, session count and latest relevant log detail always appear inline.
-Menu numbers remain stable in programme/name order across phase moves and
-history folding; a number opens that goal's detail.
+Menu numbers remain stable in programme/name order across phase moves and the
+visibility of finished goals; a number shows that goal's detail.
 
 Each live runner session is matched by its explicit programme/goal identity
 (`goal`, or the legacy `goal:` name) and shown beneath that goal, before its
@@ -312,8 +313,9 @@ lane files from before, and for the interactive plan session) and yellow for
 mend. Long activity wraps
 inside the frame within the terminal width. Positive check-in counts appear
 at the end of the activity inside the frame, in yellow, and its yellow clock
-remains visible without expansion; repository, advisor, pid and zero check-ins
-are also visible in inline programme sessions. A session
+remains visible without expansion; a known PID also appears in the frame.
+Repository, advisor and zero check-ins when present appear below the frame
+and wrap at the same inset. A session
 with no matching goal is a MAINTENANCE row, with its PR references as child rows, so
 removing SESSIONS cannot hide it. Rendering joins the
 existing `runner.sessions` and programme records; their JSON shapes remain.
@@ -485,9 +487,11 @@ lane/PR grid has no remaining renderer. `page-grid.js` retains the shared
 palette, duration and numeric-safe clipping helpers.
 
 Widths stay clamped to 60–160 columns. The page reserves two columns at the
-right edge to match its two-column left inset. Programme titles use their own line, with stage, status and criteria directly below; repository metadata is in expansion. Whole PR
-references get child rows. Operational reasons wrap and ordinary title cells
-clip with an ellipsis without splitting numeric tokens. Colour is applied
+right edge to match its two-column left inset. Goal titles have stage, status
+and criteria directly below; goal and session metadata are always inline in
+programme cards and continue at the same inset when wrapped. Whole PR
+references get child rows. Operational reasons wrap; title cells outside the
+programme tree may clip with an ellipsis without splitting numeric tokens. Colour is applied
 after measurement, so painted and plain frames have identical text/width.
 Below 60 columns the existing non-live terminal path remains.
 
@@ -559,11 +563,11 @@ painted rows occupy the same columns.
 | answer | action |
 |---|---|
 | a goal's number | `mc goal show` for that numbered goal, then redraw |
-| `o` / `operations` | the operations view: FIGURES 24 h, PIPELINE, MERGE & DEPLOY, DEV and SYSTEM, without the header rows; no programme takes `o` or `operations` as a name; the key line reads `o  operations` |
+| `o` / `operations` | the operations view: FIGURES 24 h, PIPELINE, MERGE & DEPLOY, DEV and SYSTEM, without the header rows; the key line reads `o  operations` |
 | `h` / `home` | the overview again, from the operations or maintenance view; the key line reads `h  home` |
 | `a` / `all` | toggle operations and Manager details; programme cards remain unchanged |
 | `d` / `desk` | open the desk (`mc martin`), through the injected `deskOrder`, and return its exit code; the key line reads `d  desk` |
-| `m` / `manager` | the maintenance view; the key line reads `m  maintenance`; no programme takes `m` or `manager` as a name. `b` / `brief` print the refusal: the interactive manager is gone |
+| `m` / `manager` | the maintenance view; the key line reads `m  maintenance`. `b` / `brief` print the refusal: the interactive manager is gone |
 | `p [<programme>]` | open plan, asking which programme if unnamed |
 | `f` | ask GitHub now and redraw |
 | `r` / `refresh` | collect the current page and redraw immediately |
@@ -599,17 +603,23 @@ immediately with `r`.
 
 The first key line reads `<n>  show a goal   ·   a  all / collapse   ·   o  operations   ·   h  home   ·   d  desk`; `m  maintenance` is on the line of `r  refresh`.
 
-The operations view is held by `run()`, not `page-live.js`, so it survives live
-refresh until `h` or a goal's number leaves it.
+The operations and maintenance views are held by `run()`, not `page-live.js`,
+so they survive live refresh. `h` returns from either to the overview.
 
 The prompt answers against the page on the screen: `run()` numbers each draw as it starts, keeps its data for the menu only if no later-started draw was kept, and the menu reads it through `current`, so a slow older collect never puts older numbers under a newer page, and a number typed after a frame that added a goal means the number that frame drew.
 
 The reader uses `/dev/tty`, not the stdin the next tool inherits. A number
-shows a goal or opens a programme; it starts no coding session. `pageKey` includes every goal's
-programme, name, title, phase, stage, status, phase hold, criteria and running mark, plus session identity and check-ins and the desk's identity (the ids waiting, the not-ready, failed and stuck counts and the decided figures; not an age and not the cost) and the overview's: each programme's number, name, horizon and reference state, its explicit holds and PR counts, and the horizon section including labels, membership and read warnings. It also includes the overview's rows: which sessions are in flight (not their ages), each MAINTENANCE item and its text without its age (a session item by its identity alone), and each MERGE and DEPLOY row's fact. A change in any of them is a new page, so it is printed whole like any other. If
-that key changes while the top of the page is off-screen, the live reader
-prints the page whole so scrolling up finds the new state. Clocks alone do
-not trigger that reset.
+only shows a goal, even if its row is hidden; it starts no coding session.
+`pageKey` tracks each goal's identity, title, phase, stage, status, phase hold,
+criteria and running mark, and inline details such as explicit hold reasons,
+log detail, blocker question and attached PR state. It tracks session identity,
+advisor and check-ins, and the desk's waiting ids, not-ready, failed and stuck
+counts and decided figures, not ages or cost. It also tracks programme
+headings and horizon references, horizon labels, membership and read warnings,
+which sessions are in flight, MAINTENANCE facts without their ages (session
+items by identity), and MERGE and DEPLOY row facts. If the key changes while
+the top of the page is off-screen, the live reader prints the whole page so
+scrolling up finds the new state. Clocks alone do not trigger that reset.
 
 ## The live page
 

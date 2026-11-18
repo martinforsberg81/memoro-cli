@@ -372,11 +372,10 @@ function mergeDeployLines(lines, c, wide, rows) {
 /* ----------------------------------------------------------------- overview */
 
 /**
- * The overview, as lines. `drawProgramme(lines, group)` draws one programme's frame (page-render.js owns the body).
- * Each group draws programmes under way in name order, then a fold or, under `a` (`expand`), the remaining frames.
- * `version` is mc's.
+ * The overview, as lines. `drawProgramme(lines, group, childWide)` draws each
+ * programme's frame in name order within its group. `version` is mc's.
  */
-export function overviewLines(c, wide, data, { version = '', expand = false, drawProgramme = () => {} } = {}) {
+export function overviewLines(c, wide, data, { version = '', drawProgramme = () => {} } = {}) {
   const sessions = data.runner?.sessions || [];
   const flight = flightRows(data);
   const lines = headerRows(c, wide, data, version);

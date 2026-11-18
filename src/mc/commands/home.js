@@ -74,19 +74,10 @@ export async function run(argv, deps = {}) {
 
   const collect = deps.collect || collectPage;
   const version = await getPackageVersion().catch(() => '');
-  // Whether the page expands phases, finished work and dormant programmes into
-  // line. It lives here rather than in the menu because the live loop refreshes
-  // through this same closure (`page-live.js`): a frame that did not know the
-  // mode would fold them again, thirty seconds after somebody asked to see
-  // them.
+  // The live loop draws through this closure, preserving the selected view
+  // and whether operations and Manager details are expanded.
   let expand = false;
-  // The programme the page shows alone, or null for the overview. Held here beside `expand` for the same reason:
-  // the live loop draws through this closure, so a frame keeps the view somebody opened.
-  let view = null;
-  // Whether the operations view is open (`o`): a value of its own rather than a `view`, because a programme's name
-  // can never be taken by it and `h` closes it. The live loop's frames draw through this closure and keep it.
   let operations = false;
-  // Whether the maintenance view is open (`m`): the sources' rows with their detail. Held here for the same reason.
   let maintenance = false;
   // At a terminal the page keeps its own pull requests current: every draw,
   // the live loop's included, asks GitHub when the cache is older than five
@@ -131,8 +122,6 @@ export async function run(argv, deps = {}) {
     if (call > kept) {
       kept = call;
       latest = data;
-      // A programme that is no longer listed is the overview again.
-      if (view !== null && !(data?.programmes?.programmes || []).some((group) => group.programme === view)) view = null;
     }
     return {
       data,
@@ -143,7 +132,6 @@ export async function run(argv, deps = {}) {
         colour: colourFor(stdout, env),
         version,
         expand,
-        view,
         operations,
         maintenance,
       }),
@@ -165,7 +153,7 @@ export async function run(argv, deps = {}) {
   const reader = typeof deps.reader === 'function' ? deps.reader({ page, first }) : deps.reader || readerFor({ stdout, lines: first.lines, page, key: first.key });
   return menu(first.data, {
     stdout, stderr, env, page, reader, expand: (on) => { expand = on; }, fresh: () => { freshOnce = true; },
-    showGoal: deps.showGoal, current: () => latest, show: (name) => { view = name; operations = false; maintenance = false; },
+    showGoal: deps.showGoal, current: () => latest,
     operate: (on) => { operations = on; if (on) maintenance = false; },
     maintain: (on) => { maintenance = on; if (on) operations = false; },
     restart: () => (deps.restartPage || restartPage)({ stdout, env, from: startedOn, to: movedTo }),
@@ -279,7 +267,7 @@ export function pageKey(data) {
   const priorityKey = (data?.programmes?.programmes || []).filter((group) => group.priority)
     .map((group) => `${group.programme}:priority:${group.priority}`).join('|');
   // What waits for Martin changes what the top of the page says; its ages and its cost do not.
-  // The overview is drawn from the programmes' numbers and names and from the horizons they are under, in order.
+  // Track programme membership, heading facts and the horizon groups.
   const horizonKey = [
     (data?.programmes?.programmes || []).map((group) => [group.number, group.programme, group.horizon, group.horizon_state, group.record_state, group.record_invalid, group.prs?.length, (group.goals || []).map((goal) => [goal.hold, goal.prs?.length])]),
     data?.horizons ?? null,
@@ -362,10 +350,9 @@ async function showGoalVerb(argv, io) {
  * The way on from the page.
  *
  * The numbers are the page's — the page above the prompt is the listing, so the
- * menu has none of its own. A goal's number shows it (`mc goal show`); a
- * programme's number or name opens it alone and `h` returns to the overview. `a` draws everything. Everything a number cannot say is a
- * letter. Anything else is said out loud rather than swallowed, and the page
- * is drawn again with whatever changed.
+ * menu has none of its own. A goal's number shows it (`mc goal show`), even
+ * if its row is hidden. `h` returns to the overview and `a` toggles operations
+ * and Manager details. Unrecognised input is reported before redrawing.
  *
  * The reading is a `reader` rather than a call, because at a terminal it is
  * two things at once: the line being typed, and the page above it refreshing
@@ -375,14 +362,12 @@ async function showGoalVerb(argv, io) {
  */
 export async function menu(first, {
   stdout, stderr, env = process.env, page, reader, expand = () => {},
-  // The page on the screen: the numbers and names the prompt resolves are the ones the last frame drew, which the
+  // The goal numbers the prompt resolves come from the last frame, which the
   // live loop may have drawn since this menu's own redraw. Without it the menu goes by the data it drew itself.
   current = () => null,
-  // Opens a programme's view (its name) or the overview (null) on the caller's closure, as `expand` does.
-  show = () => {},
-  // Opens the operations view (`o`) on the caller's closure; `show` closes it.
+  // Sets the operations view (`o`) on the caller's closure.
   operate = () => {},
-  // Opens the maintenance view (`m`) on the caller's closure; `show` closes it.
+  // Sets the maintenance view (`m`) on the caller's closure.
   maintain = () => {},
   // Asks the next draw to go to GitHub for the pull requests (`f`).
   fresh = () => {},
@@ -411,7 +396,7 @@ export async function menu(first, {
     const answer = await reader.ask(`\n${KEYS}\n\n`, '>');
     if (answer === RESTART) return restart();
     if (!answer || answer === 'q') return 0;
-    // Every goal numbered on the page, and every programme, as the frame on the screen numbered them.
+    // Include numbered goals hidden in the overview's finished-goal filter.
     const shown = current() ?? data;
     const groups = shown.programmes?.programmes || [];
     const goals = groups.flatMap((group) => group.goals || []);
@@ -429,9 +414,10 @@ export async function menu(first, {
       data = await redraw();
       continue;
     }
-    // The overview again, from whichever programme or the operations view was open.
+    // The overview again, from the operations or maintenance view.
     if (answer === 'h' || answer === 'home') {
-      show(null);
+      operate(false);
+      maintain(false);
       data = await redraw();
       continue;
     }
@@ -457,7 +443,7 @@ export async function menu(first, {
     // The desk: `mc martin`, whose own opening is what the DESK panel above summarises.
     if (answer === 'd' || answer === 'desk') return (deskOrder || deskVerb)([], { stdout, stderr, env });
     // The maintenance view: every source of MAINTENANCE with its detail below its row. `m` and `manager` open it, no
-    // longer the manager (gone, D10); no programme is named `m` or `manager`.
+    // longer the manager (gone, D10).
     if (answer === 'm' || answer === 'manager') {
       maintain(true);
       data = await redraw();

@@ -1,5 +1,6 @@
-/** Session details shared by the programme tree and its unassigned fallback. */
+/** Rounded session frames and their detail rows. */
 import { clipCell, duration, kindTone } from './page-grid.js';
+import { detail } from './page-operations.js';
 import { width } from './status-render.js';
 
 export function sessionGoal(session) {
@@ -47,7 +48,7 @@ export function activityLines(c, wide, session, { indent = 10, expand = false, n
   if (expand) {
     const details = [session.repo, session.advisor && `${session.advisor} advisor`,
       session.check_ins === 0 && '0 check-ins'].filter(Boolean).join(' · ');
-    if (details) framed.push(`${' '.repeat(indent + 2)}${c(clipCell(details, wide - indent - 2), 'grey')}`);
+    detail(framed, c, wide, indent + 2, details);
   }
   return framed;
 }

@@ -389,31 +389,29 @@ describe('the menu under the page', () => {
     const data = numbered([row('mc-ui', 'mc'), row('docx-editor', 'docx-editing-surface'),
       { ...row('finished', 'sleep'), stage: 'done' }]);
     const hidden = data.programmes.programmes.flatMap((group) => group.goals).find((goal) => goal.name === 'finished');
-    const shown = [];
-    const session = drive(['4', 'docx-editing-surface', String(hidden.number), 'h', 'q'], { data, show: (name) => shown.push(name) });
+    const session = drive(['4', 'docx-editing-surface', String(hidden.number), 'q'], { data });
     assert.equal(await session.run(), 0);
     assert.match(session.written.join(''), /nothing here called "4"/u);
     assert.match(session.written.join(''), /nothing here called "docx-editing-surface"/u);
     assert.deepEqual(session.opened, ['sleep/finished']);
-    assert.deepEqual(shown, [null]);
   });
 
   it('retains command precedence for operations and maintenance and goal numbers', async () => {
     const data = numbered([row('first-goal', '1'), row('second-goal', 'manager')]);
     const calls = [];
     const session = drive(['manager', '1', 'o', 'operations', 'h', 'q'], {
-      data, show: (name) => calls.push(`show ${name}`), maintain: (on) => calls.push(`maintain ${on}`),
+      data, maintain: (on) => calls.push(`maintain ${on}`),
       operate: (on) => calls.push(`operate ${on}`),
     });
     assert.equal(await session.run(), 0);
-    assert.deepEqual(calls, ['maintain true', 'operate true', 'operate true', 'show null']);
+    assert.deepEqual(calls, ['maintain true', 'operate true', 'operate true', 'operate false', 'maintain false']);
     assert.deepEqual(session.opened, ['1/first-goal']);
   });
 
-  it('`a` unfolds from the overview and from a programme\'s view, and folds again', async () => {
+  it('`a` toggles details across menu redraws', async () => {
     const data = numbered([row('mc-ui', 'mc')]);
     const flags = [];
-    const session = drive(['a', '2', 'a', 'h', 'a', 'q'], { data, show: () => {}, expand: (on) => flags.push(on) });
+    const session = drive(['a', '2', 'a', 'h', 'a', 'q'], { data, expand: (on) => flags.push(on) });
     assert.equal(await session.run(), 0);
     assert.deepEqual(flags, [true, false, true]);
   });
@@ -439,9 +437,9 @@ describe('the menu under the page', () => {
     for (const answer of ['m', 'manager']) {
       const calls = [];
       // `h`, the key the view's frame names, leaves it for the overview.
-      const session = drive([answer, 'h', '1', 'q'], { maintain: (on) => calls.push(`maintain ${on}`), show: (name) => calls.push(`show ${name}`) });
+      const session = drive([answer, 'h', '1', 'q'], { maintain: (on) => calls.push(on) });
       assert.equal(await session.run(), 0, answer);
-      assert.deepEqual(calls, ['maintain true', 'show null'], answer);
+      assert.deepEqual(calls, [true, false], answer);
       assert.doesNotMatch(session.written.join(''), /the interactive manager is gone/u, answer);
       assert.deepEqual(session.opened, ['docx-editing-surface/docx-editor'], `${answer}: the page is still there to answer`);
     }

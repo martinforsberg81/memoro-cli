@@ -428,11 +428,11 @@ export function statusRollup(statuses = {}) {
 }
 
 /**
- * One programme's frame in the overview: its heading (number, horizon, phase), then its plan and programme sessions and
+ * One programme's frame in the overview: its heading, then its plan and programme sessions and
  * its goals by phase, then the border. A programme with nothing to draw is its heading row alone.
  */
-function programmeFrame(lines, c, wide, data, group, expand, runnerSessions) {
-  const body = programmeBody(c, wide - 2, group, true, runnerSessions, { insetCard: true });
+function programmeFrame(lines, c, wide, data, group, runnerSessions) {
+  const body = programmeBody(c, wide - 2, group, runnerSessions);
   const continuation = [];
   lines.push(programmeHeading(c, wide, data, group, programmeFacts(group, runnerSessions), continuation));
   if (!body.length && !continuation.length) return;
@@ -441,11 +441,11 @@ function programmeFrame(lines, c, wide, data, group, expand, runnerSessions) {
 }
 
 /** What a programme's block holds under its heading: its plan and programme sessions, then its goals by phase. */
-function programmeBody(c, wide, group, expand, runnerSessions, { insetCard = false } = {}) {
+function programmeBody(c, wide, group, runnerSessions) {
   return [
-    ...(group.planning_sessions || []).flatMap((session) => activityLines(c, wide, { ...session, kind: 'plan' }, { indent: 4, expand })),
-    ...(group.sessions || []).flatMap((session) => activityLines(c, wide, session, { indent: 4, expand })),
-    ...programmeTreeLines(c, wide, group, { expand, sessions: runnerSessions, stateIndent: insetCard ? 9 : 10 }),
+    ...(group.planning_sessions || []).flatMap((session) => activityLines(c, wide, { ...session, kind: 'plan' }, { indent: 4, expand: true })),
+    ...(group.sessions || []).flatMap((session) => activityLines(c, wide, session, { indent: 4, expand: true })),
+    ...programmeTreeLines(c, wide, group, { sessions: runnerSessions }),
   ];
 }
 
@@ -803,11 +803,11 @@ function operationsBody(lines, c, wide, data, { expand, version, at }) {
  * The whole page, as lines. `data` is exactly what `--json` prints: one key
  * per section, so the two can never say different things.
  *
- * Four pages are drawn from it: the overview (the default, as long as the work; page-overview.js), the maintenance view (`maintenance`),
- * the operations view (`operations`: the hero frame and the panels), and a programme's own view (`view`).
+ * Three views are drawn from it: the overview (the default, page-overview.js),
+ * maintenance, and operations (the hero frame and the panels).
  */
 export function renderPageLines(data, {
-  columns = 100, colour = false, version = '', now = new Date(), expand = false, view = null, operations = false, maintenance = false,
+  columns = 100, colour = false, version = '', now = new Date(), expand = false, operations = false, maintenance = false,
 } = {}) {
   const paintText = painter(colour);
   // Secondary information must remain readable on dark terminal palettes.
@@ -834,8 +834,7 @@ export function renderPageLines(data, {
   }
   lines.push(...overviewLines(c, wide, data, {
     version,
-    expand,
-    drawProgramme: (into, group, childWide) => programmeFrame(into, c, childWide, data, group, expand, runnerSessions),
+    drawProgramme: (into, group, childWide) => programmeFrame(into, c, childWide, data, group, runnerSessions),
   }));
   if (expand) {
     // `a` holds what the single page held (D10): the operations view's sections expanded, beginning with its hero

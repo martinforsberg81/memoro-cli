@@ -155,7 +155,7 @@ describe('The programmes\' phase tree', () => {
         const at = lines.findIndex((line) => line.includes(title));
         assert.ok(at >= 0, title);
         const top = lines[at + 2].includes('criteria ') ? at + 3 : at + 2;
-        assert.match(lines[top], /^ {16}╭─+╮$/u);
+        assert.match(lines[top], /^ {15}╭─+╮$/u);
         const bottom = lines.findIndex((line, index) => index > top && line.trimStart().startsWith('╰'));
         const content = lines.slice(top + 1, bottom).map((line) => line.trim().slice(1, -1).trim()).join(' ');
         assert.match(content, /^● · (BUILD|REVIEW) · 12 min · codex · sol(?: ·)? 1 check-in(?: ·)? runner pid 7$/u);
@@ -251,8 +251,13 @@ describe('Programmes without finished goals', () => {
     const lines = draw(data);
     const last = lines.findIndex((line) => /^ {6}┌─ inbox /u.test(line));
     const maintenance = lines.findIndex((line) => line.startsWith('  ┌─ MAINTENANCE'));
-    assert.ok(last >= 0 && maintenance > last);
-    assert.ok(lines.slice(maintenance).some((line) => line.startsWith('      mend:main-red  mend · open')));
+    assert.ok(last >= 0, 'the dormant programme is the last card');
+    assert.match(lines[last + 1], /^ {2}└─+┘$/u, 'group closes after the last card');
+    assert.equal(lines[last + 2], '', 'a blank line between');
+    assert.equal(maintenance, last + 3);
+    assert.match(lines[maintenance + 1], /^ {4}Strays/u);
+    assert.match(lines[maintenance + 2], /^ {6}mend:main-red {2}mend · open/u);
+    assert.match(lines[maintenance + 3], /^ {2}└─+┘$/u, 'the session is inside the MAINTENANCE frame');
   });
 
   it('keeps a finished goal that is running, or owns a live session, in its phase until the session ends', () => {

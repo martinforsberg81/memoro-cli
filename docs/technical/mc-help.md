@@ -17,7 +17,8 @@ starts an operation or asks for authentication. A script's own flags after
 
 ## Current work model
 
-The page is `mc`: a numbered item shows a goal or opens a programme (HORIZONS draws each programme under the horizon it serves). `mc goal` writes the
+The page is `mc`: a number shows a goal. The overview draws programme work
+trees inline under their horizons or in Other. `mc goal` writes the
 brief, criteria, phase, stage and log; `mc plan` and `mc martin` are the person's interactive entrances
 (`mc helper` is the eye and has none); `mc manager` is headless only
 (`mc manager --headless --prompt`, [mc-manager.md](mc-manager.md)) and the runner starts it itself. A session already

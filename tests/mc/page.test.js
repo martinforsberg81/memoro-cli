@@ -49,12 +49,12 @@ const NOW = new Date('2026-08-29T12:00:00Z');
 
 /**
  * The page as most of this file reads it: the operations view, which holds the hero frame and the panels the
- * overview leaves out. A test of the overview, of a programme's own view or of `a` says so: `overview: true`
- * (or `view`, or `expand` together with `overview`) draws the page `mc` opens on.
+ * overview leaves out. Tests of the overview draw the default page; `expand`
+ * also draws the operations and Manager details below it.
  */
 /**
  * The programme frames of a page by programme name: `{ heading, body }` for every frame whose heading names a programme
- * (its number when it has one, then its horizon words), the body being the rows up to the frame's bottom rule.
+ * (with horizon words in Other), the body being the rows up to the frame's bottom rule.
  */
 const programmeFramesOf = (lines, pattern = /^ {6}┌─ (?:\d+ {2})?(\S+)(?: {2}| ─)/u) => {
   const frames = new Map();
@@ -68,7 +68,7 @@ const programmeFramesOf = (lines, pattern = /^ {6}┌─ (?:\d+ {2})?(\S+)(?: {2
   return frames;
 };
 const renderPageLines = (data, { overview = false, ...options } = {}) => drawPage(data, {
-  ...options, operations: !overview && options.view == null && options.operations !== false,
+  ...options, operations: !overview && options.operations !== false,
 });
 
 /** Whether a frame titled `title`, with `facts` after it, has its top rule among `lines`. */
@@ -1763,7 +1763,7 @@ describe('the page', () => {
     assert.doesNotMatch(text, /in flight ·|Goals: \d+ total/u, 'the old count lines are gone');
     assert.match(text, /■ stopping since an unknown time/u);
     assert.match(text, /runner running · 1\/2 lanes/u);
-    // The overview: the programmes under way in name order, the folded frame, then what belongs to no programme.
+    // The overview: every programme in name order, then what belongs to no programme.
     const home = renderPage({ ...DATA, billing: 'plan · available' }, { columns: 120, version: '0.7.11', now: NOW, overview: true });
     const order = ['┌─ assistant-avatar', '┌─ docx-editing-surface', '┌─ dormant-one', '┌─ mc ', '┌─ MAINTENANCE', '┌─ MERGE'].map((head) => home.indexOf(head));
     assert.ok(order.every((index, n) => index >= 0 && (n === 0 || index > order[n - 1])), home);
@@ -1888,11 +1888,11 @@ describe('the page', () => {
       assert.deepEqual(opened, ['aaa/aaa']);
     });
 
-    it('keeps operations through refresh and returns home with inline programme cards', async (t) => {
+    it('keeps operations through refresh and returns home from operations and maintenance', async (t) => {
       const root = mkdtempSync(join(tmpdir(), 'mc-page-view-'));
       t.after(() => rmSync(root, { recursive: true, force: true }));
       const data = dataWith([goalRow('mc-ui', 'mc')], root);
-      const frames = []; const live = []; const steps = ['o', 'a', 'h', 'q'];
+      const frames = []; const live = []; const steps = ['o', 'a', 'h', 'm', 'home', 'q'];
       const code = await page([], { collect: async () => data, stdout: { columns: 120, write: () => {} },
         stderr: { write: () => {} }, env: {}, interactive: () => true, checkAndPrintFreshInstall: async () => {},
         reader: ({ page: frame }) => ({ show: (lines) => frames.push(lines.join('\n')),
@@ -1903,6 +1903,10 @@ describe('the page', () => {
       assert.match(frames[1], /MERGE & DEPLOY/u);
       assert.match(frames[2], /HORIZONS/u);
       assert.match(frames[2], /┌─ mc /u);
+      assert.match(frames[3], /┌─ MAINTENANCE/u);
+      assert.doesNotMatch(frames[3], /HORIZONS|┌─ mc /u);
+      assert.match(frames[4], /HORIZONS/u);
+      assert.match(frames[4], /┌─ mc /u);
     });
   });
 
@@ -2308,7 +2312,7 @@ describe('collectPage', () => {
     const group = data.programmes.programmes.find(group => group.programme === 'mc');
     assert.equal(group.record_state, 'draft');
     for (const columns of [160, 80]) {
-      const lines = renderPageLines(data, { columns, now: NOW, view: 'mc' });
+      const lines = drawPage(data, { columns, now: NOW });
       assert.ok(!lines.some(line => line.includes('mc is draft')), 'the heading says draft; no goal repeats it');
       assert.ok(lines.some(line => /status paused/u.test(line)), 'a ready goal of a draft programme reads paused');
       assert.ok(!lines.some(line => /status ready/u.test(line)));
@@ -2319,19 +2323,22 @@ describe('collectPage', () => {
     const ready = await fx.collect();
     const free = ready.programmes.programmes.find(group => group.programme === 'mc');
     assert.equal(free.record_state, 'ready');
-    assert.ok(!renderPageLines(ready, { columns: 80, now: NOW, view: 'mc' }).some(line => line.includes('mc is draft')));
-    assert.ok(!renderPageLines(ready, { columns: 80, now: NOW, view: 'mc' }).some(line => /status paused/u.test(line)), 'ready restores the goal\'s status');
+    const lines = drawPage(ready, { columns: 80, now: NOW });
+    assert.ok(!lines.some(line => line.includes('mc is draft')));
+    assert.ok(!lines.some(line => /status paused/u.test(line)), 'ready restores the goal\'s status');
     assert.equal(free.goals[0].phase, group.goals[0].phase);
     assert.notEqual(pageKey(data), pageKey(ready), 'ready redraws');
   });
 
-  it('heads a programme with its number, its horizon and its phase, and says draft for a draft', () => {
+  it('heads a programme with name and phase, or fallback horizon and record state in Other', () => {
     const data = { horizons: { open: [{ slug: 'first', title: 'First', position: 5, programmes: ['p'] }], none: ['d'], unreadable: [], error: null } };
     const group = { programme: 'p', number: 7, record_state: 'open', current_phase: 2, horizon: 'first', priority: 3, finished: 4, goals: [{ stage: 'build', phase: 2 }, { stage: 'plan', phase: 3 }] };
     const draft = { programme: 'd', number: 8, record_state: 'draft', current_phase: 1, goals: [{ stage: 'build', phase: 1 }] };
-    const head = (item, columns = 160) => programmeHeading(text => text, columns - 2, data, item, programmeFacts(item));
+    const dormant = { programme: 'connectors-and-drift', number: 9, record_state: 'ready', goals: [] };
+    const head = (item, columns = 96) => programmeHeading(text => text, columns - 2, data, item, programmeFacts(item));
     assert.match(head(group), /^ {2}┌─ p {2}phase 2 of 3 · 2 goals · priority 3 · 4 finished in tree ─+┐$/u);
-    assert.match(head(draft), /^ {2}┌─ d {2}· {2}no horizon {2}· {2}draft · 1 goal ─+┐$/u);
+    assert.match(head(draft), /^ {2}┌─ d {2}no horizon · draft · 1 goal ─+┐$/u);
+    assert.match(head(dormant, 96 - 8), /^ {2}┌─ connectors-and-drift {2}no horizon · ready · 0 goals ─+┐$/u);
     assert.doesNotMatch(head(draft), /phase/u, 'a draft has no phase');
     assert.ok(width(head({ ...group, programme: 'x'.repeat(60) }, 80)) <= 80);
     assert.match(programmeHeading(text => text, 158, { horizons: { open: [], none: [], unreadable: [] } }, { ...group, horizon: 'ghost', horizon_state: 'not held' }, programmeFacts(group)), /horizon ghost \(not held\)/u);
@@ -2508,7 +2515,7 @@ describe('collectPage', () => {
     }
   }
 
-  it('draws HORIZONS below the desk with exact group facts, ordered visible cards and their own folds', async (t) => {
+  it('draws HORIZONS below the desk with exact group facts and ordered inline cards', async (t) => {
     checkGroupedOverview(await overviewData(t), false);
   });
 
@@ -2539,9 +2546,9 @@ describe('collectPage', () => {
       assert.ok(lines.every((row) => width(row) <= columns), `${columns}: ${lines.filter((row) => width(row) > columns).join('\n')}`);
       const frame = programmeFramesOf(lines).get('mc');
       const body = frame.body.join('\n');
-      assert.match(body, /^ {16}held by martin since 2026-11-14T10:00:00Z — wait for the(?: |\n {16})deploy$/mu, `${columns}: the held goal`);
+      assert.match(body, /^ {15}held by martin since 2026-11-14T10:00:00Z — wait for the(?: |\n {15})deploy$/mu, `${columns}: the held goal`);
       assert.match(body, /^ {15}stage build · status blocked/mu, `${columns}: the blocked goal`);
-      assert.match(body, /^ {16}waits on Martin$/mu, `${columns}: the goal waiting on Martin`);
+      assert.match(body, /^ {15}waits on Martin$/mu, `${columns}: the goal waiting on Martin`);
       assert.match(body, /NEEDS ATTENTION[\s\S]*GOAL\.json: GOAL\.json does not parse/u, `${columns}: the malformed goal`);
       assert.match(body, /runner pid 4000/u, `${columns}: the runner session sits under its goal`);
       assert.equal(body.match(/runner pid 4000/gu).length, 1);
@@ -2553,26 +2560,43 @@ describe('collectPage', () => {
     }
   });
 
-  it('shows inline goal metadata and full wrapped reasons on first render at narrow and wide widths', async (t) => {
+  it('shows inline goal and session metadata and full wrapped reasons on first render', async (t) => {
     const data = await overviewData(t);
     const group = data.programmes.programmes.find((item) => item.programme === 'mc');
     const goal = group.goals[0];
     const reason = 'Wait until the external service and every related dependency have been carefully checked';
-    Object.assign(goal, { repos: ['memoro-cli'], sessions: 2, hold: { by: 'plan', at: 'today', reason }, last: { next: 'Verify the complete offer' } });
-    for (const columns of [60, 160]) {
-      const lines = renderPageLines(data, { columns, now: NOW, overview: true });
+    Object.assign(goal, { repos: ['memoro-cli'], sessions: 2, hold: { by: 'plan', at: 'today', reason },
+      last: { next: 'Verify the complete offer' }, prs: [{ repo: 'memoro-cli', number: 7, title: 'Add the offer' }] });
+    const advisor = 'claude-opus-4.7';
+    data.runner = { ...data.runner, sessions: [{ goal: `mc/${goal.name}`, kind: 'build', repo: 'memoro-cli', advisor, check_ins: 0 }] };
+    for (const columns of [60, 96, 160]) {
+      const lines = drawPage(data, { columns, now: NOW });
       assert.ok(lines.every((line) => width(line) <= columns));
-      const joined = lines.map((line) => line.trim()).join(' ');
+      const body = programmeFramesOf(lines).get('mc').body;
+      const joined = body.map((line) => line.trim()).join(' ');
       assert.ok(joined.includes(reason), joined);
       assert.ok(joined.includes('mc-ui · memoro-cli · 2 sessions'), joined);
       assert.ok(joined.includes('Verify the complete offer'), joined);
+      const end = body.findIndex((row) => /^ {15}╰─+╯$/u.test(row));
+      assert.ok(end >= 0, 'the rounded frame shares the stage row inset');
+      const pr = body.findIndex((row, i) => i > end && /^ {15}↳ memoro-cli#7 · open/u.test(row));
+      assert.ok(pr > end, 'the PR comes after the frame at the same inset');
+      const detail = body.slice(end + 1, pr);
+      assert.equal(detail.length, columns === 60 ? 2 : 1, `${columns}: ${detail.join('\n')}`);
+      assert.ok(detail.every((row) => /^ {17}\S/u.test(row)), detail.join('\n'));
+      assert.equal(detail.map((row) => row.trim()).join(' '), `memoro-cli · ${advisor} advisor · 0 check-ins`);
+      if (columns === 96) assert.deepEqual(body.slice(pr, pr + 3), [
+        '               ↳ memoro-cli#7 · open  Add the offer',
+        '               mc-ui · memoro-cli · 2 sessions',
+        '               Verify the complete offer',
+      ]);
     }
   });
 
-  it('ignores a former programme view and keeps the overview and its inline details', async (t) => {
+  it('keeps the overview and its inline details on the default page', async (t) => {
     const data = await overviewData(t);
     for (const columns of [160, 80]) {
-      const lines = renderPageLines(data, { columns, now: NOW, view: 'mc' });
+      const lines = drawPage(data, { columns, now: NOW });
       assert.ok(lines.every((row) => width(row) <= columns));
       assert.ok(lines.some((row) => row.includes('HORIZONS')));
       assert.ok(lines.some((row) => row.includes('┌─ mc ')));
@@ -2627,7 +2651,7 @@ describe('collectPage', () => {
     const lines = renderPageLines(data, { columns: 100, now: NOW, overview: true });
     assert.ok(lines.some((line) => /horizons unreadable/u.test(line)), lines.join('\n'));
     const other = lines.findIndex((line) => line.startsWith('  ┌─ OTHER PROGRAMMES'));
-    assert.match(lines[other + 1], /^ {6}┌─ mc {2}· {2}horizon first \(unreadable\)/u);
+    assert.match(lines[other + 1], /^ {6}┌─ mc {2}horizon first \(unreadable\) · /u);
   });
 
   it('draws a missing and a readable empty horizon store alike, and the json keeps every key it had', async (t) => {
@@ -3911,12 +3935,12 @@ describe('the overview: its order, its programmes and what belongs to none', () 
 
     it('draws a held goal, a blocked goal and a goal stopped for no progress under their goal', () => {
       const held = framed(patch(quiet(), 'prog-01/goal-01', { hold: ago }));
-      assert.ok(held.body.some((row) => /^ {16}held by martin since 2026-08-28T10:00:00Z — wait$/u.test(row)), held.body.join('\n'));
+      assert.ok(held.body.some((row) => /^ {15}held by martin since 2026-08-28T10:00:00Z — wait$/u.test(row)), held.body.join('\n'));
       assert.ok(held.body.some((row) => /^ {15}stage \S+ · status paused/u.test(row)), `a held ready goal reads paused\n${held.body.join('\n')}`);
       const blocked = framed(patch(quiet(), 'prog-01/goal-01', { status: 'blocked' }));
-      assert.ok(blocked.body.some((row) => /^ {15}stage build · status blocked/u.test(row)) && blocked.body.some((row) => /^ {16}a mend session resolves the obstacle$/u.test(row)), blocked.body.join('\n'));
+      assert.ok(blocked.body.some((row) => /^ {15}stage build · status blocked/u.test(row)) && blocked.body.some((row) => /^ {15}a mend session resolves the obstacle$/u.test(row)), blocked.body.join('\n'));
       const stopped = framed(patch(quiet(), 'prog-01/goal-01', { status: 'Martin', last: { next: 'x', comment: 'no progress: three sessions in a row' } }));
-      assert.ok(stopped.body.some((row) => /^ {16}no progress: three sessions in a row$/u.test(row)), stopped.body.join('\n'));
+      assert.ok(stopped.body.some((row) => /^ {15}no progress: three sessions in a row$/u.test(row)), stopped.body.join('\n'));
       assert.deepEqual(maintenanceItems(patch(quiet(), 'prog-01/goal-01', { hold: ago, status: 'blocked' })), [], 'a goal is the programme\'s, never MAINTENANCE\'s');
     });
 
@@ -3928,12 +3952,12 @@ describe('the overview: its order, its programmes and what belongs to none', () 
         if (at >= 0) group.phases.push({ number: null, goals: phase.goals.splice(at, 1) });
       }
       const malformed = framed(data);
-      assert.ok(malformed.body.some((row) => /^ {10}NEEDS ATTENTION$/u.test(row)) && malformed.body.some((row) => /^ {16}GOAL\.json: criterion 2 has no check$/u.test(row)), malformed.body.join('\n'));
+      assert.ok(malformed.body.some((row) => /^ {10}NEEDS ATTENTION$/u.test(row)) && malformed.body.some((row) => /^ {15}GOAL\.json: criterion 2 has no check$/u.test(row)), malformed.body.join('\n'));
       const refused = patch(quiet(), 'prog-02/goal-02', { stage: 'done', status: 'done', archive_refused: 'a review is open' });
-      assert.ok(framed(refused, 'prog-02').body.some((row) => /^ {16}not archived — a review is open$/u.test(row)));
+      assert.ok(framed(refused, 'prog-02').body.some((row) => /^ {15}not archived — a review is open$/u.test(row)));
       assert.ok(!draw(refused).some((row) => /with nothing under way/u.test(row)), 'a programme that holds a goal nobody has archived is not asleep');
       const open = patch(quiet(), 'prog-02/goal-02', { stage: 'done', status: 'done', prs: [{ repo: 'memoro-cli', number: 5 }] });
-      assert.ok(framed(open, 'prog-02').body.some((row) => /^ {16}not archived — memoro-cli#5 is open/u.test(row)));
+      assert.ok(framed(open, 'prog-02').body.some((row) => /^ {15}not archived — memoro-cli#5 is open/u.test(row)));
     });
 
     it('keeps a finished goal with a live session while hiding an ordinary finished goal', () => {
@@ -4085,11 +4109,6 @@ describe('the overview: its order, its programmes and what belongs to none', () 
         assert.ok(rows[0][1] > order[4] && rows[0][1] < order[5], `manager pid ${pid} between the hero frame and the panels`);
       }
       assert.ok(!draw(data, { columns: 120 }).some((row) => /Landed 24 h|┌─ proposals|pid 600[01]/u.test(row)), 'not in the collapsed overview');
-    });
-
-    it('keeps a programme\'s own view as it was: its top, not the compact header', () => {
-      const lines = drawPage(normalDay(), { columns: 120, now: NOW, version: '0.7.11', view: 'prog-01' }).map(TEXT);
-      assert.ok(lines.some((row) => /┌/u.test(row)), lines.slice(0, 6).join('\n'));
     });
   });
 });
