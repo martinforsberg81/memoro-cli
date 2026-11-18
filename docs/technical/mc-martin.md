@@ -48,19 +48,22 @@ has stopped (waiting in status `Martin`, wrong, or stuck).
 
 ## Opening
 
-Launch first syncs the durable desk items (below), then builds the opening from
-the item store, the item briefs, `runs.tsv` and the daily ceiling, with no
-model. New and resumed sessions receive the opening as reference material with
-an instruction to acknowledge readiness briefly in Swedish and wait for
-Martin to choose the work. `mc martin brief` prints the opening and starts no
-session; `brief --json` gives the same data as the text. `brief` writes nothing
-except the sync's own store writes, and neither it nor a refused or failed
-launch changes `last-open.json`.
+Launch first syncs the durable desk items (below). New and resumed sessions
+receive a compact snapshot with the queue counts, the first waiting item's
+title and ID, and counts of decisions, reached horizons and landed lessons
+since the previous opening. The prompt directs the session to acknowledge
+readiness in Swedish and wait for Martin to choose the work.
+
+`mc martin item <id>` reads one current brief. `mc martin brief` prints the
+full opening on demand and starts no session. `brief --json` gives the same
+data as the text. `brief --since <timestamp>` uses the supplied start time
+through the current reading time, so interval details remain available after
+launch advances the marker. `brief` writes nothing except the sync's own
+store writes. A refused or failed launch leaves `last-open.json` intact.
 
 The opening's data is built in `src/mc/desk-opening.js`, with no sync, lock or
 writer: texts, acts, stuck, not ready, decided and cost, each by one function,
-and the reading of `last-open.json`. `martin.js` re-exports them, and what the
-opening shows is unchanged. The page's DESK section ([mc-ui.md](mc-ui.md#desk))
+and the reading of `last-open.json`. `martin.js` re-exports them. The page's DESK section ([mc-ui.md](mc-ui.md#desk))
 calls the same functions, so it reads the same texts, acts, decided, not ready
 and cost from the store as the last sync left it. The page runs no sync, takes
 no lock and writes nothing. The module also holds the page's ledger reader,
@@ -69,7 +72,7 @@ the jev ledger, `decisions.jsonl`. Whether an ask went against the asking
 session's recommendation follows `mc decisions`: an `answered` row takes jev's
 choice and a `decided` row takes the recommendation.
 
-The opening has these parts, in this order (Horizons only when the desk holds one):
+The full opening printed by `mc martin brief` has these parts, in this order (Horizons only when the desk holds one):
 
 1. **Horizons** — present only when the horizon store holds a horizon or a
    record that cannot be read (*Horizons*, below); a desk that holds none opens
