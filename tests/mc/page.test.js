@@ -3936,6 +3936,18 @@ describe('the overview: its order, its programmes and what belongs to none', () 
       assert.ok(framed(open, 'prog-02').body.some((row) => /^ {16}not archived — memoro-cli#5 is open/u.test(row)));
     });
 
+    it('keeps a finished goal with a live session while hiding an ordinary finished goal', () => {
+      const data = patch(quiet(), 'prog-01/goal-01', { stage: 'done', status: 'ready' });
+      patch(data, 'prog-02/goal-02', { stage: 'done', status: 'ready' });
+      data.runner = { ...data.runner, sessions: [{ goal: 'prog-01/goal-01', kind: 'build', pid: 7, repo: 'memoro', tool: 'codex', model: 'sol' }] };
+      for (const expand of [false, true]) {
+        const lines = draw(data, { columns: 120, expand });
+        assert.ok(framesOf(lines).get('prog-01').body.some((line) => line.includes('goal-01')));
+        assert.ok(framesOf(lines).get('prog-01').body.some((line) => line.includes('runner pid 7')));
+        assert.ok(!framesOf(lines).get('prog-02').body.some((line) => line.includes('goal-02')));
+      }
+    });
+
     it('draws a failed merge in its goal\'s programme, and in MAINTENANCE only when no goal\'s pull request carries it', () => {
       const data = patch(quiet(), 'prog-01/goal-01', { stage: 'merge', prs: [{ repo: 'memoro', number: 904, merge_red: 'merge: Merge conflict' }] });
       data.merges = { ...data.merges, red: { items: [{ repo: 'memoro', pr: 904, prs: [{ number: 904 }], said: 'Merge conflict' }] } };
