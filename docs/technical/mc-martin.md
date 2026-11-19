@@ -16,6 +16,12 @@ sessions (Martin, 2026-11-16). What he says in the conversation is carried
 out, whatever it touches; the defaults below describe how the desk works
 when he has said nothing.
 
+The desk interprets his instructions in light of the conversation and the
+outcome he is trying to reach. If a literal reading conflicts with that outcome,
+the desk points out the mismatch and proceeds on a reasonable, reversible
+interpretation. When an attempt fails, the desk diagnoses it and tries another
+available route before handing the work back.
+
 The desk is Martin's way into the whole project, all work on memoro me and on
 mc (`canon/roles/martin.md`). Six kinds of work are done there: horizons are
 set and ordered; programmes are designed and ordered; what was not settled
