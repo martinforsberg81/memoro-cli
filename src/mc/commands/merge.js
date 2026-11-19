@@ -17,7 +17,8 @@ import { writeJsonAtomic } from '../atomic-write.js';
 import { runTool } from '../child-async.js';
 import { docsMergeLines, docsOnly, prFiles, runDocsMerge } from '../docs-merge.js';
 import { dequeue, mergesPath, parseQueue } from '../merge-queue.js';
-import { beforeMergeLine, FINISHED, goalsBeforeMerge, programsGoals } from '../goals.js';
+import { beforeMergeLine, FINISHED, goalReferences, goalsBeforeMerge, programsGoals } from '../goals.js';
+import { repairPrBinding } from '../repair-delivery.js';
 import { programsHome, workRoot } from '../paths.js';
 import { dropPr } from '../page-cache.js';
 import { realLock } from '../runner-lock.js';
@@ -56,7 +57,7 @@ export async function run(argv, deps = {}) {
   // works, and it says where the measurement lives now: a person asking "is
   // this red?" should not have to find it under the verb for landing things.
   if (opts.check && !opts.docs) stderr.write('mc: --check is now mc test <repo> <pr> — same round, running it\n');
-  if (!opts.docs && (opts.check || opts.prs)) return (deps.gate || gate)(opts, { stdout, stderr });
+  if (!opts.docs && (opts.check || opts.prs)) return (deps.gate || gate)(opts, { ...deps, stdout, stderr });
 
   if (opts.prs) { stderr.write('mc: --docs lands one pull request at a time\n'); return 2; }
   if (opts.check) { stderr.write('mc: --docs has nothing to check — it is the gate or it is documentation\n'); return 2; }
@@ -75,6 +76,7 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: #${opts.pr} changes only documents under docs/ (${files.length} file${files.length === 1 ? '' : 's'}, no script) — landing it as mc merge --docs, now, after the tests that read documents\n`);
   }
   const report = await (deps.runDocsMerge || runDocsMerge)({ repoPath, pr: opts.pr, gh: deps.gh,
+    beforeMerge: repairDoor(repoPath, opts.pr, deps),
     measure: deps.measure, onProgress: (m) => stderr.write(`mc: ${m}\n`) });
   // The body is not kept in the round log.
   delete report.body;
@@ -83,6 +85,24 @@ export async function run(argv, deps = {}) {
   if (opts.json) { stdout.write(`${JSON.stringify(report, null, 2)}\n`); return report.ok ? 0 : 1; }
   for (const line of docsMergeLines(report)) stdout.write(`${line}\n`);
   return report.ok ? 0 : 1;
+}
+
+/** Hold the decision made before measurement, and re-read it before the squash. */
+function repairDoor(repoPath, pr, deps) {
+  const env = deps.env || process.env;
+  let selected;
+  return ({ branch, head }) => {
+    const goals = deps.goalsOf ? deps.goalsOf() : goalReferences({ home: programsHome(env) });
+    const revision = selected?.revision ?? env.MC_REPAIR_REVISION ?? undefined;
+    const binding = repairPrBinding({ goals, repo: repoNameOf(repoPath), pr, branch, revision, read: deps.read });
+    if (binding?.problem) return binding.problem;
+    if (binding && binding.sha !== head) return 'the pull request is not at its authorized repair head';
+    if (selected !== undefined && (selected?.revision !== binding?.revision || selected?.sha !== binding?.sha)) {
+      return 'the repair merge handoff changed before landing';
+    }
+    selected = binding;
+    return null;
+  };
 }
 
 /**
@@ -145,6 +165,8 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
     stderr.write(`mc: #${opts.pr} is closed, not merged — nothing to land\n`);
     return 1;
   }
+  const problem = repairDoor(repoPath, opts.pr, deps)({ branch: view.headRefName, head: view.headRefOid });
+  if (problem) { stderr.write(`mc: #${opts.pr}: ${problem} — nothing was merged or booked\n`); return 1; }
   let sha = view.mergeCommit?.oid || null;
   if (view.state === 'MERGED') {
     stderr.write(`mc: #${opts.pr} was already merged as ${sha7(sha)} — booking it\n`);

@@ -58,6 +58,7 @@ export function reconcileRepair({ home, programme, env, reason, list = listDirsO
         return refused(`${name}: the released part changed — update its contract, take back its criterion marks and return it to draft or build before reconciliation`);
       }
       if (!landed && !previous && !['draft', 'build'].includes(goal.stage)) return refused(`${name}: return unversioned work to draft or build before reconciliation`);
+      if (!landed && goal.stage === 'merge') return refused(`${name}: return the old merge handoff to build before reconciling this release`);
       for (const number of selected) if (!landed || !prior || (previous && matching(number))) covered.add(number);
       goals.push([name, contract, landed ? selected.filter(number => !prior || (previous && matching(number))) : selected]);
     }

@@ -100,6 +100,7 @@ export async function runMergeRound({
   // Stops the round from outside (`runGate`'s signal): the round ends `gone`.
   signal = null,
   beforeMerge = async () => true,
+  expectedHead = null,
   // The pause between reads of GitHub's head (see `headAsGitHubSeesIt`); a
   // test passes a no-op rather than waiting five seconds a read.
   sleep = defaultSleep,
@@ -304,6 +305,7 @@ export async function runMergeRound({
       // the branch was freshened to when that was needed. A round that cannot
       // say which head it means squashes none — and says so.
       let pin = batch ? (verdict.prs || []).find((item) => item.number === number)?.head_sha : verdict.pr.head_sha;
+      if (expectedHead && pin !== expectedHead) return finish('pushed', `#${number} is no longer at the authorized repair head — not merged`);
       // Freshened before its squash: every later branch of a batch, because
       // the squash before it is a commit the branch does not have; and any
       // branch at all when the gate had to regenerate derived artifacts after
@@ -338,8 +340,10 @@ export async function runMergeRound({
         say(`#${number} has no measured head to pin the squash to — merging without --match-head-commit`);
       }
       let allowed = false;
-      try { allowed = await beforeMerge({ repo: repoPath, pr: number }); } catch { allowed = false; }
-      if (!allowed) return finish('dropped', `#${number} belongs only to a dropped goal; delivery is abandoned`);
+      try { allowed = await beforeMerge({ repo: repoPath, pr: number, branch: batch ? (verdict.prs || []).find(item => item.number === number)?.head : verdict.pr.head }); } catch { allowed = false; }
+      if (allowed !== true) return typeof allowed === 'string'
+        ? finish('repair-release', allowed)
+        : finish('dropped', `#${number} belongs only to a dropped goal; delivery is abandoned`);
       const merged = await askGh(['pr', 'merge', String(number), '--squash', ...(pin ? ['--match-head-commit', pin] : [])], { cwd: repoPath });
       if (merged.status !== 0) {
         // A failed call is not a failed merge. On #10844 GitHub took the call,

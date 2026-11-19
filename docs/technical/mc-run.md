@@ -947,11 +947,17 @@ creates goals only against that current release and records its comparison
 with `mc programs reconcile <programme> --reason <text>`. Changed unfinished
 work is updated by the goal verbs; a changed contract must be back in draft
 or build without carried criterion marks. The planner may return a repair
-goal from review or merge to build while reconciling. Removed parts retire
+goal from review or merge to build while reconciling. An unfinished merge
+handoff must return to build even if the goal's contract still matches;
+the earlier handoff cannot be reused. Removed parts retire
 their unfinished work. Landed goals are kept as evidence and cannot cover a
 changed part by number alone. The runner checks both the programme manifest
 and the reconciled goal contract before delivery, and passes the revision to
 the session. A result from a superseded session does not advance the goal.
+Merge recovery and completion require the current repair handoff as well as
+the current manifest and goal contract; the runner never assigns a new
+revision to an old queue entry or uses an earlier merge decision to complete
+a goal under a later release.
 
 Martin, 2026-11-16: a programme whose record is `ready` is cut
 into its phases and goals from `README.md`, with nobody present.

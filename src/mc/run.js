@@ -84,6 +84,7 @@ import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
 import { readRecord } from './programme-record.js';
 import { repairGoalAdmission } from './repair-reconcile.js';
+import { repairMergeBinding } from './repair-delivery.js';
 import { RUNNER_DISK, RUNNER_MEMORY, planAreaName, programsHome, restrictedProgrammeDir, runnerDir, runnerScratchDir, workRoot } from './paths.js';
 import { archiveGoal, finalizeDroppedGoal, goalArchiveDue } from './goal-archive.js';
 import {
@@ -3032,6 +3033,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     };
     for (const goal of goals()) {
       if (goal.problems.length || FINISHED.includes(goal.stage) || !goal.prs?.length) continue;
+      const repair = repairMergeBinding(goal, { read: deps.read });
+      if (repair?.problem) continue;
+      const settle = (change, fields) => {
+        const done = () => goalState(goal, goalName(goal), change, fields);
+        if (!repair) return done();
+        return lock(root, () => {
+          const live = repairMergeBinding(goal, { read: deps.read, revision: repair.revision });
+          if (!live?.problem && JSON.stringify(live) === JSON.stringify(repair)) return done();
+        }, { strict: true, name: 'repair-goal-settle' });
+      };
       // Each pull request is asked once in this pass over the goal.
       const asked = new Map();
       const stateOf = (item) => {
@@ -3041,7 +3052,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       };
       const settled = prsLanded(goal.prs, stateOf);
       if (goal.stage === 'merge' && goal.status === 'ready' && settled.closed.length === goal.prs.length) {
-        goalState(goal, goalName(goal), { status: 'Martin' }, {
+        settle({ status: 'Martin' }, {
           comment: `every pull request closed without merging: ${settled.closed.join(', ')} — nothing to land; a person opens a new one (mc goal pr) and sets it ready, or drops the goal`,
         });
         continue;
@@ -3055,7 +3066,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         const repaired = goal.log.slice(lastFailure + 1).some((entry) => entry.stage === 'merge'
           && entry.status === 'ready' && entry.tool !== 'runner');
         for (const item of goal.prs) {
+          const bound = repair?.prs.find(pr => pr.repo === item.repo && pr.pr === item.pr);
           if (pending.some((job) => job.repo === item.repo && Number(job.pr) === Number(item.pr)
+            && (!repair || job.state === 'landing' || (job.repair_revision === repair.revision && job.sha === bound?.sha))
             && (job.state !== 'red' || !repaired))) continue;
           if (goal.log.some((entry) => String(entry.done ?? '').startsWith(`${item.repo}#${item.pr} landed `))) continue;
           // Closed without merging: the merger has nothing to land, and would answer red.
@@ -3065,12 +3078,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           try {
             deps.queueMerge({ root, repo: item.repo, repoPath: repo.path, pr: item.pr,
               holder: { name: `goal:${goalName(goal)}` },
-              goal: { programme: goal.programme, goal: goal.goal, dir: goal.dir }, now: deps.now() });
+              goal: { programme: goal.programme, goal: goal.goal, dir: goal.dir }, now: deps.now(),
+              ...(bound ? { repairRevision: repair.revision, sha: bound.sha } : {}) });
           } catch (error) { say(`${goalName(goal)}: ${item.repo}#${item.pr} could not be queued (${error.message})`); }
         }
       }
       if (!settled.done) continue;
-      goalState(goal, goalName(goal), { stage: 'done' }, {
+      settle({ stage: 'done' }, {
         done: `landed ${settled.landed.join(', ')}`,
         comment: settled.closed.length ? `closed without landing: ${settled.closed.join(', ')}` : null,
       });
@@ -3489,7 +3503,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           logPath: `${out}.jsonl`,
           onSpawn: (childPid) => { current.session_pid = childPid; writeJson(currentPath, current); },
           handoff: canHandoff ? () => {
-            try { return JSON.parse(deps.read(handoffPath) ?? 'null')?.goal === `${goal.programme}/${goal.goal}`; }
+            try {
+              const recorded = JSON.parse(deps.read(handoffPath) ?? 'null');
+              return recorded?.goal === `${goal.programme}/${goal.goal}`
+                && (recorded.revision ?? null) === (revision ?? null)
+                && (!revision || !goalRelease(goal, revision)?.problems);
+            }
             catch { return false; }
           } : null,
           ...watchFor(launch, settings, {

@@ -1377,6 +1377,17 @@ registered pull requests to merge. Phases hold later goals back until lower phas
 or dropped; there is no chain of execution branches for the merger to restack.
 The queue orders runnable jobs by arrival within each repository lane.
 
+### Repair-owned work
+
+A repair goal in merge needs a handoff for the current, reconciled programme
+release. Its handoff names the revision and the registered pull requests'
+authorized heads. Each queued job carries both the revision and its head.
+The merge command, documentation-only and admin routes apply this fence;
+admin does not waive it. A measured round checks it again immediately
+before the squash. An obsolete job leaves the queue without changing the
+goal or waking mend. Completion reads the same fence under the programme
+lock; an already landed GitHub change is not undone.
+
 **The merger is the installed mc** (ruling 37, 2026-10-10). `startMerger`
 spawns `merger-run.js` from the checkout the `mc` on PATH resolves to
 (`installedMergerRun`), never from the caller's own tree, and the first line

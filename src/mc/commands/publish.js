@@ -34,7 +34,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { run as runGit, tryGit } from '../git.js';
 import { addPr, beforeMergeLine, goalDirIn, goalOfPath, GOAL_FILE, isGoalRef, logStamp, parseGoal, programsGoals, prRef, readTextOrNull } from '../goals.js';
@@ -49,6 +49,8 @@ import { writerRole } from './goal.js';
 import { commandUsage } from '../command-help.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { AREAS_PATH, checkAreas } from '../areas.js';
+import { repairGoalAdmission } from '../repair-reconcile.js';
+import { realLock } from '../runner-lock.js';
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
 /** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
@@ -109,6 +111,10 @@ export async function run(argv, deps = {}) {
   }
   const goal = goalOfPublish({ given: flags.goal, env, cwd, branch, home: deps.home || programsHome(env), read: deps.readGoal || readTextOrNull, list: deps.listGoals });
   if (goal?.error) { stderr.write(`mc: ${goal.error}\n`); return 2; }
+  const repairAdmission = () => goal && repairGoalAdmission(dirname(dirname(goal.dir)), basename(goal.dir),
+    { read: deps.readGoal || readTextOrNull, revision: env.MC_REPAIR_REVISION ?? null });
+  const repair = repairAdmission();
+  if (repair?.problems) { stderr.write(`mc: ${repair.problems[0]} — nothing was published\n`); return 1; }
 
   const repo = repoName(git(['remote', 'get-url', 'origin']), root);
   if (learning && (repo !== deps.learningArea.repo || branch !== deps.learningArea.branch)) {
@@ -179,7 +185,19 @@ export async function run(argv, deps = {}) {
   let pr = null;
   try { pr = JSON.parse(viewed.stdout || 'null'); } catch { pr = null; }
   if (!viewed.ok || !pr) { stderr.write(`mc: gh pr view #${number} failed: ${viewed.text}\n`); return 1; }
-  if (goal) carryGoal({ goal, repo, number: pr.number, env, now: deps.now ? deps.now() : new Date(), read: deps.readGoal || readTextOrNull, write: deps.writeGoal || writeFileAtomic, stdout, stderr, json: flags.json });
+  if (goal) {
+    const carry = () => carryGoal({ goal, repo, number: pr.number, env, now: deps.now ? deps.now() : new Date(), read: deps.readGoal || readTextOrNull, write: deps.writeGoal || writeFileAtomic, stdout, stderr, json: flags.json });
+    if (!repair) carry();
+    else {
+      const problem = (deps.lock || realLock)(workRoot(env), () => {
+        const live = repairAdmission();
+        if (live?.release?.revision !== repair.release.revision) return live?.problems?.[0] ?? 'the repair release changed during publication';
+        carry();
+        return null;
+      }, { strict: true, name: 'repair-publish' });
+      if (problem) { stderr.write(`mc: ${problem} — the pull request was not handed off\n`); return 1; }
+    }
+  }
   if (branch.startsWith(`mend/main-${repo}-`)) {
     try { (deps.publishMainMend || publishMainMend)({ root: workRoot(env), repo, branch, pr: pr.number }); }
     catch (error) { stderr.write(`mc: main-red ownership not recorded: ${error.message}\n`); return 1; }
@@ -202,7 +220,7 @@ export async function run(argv, deps = {}) {
   const queue = !flags['no-merge'] && held && !handOff;
   for (const line of publishLines({ pr, localHead, branch, pushed, created, repo, after, described, queued: queue, handOff: before ? `${beforeMergeLine(before)} — not queued` : null })) stdout.write(`${line}\n`);
   if (!queue) return 0;
-  return (deps.merge || merge)([repo, String(pr.number)], { stdout, stderr });
+  return (deps.merge || merge)([repo, String(pr.number)], { stdout, stderr, env });
 }
 
 /**

@@ -300,6 +300,13 @@ A stale ready record keeps that spelling on disk and says `ready (needs
 review)` in the terminal list. An authorised reopen changes it to draft and
 revokes the receipt without removing sources, goals or the previous cut.
 
+Once reconciled, delivery writes are for that revision. A stale session keeps
+its local work but cannot register a PR, publish a handoff or move a goal
+forward under a new release. Goal review records the released revision and
+the authorized PR heads before queueing. A later release requires a new
+handoff even for a goal the planner keeps unchanged; see
+[merge admission](mc-merge.md#repair-owned-work).
+
 ## What the session is told
 
 `planLaunch` names the programme, asks it to read the aim first, names the

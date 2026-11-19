@@ -15,8 +15,11 @@ import { archiveDue, archiveOnOk, keepReading, parseWriteBack, readArchiveState 
 import { writeFileAtomic, writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { run as ask } from '../../src/mc/commands/ask.js';
 import { run as goal } from '../../src/mc/commands/goal.js';
+import { run as merge } from '../../src/mc/commands/merge.js';
 import { run as programs } from '../../src/mc/commands/programs.js';
-import { listDirsOf, readTextOrNull } from '../../src/mc/goals.js';
+import { goalReferences, listDirsOf, readTextOrNull, REVIEW_ROLE } from '../../src/mc/goals.js';
+import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
+import { landJob, queueMerge } from '../../src/mc/merger.js';
 import { newRecord, readRecord, RECORD_FILE, recordPageTemplate, writeRecord } from '../../src/mc/programme-record.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { applyObservation, normaliseCapacity } from '../../src/mc/model-capacity.js';
@@ -293,6 +296,125 @@ test('repair planning: stale ready blocks new and runnable goals; a changed part
     assert.equal(readsDue().due, false);
     assert.equal(admitted(second).release.revision, second);
     assert.match(admitted(first).problems[0], /different repair release/u);
+  });
+});
+
+test('repair delivery: a queued or in-flight PR cannot use a stale order or a later release', async t => {
+  const f = repairSetup(t);
+  const home = join(f.root, 'programs');
+  const page = join(f.dir, 'README.md');
+  const order = readFileSync(page, 'utf8').replace(/### Part 1 — [^\n]+/u, '### Part 1 — Restore rows');
+  writeFileSync(page, order);
+  const dir = join(f.dir, 'goals', 'restore');
+  const file = join(dir, 'GOAL.json');
+  const sha = '1'.repeat(40);
+  const criterion = { criterion: 'Rows in settled order', check: 'mc gate', met: true };
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(file, goalJson({ prs: ['memoro-cli#17'], success_criteria: [criterion], documents: [{ label: 'Part 1', path: page }] }));
+  const queue = options => queueMerge({ root: f.root, ...options, start: () => ({}) });
+  const goalsOf = () => goalReferences({ home });
+  const forge = () => ({ ok: true, status: 0, stdout: JSON.stringify({ state: 'OPEN', headRefOid: sha, headRefName: 'goal/restore' }) });
+  let goalWrites = 0;
+  const land = (job, mergeRound) => landJob(job, {
+    root: f.root, mergeRound, gh: forge, goalsOf, say: () => {}, record: () => {}, recordStart: () => {},
+    readRunningRound: () => null, readLeaseFn: () => null, readRunningDeploy: () => null,
+    dropFromPage: () => {}, setGoal: () => { goalWrites++; },
+  });
+  await f.asAuthor(async author => {
+    const release = async () => {
+      assert.equal((await f.review(author, f.reader())).code, 0);
+      assert.equal((await f.call(['release', 'p'], { identity: author })).code, 0);
+      return readRecord(f.dir).record.repair.release.revision;
+    };
+    const identity = (revision, extra) => ({ ...f.baseEnv, MC_HEADLESS: '1', MC_REPAIR_REVISION: revision, ...extra });
+    const reconcile = revision => f.call(['reconcile', 'p', '--reason', 'Compared Part 1 and the goal contract.'], { identity: identity(revision) });
+    const call = async (args, env) => {
+      const stdout = sink(), stderr = sink();
+      const code = await goal(args, {
+        env, stdout, stderr, known: () => ['/known/memoro-cli'], gh: (_cwd, args) => forge(args), queue,
+        git: () => ({ ok: true, stdout: '', stderr: '' }),
+      });
+      return { code, err: stderr.text() };
+    };
+    const intoMerge = async revision => {
+      // The ordinary goal build/review evidence is fixture input; execute the actual merge handoff verb.
+      const current = JSON.parse(readFileSync(file, 'utf8'));
+      writeFileSync(file, goalJson({ ...current, stage: 'review', success_criteria: [criterion] }));
+      writeFileSync(join(dir, 'REVIEW.md'), `head: memoro-cli ${sha}\ncriterion 1: OK\n`);
+      const result = await call(['stage', 'p/restore', 'merge'], identity(revision, {
+        MC_GOAL: 'p/restore', MC_ROLE: REVIEW_ROLE, MC_REVIEW_HEAD: sha,
+      }));
+      assert.equal(result.code, 0, result.err);
+      return parseQueue(readFileSync(mergesPath(f.root), 'utf8'))[0];
+    };
+    const stale = () => writeFileSync(page, order.replace(/### Part 1 — [^\n]+/u, '### Part 1 — Restore panels'));
+    const first = await release();
+    const before = await reconcile(first);
+    assert.equal(before.code, 0, before.err);
+    const old = await intoMerge(first);
+    assert.equal(old.repair_revision, first);
+    assert.equal(old.sha, sha);
+    const [inFlight] = await land(old, async options => {
+      assert.equal(options.expectedHead, sha);
+      assert.equal(await options.beforeMerge(), true);
+      stale();
+      const reason = await options.beforeMerge();
+      assert.match(reason, /needs review/u);
+      return { ok: false, merged: false, stopped_at: 'repair-release', reason };
+    });
+    assert.equal(inFlight.landed, false);
+    const neverRound = () => assert.fail('an obsolete job cannot start its round');
+    const [queued] = await land(old, neverRound);
+    assert.equal(queued.report.stopped_at, 'repair-release');
+    assert.match(queued.report.reason, /needs review/u);
+    assert.throws(() => queue({ ...old, repoPath: old.repo_path, repairRevision: first }), /needs review/u);
+    for (const option of ['--admin', '--docs']) {
+      const stdout = sink(), stderr = sink();
+      const code = await merge(['memoro-cli', '17', option], {
+        env: f.baseEnv, goalsOf, stdout, stderr, resolveRepoPath: () => '/known/memoro-cli',
+        gh: args => {
+          assert.equal(args[1], 'view', 'stale repair cannot squash through either command route');
+          return { ...forge(), stdout: JSON.stringify({ number: 17, title: 'Restore', baseRefName: 'main',
+            state: 'OPEN', headRefOid: sha, headRefName: 'goal/restore', files: [{ path: 'docs/technical/rows.md' }] }) };
+        },
+        measure: () => assert.fail('obsolete documentation delivery cannot start measurement'),
+      });
+      assert.equal(code, 1);
+      assert.match(stdout.text() + stderr.text(), /needs review/u);
+    }
+
+    assert.equal(reopenRepair(f.dir, author).changed, true);
+    const next = await release();
+    assert.notEqual(next, first);
+    const planner = identity(next);
+    for (const args of [
+      ['stage', 'p/restore', 'build'],
+      ['set', 'p/restore', 'contract', '--text', 'Restore the panels to their settled order.'],
+      ['criterion', 'unmet', 'p/restore', '1'],
+    ]) {
+      const result = await call(args, planner);
+      assert.equal(result.code, 0, result.err);
+    }
+    const after = await reconcile(next);
+    assert.equal(after.code, 0, after.err);
+    const current = await intoMerge(next);
+    assert.equal(current.repair_revision, next);
+    const obsolete = await call(['stage', 'p/restore', 'merge'], identity(first, {
+      MC_GOAL: 'p/restore', MC_ROLE: REVIEW_ROLE, MC_REVIEW_HEAD: sha,
+    }));
+    assert.equal(obsolete.code, 1);
+    assert.match(obsolete.err, /different repair release/u);
+    const [oldAfterRelease] = await land(old, neverRound);
+    assert.equal(oldAfterRelease.report.stopped_at, 'repair-release');
+    assert.match(oldAfterRelease.report.reason, /different repair release/u);
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).stage, 'merge', 'the newer handoff remains in merge');
+    const [landedBeforeReadBack] = await land(current, async options => {
+      assert.equal(await options.beforeMerge(), true);
+      writeFileSync(page, `${readFileSync(page, 'utf8')}\nChanged while GitHub took the merge.\n`);
+      return { ok: true, merged: true, merge_commit: '2'.repeat(40) };
+    });
+    assert.equal(landedBeforeReadBack.landed, true, 'the merge that already landed is not undone');
+    assert.equal(goalWrites, 0, 'no obsolete answer may change the goal, including a completed squash');
   });
 });
 

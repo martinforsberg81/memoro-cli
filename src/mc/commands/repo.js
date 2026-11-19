@@ -25,6 +25,7 @@ import { followMerge } from '../merge-watch.js';
 import { mergerLogPath, queueMerge } from '../merger.js';
 import { mcHome, programsHome, workRoot } from '../paths.js';
 import { FINISHED, goalReferences } from '../goals.js';
+import { repairPrBinding } from '../repair-delivery.js';
 import { tryGit } from '../git.js';
 import { painter } from '../status-render.js';
 import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
@@ -505,9 +506,11 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
   const askGh = deps.gh || spawnTool('gh');
   let head = null;
   let mergeable = null;
+  let sha = null;
   try {
     const view = JSON.parse(askGh(['pr', 'view', String(opts.pr), '--json', 'headRefName,headRefOid,mergeable'], { cwd: repoPath }).stdout);
     head = view?.headRefName || null;
+    sha = view?.headRefOid || null;
     mergeable = view?.mergeable || null;
   } catch { head = null; }
   const isDroppedOnly = () => {
@@ -519,6 +522,13 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
   };
   if (isDroppedOnly()) {
     stderr.write(`mc: #${opts.pr} is owned only by a dropped goal — delivery is abandoned; it was not queued\n`);
+    return 1;
+  }
+  const binding = () => repairPrBinding({ goals: references() ?? [], repo, pr: opts.pr, branch: head, read: deps.read,
+    ...(env.MC_REPAIR_REVISION ? { revision: env.MC_REPAIR_REVISION } : {}) });
+  const repair = binding();
+  if (repair?.problem || (repair && repair.sha !== sha)) {
+    stderr.write(`mc: #${opts.pr}: ${repair.problem ?? 'not at the authorized repair head'} — not queued\n`);
     return 1;
   }
   const io = { read: deps.read, write: deps.writeJson, lock: deps.lock };
@@ -545,8 +555,15 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
   try {
     queued = queueMerge({
       root, repo, repoPath, pr: opts.pr, branch: head, holder,
+      ...(repair ? { goal: repair.goal, repairRevision: repair.revision, sha: repair.sha } : {}),
       now: deps.now ? deps.now() : new Date(), env, ...io,
-      mayEnqueue: () => !isDroppedOnly(),
+      mayEnqueue: () => {
+        const current = binding();
+        if (current?.problem || current?.revision !== repair?.revision || current?.sha !== repair?.sha) {
+          throw new Error(current?.problem ?? 'the repair merge handoff changed before queueing');
+        }
+        return !isDroppedOnly();
+      },
       ...(deps.startMerger ? { start: deps.startMerger } : {}),
     });
   } catch (error) {

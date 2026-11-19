@@ -93,6 +93,7 @@ import { NAME_RE } from '../plan-schema.js';
 import { readRecord, repairDraftRefusal } from '../programme-record.js';
 import { repairReleaseState } from '../repair-release.js';
 import { repairGoalAdmission, repairPlanRevision } from '../repair-reconcile.js';
+import { REPAIR_HANDOFF, repairHandoff } from '../repair-delivery.js';
 import { programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
 import { MERGE_HANDOFF_FILE } from '../session-role.js';
@@ -467,8 +468,54 @@ function logEntry(args, fields, ctx) {
     if (conflicted) { stderr.write(`mc: ${target.name} is not moved to ${fields.stage} — ${conflicted}\n`); return 1; }
   }
   const moves = fields.stage !== null && fields.stage !== goal.stage;
-  if (verdict.round) write(join(target.dir, `REVIEW-${verdict.round}.md`), verdict.text);
-  if (verdict.third) return thirdRejection({ target, goal, fields, round: verdict.round }, ctx);
+  const revision = release?.release?.revision;
+  const atRepairHead = (writeState) => release ? ctx.lock(workRoot(env), () => {
+    const live = readRecord(programmeDir, { read }).record;
+    if (read(join(target.dir, GOAL_FILE)) !== text || JSON.stringify(live) !== JSON.stringify(record)
+        || (revision && repairReleaseState(programmeDir, live)?.release?.revision !== revision)) {
+      return { problems: ['the goal or its repair release changed during the handoff'] };
+    }
+    return writeState();
+  }, { strict: true, name: 'repair-goal-stage' }) : writeState();
+  let handoff = null;
+  if (revision && (fields.stage === 'merge' || (goal.stage === 'merge' && fields.status === 'ready'))) {
+    const prior = repairHandoff(target, { read });
+    if (!verdict.heads && (prior?.revision !== revision || goal.stage !== 'merge')) {
+      stderr.write('mc: a repair merge handoff requires the review of this release\n');
+      return 1;
+    }
+    const prs = [];
+    for (const item of goal.prs) {
+      const repo = ctx.known().find(path => repoNameOf(path) === item.repo);
+      let sha;
+      try {
+        if (repo) {
+          const view = ctx.gh(repo, ['pr', 'view', String(item.pr), '--json', 'headRefOid']);
+          if (view.ok) sha = JSON.parse(view.stdout)?.headRefOid;
+        }
+      } catch { /* an unreadable head authorizes nothing */ }
+      const judged = verdict.heads?.find(head => head.repo === item.repo)?.sha
+        ?? (env.MC_ROLE === MEND_ROLE ? sha : prior?.prs?.find(pr => pr.repo === item.repo && pr.pr === item.pr)?.sha);
+      if (!/^[0-9a-f]{40}$/u.test(sha ?? '') || sha !== judged) {
+        stderr.write(`mc: ${prRef(item)} is not at the head authorized for this repair release\n`);
+        return 1;
+      }
+      prs.push({ ...item, sha });
+    }
+    handoff = { revision, prs };
+  }
+  const keepVerdict = () => {
+    if (verdict.round) write(join(target.dir, `REVIEW-${verdict.round}.md`), verdict.text);
+  };
+  if (verdict.third) {
+    const rejected = atRepairHead(() => {
+      keepVerdict();
+      return thirdRejection({ target, goal, fields, round: verdict.round }, ctx);
+    });
+    if (!rejected?.problems) return rejected;
+    stderr.write(`mc: ${target.name}: ${rejected.problems[0]}\n`);
+    return 1;
+  }
   let done = fields.done;
   const back = moves && backward(goal.stage, fields.stage);
   const base = fields.comment;
@@ -477,7 +524,17 @@ function logEntry(args, fields, ctx) {
   let now = goal;
   let freed = false;
   if (fields.stage !== null || fields.status !== null) {
-    const outcome = setGoalState({ dir: target.dir, stage: fields.stage ?? undefined, status: fields.status ?? (fields.stage === 'merge' ? 'ready' : undefined), entry, read, write });
+    const outcome = atRepairHead(() => {
+      keepVerdict();
+      if (handoff) write(join(target.dir, REPAIR_HANDOFF), JSON.stringify(handoff));
+      const changed = setGoalState({ dir: target.dir, stage: fields.stage ?? undefined, status: fields.status ?? (fields.stage === 'merge' ? 'ready' : undefined), entry, read, write });
+      // A rejection takes back what it judged NOT OK.
+      if (changed.goal && verdict.failed?.length) {
+        const dropped = dropItems(target.dir, verdict.failed, { read, write });
+        if (dropped.problem) stderr.write(`mc: ${dropped.problem} — the rejected items' records are not removed\n`);
+      }
+      return changed;
+    });
     if (outcome.problems) {
       for (const problem of outcome.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
       return 1;
@@ -489,16 +546,11 @@ function logEntry(args, fields, ctx) {
       ctx.remove(join(target.dir, HOLD_FILE));
       freed = true;
     }
-    // A review's rejection removes the records of the items it judged NOT OK: the repair gives new evidence for them (D2).
-    if (verdict.failed?.length) {
-      const dropped = dropItems(target.dir, verdict.failed, { read, write });
-      if (dropped.problem) stderr.write(`mc: ${dropped.problem} — the rejected items' records are not removed\n`);
-    }
   } else {
     appendEntry({ dir: target.dir, entry: { ...entry, stage: goal.stage, status: goal.status }, read, write });
   }
   if (now.stage === 'merge' && fields.stage === 'merge') {
-    const queued = queueGoal(target, now, ctx);
+    const queued = queueGoal(target, now, ctx, handoff);
     if (queued.error) { stderr.write(`mc: ${target.name} · merge — ${queued.error}; run mc goal stage merge again to retry\n`); return 1; }
     done = queued.text;
   }
@@ -533,7 +585,7 @@ function logEntry(args, fields, ctx) {
   // partial enqueue leaves no receipt, so the session can repair and retry.
   if (fields.stage === 'merge' && env.MC_HEADLESS === '1' && env.MC_GOAL === target.name
       && [REVIEW_ROLE, MEND_ROLE].includes(env.MC_ROLE) && env.MC_SCRATCH) {
-    write(join(env.MC_SCRATCH, MERGE_HANDOFF_FILE), JSON.stringify({ goal: target.name }));
+    write(join(env.MC_SCRATCH, MERGE_HANDOFF_FILE), JSON.stringify({ goal: target.name, ...(revision ? { revision } : {}) }));
   }
   if (now.stage === 'build' && goal.stage !== 'build') remakeBranches(target, goal, ctx);
   return 0;
@@ -750,7 +802,7 @@ function reviewMove(goal, target, to, ctx) {
   if (to === 'merge' && checked.failed.length) return { refusal: `${REVIEW_FILE} has NOT OK lines (${ids}) — a goal with a rejected item does not merge: mc goal stage build` };
   if (to === 'build' && !checked.failed.length) return { refusal: `${REVIEW_FILE} has no NOT OK line — every item is OK, so the goal is moved to merge: mc goal stage merge` };
   const prior = rejections(parseLog(read(join(target.dir, LOG_FILE)) ?? ''));
-  return { text, round: prior + 1, third: to === 'build' && prior >= MAX_REJECTIONS, failed: to === 'build' ? checked.failed.map((one) => one.id) : [] };
+  return { text, heads: found.heads, round: prior + 1, third: to === 'build' && prior >= MAX_REJECTIONS, failed: to === 'build' ? checked.failed.map((one) => one.id) : [] };
 }
 
 /** How many times a review may send a goal back to build: the next NOT OK is the desk's. */
@@ -778,7 +830,7 @@ function thirdRejection({ target, goal, fields, round }, ctx) {
  * Execute the session's merge decision for every PR it registered on the goal.
  * A PR GitHub says is closed or already merged is not queued, and is named.
  */
-function queueGoal(target, goal, ctx) {
+function queueGoal(target, goal, ctx, handoff) {
   const queued = [];
   const closed = [];
   const merged = [];
@@ -789,7 +841,9 @@ function queueGoal(target, goal, ctx) {
     if (state === 'CLOSED') { closed.push(prRef(item)); continue; }
     if (state === 'MERGED') { merged.push(prRef(item)); continue; }
     try {
-      ctx.queue({ repo: item.repo, repoPath, pr: item.pr, holder: { name: `goal:${target.name}` }, goal: { programme: target.programme, goal: target.goal, dir: target.dir }, now: ctx.now });
+      const bound = handoff?.prs.find(pr => pr.repo === item.repo && pr.pr === item.pr);
+      ctx.queue({ repo: item.repo, repoPath, pr: item.pr, holder: { name: `goal:${target.name}` }, goal: { programme: target.programme, goal: target.goal, dir: target.dir }, now: ctx.now,
+        ...(bound ? { repairRevision: handoff.revision, sha: bound.sha } : {}) });
       queued.push(prRef(item));
     } catch (error) {
       return { error: `${prRef(item)} could not be queued (${error?.message || error})` };
@@ -1796,13 +1850,22 @@ function carryPrs(args, ctx) {
     for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
     return 1;
   }
-  for (const { pr } of parsed) {
-    const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, stage: goal.stage, status: goal.status, done: `carries ${prRef(pr)}`, comment: null, next: null };
-    const added = addPr({ dir: target.dir, repo: pr.repo, pr: pr.pr, entry, read, write });
-    if (added.problems) { for (const problem of added.problems) stderr.write(`mc: ${target.name}: ${problem}\n`); return 1; }
-    stdout.write(`mc: ${target.name} carries ${prRef(pr)}${added.added ? '' : ' already'}\n`);
-  }
-  return 0;
+  const carry = () => {
+    for (const { pr } of parsed) {
+      const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, stage: goal.stage, status: goal.status, done: `carries ${prRef(pr)}`, comment: null, next: null };
+      const added = addPr({ dir: target.dir, repo: pr.repo, pr: pr.pr, entry, read, write });
+      if (added.problems) { for (const problem of added.problems) stderr.write(`mc: ${target.name}: ${problem}\n`); return 1; }
+      stdout.write(`mc: ${target.name} carries ${prRef(pr)}${added.added ? '' : ' already'}\n`);
+    }
+    return 0;
+  };
+  const programmeDir = join(ctx.home, target.programme);
+  if (!readRecord(programmeDir, { read }).record?.repair) return carry();
+  return ctx.lock(workRoot(env), () => {
+    const admission = repairGoalAdmission(programmeDir, target.goal, { read, revision: env.MC_REPAIR_REVISION ?? null });
+    if (admission?.problems) { stderr.write(`mc: ${admission.problems[0]}\n`); return 1; }
+    return carry();
+  }, { strict: true, name: 'repair-goal-pr' });
 }
 
 /**
