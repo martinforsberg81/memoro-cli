@@ -243,6 +243,14 @@ ends at an item boundary only when done, blocked, or cheaper to continue in a
 fresh session. A review judges the goal's criteria and PR head; it never
 builds. `roles.test.js` holds the selected parts and their shared instructions.
 
+Planning aims for a goal a build session can reasonably hand to independent
+review in one turn, not a new limit. When a build continues, its goal log records
+the concrete implemented or verified result and a specific remaining task in
+`Next`, including useful verification without a commit; if nothing useful was
+established it says so. This guidance changes neither eligibility nor runner
+stops. Repairable in-scope obstacles remain with build; a verified wrong brief
+or impossible premise follows the goal-defect technical desk route.
+
 **The plan session** (`plan-session.md`) is written around the programme's
 aim in `~/mc/programs/<programme>/README.md` (Martin, 2026-11-03). Its primary
 deliverable is the programme's planning: the README and design, the resolved
