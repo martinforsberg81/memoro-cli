@@ -36,8 +36,17 @@ const GRACE_MS = 1000;
  * `group` opts a bounded session into the same detached process-group cleanup
  * as runShell, so the provider and its tool children share the deadline.
  */
-export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal = null, graceMs = GRACE_MS, group = false } = {}) {
-  return collect(() => spawn(tool, args, { cwd, env: env || process.env, detached: group, stdio: ['ignore', 'pipe', 'pipe'] }), { maxBuffer, timeoutMs, signal, graceMs, group });
+export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal = null, graceMs = GRACE_MS, group = false, input = null } = {}) {
+  return collect(() => {
+    const child = spawn(tool, args, { cwd, env: env || process.env, detached: group, stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+    if (input !== null) {
+      // A child may exit without reading (e.g. a provider refusal); its process
+      // result, not the resulting EPIPE on stdin, reports that failure.
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
+    }
+    return child;
+  }, { maxBuffer, timeoutMs, signal, graceMs, group });
 }
 
 /**

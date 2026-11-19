@@ -10,8 +10,8 @@
  * made. Creation never replaces a file; all read/change/replace writers take the
  * runner's strict lock around their fresh read and atomic write.
  */
-import { linkSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { linkSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { writeFileAtomic } from './atomic-write.js';
 import { canonRoot } from './canon.js';
@@ -23,8 +23,43 @@ export const RECORD_FILE = 'PROGRAMME.json';
 export const RECORD_SCHEMA = 'mc-programme';
 export const RECORD_VERSION = 2;
 export const RECORD_STATES = Object.freeze(['draft', 'ready', 'done']);
-export const RECORD_AUTHORS = Object.freeze(['person', 'martin', 'manager']);
+export const RECORD_AUTHORS = Object.freeze(['person', 'martin', 'manager', 'repair']);
 const V1_KEYS = Object.freeze(['schema', 'version', 'horizon', 'area', 'end', 'state', 'created', 'created_by', 'phases']);
+const DIGEST = /^[a-f0-9]{64}$/u;
+
+/** A source reference is data, not a path to be opened without revalidating it. */
+export function validRepairSource(source) {
+  return source && typeof source === 'object' && !Array.isArray(source)
+    && Object.keys(source).every(key => ['kind', 'path', 'key', 'digest', 'links', 'possible', 'incident'].includes(key))
+    && ['proposal', 'feedback', 'error'].includes(source.kind)
+    && typeof source.path === 'string' && source.path.startsWith('/') && !/[\r\n`]/u.test(source.path)
+    && typeof source.key === 'string' && DIGEST.test(source.key)
+    && typeof source.digest === 'string' && DIGEST.test(source.digest)
+    && (source.incident === undefined || (typeof source.incident === 'string' && DIGEST.test(source.incident)))
+    && ['links', 'possible'].every(field => source[field] === undefined
+      || (Array.isArray(source[field]) && source[field].every(key => typeof key === 'string' && DIGEST.test(key))));
+}
+
+function validRepair(repair) {
+  return repair && typeof repair === 'object' && !Array.isArray(repair)
+    && Object.keys(repair).every(key => ['sources', 'stop_item'].includes(key))
+    && Array.isArray(repair.sources) && repair.sources.length > 0 && repair.sources.every(validRepairSource)
+    && (repair.stop_item === undefined || (typeof repair.stop_item === 'string' && /^[a-z0-9-]+$/u.test(repair.stop_item)));
+}
+
+/** The caller must already hold the strict programme lock. Do not release or change state here. */
+export function linkRepairSource(dir, record, source) {
+  if (record.repair.sources.some(item => item.key === source.key && item.path === source.path && item.digest === source.digest)) return;
+  const updated = { ...record, repair: { ...record.repair, sources: [...record.repair.sources, source] } };
+  const problems = validateRecord(updated);
+  if (problems.length) throw new Error(`not a programme record: ${problems.join('; ')}`);
+  writeFileAtomic(join(dir, RECORD_FILE), `${JSON.stringify(updated, null, 2)}\n`);
+}
+
+// Part 2 has no release authority. State alone must never open this record.
+export function repairDraftRefusal(record, programme) {
+  return record?.repair ? `repair programme ${programme} is draft — its release is not available` : null;
+}
 /**
  * The fields the removed signing wrote into version 2 records on disk: every one of them starts with `signed_` or
  * `cut_` (the signing instant, its author and the hashes of the signed and cut text), and `legacy`. A record that
@@ -58,6 +93,7 @@ export function normalized(record) {
     created: record.created,
     created_by: record.created_by,
     ...(record.phases ? { phases: record.phases } : {}),
+    ...(record.repair ? { repair: record.repair } : {}),
   };
   return out;
 }
@@ -114,7 +150,7 @@ export function validateRecord(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return ['the record must be a JSON object'];
   const problems = [];
   for (const key of Object.keys(value)) {
-    if (!V1_KEYS.includes(key) && (value.version === 1 || !REMOVED_KEY.test(key))) problems.push(`${key}: unknown key`);
+    if (!V1_KEYS.includes(key) && (value.version === 1 || !(key === 'repair' || REMOVED_KEY.test(key)))) problems.push(`${key}: unknown key`);
   }
   if (value.schema !== RECORD_SCHEMA) problems.push(`schema: must be "${RECORD_SCHEMA}"`);
   if (value.version !== 1 && value.version !== RECORD_VERSION) problems.push(`version: must be 1 or ${RECORD_VERSION}`);
@@ -128,12 +164,17 @@ export function validateRecord(value) {
   if (!states.includes(value.state)) problems.push(`state: one of ${RECORD_STATES.join(', ')}`);
   if (!isInstant(value.created)) problems.push('created: an ISO instant in UTC to the second');
   if (!RECORD_AUTHORS.includes(value.created_by)) problems.push(`created_by: one of ${RECORD_AUTHORS.join(', ')}`);
+  if (value.repair !== undefined || value.created_by === 'repair') {
+    if (!validRepair(value.repair) || value.created_by !== 'repair' || value.horizon !== null || value.area !== undefined) {
+      problems.push('repair: a repair-owned record without a horizon or area-text order, with at least one valid source reference');
+    }
+  }
   if (value.phases !== undefined) problems.push(...phasesProblems(value.phases));
   return problems;
 }
 
 /** A new record, the keys in their order; `stated` opts the programme's phases in (`mc programs create`). */
-export function newRecord({ horizon = null, area = null, end, createdBy, now = new Date(), stated = false }) {
+export function newRecord({ horizon = null, area = null, end, createdBy, now = new Date(), stated = false, repair = null }) {
   return {
     schema: RECORD_SCHEMA,
     version: RECORD_VERSION,
@@ -144,6 +185,7 @@ export function newRecord({ horizon = null, area = null, end, createdBy, now = n
     created: instant(now),
     created_by: createdBy,
     ...(stated ? { phases: { order: PHASES_ORDER } } : {}),
+    ...(repair ? { repair } : {}),
   };
 }
 
@@ -177,6 +219,7 @@ export function recordView(read) {
       created,
       created_by: createdBy,
       ...(read.record.phases ? { phases: read.record.phases } : {}),
+      ...(read.record.repair ? { repair: read.record.repair } : {}),
     };
   }
   return read.status === 'invalid' ? { problems: read.problems } : null;
@@ -207,6 +250,17 @@ export function writeRecord(dir, record) {
   return path;
 }
 
+/** Shared create-only writer for a programme page and its validated record. */
+export function createProgramme(dir, page, record) {
+  const problems = validateRecord(record);
+  if (problems.length) throw new Error(`not a programme record: ${problems.join('; ')}`);
+  mkdirSync(dir);
+  // Publish the admission record before any of the programme's working files.
+  writeRecord(dir, record);
+  for (const sub of ['goals', 'evidence']) mkdirSync(join(dir, sub));
+  writeFileSync(join(dir, 'README.md'), page, { flag: 'wx' });
+}
+
 /**
  * The one change to a record that is there: its `phases`. `change` is given the
  * current `phases` (undefined when the record has none) and returns the new
@@ -228,7 +282,10 @@ export function changePhases(dir, change, options = {}) {
  * Returns `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
  */
 export function setRecordState(dir, state, options = {}) {
-  return replaceRecord(dir, (record) => ({ ...record, state }), options, 'programme-state');
+  return replaceRecord(dir, (record) => {
+    const refusal = state !== 'draft' && repairDraftRefusal(record, basename(dir));
+    return refusal ? { problems: [refusal] } : { ...record, state };
+  }, options, 'programme-state');
 }
 
 /** Fresh read, validation and atomic replacement share the runner's strict lock. Create stays create-only. */

@@ -54,7 +54,8 @@ proposal. The programme's ordinary desk path is unchanged.
 A programme may have a record, `PROGRAMME.json` directly in its directory
 (`src/mc/programme-record.js`): a bounded piece of work serving a horizon, or storage for small area work
 without one. A programme without the file is also bounded. Version 2 has the
-following keys; `area`, `phases` and `legacy` are optional, and no others are accepted:
+following keys; `area`, `phases` and `repair` are optional. Removed signing fields
+and `legacy` remain readable on old records but are not written:
 
 | key | value |
 |---|---|
@@ -65,8 +66,9 @@ following keys; `area`, `phases` and `legacy` are optional, and no others are ac
 | `end` | one non-empty sentence saying when the programme is done |
 | `state` | `draft`, `ready` or `done` |
 | `created` | an ISO instant in UTC to the second |
-| `created_by` | `person` or `martin` |
+| `created_by` | `person`, `martin`, `repair` or the historical `manager` |
 | `phases` | optional: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}` |
+| `repair` | required for `created_by: "repair"`; absent for ordinary orders. Provenance for a functionality repair, with null horizon and no area-text order |
 
 `draft` means not finished; planning and build take nothing from it (`mc goal new`
 is refused, the planning turn does not run, no session starts on its goals).
@@ -77,10 +79,11 @@ Reading an older record normalizes it in memory: `open` reads as `ready`, `dropp
 as `done`, and removed fields are ignored. It does not change disk bytes or state.
 Only an actual write upgrades a record to version 2.
 
-A programme, a repair programme included, is created only by a person or by
-Martin's interactive session (`mc martin`); every headless role, the manager
-included, is refused (exit 2). Martin sets the state with
-`mc programs state <programme> draft|ready`.
+The ordinary desk writer creates a programme only for a person or Martin's
+interactive session (`mc martin`); every headless role is refused (exit 2).
+Martin sets an ordinary order's state with `mc programs state <programme>
+draft|ready`. The unpublished [repair drafting entry](#internal-repair-drafts)
+uses the same validated writer but confers no state authority.
 
 A record cannot name both a horizon and an area. A repair programme (`--area`)
 orders a set of small adjustments to one area as one document, and the planner
@@ -221,6 +224,54 @@ short template in `repair-page.md`. The older recordless page is
 `programme-readme.md`. `create` fills name, end, horizon/area and purpose.
 the no-record page only when no README exists. `mc programs show` prints the
 `area` line and `--json` the key.
+
+### Internal repair drafts
+
+The draft is a full programme document with affected repositories, numbered
+parts, observable acceptance and original source pointers in Where things are.
+The validated record carries `repair.sources`: absolute source references
+(`kind`, `path`), logical keys and SHA-256 evidence digests. Fingerprint
+identity includes the repository, not the date or intake path; the evidence
+digest covers the selected fingerprint row. Proposal archive moves preserve
+proposal identity. Explicit source links and corroborating incident or
+fingerprint evidence join one order; a shared incident without that
+corroboration is not enough. An ordinary desk order can be found by its
+proposal archive outcome or its original README pointer if the move failed.
+Part 2 does not change the desk's ownership or archive operation.
+
+Feedback and collected errors reuse a corroborated proposal if one already
+exists; otherwise they get one in the appropriate area before drafting.
+Feedback uses the original task ID or a labelled
+incident timestamp and build. Only minimum defect details and provenance are
+copied. Waiting sources stay in their area while a draft exists. Resolved
+sources archive their proposals with `Utfall: resolved — <where>`. If the
+original archive name already holds a disposition for other evidence, the
+resolution gets a separate archive file and the waiting path points to the
+latest resolution once the waiting file has moved. An explicit archive path
+still reads its own version. An unestablished or ambiguous report keeps its
+proposal and a reason in `runner/repair-draft/`. Decline and resolution apply
+across corroborated routes to the same evidence version, not to changed
+evidence for the same fingerprint. A matching archive disposition is reported
+before using defect ownership to resume or point to an order for other
+evidence. The same recorded source key and evidence digest on waiting and
+archived proposals corroborate the version for its archived disposition,
+even when a collector file has moved or been replaced and no longer lists
+the original fingerprint. This does not establish general order ownership.
+A collector link alone can corroborate defect identity but not the archived
+evidence version: today's row is not proof of the archived one. An
+identity-only legacy link without a provable version is ambiguous and repair
+makes no order. A recorded digest for a different row does not close the
+selected row or let it consume a waiting proposal pinned to the other row.
+A legacy feedback link can still corroborate a report with the
+same original incident. Repair checks ownership and rechecks the selected
+evidence in the strict programme lock; it does not hold the lock while the
+role reads. Changed evidence or concurrent order changes cannot be committed
+from a stale reading.
+
+Ordinary `state ready`, `mc plan` and `mc goal new` refuse repair-owned
+drafts (exit 1). A state spelling is not a release. Part 2 has no release
+operation; older runners see the optional repair field as invalid and hold
+its goals. Ordinary desk-created area repairs keep their existing route.
 
 ## What the session is told
 

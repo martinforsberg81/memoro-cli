@@ -238,6 +238,11 @@ The in-process claim is taken in the same tick as the choice, before any
 await, so two lanes cannot choose the same goal before its current file exists.
 The phase rule and the stage transitions are in [mc-goals.md](mc-goals.md).
 
+Repair-owned drafts are held at selection and rechecked during goal admission,
+including goals that already read `build · ready`. Ordinary state values do
+not clear this hold. The programme planning turn also refuses repair-owned
+records. The runner does not launch the internal repair drafting entry.
+
 ## Lanes
 
 `mc run lanes <n>` sets one total across repositories and session kinds,

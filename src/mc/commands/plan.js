@@ -41,7 +41,8 @@ import { runDocsMerge } from '../docs-merge.js';
 import { addWorktree, createWorkArea, dropEmptyArea, inspectWorkArea, releaseWorkArea } from '../work-area.js';
 import { attachRepoDeps } from '../shared-deps.js';
 import { openInWorkArea } from '../work-open.js';
-import { layoutVersion, planAreaName, planAreaRoot, workRoot } from '../paths.js';
+import { layoutVersion, planAreaName, planAreaRoot, programsHome, workRoot } from '../paths.js';
+import { readRecord, repairDraftRefusal } from '../programme-record.js';
 import { readCanonRole, reservedRoleHint, reservedRoleName, roleSourceOf } from '../roles.js';
 import { ask, interactive, select } from '../prompt.js';
 import { run as runGit } from '../git.js';
@@ -132,6 +133,10 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: ${reservedRoleHint(programme)}\n`);
     return 1;
   }
+
+  const found = readRecord(join(programsHome(env), programme));
+  const repairRefusal = found.status === 'valid' && repairDraftRefusal(found.record, programme);
+  if (repairRefusal) { stderr.write(`mc: ${repairRefusal}\n`); return 1; }
 
   // A programme that is over: off main in both repositories, and its planning
   // session released. Never triggered — only typed (archive-programme.js).

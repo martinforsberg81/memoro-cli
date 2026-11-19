@@ -82,7 +82,7 @@ import { loggedTick } from './nightly-loop.js';
 import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
-import { readRecord } from './programme-record.js';
+import { readRecord, repairDraftRefusal } from './programme-record.js';
 import { RUNNER_DISK, RUNNER_MEMORY, planAreaName, programsHome, restrictedProgrammeDir, runnerDir, runnerScratchDir, workRoot } from './paths.js';
 import { archiveGoal, finalizeDroppedGoal, goalArchiveDue } from './goal-archive.js';
 import {
@@ -1637,6 +1637,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       })];
   }
 
+
   /** `programme`'s order of phases, read now from its record; an invalid one is said once while it lasts (`invalidSaid`). */
   function orderOf(programme) {
     const order = programmeOrder(programme, { home: programsHome(deps.env), read: deps.read });
@@ -2731,10 +2732,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function heldBy(goal) {
     const name = goalName(goal);
     const programme = readRecord(join(programsHome(deps.env), goal.programme), { read: deps.read });
-    if (programme.status === 'valid' && programme.record.state === 'draft') {
+    const repair = programme.status === 'valid' && repairDraftRefusal(programme.record, goal.programme);
+    if (repair || (programme.status === 'valid' && programme.record.state === 'draft')) {
       const key = `draft:${goal.programme}`;
       if (holdsSaid.get(name) !== key) {
-        say(`${name}: ${goal.programme} is draft — no session is started`);
+        say(`${name}: ${repair || `${goal.programme} is draft`} — no session is started`);
         holdsSaid.set(name, key);
       }
       return true;

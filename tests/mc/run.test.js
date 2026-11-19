@@ -4172,6 +4172,21 @@ test('an API credit refusal is recorded without exposing the key', async () => {
   assert.doesNotMatch(JSON.stringify(f.files), /sk-ant-test-key/u);
 });
 
+test('a repair-owned order admits neither goal delivery nor planning even with an ordinary ready state', async () => {
+  const f = goalFixture({ build: {}, plan: { stage: 'draft' } });
+  const record = {
+    schema: 'mc-programme', version: 2, horizon: null, end: 'An existing command works again.',
+    state: 'ready', created: '2026-08-28T10:00:00Z', created_by: 'repair',
+    repair: { sources: [{ kind: 'proposal', path: '/w/proposal.md', key: 'a'.repeat(64), digest: 'b'.repeat(64) }] },
+  };
+  f.files['/w/programs/prog/PROGRAMME.json'] = JSON.stringify(record);
+  f.files['/w/programs/prog/README.md'] = '## Parts\n\n### Part 1 — Restore the command\n';
+  const result = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.equal(result.ran, 0);
+  assert.deepEqual(f.calls.sessions, []);
+  assert.equal(where(f, 'build'), 'build · ready');
+});
+
 test('a lane with no runnable step starts the oldest open goal', async () => {
   const f = goalFixture({
     newer: { log: goalLog('2026-08-20T10:00Z', '2026-08-28T10:00Z') },

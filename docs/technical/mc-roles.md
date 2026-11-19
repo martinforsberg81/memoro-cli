@@ -79,6 +79,15 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 | `decision` | opus | `decision` | runner lane or a person’s `mc decision [<id>]`, unattended on its own `decision` list; full goal desk authority within headless hooks ([mc-martin.md](mc-martin.md)) |
 | `desk-prepare` | sonnet | `desk-prepare` | chores or the person’s `mc martin prepare`, one fresh headless evidence-only turn per new item on the `medium` list; no goal identity or mutation authority ([mc-martin.md](mc-martin.md)) |
 | `learning` | opus | `learning` | `mc learning` or chores, one headless session on the `decision` list in `~/mc/martin/lessons/`. It updates factual area information and records dispositions, never creates a programme or goal ([mc-martin.md](mc-martin.md) § *Lessons and the learning pass*) |
+| `repair` | opus | `repair` | Internal Part 2 entry only, with `MC_ROLE=repair` and `MC_HEADLESS=1`. It reads one defect to propose a bounded functionality repair or record why none is established. |
+
+The repair role has no execution tools and inherits neither another session's
+identity nor runtime secrets. The caller feeds selected evidence on stdin and
+services only bounded reads/searches of versioned standards, source, tests and
+scripts at pinned `origin/main` revisions. Each source has up to two rounds
+of four reads and five minutes for the model. Raw output is not written to a
+session transcript by mc. Only the caller validates and writes a disposition
+or a draft; the role cannot plan, review, release or act on production.
 
 `programme-review` reads the document, horizon playback/basis, cited code and
 standards, unread places and pictures at origin/main. Its eight questions and
