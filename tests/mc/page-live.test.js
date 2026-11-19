@@ -799,6 +799,38 @@ describe('a page taller than the screen', () => {
     assert.equal(await answer, 'pending');
   });
 
+  it('refreshes archive status and reason above the screen at fixed height', async () => {
+    const data = (archive, reason) => {
+      const groups = [
+        { programme: 'aaa-status', goals: [], phases: [], archive },
+        { programme: 'bbb-reason', goals: [], phases: [], archive: { status: 'attention', reason } },
+        ...Array.from({ length: 55 }, (_, i) => ({ programme: `tail-${i}`, goals: [], phases: [] })),
+      ];
+      return { programmes: { programmes: groups }, horizons: { open: [], none: groups.map((g) => g.programme), unreadable: [] } };
+    };
+    const frame = (d) => ({ data: d, key: pageKey(d), lines: renderPageLines(d, { columns: 100, now: 0 }) });
+    const first = frame(data({ status: 'pending' }, 'old reason'));
+    const updates = [frame(data(null, 'old reason')), frame(data(null, 'new reason'))];
+    let n = 0;
+    const it_ = tall({ columns: 100, first: first.lines, key: first.key, page: async () => {
+      const next = updates[n++];
+      assert.equal(next.lines.length, first.lines.length);
+      return next;
+    } });
+    const answer = it_.reader.ask(TAIL, '>');
+    await it_.flush(); await settle();
+    it_.input.type('pending');
+    for (const [before, after] of [['archive pending', 'aaa-status'], ['old reason', 'new reason']]) {
+      assert.ok(it_.screen().every((row) => !row.includes(before)));
+      await it_.advance(31_000);
+      assert.ok(it_.everything().every((row) => !row.includes(before)));
+      assert.equal(it_.everything().filter((row) => row.includes(after)).length, 1);
+      assert.equal(it_.screen().at(-1), '> pending');
+    }
+    it_.input.type('\r');
+    assert.equal(await answer, 'pending');
+  });
+
   it('live redraw: changes horizon label, reference state and warnings independently above the screen at fixed height', async () => {
     // Ordinary programme cards below the rows under test push those rows into scrollback.
     const active = (programme, number) => {

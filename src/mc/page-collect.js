@@ -1582,7 +1582,7 @@ export function archiveStatus({ programme, home, root, items, env }) {
 }
 
 /** A completed local programme is not revived by its sessions, PRs or retained tree. */
-function archiveCompleted({ programme, home, root, repositoryMembership = false, shelved = false }) {
+function archiveCompleted({ programme, home, repositoryMembership = false }) {
   const list = (dir) => { try { return readdirSync(dir); } catch { return []; } };
   const read = (path) => { try { return readFileSync(path, 'utf8'); } catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw error; } };
   if (liveGoals({ home, programme, list }).length) return false;
@@ -1591,9 +1591,7 @@ function archiveCompleted({ programme, home, root, repositoryMembership = false,
   if (record.status === 'valid' && record.record.state === 'done') return true;
   // A current directory is a successor, including one without a record.
   if (existsSync(dir)) return false;
-  if (!repositoryMembership && shelved) return true;
-  const state = readArchiveState({ root, programme, read });
-  return !repositoryMembership && state.status === 'valid' && !!state.state.destination && existsSync(state.state.destination);
+  return !repositoryMembership;
 }
 
 // A recordless programme directory is still current membership.
@@ -1622,11 +1620,9 @@ export function readProgrammes({
   // Which repository's tree each programme is a directory in: the one fact a
   // programme with no goal has about where it lives.
   const homes = {};
-  const shelves = new Set();
   for (const repo of present) {
     for (const name of programmes(repo)) {
-      if (shelvedMembership(name, repo, { env, git: runGit })) shelves.add(name);
-      else (homes[name] ||= []).push(repo.name);
+      if (!shelvedMembership(name, repo, { env, git: runGit })) (homes[name] ||= []).push(repo.name);
     }
   }
   const order = orderReader(env);
@@ -1639,7 +1635,7 @@ export function readProgrammes({
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
     order,
   });
-  section.programmes = section.programmes.filter((group) => !archiveCompleted({ programme: group.programme, home: programsHome(env), root, repositoryMembership: !!homes[group.programme]?.length, shelved: shelves.has(group.programme) }));
+  section.programmes = section.programmes.filter((group) => !archiveCompleted({ programme: group.programme, home: programsHome(env), repositoryMembership: !!homes[group.programme]?.length }));
   section.dormant = section.programmes.filter((group) => group.dormant).length;
   section.active = section.programmes.length - section.dormant;
   return { section, homes };
@@ -1812,10 +1808,8 @@ export async function collectPage({
   const records = recordReader(env);
   const order = records.order;
   const repositoryNames = new Set();
-  const shelvedNames = new Set();
   for (const repo of present) for (const name of listProgrammes(repo)) {
-    if (shelvedMembership(name, repo, { env, git: runGit })) shelvedNames.add(name);
-    else repositoryNames.add(name);
+    if (!shelvedMembership(name, repo, { env, git: runGit })) repositoryNames.add(name);
   }
   const programmes = programmesSection({
     planning: sessions.planning,
@@ -1842,8 +1836,7 @@ export async function collectPage({
     group.archive = archiveStatus({ programme: group.programme, home: programsHome(env), root, items: archiveItems, env });
   }
   programmes.programmes = programmes.programmes.filter((group) => !archiveCompleted({
-    programme: group.programme, home: programsHome(env), root,
-    repositoryMembership: repositoryNames.has(group.programme), shelved: shelvedNames.has(group.programme),
+    programme: group.programme, home: programsHome(env), repositoryMembership: repositoryNames.has(group.programme),
   }));
   // A PR attached before completion filtering now belongs to the existing
   // outside-goal rows, not to an invisible programme frame.

@@ -2309,6 +2309,64 @@ describe('collectPage', () => {
     assert.deepEqual(page.horizons.none, ['mc', 'recordless']);
   });
 
+  it('reports a session without programme membership as a stray rather than a card', async (t) => {
+    const fx = horizonsFixture();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    writeFileSync(join(fx.root, 'runner', 'foreground', `${process.pid}.json`), JSON.stringify({
+      verb: 'plan', area: 'programs/vanished', tool: 'codex', model: 'sol', pid: process.pid, started: '2026-08-29T11:00:00Z',
+    }));
+    const page = await fx.collect();
+    assert.ok(!page.programmes.programmes.some((g) => g.programme === 'vanished'));
+    assert.ok(!page.horizons.none.includes('vanished'));
+    assert.equal(maintenanceItems(page).filter((item) => item.text.includes('session with no programme') && item.text.includes('plan')).length, 1);
+  });
+
+  it('shows an archive turn and its competing attention sources until completion', async (t) => {
+    const fx = horizonsFixture();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    fx.horizon('first', 'open', 1);
+    fx.record('finished', 'first');
+    const dir = join(programsHome(fx.env), 'finished');
+    const record = join(dir, 'PROGRAMME.json');
+    writeFileSync(record, JSON.stringify({ ...JSON.parse(readFileSync(record, 'utf8')), state: 'ready' }));
+    const archived = join(dir, 'goals', '.archive', 'work');
+    mkdirSync(archived, { recursive: true });
+    writeFileSync(join(archived, 'GOAL.json'), goalJson({ stage: 'done' }));
+    const stateFile = join(fx.root, 'runner', 'archive-turn', 'finished.json');
+    mkdirSync(dirname(stateFile), { recursive: true });
+    const state = { schema: 'mc-archive-turn', version: 1, programme: 'finished', failures: [], items: [], reading: null, destination: null };
+    const save = () => writeFileSync(stateFile, JSON.stringify(state));
+    const check = async (expected, reason) => {
+      const page = await fx.collect();
+      assert.deepEqual(page.horizons.open[0].programmes, ['finished']);
+      const group = page.programmes.programmes.find((g) => g.programme === 'finished');
+      assert.deepEqual(group.archive, expected);
+      const lines = renderPageLines(page, { columns: 160, now: NOW, overview: true });
+      const frame = programmeEntriesOf(lines).get('finished');
+      assert.ok(frame.heading.includes(expected.status === 'pending' ? 'archive pending' : 'archive needs attention'));
+      if (reason) assert.ok(frame.body.some((line) => line.includes(reason)), lines.join('\n'));
+    };
+    await check({ status: 'pending' });
+    state.failures.push({ at: '2026-11-01T00:00:00Z', reason: 'first failure' }); save();
+    await check({ status: 'attention', reason: 'first failure' }, 'first failure');
+    const source = '2026-11-02T00:00:00Z';
+    const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('archive', 'archive:finished', source), kind: 'archive', reference: 'archive:finished', source_at: source, opened_at: source, state: 'for-martin', sort: 'text', reversible: null, due_at: null, outcome: null };
+    writeDeskItem(item, { env: fx.env });
+    writeFileSync(join(itemDirectory(item, fx.env), 'prepared.md'), 'repair write-back\n');
+    await check({ status: 'attention', reason: 'repair write-back' }, 'repair write-back');
+    item.state = 'closed'; writeDeskItem(item, { env: fx.env });
+    state.items.push({ id: item.id, opened_at: source }); save();
+    await check({ status: 'pending' });
+    writeFileSync(stateFile, '{ invalid');
+    const unreadable = await fx.collect();
+    assert.match(unreadable.programmes.programmes.find((g) => g.programme === 'finished').archive.reason, /is unreadable/u);
+    save();
+    writeFileSync(record, JSON.stringify({ ...JSON.parse(readFileSync(record, 'utf8')), state: 'done' }));
+    const completed = await fx.collect();
+    assert.deepEqual(completed.horizons.open[0].programmes, []);
+    assert.ok(!completed.programmes.programmes.some((g) => g.programme === 'finished'));
+  });
+
   it('collects a draft with no goals into JSON and draws draft at 160 and 80 columns', async (t) => {
     const fx = horizonsFixture();
     t.after(() => rmSync(fx.root, { recursive: true, force: true }));
@@ -2394,13 +2452,12 @@ describe('collectPage', () => {
     const groups = data.programmes.programmes;
     const by = Object.fromEntries(groups.map((group) => [group.programme, group]));
 
-    // Goal numbers are the goals'; programmes follow, in name order, one each, plan-PR-only programme included.
+    // Goal numbers are the goals'; programmes follow in name order. A PR alone is not membership.
     assert.deepEqual(groups.map((group) => group.programme), [...groups.map((group) => group.programme)].sort());
     assert.deepEqual(groups.map((group) => group.number), groups.map((_, i) => data.programmes.count + 1 + i));
     assert.deepEqual(data.programmes.programmes.flatMap((group) => group.goals).map((goal) => goal.number), [1], 'the goals keep 1..N');
-    assert.ok(by['plan-only'], 'a programme only a plan pull request names is a group');
-    assert.equal(by['plan-only'].prs.length, 1);
-    assert.equal(by['plan-only'].number > data.programmes.count, true);
+    assert.equal(by['plan-only'], undefined);
+    assert.equal(maintenanceItems(data).filter((item) => item.key === 'pr:memoro#9000').length, 1);
 
     assert.deepEqual(Object.fromEntries(groups.map((group) => [group.programme, [group.horizon, group.horizon_state]])), {
       mc: [null, null],
@@ -2412,7 +2469,6 @@ describe('collectPage', () => {
       'p-reached': ['done-one', 'reached'],
       'p-second': ['second', 'open'],
       'p-unheld': ['ghost', 'not held'],
-      'plan-only': [null, null],
     });
     assert.equal(by['p-invalid'].record_invalid, true);
 
@@ -2420,7 +2476,7 @@ describe('collectPage', () => {
     assert.deepEqual(data.horizons.open.map((item) => [item.slug, item.position, item.programmes]), [
       ['first', 1, ['p-first']], ['second', 2, ['p-second']],
     ]);
-    assert.deepEqual(data.horizons.none, ['mc', 'p-broken', 'p-dropped', 'p-invalid', 'p-none', 'p-reached', 'p-unheld', 'plan-only']);
+    assert.deepEqual(data.horizons.none, ['mc', 'p-broken', 'p-dropped', 'p-invalid', 'p-none', 'p-reached', 'p-unheld']);
     assert.deepEqual(data.horizons.unreadable, ['broken']);
     assert.equal(data.horizons.error, null);
   });
