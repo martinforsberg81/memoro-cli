@@ -575,7 +575,7 @@ for (const [action, confirmation, lateLanding] of [
       syncDeskItems({ env: f.baseEnv });
       syncDeskItems({ env: f.baseEnv });
       const open = readDeskItem(id, { env: f.baseEnv });
-      assert.equal(open.state, 'for-martin');
+      assert.equal(open?.state, 'for-martin');
       assert.deepEqual(open.landed, ['landed']);
       const opening = (await desk(['brief'])).out;
       const section = opening.indexOf('## Reparationsbeställningar som väntar på dig');
