@@ -2342,6 +2342,8 @@ describe('collectPage', () => {
       const group = page.programmes.programmes.find((g) => g.programme === 'finished');
       assert.deepEqual(group.archive, expected);
       const lines = renderPageLines(page, { columns: 160, now: NOW, overview: true });
+      assert.equal(horizonFigures(page)[0].programmes, 1);
+      assert.ok(lines.some((line) => line.includes('1 programme')), lines.join('\n'));
       const frame = programmeEntriesOf(lines).get('finished');
       assert.ok(frame.heading.includes(expected.status === 'pending' ? 'archive pending' : 'archive needs attention'));
       if (reason) assert.ok(frame.body.some((line) => line.includes(reason)), lines.join('\n'));
@@ -2354,6 +2356,10 @@ describe('collectPage', () => {
     await check({ status: 'pending' });
     state.failures.push({ at: '2026-11-01T00:00:00Z', reason: 'first failure' }); save();
     await check({ status: 'attention', reason: 'first failure' }, 'first failure');
+    // The runner is retrying while the earlier failure and a new desk item coexist.
+    const current = join(fx.root, 'runner', 'current-memoro-cli.json');
+    writeFileSync(current, JSON.stringify({ name: 'archive:finished', kind: 'plan', repo: 'memoro-cli', tool: 'codex', model: 'sol', started: '2026-08-29T11:40:00Z', pid: process.pid }));
+    assert.ok((await fx.collect()).runner.sessions.some((session) => session.name === 'archive:finished'));
     const source = '2026-11-02T00:00:00Z';
     const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('archive', 'archive:finished', source), kind: 'archive', reference: 'archive:finished', source_at: source, opened_at: source, state: 'for-martin', sort: 'text', reversible: null, due_at: null, outcome: null };
     writeDeskItem(item, { env: fx.env });
@@ -2379,6 +2385,7 @@ describe('collectPage', () => {
     item.state = 'closed'; writeDeskItem(item, { env: fx.env });
     state.items.push({ id: item.id, opened_at: source }); save();
     await check({ status: 'pending' });
+    rmSync(current);
     writeFileSync(stateFile, '{ invalid');
     const unreadable = await fx.collect();
     assert.match(unreadable.programmes.programmes.find((g) => g.programme === 'finished').archive.reason, /is unreadable/u);
@@ -2390,6 +2397,8 @@ describe('collectPage', () => {
     const completed = await fx.collect();
     assert.deepEqual(completed.horizons.open[0].programmes, []);
     assert.ok(!completed.programmes.programmes.some((g) => g.programme === 'finished'));
+    assert.equal(horizonFigures(completed)[0].programmes, 0);
+    assert.ok(renderPageLines(completed, { columns: 160, now: NOW, overview: true }).some((line) => line.includes('No programmes')));
   });
 
   it('keeps the final-record repair on the desk after the programme moves', async (t) => {
@@ -2401,6 +2410,9 @@ describe('collectPage', () => {
     const destination = join(fx.root, 'archive', 'programs', 'finished');
     mkdirSync(dirname(destination), { recursive: true });
     renameSync(dir, destination);
+    writeFileSync(join(fx.root, 'runner', 'foreground', `${process.pid}.json`), JSON.stringify({
+      verb: 'plan', area: 'programs/finished', tool: 'codex', model: 'sol', pid: process.pid, started: '2026-08-29T11:00:00Z',
+    }));
     const stateFile = join(fx.root, 'runner', 'archive-turn', 'finished.json');
     mkdirSync(dirname(stateFile), { recursive: true });
     writeFileSync(stateFile, JSON.stringify({ schema: 'mc-archive-turn', version: 1, programme: 'finished', failures: [], items: [], reading: null, destination }));
@@ -2412,6 +2424,9 @@ describe('collectPage', () => {
     assert.ok(!page.programmes.programmes.some((g) => g.programme === 'finished'));
     assert.deepEqual(page.desk.acts.filter((entry) => entry.id === item.id).map((entry) => entry.reference), ['archive:finished']);
     assert.deepEqual(maintenanceItems(page).filter((entry) => entry.key === 'pr:memoro#9000').map((entry) => entry.key), ['pr:memoro#9000']);
+    assert.equal(maintenanceItems(page).filter((entry) => entry.text.includes('session with no programme') && entry.text.includes('plan')).length, 1);
+    assert.equal(horizonFigures(page)[0].programmes, 0);
+    assert.ok(renderPageLines(page, { columns: 160, now: NOW, overview: true }).some((line) => line.includes('No programmes')));
   });
 
   it('collects a draft with no goals into JSON and draws draft at 160 and 80 columns', async (t) => {
