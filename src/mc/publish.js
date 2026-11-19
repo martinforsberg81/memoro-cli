@@ -15,7 +15,6 @@
  *
  * Pure over facts about the tree; the verb gathers them.
  */
-
 /** The branches nobody publishes from: a pull request is opened *to* them. */
 export const PROTECTED = new Set(['main', 'master', 'HEAD']);
 
@@ -136,6 +135,173 @@ function sectionOf(text, heading) {
   return lines.slice(start + 1, end).join('\n').trim();
 }
 
+/** Keep every occurrence, including its heading, so adding a second Aim or Decisions is not a factual edit. */
+function areaHeldSections(text, title) {
+  const sections = [];
+  let current = null;
+  for (const line of text.split('\n')) {
+    const heading = /^ {0,3}(#{1,2})[ \t]+(.*)$/u.exec(line);
+    if (heading) {
+      current = null;
+      if (heading[1] === '##' && heading[2].replace(/[ \t]+#+[ \t]*$/u, '').trim().toLowerCase() === title) {
+        current = [line];
+        sections.push(current);
+      }
+    } else if (current) current.push(line);
+  }
+  return JSON.stringify(sections.map(lines => lines.join('\n').trimEnd()));
+}
+
+// Tabs advance to the next four-column stop, including after a list marker.
+function markdownIndent(whitespace, column = 0) {
+  for (const char of whitespace) column += char === '\t' ? 4 - column % 4 : 1;
+  return column;
+}
+
+// CommonMark 0.31.2 §4.6, in start-condition order. Types 1–5 end on a delimiter.
+const HTML_DELIMITED = [
+  { start: /^<(?:pre|script|style|textarea)(?=[ \t>]|$)/i, end: /<\/(?:pre|script|style|textarea)>/i },
+  { start: /^<!--/u, end: /-->/u },
+  { start: /^<\?/u, end: /\?>/u },
+  { start: /^<![A-Za-z]/u, end: />/u },
+  { start: /^<!\[CDATA\[/u, end: /\]\]>/u },
+];
+const HTML_BLOCK_TAGS = new Set(`address article aside base basefont blockquote body caption center col colgroup
+dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header
+hr html iframe legend li link main menu menuitem nav noframes ol optgroup option p param search section summary
+table tbody td tfoot th thead title tr track ul`.split(/\s+/u));
+const HTML_UNTIL_BLANK = { end: null };
+// Type 7 requires a whole open or closing tag on the line (§6.6 tag grammar).
+const HTML_ATTRIBUTE = /[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:[^ \t"'=<>\x60]+|'[^']*'|"[^"]*"))?/u;
+const HTML_COMPLETE_TAG = new RegExp(`^<(?:/[A-Za-z][A-Za-z0-9-]*[ \\t]*|[A-Za-z][A-Za-z0-9-]*(?:${HTML_ATTRIBUTE.source})*[ \\t]*/?)>[ \\t]*$`, 'u');
+
+function learningHtmlBlock(content, paragraph) {
+  if (!content.startsWith('<')) return null;
+  const delimited = HTML_DELIMITED.find(({ start }) => start.test(content));
+  if (delimited) return delimited;
+  const tag = /^<\/?([A-Za-z][A-Za-z0-9-]*)(?=[ \t>]|\/>|$)/u.exec(content)?.[1];
+  if (!tag) return null;
+  const name = tag.toLowerCase();
+  if (HTML_BLOCK_TAGS.has(name)) return HTML_UNTIL_BLANK;
+  if (paragraph || (!content.startsWith('</') && /^(?:pre|script|style|textarea)$/u.test(name))) return null;
+  return HTML_COMPLETE_TAG.test(content) ? HTML_UNTIL_BLANK : null;
+}
+
+/**
+ * Pin structural blocks in order, including their surrounding nonblank lines.
+ * In addition to possible headings, fences, raw HTML and reference definitions,
+ * keep top-level indented code. Indentation alone is not code within a paragraph
+ * or at a list item's content column. Only a nonempty item continues across a
+ * blank line. Also pin each recognized HTML leaf's source, which can span
+ * several of these conservative chunks.
+ */
+function learningStructure(text) {
+  const structural = /\x60{3,}|~{3,}|<[A-Za-z/!?]|\]:|^[ \t>]*(?:#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$)/mu;
+  const boundary = /^(?:#{1,6}(?:[ \t]|$)|(?:\x60{3,}|~{3,}|>)|(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$)/u;
+  const listMarker = /^([-+*]|\d{1,9}[.)])([ \t]+|$)(.*)$/u;
+  const items = [];
+  const pinned = [], htmlSpans = [];
+  // The leaf belongs to the deepest active item (or the document at depth zero).
+  let html = null, fence = null;
+  function closeHtml(end) {
+    if (!html) return;
+    htmlSpans.push(text.slice(html.start, end));
+    html = null;
+  }
+  // Keep the conservative chunks unchanged, but count their original separators
+  // in source offsets. The first newline still belongs to the preceding line.
+  const chunks = text.split(/(\r?\n(?:[ \t]*\r?\n)+)/u);
+  let offset = 0;
+  for (let i = 0; i < chunks.length; i += 2) {
+    const block = chunks[i], separator = chunks[i + 1] ?? '';
+    const newline = /^\r?\n/u.exec(separator)?.[0] ?? '';
+    let paragraph = false, code = false;
+    for (const [rawLine, line] of (block + newline).matchAll(/([^\n]*?)(?:\r?\n|$)/gu)) {
+      if (!rawLine) continue;
+      const lineStart = offset;
+      offset += rawLine.length;
+      const indent = /^[ \t]*/u.exec(line)[0];
+      let column = markdownIndent(indent);
+      let content = line.slice(indent.length);
+      if (!content && html?.end === null) closeHtml(lineStart);
+      let depth = items.length;
+      while (depth && column < items[depth - 1].column) depth--;
+
+      // Classify inline item contents the same way as a later indented line.
+      while (content) {
+        const parent = items[depth - 1];
+        const relative = column - (parent?.column ?? 0);
+        // A matched HTML leaf owns the whole line, even if it resembles a new
+        // block or includes the end delimiter. Unmatched leaves close below.
+        if (depth === items.length && html) {
+          if (html.end?.test(content)) closeHtml(offset);
+          break;
+        }
+        const fenceLine = relative < 4 && /^(\x60{3,}|~{3,})(.*)$/u.exec(content);
+        if (depth === items.length && fence) {
+          if (fenceLine && fenceLine[1].startsWith(fence) && /^[ \t]*$/u.test(fenceLine[2])) fence = null;
+          break;
+        }
+        const startsHtml = relative < 4 && learningHtmlBlock(content, paragraph);
+        const startsBlock = startsHtml || (relative < 4 && boundary.test(content));
+        const marker = relative < 4 && !startsBlock ? listMarker.exec(content) : null;
+        const style = marker?.[1].at(-1);
+        // A sibling can be empty or have any start number; a new list cannot
+        // interrupt prose unless it starts with content and (if ordered) at 1.
+        const startsItem = marker && (!paragraph || style === items[depth]?.style
+          || (marker[3] && /^([-+*]|0*1[.)])$/u.test(marker[1])));
+
+        if (depth < items.length) {
+          // Only the paragraph at the deepest active item can continue lazily.
+          if (paragraph && !startsBlock && !startsItem) break;
+          items.length = depth;
+          paragraph = false;
+          closeHtml(lineStart);
+          fence = null;
+        }
+        if (parent) parent.hasContent = true;
+        if (relative >= 4) {
+          // Within prose this is continuation text. Pin only top-level code.
+          if (!parent && !paragraph) code = true;
+          break;
+        }
+        if (startsHtml) {
+          paragraph = false;
+          html = { start: lineStart, end: startsHtml.end };
+          if (html.end?.test(content)) closeHtml(offset);
+          break;
+        }
+        if (fenceLine && (fenceLine[1][0] === '~' || !fenceLine[2].includes('`'))) fence = fenceLine[1];
+        if (startsItem) {
+          const markerEnd = column + marker[1].length;
+          column = markdownIndent(marker[2], markerEnd);
+          content = marker[3];
+          const padding = column - markerEnd;
+          const contentPadding = content && padding >= 1 && padding <= 4 ? padding : 1;
+          items.push({ column: markerEnd + contentPadding, style, hasContent: false });
+          depth++;
+          paragraph = false;
+          continue;
+        }
+        paragraph = !startsBlock && (paragraph
+          ? !/^(?:=+|-+)[ \t]*$/u.test(content) // A setext underline ends the paragraph.
+          : !/^\[[^\]]+\]:/u.test(content));
+        break;
+      }
+    }
+    if (code || structural.test(block) || MARTIN_DECIDED.test(block)) pinned.push(block);
+    if (separator) {
+      // A blank ends the leaf paragraph and any still-empty item. Delimited
+      // HTML instead owns the blanks until its delimiter or item closure.
+      if (items.at(-1)?.hasContent === false) items.pop();
+      if (html?.end === null) closeHtml(offset);
+      offset += separator.length - newline.length;
+    }
+  }
+  closeHtml(text.length);
+  return JSON.stringify([pinned, htmlSpans]);
+}
+
 /**
  * The blocks of `text`, each as its lines: a list item with its continuation lines, a heading, or a paragraph up to
  * the next blank line. A line that starts a list item or a heading starts a block of its own.
@@ -219,11 +385,19 @@ function decisionsCorrected(before, after, superseded) {
  * change to its `## Decisions` other than the correction of a superseded dated block, and any removal or alteration of a
  * block that holds a dated decision of Martin's unless the same file keeps, unchanged, a dated block with a later date (D2).
  */
-export function managerGuard(files) {
+export function managerGuard(files, { areaPage = null } = {}) {
   const found = [];
   for (const { path, before, after } of files) {
     if (!path.startsWith(MANAGER_ROOT)) { found.push(`${path} is outside docs/technical/`); continue; }
     if (path === MANAGER_ME) { found.push(`${path} is Martin's own text`); continue; }
+    if (areaPage !== null) {
+      if (path !== areaPage || before === null || after === null) { found.push(`${path} is not an edit to the declared area page ${areaPage}`); continue; }
+      if (areaHeldSections(before, 'decisions') !== areaHeldSections(after, 'decisions')) found.push(`${path} changes its ## Decisions`);
+      if (areaHeldSections(before, 'aim') !== areaHeldSections(after, 'aim')) found.push(`${path} changes its ## Aim`);
+      if (learningStructure(before) !== learningStructure(after)) found.push(`${path} changes its Markdown structure or raw HTML`);
+      if (JSON.stringify(martinBlocks(before)) !== JSON.stringify(martinBlocks(after))) found.push(`${path} changes a dated decision of Martin's`);
+      continue;
+    }
     const { kept, superseded } = supersession(before, after);
     if (AREA_PAGE.test(path)) {
       if (sectionOf(before, 'Aim') !== sectionOf(after, 'Aim')) found.push(`${path} changes its ## Aim`);
@@ -237,5 +411,5 @@ export function managerGuard(files) {
     }
   }
   if (!found.length) return null;
-  return `the manager publishes only what its role may change — ${found.join('; ')}; a text of Martin's goes to the desk with mc martin propose`;
+  return `the ${areaPage === null ? 'manager' : 'learning role'} publishes only what its role may change — ${found.join('; ')}; a text of Martin's goes to the desk with mc martin propose`;
 }

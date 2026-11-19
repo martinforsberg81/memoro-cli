@@ -30,7 +30,7 @@ export const horizonStatePath = (root, slug) => join(root, 'runner', 'manager-tu
 /** `runner/manager-turn/curation.json` under the work root. */
 export const curationStatePath = (root) => join(root, 'runner', 'manager-turn', 'curation.json');
 /** `runner/work/manager-curation/<stamp>`: one curation turn's branch worktrees, one per repository that declares areas. */
-export const curationWorktreesDir = (root, stamp) => join(root, 'runner', 'work', 'manager-curation', stamp);
+export const curationWorktreesDir = (root, stamp, kind = 'manager-curation') => join(root, 'runner', 'work', kind, stamp);
 
 const lastLine = (text) => String(text ?? '').trim().split('\n').at(-1) || '';
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -129,8 +129,8 @@ export function curationState({ started, bases }) {
 
 /* ------------------------------------------------------------------ checkouts */
 
-const checkoutClean = ({ git, path }) => {
-  const status = git(path, ['status', '--porcelain']);
+const checkoutClean = ({ git, path, preserveIgnored }) => {
+  const status = git(path, ['status', '--porcelain', '--untracked-files=all', ...(preserveIgnored ? ['--ignored=matching'] : [])]);
   return status.ok && String(status.stdout ?? '').trim() === '';
 };
 const reachable = ({ git, path, ref }) => git(path, ['merge-base', '--is-ancestor', 'HEAD', ref]).ok;
@@ -140,8 +140,8 @@ const reachable = ({ git, path, ref }) => git(path, ['merge-base', '--is-ancesto
  * from a fresh origin/main in its own worktree. `{ ok: true, paths, branches, heads }` — `heads` the commit each
  * branch starts at, which is what the turn read — or `{ ok: false, reason, fetch? }`, with what was made removed.
  */
-export function setUpCurationWorktrees({ git, root, stamp, repos }) {
-  const base = curationWorktreesDir(root, stamp);
+export function setUpCurationWorktrees({ git, root, stamp, repos, kind = 'manager-curation' }) {
+  const base = curationWorktreesDir(root, stamp, kind);
   const paths = {}; const branches = {}; const heads = {}; const made = [];
   const undo = () => { for (const repo of made) { git(repo.path, ['worktree', 'remove', '--force', paths[repo.name]]); git(repo.path, ['branch', '-D', branches[repo.name]]); } };
   for (const repo of repos) {
@@ -150,7 +150,7 @@ export function setUpCurationWorktrees({ git, root, stamp, repos }) {
   }
   for (const repo of repos) {
     const path = join(base, repo.name);
-    const branch = `manager/curation-${stamp}`;
+    const branch = kind === 'manager-curation' ? `manager/curation-${stamp}` : `learning/${stamp}`;
     const added = git(repo.path, ['worktree', 'add', '-q', '-b', branch, path, 'origin/main']);
     if (!added.ok) { undo(); return { ok: false, reason: `setup: ${lastLine(added.stderr) || 'git worktree add failed'}` }; }
     paths[repo.name] = path; branches[repo.name] = branch; made.push(repo);
@@ -161,20 +161,26 @@ export function setUpCurationWorktrees({ git, root, stamp, repos }) {
 
 /**
  * The curation worktrees after the session: one that holds nothing (clean, no commit beyond origin/main) or whose
- * branch is published (clean, HEAD on `origin/<branch>`) is removed, with its branch; any other is kept. Returns
+ * branch is published (clean, HEAD on `origin/<branch>`) is removed, with its branch; any other is kept.
+ * An optional final check can return a reason to keep a candidate immediately before removal. Returns
  * `{ removed: [repo], kept: [{ repo, path, why }] }`.
  */
-export function settleCurationWorktrees({ git, repos, paths, branches }) {
+export function settleCurationWorktrees({ git, repos, paths, branches, preserveIgnored = false, beforeRemove }) {
   const removed = []; const kept = [];
   for (const repo of repos) {
     const path = paths[repo.name]; const branch = branches[repo.name];
-    if (!checkoutClean({ git, path })) { kept.push({ repo: repo.name, path, why: 'it holds uncommitted work' }); continue; }
+    if (!checkoutClean({ git, path, preserveIgnored })) { kept.push({ repo: repo.name, path, why: 'it holds uncommitted work' }); continue; }
     const ahead = git(path, ['rev-list', '--count', 'origin/main..HEAD']);
     const empty = ahead.ok && String(ahead.stdout ?? '').trim() === '0';
     const published = !empty && git(path, ['rev-parse', '--verify', '-q', `origin/${branch}`]).ok && reachable({ git, path, ref: `origin/${branch}` });
     if (!empty && !published) { kept.push({ repo: repo.name, path, why: `its branch ${branch} is not published` }); continue; }
+    const why = beforeRemove?.(path);
+    if (why) { kept.push({ repo: repo.name, path, why }); continue; }
     if (!git(repo.path, ['worktree', 'remove', path]).ok) { kept.push({ repo: repo.name, path, why: 'it could not be removed' }); continue; }
-    git(repo.path, ['branch', '-D', branch]);
+    if (!git(repo.path, ['branch', '-D', branch]).ok) {
+      kept.push({ repo: repo.name, path, why: `the worktree was removed but its local branch ${branch} could not be deleted` });
+      continue;
+    }
     removed.push(repo.name);
   }
   return { removed, kept };

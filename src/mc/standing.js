@@ -20,7 +20,7 @@
  * The directory reported is the *known* path that matched, so every caller's
  * map keyed on its own paths keeps working; the actual cwd rides along.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { userInfo } from 'node:os';
 
 /**
@@ -79,4 +79,23 @@ export function processesStandingIn(paths, { cwds = null, run, uid } = {}) {
     if (directory) found.push({ pid, directory, cwd });
   }
   return found;
+}
+
+/** PIDs with a file open under this directory, or null if the scan cannot establish that. */
+export function openFilesIn(path, { run = spawnSync } = {}) {
+  let r;
+  try {
+    // -t implies -w, hiding warnings that distinguish a partial scan from no matches.
+    r = run('lsof', ['-nP', '+w', '-Fp', '+D', path], { encoding: 'utf8', timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
+  } catch { return null; }
+  if (r.error || r.signal || r.stderr !== '' || (r.status !== 0 && r.status !== 1)) return null;
+  // lsof uses exit 1 both for no matches and for failure. Only a silent
+  // exit 1 is clear; it can also report a PID before exiting with that status.
+  if (r.status === 1 && r.stdout === '') return [];
+  if (!r.stdout?.endsWith('\n')) return null;
+  const records = r.stdout.slice(0, -1).split('\n');
+  if (records.some(line => !/^p[1-9][0-9]*$/u.test(line))) return null;
+  const pids = records.map(line => Number(line.slice(1)));
+  if (pids.some(pid => !Number.isSafeInteger(pid))) return null;
+  return [...new Set(pids)];
 }

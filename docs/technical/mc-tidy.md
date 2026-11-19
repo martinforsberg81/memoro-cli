@@ -454,6 +454,14 @@ What it means in `src/mc/scratch.js` and `mc scratch` (the command help is `mc s
   and no retention rule changes. Existing thresholds, lanes and the admission
   policy are unchanged.
 
+## Recursive open-file evidence
+
+The shared recursive check runs `lsof -nP +w -Fp +D <directory>`, keeping
+diagnostics visible. Only exit 1 with no records and no diagnostics clears a
+directory. Well-formed PID records on exit 0 or 1 identify open files;
+warnings, timeouts and malformed or otherwise ambiguous evidence keep the
+candidate.
+
 ## Disk pressure
 
 `src/mc/disk-pressure.js` is the one policy the runner, the deployer and a

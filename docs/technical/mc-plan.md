@@ -47,6 +47,10 @@ before it has documents on main, or after all its goals have been archived.
 
 ## A programme with a record
 
+Area learning is not a planning entrance. It does not create or alter
+programme orders; a functionality defect it finds stays linked to an area
+proposal. The programme's ordinary desk path is unchanged.
+
 A programme may have a record, `PROGRAMME.json` directly in its directory
 (`src/mc/programme-record.js`): a bounded piece of work serving a horizon, or storage for small area work
 without one. A programme without the file is also bounded. Version 2 has the
