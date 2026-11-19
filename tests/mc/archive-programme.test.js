@@ -22,6 +22,8 @@ import {
 import { formatRow, logRows } from '../../src/mc/archive-plan.js';
 import { run } from '../../src/mc/commands/plan.js';
 import { renderGoal } from '../../src/mc/goals.js';
+import { shelvedMembership } from '../../src/mc/archive-receipt.js';
+import { readProgrammes } from '../../src/mc/page-collect.js';
 
 function git(cwd, args) {
   const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
@@ -419,6 +421,43 @@ describe('archiveProgramme with the runner\'s fence', () => {
     assert.ok(existsSync(join(moved, 'rulings.md')));
     assert.deepEqual(asked, [1, 1, 2], 'asked after the docs PR, before the release (the dry run only so far) and before the shelving (after it)');
     assert.deepEqual(calls.release, [true, false]);
+  });
+
+  it('only a matching shelved receipt removes retained repository membership', async (t) => {
+    const { fx, area } = layout2();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    const { deps } = stubs();
+    const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area });
+    const readGit = (cwd, argv) => { const r = git(cwd, argv); return r.ok ? r.stdout.trimEnd() : null; };
+    const listed = () => readProgrammes({ env: fx.env, repos: fx.repos }).section.programmes.map((p) => p.programme);
+    assert.deepEqual(listed(), ['gone']);
+    assert.equal(await archiveProgramme('gone', a), 0, a.stderr.out.text);
+    const receipt = join(fx.root, 'work', 'archive', 'programs', 'gone', '.archive-receipt.json');
+    const saved = readFileSync(receipt, 'utf8');
+    assert.equal(shelvedMembership('gone', fx.repos[0], { env: fx.env, git: readGit }), true);
+    assert.deepEqual(listed(), []);
+    const mismatch = JSON.parse(saved);
+    mismatch.entries[0].path = 'docs/project/other';
+    writeFileSync(receipt, JSON.stringify(mismatch));
+    assert.deepEqual(listed(), ['gone']);
+    rmSync(receipt);
+    assert.deepEqual(listed(), ['gone']);
+    writeFileSync(receipt, saved);
+    mkdirSync(area, { recursive: true });
+    assert.deepEqual(listed(), ['gone'], 'a recordless successor takes precedence');
+    rmSync(area, { recursive: true });
+    const tracked = join(fx.repo, 'docs', 'project', 'gone', 'README.md');
+    const contents = readFileSync(tracked, 'utf8');
+    rmSync(join(fx.repo, 'docs', 'project', 'gone'), { recursive: true });
+    git(fx.repo, ['add', '-A']);
+    git(fx.repo, ['commit', '-q', '-m', 'delete membership']);
+    git(fx.repo, ['push', '-q', 'origin', 'HEAD:main']);
+    mkdirSync(join(tracked, '..'), { recursive: true });
+    writeFileSync(tracked, contents);
+    git(fx.repo, ['add', '-A']);
+    git(fx.repo, ['commit', '-q', '-m', 'restore membership']);
+    git(fx.repo, ['push', '-q', 'origin', 'HEAD:main']);
+    assert.deepEqual(listed(), ['gone'], 'deletion and reintroduction break path identity');
   });
 
   it('a fence that fires after the docs PR landed stops before any release: the planning session, the directory and restricted data are as they were, and the landed PR stays', async () => {

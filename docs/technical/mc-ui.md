@@ -84,6 +84,21 @@ without details are consecutive heading rows. Each heading has the programme
 name in bold, and in Other its fallback horizon reference, then draft or phase
 when applicable, or `ready` for a ready record without a phase, goal count,
 nonzero priority and finished-in-tree count, and `record invalid` when applicable.
+After the goal count, `archive pending` is grey for a due read or archive turn;
+`archive needs attention` is red and adds its reason to NEEDS ATTENTION. The
+collector reads the runner's archive state, physical live goals and open archive
+desk items without changing them. A current notice or failure is shown verbatim;
+an item uses its first brief line (or prepared text), falling back to `see the
+desk` for a missing line, heading or reading verdict. An old destination holding
+a successor is identified as a previous archive repair, not the successor's fault.
+
+A done record with no live goal leaves the page. A local directory or live goal
+otherwise takes precedence over an earlier archive. Repository membership is
+removed only when the shared shelved-receipt reader validates the repository,
+path, main ancestry, retained tree and uninterrupted path identity; absent,
+unreadable or mismatched proof leaves it visible. Residual sessions and PRs are
+reported in Strays rather than restoring a completed card. Open archive items
+remain on the desk after the move.
 Held, blocked and malformed goals and sessions are drawn in their programme.
 Programme headings and tree text, including goal titles, metadata, holds and
 blockers, wrap within the inset at narrow widths. A goal's stage, criteria,
