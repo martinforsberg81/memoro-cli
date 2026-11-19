@@ -244,9 +244,16 @@ exists; otherwise they get one in the appropriate area before drafting.
 Feedback uses the original task ID or a labelled
 incident timestamp and build. Only minimum defect details and provenance are
 copied. Waiting sources stay in their area while a draft exists. Resolved
-sources archive their proposals with `Utfall: resolved — <where>`; an
-unestablished or ambiguous report keeps its proposal and a reason in
-`runner/repair-draft/`. Unchanged declined evidence stays closed. Repair
+sources archive their proposals with `Utfall: resolved — <where>`. If the
+original archive name already holds a disposition for other evidence, the
+resolution gets a separate archive file and the waiting path points to the
+latest resolution once the waiting file has moved. An explicit archive path
+still reads its own version. An unestablished or ambiguous report keeps its
+proposal and a reason in `runner/repair-draft/`. Decline and resolution apply
+across corroborated routes to the same evidence version, not to changed
+evidence for the same fingerprint. Repair uses recorded source digests where
+available; a legacy archive can corroborate a linked fingerprint row or a
+feedback link with the same original incident. Repair
 checks ownership and rechecks the selected evidence in the strict programme
 lock; it does not hold the lock while the role reads. Changed evidence or
 concurrent order changes cannot be committed from a stale reading.

@@ -9,7 +9,7 @@ import { archivedProgramsHome, programsHome, workRoot } from './paths.js';
 import { AREA_RE, createProgramme, linkRepairSource, newRecord, readRecord, recordedProgrammes } from './programme-record.js';
 import { NAME_RE } from './plan-schema.js';
 import { judgeRepair } from './repair-session.js';
-import { archivedProposal, pendingProposals, readRepairSource } from './repair-sources.js';
+import { archivedProposal, archivedProposals, pendingProposals, readRepairCase, readRepairSource, repairCasePath, versionedArchive } from './repair-sources.js';
 import { realLock } from './runner-lock.js';
 
 const ROUTE = { strictValues: ['--proposal', '--feedback', '--error', '--fingerprint'] };
@@ -77,13 +77,49 @@ function owningOrder(source, all, env) {
   return { ordered: order.name };
 }
 
-const casePath = (env, key) => join(workRoot(env), 'runner', 'repair-draft', `${key}.json`);
-function readCase(env, key) {
-  const text = read(casePath(env, key));
-  return text === null ? {} : JSON.parse(text);
-}
 function writeCase(env, ref, state) {
-  writeJsonAtomic(casePath(env, ref.key), { ...state, source: ref });
+  const previous = ref.kind === 'proposal' ? readRepairCase(env, ref.key).archive : null;
+  writeJsonAtomic(repairCasePath(env, ref.key), { ...(previous ? { archive: previous } : {}), ...state, source: ref });
+}
+
+function archiveStatus(outcome) {
+  if (/^(?:ej aktuellt|declined)(?:\s|$)/iu.test(outcome ?? '')) return 'declined';
+  if (/^resolved(?:\s|$)/iu.test(outcome ?? '')) return 'resolved';
+  return null;
+}
+
+/** An archive can close an evidenced version, not every occurrence of a defect. */
+function archivedDisposition(source, env) {
+  const statuses = new Set();
+  let possible = false;
+  for (const given of archivedProposals(env)) {
+    const candidate = readRepairSource({ kind: 'proposal', given, env });
+    const status = archiveStatus(candidate.outcome);
+    if (!status || !candidate.proposal?.isArchived) continue;
+    // The selected proposal's own path was already checked against its archived content.
+    if (source.ref.key === candidate.ref.key) continue;
+    const versions = candidate.evidence.get(source.ref.key);
+    if (versions) {
+      if (versions.has(source.ref.digest)) statuses.add(status);
+      continue;
+    }
+    const strength = linkStrength(source.ref, candidate.ref);
+    if (source.ref.kind === 'proposal') {
+      const shared = [...source.evidence].filter(([key]) => candidate.evidence.has(key));
+      const unchanged = shared.filter(([key, digests]) => [...digests].some(digest => candidate.evidence.get(key).has(digest)));
+      if (shared.length && !unchanged.length) continue;
+      if (strength === 'certain' && (source.ref.digest === candidate.ref.digest
+        || (shared.length > 0 && unchanged.length === shared.length))) statuses.add(status);
+      else if (strength) possible = true;
+      continue;
+    }
+    // Legacy prose has no feedback digest. A source link and matching incident corroborate it.
+    if (strength === 'certain' && source.ref.kind === 'feedback'
+      && source.ref.incident === candidate.ref.incident) statuses.add(status);
+    else if (strength) possible = true;
+  }
+  if (statuses.size === 1) return [...statuses][0];
+  return possible || statuses.size > 1 ? 'ambiguous' : null;
 }
 
 function waitingMatch(source, env) {
@@ -102,12 +138,10 @@ function waitingMatch(source, env) {
 }
 
 function decisionFor(source, all, ctx) {
-  const previous = readCase(ctx.env, source.ref.key);
+  const previous = readRepairCase(ctx.env, source.ref.key);
   const generated = previous.proposal && readRepairSource({ kind: 'proposal', given: previous.proposal, env: ctx.env });
-  const generatedOutcome = previous.source?.digest === source.ref.digest ? generated?.outcome : null;
-  const outcome = source.outcome ?? generatedOutcome;
-  if (/^(?:ej aktuellt|declined)(?:\s|$)/iu.test(outcome ?? '')) return { status: 'declined' };
-  if (/^resolved(?:\s|$)/iu.test(outcome ?? '')) return { status: 'resolved' };
+  const status = archiveStatus(source.outcome);
+  if (status) return { status };
   let owner = owningOrder(source, all, ctx.env);
   if (!Object.keys(owner).length && generated?.ref) owner = owningOrder(generated, all, ctx.env);
   if (owner.ordered) return { status: 'ordered', name: owner.ordered };
@@ -119,6 +153,8 @@ function decisionFor(source, all, ctx) {
   }
   if (owner.possible) return { status: 'ambiguous' };
   if (source.proposal?.isArchived) return { status: 'ambiguous' }; // Unknown archive disposition is not intake.
+  const archived = archivedDisposition(source, ctx.env);
+  if (archived) return { status: archived };
   if (previous.source?.digest === source.ref.digest && previous.status) return { status: previous.status };
   if (generated?.ref && !generated.proposal.isArchived && !generated.outcome) source.associated = generated;
   else {
@@ -136,7 +172,7 @@ function generatedProposal(source, repo, area, summary, now, env) {
     writeCase(env, source.ref, { proposal: path });
     return path;
   }
-  const previous = readCase(env, source.ref.key);
+  const previous = readRepairCase(env, source.ref.key);
   const archived = previous.proposal && existsSync(archivedProposal(previous.proposal));
   const day = now.toISOString().slice(0, 10);
   const system = repo === 'memoro-cli' ? 'mc' : 'memoro';
@@ -147,7 +183,8 @@ function generatedProposal(source, repo, area, summary, now, env) {
     : source.locator ? `Incident timestamp: ${source.locator.timestamp}; build: ${source.locator.build}` : null;
   const fingerprint = source.ref.kind === 'error' ? `Fingerprint: \`${JSON.parse(source.text).fingerprint}\`` : null;
   // No raw feedback, log message, user text or attachments are copied.
-  const prose = [`# ${summary}`, `Evidence for ${repo}, from \`${source.ref.path}\`.`, incident, fingerprint].filter(Boolean).join('\n\n');
+  const prose = [`# ${summary}`, `Evidence for ${repo}, from \`${source.ref.path}\`.`, incident, fingerprint,
+    `Repair evidence: ${source.ref.key} ${source.ref.digest}`].filter(Boolean).join('\n\n');
   writeCase(env, source.ref, { proposal: path });
   mkdirSync(dirname(path), { recursive: true });
   try { writeFileSync(path, `${prose}\n`, { flag: 'wx', mode: 0o600 }); }
@@ -155,16 +192,26 @@ function generatedProposal(source, repo, area, summary, now, env) {
   return path;
 }
 
-function archiveResolved(path, reason) {
-  const body = read(path);
-  if (body === null) throw new Error('the proposal moved during repair');
+function archiveResolved(primary, source, reason) {
+  const path = primary.proposal.live;
   const archived = archivedProposal(path);
   mkdirSync(dirname(archived), { recursive: true });
   if (!lstatSync(dirname(archived)).isDirectory()) throw new Error('proposal archive is not a directory owned by the area');
-  const text = `Utfall: resolved — ${reason}\n\n${body}`;
-  try { writeFileSync(archived, text, { flag: 'wx', mode: 0o600 }); }
-  catch (error) { if (error.code !== 'EEXIST' || read(archived) !== text) throw error; }
-  unlinkSync(path);
+  const evidence = source.ref.key === primary.ref.key ? {} : { evidence: [source.ref.key, source.ref.digest] };
+  const text = meta => `Utfall: resolved — ${reason}\n\n`
+    + (Object.keys(meta).length ? `Repair archive: ${JSON.stringify(meta)}\n\n` : '') + primary.text;
+  const save = (target, contents) => {
+    try { writeFileSync(target, contents, { flag: 'wx', mode: 0o600 }); }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      return lstatSync(target, { throwIfNoEntry: false })?.isFile() && read(target) === contents;
+    }
+    return true;
+  };
+  if (save(archived, text(evidence))) return archived;
+  const versioned = versionedArchive(path, primary.ref.digest);
+  if (save(versioned, text({ original: basename(path), ...evidence }))) return versioned;
+  throw new Error(`the proposal archive already has a different resolution at ${versioned}`);
 }
 
 function draftPage(answer, refs, proposal) {
@@ -212,11 +259,13 @@ function settle(source, answer, ctx) {
   const primary = readRepairSource({ kind: 'proposal', given: proposal, env: ctx.env });
   if (!primary.ref || primary.proposal.isArchived) throw new Error('the proposal is no longer waiting');
   if (answer.status !== 'draft') {
-    if (answer.status === 'resolved') archiveResolved(proposal, answer.reason);
-    writeCase(ctx.env, source.ref, { proposal, status: answer.status, reason: answer.reason });
+    const archive = answer.status === 'resolved' ? archiveResolved(primary, source, answer.reason) : null;
+    const disposition = { status: answer.status, reason: answer.reason };
+    writeCase(ctx.env, source.ref, { proposal, ...disposition, ...(archive ? { archive } : {}) });
     if (primary.ref.key !== source.ref.key) {
-      writeCase(ctx.env, primary.ref, { status: answer.status, reason: answer.reason });
+      writeCase(ctx.env, primary.ref, { ...disposition, ...(archive ? { archive } : {}) });
     }
+    if (archive) unlinkSync(proposal);
     return { status: answer.status };
   }
   const sources = source.ref.key === primary.ref.key ? [source.ref] : [source.ref, primary.ref];

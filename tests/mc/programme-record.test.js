@@ -18,6 +18,7 @@ import { changePhases, newRecord, normalized, readRecord, recordedProgrammes, re
 import { lockPath, realLock } from '../../src/mc/runner-lock.js';
 import { goalJson } from './_helpers/goal-file.js';
 import { runRepairDraft } from '../../src/mc/repair-draft.js';
+import { renderCliSections } from '../../src/mc/helper-cli-collect.js';
 import { judgeRepair } from '../../src/mc/repair-session.js';
 import { archivedProposal, sha256 } from '../../src/mc/repair-sources.js';
 
@@ -681,6 +682,73 @@ describe('internal repair order drafting', () => {
       assert.deepEqual(readdirSync(a.home), []);
       put(weak, 'New evidence supplies the absent input.');
       assert.match((await direct(a, 'proposal', weak, order('now-established'))).out, /now-established is draft/u);
+    } finally { a.done(); }
+  });
+
+  it('honours a corroborated archive decline across routes without closing changed evidence', async () => {
+    const a = area();
+    try {
+      const feedback = put(join(a.root, 'feedback.md'), 'Task ID: event-102\nValid input fails.');
+      const collect = (date, message) => put(join(a.root, 'intake', `errors-memoro-cli-${date}.md`),
+        renderCliSections({ cli: { notes: [], byStatus: {}, open: [], rows: [
+          { fingerprint: 'gate-a', count: 1, status: 'gate', lastSeen: '2026-11-14T10:00:00Z', message },
+        ] }, threshold: 2 }).join('\n'));
+      const e = collect('2026-11-14', 'A command refused valid input');
+      const p = join(a.root, 'areas', 'memoro-cli', 'system', 'proposals', '2026-11-14-mc-declined-intake.md');
+      const archived = archivedProposal(p);
+      const body = `Task ID: event-102\nSource \`${feedback}\`; fingerprint \`gate-a\` in \`${e}\`.\n`;
+      const declined = `Utfall: ej aktuellt — not a defect\n\n${body}`;
+      put(archived, declined);
+      const later = collect('2026-11-15', 'A command refused valid input');
+      const moved = join(a.root, 'runner', 'log', 'intake', '2026-11-15', 'errors-memoro-cli-2026-11-14.md');
+      mkdirSync(dirname(moved), { recursive: true });
+      renameSync(e, moved);
+      assert.deepEqual(await direct(a, 'proposal', archived),
+        { code: 0, err: '', out: `mc: ${archived} — previously declined\n` });
+      for (const [kind, file] of [['error', moved], ['error', later], ['feedback', feedback]]) {
+        assert.deepEqual(await direct(a, kind, file, order('wrongly-reopened')),
+          { code: 0, err: '', out: `mc: ${file} — previously declined\n` });
+      }
+      assert.deepEqual(readdirSync(a.home), []);
+      assert.deepEqual(readdirSync(dirname(p)), ['archive']);
+      assert.equal(readFileSync(archived, 'utf8'), declined);
+      const repeated = proposal(a, 'same-report', body);
+      assert.equal((await direct(a, 'proposal', repeated)).out, `mc: ${repeated} — previously declined\n`);
+      const uncertain = put(join(a.root, 'other-feedback.md'), 'Task ID: event-102\nA different symptom.');
+      assert.equal((await direct(a, 'feedback', uncertain)).out, `mc: possible duplicate for ${uncertain}; no order made\n`);
+      const changed = collect('2026-11-16', 'New reproduction with a different result');
+      const fixed = { status: 'resolved', reason: 'Fixed on main.', repository: 'memoro-cli' };
+      assert.deepEqual(await direct(a, 'error', changed, fixed),
+        { code: 0, err: '', out: `mc: ${changed} — already fixed\n` });
+      assert.equal((await direct(a, 'error', later)).out, `mc: ${later} — previously declined\n`);
+      assert.equal((await direct(a, 'error', changed)).out, `mc: ${changed} — already fixed\n`);
+      assert.deepEqual(readdirSync(a.home), []);
+    } finally { a.done(); }
+  });
+
+  it('archives a resolution for changed proposal evidence without replacing its prior decline', async () => {
+    const a = area();
+    try {
+      const changed = 'New reproduction identifies the supported input.\n';
+      const p = proposal(a, 'reconsidered', changed);
+      const archived = archivedProposal(p);
+      const declined = 'Utfall: ej aktuellt — not a defect\n\nThe input was unknown.\n';
+      put(archived, declined);
+      const fixed = { status: 'resolved', reason: 'Fixed on main.', repository: 'memoro-cli' };
+      const result = await direct(a, 'proposal', p, fixed);
+      assert.deepEqual(result, { code: 0, err: '', out: `mc: ${p} — already fixed\n` });
+      assert.ok(!existsSync(p));
+      assert.equal(readFileSync(archived, 'utf8'), declined);
+      const [replacement] = readdirSync(dirname(archived)).filter(name => join(dirname(archived), name) !== archived);
+      assert.ok(replacement, 'the resolution is a separate archive record');
+      const resolvedPath = join(dirname(archived), replacement);
+      assert.match(readFileSync(resolvedPath, 'utf8'), /^Utfall: resolved — Fixed on main\.\n/u);
+      assert.ok(readFileSync(resolvedPath, 'utf8').endsWith(changed));
+      assert.equal((await direct(a, 'proposal', p)).out, `mc: ${resolvedPath} — already fixed\n`);
+      assert.equal((await direct(a, 'proposal', archived)).out, `mc: ${archived} — previously declined\n`);
+      put(p, changed);
+      assert.equal((await direct(a, 'proposal', p)).out, `mc: ${p} — already fixed\n`);
+      assert.deepEqual(readdirSync(a.home), []);
     } finally { a.done(); }
   });
 

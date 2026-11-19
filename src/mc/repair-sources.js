@@ -1,23 +1,41 @@
 /** Read repair evidence without giving the drafting session paths it can open. */
 import { createHash } from 'node:crypto';
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
-import { areasHome, FALLBACK_AREAS, listAllProposals } from './area-proposals.js';
+import { areaKeysOnDisk, areasHome, FALLBACK_AREAS, keyProposalsDir, listAllProposals } from './area-proposals.js';
 import { digestDirs } from './helper-collect.js';
+import { workRoot } from './paths.js';
 import { AREA_RE } from './programme-record.js';
 
 export const sha256 = text => createHash('sha256').update(text).digest('hex');
 const keyOf = (kind, ...identity) => sha256(JSON.stringify([kind, ...identity]));
 const fileOrder = (a, b) => a.file < b.file ? -1 : a.file > b.file ? 1 : a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
-const DATE_PROPOSAL = /^\d{4}-\d\d-\d\d-(?:mc|memoro)-.+\.md$/u;
+const DATE_PROPOSAL = /^(\d{4}-\d\d-\d\d-(?:mc|memoro))-.+\.md$/u;
 const DIGEST_NAME = /^errors-(?:(memoro|memoro-cli)-)?\d{4}-\d\d-\d\d\.md$/u;
 const FINGERPRINT = /^[\w.:-]{1,128}$/u;
 const INPUT_LIMIT = 128 * 1024;
 const OUTCOME = /^Utfall: ([^\r\n]+)\r?\n(?:\r?\n)?/u;
+const ARCHIVE_META = /^Repair archive: (\{[^\r\n]+\})\r?\n\r?\n/u;
+const EVIDENCE = /^Repair evidence: ([a-f0-9]{64}) ([a-f0-9]{64})$/mu;
 
 export function pendingProposals(env) {
   return listAllProposals(env).filter(row => DATE_PROPOSAL.test(row.file)).sort(fileOrder);
+}
+
+export function archivedProposals(env) {
+  return areaKeysOnDisk(env).flatMap(area => {
+    const dir = join(keyProposalsDir(area, env), 'archive');
+    if (!lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) return [];
+    return readdirSync(dir, { withFileTypes: true }).filter(entry => entry.isFile() && DATE_PROPOSAL.test(entry.name))
+      .map(entry => join(dir, entry.name));
+  });
+}
+
+export const repairCasePath = (env, key) => join(workRoot(env), 'runner', 'repair-draft', `${key}.json`);
+export function readRepairCase(env, key) {
+  try { return JSON.parse(readFileSync(repairCasePath(env, key), 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
 }
 
 function regular(path) {
@@ -37,19 +55,49 @@ function read(path) {
 }
 
 export const archivedProposal = path => join(dirname(path), 'archive', basename(path));
+export const versionedArchive = (live, digest) => join(dirname(archivedProposal(live)),
+  `${DATE_PROPOSAL.exec(basename(live))[1]}-repair-resolved-${keyOf('proposal', live)}-${digest}.md`);
 
-/** Active and archived references have the same identity; an ordinary order may already have moved the source. */
-function proposalAt(given, env) {
-  if (!DATE_PROPOSAL.test(basename(given))) return null;
-  const path = regular(given) ?? regular(archivedProposal(given));
-  if (!path) return null;
+function archiveContent(body) {
+  const outcome = OUTCOME.exec(body);
+  if (!outcome) return { text: body };
+  const contents = body.slice(outcome[0].length);
+  const header = ARCHIVE_META.exec(contents);
+  if (header && outcome[1].startsWith('resolved — ')) {
+    try { return { outcome: outcome[1], text: contents.slice(header[0].length), meta: JSON.parse(header[1]) }; }
+    catch { /* A legacy proposal may contain prose that looks like a header. */ }
+  }
+  return { outcome: outcome[1], text: contents };
+}
+
+function proposalLocation(path, env) {
+  if (!DATE_PROPOSAL.test(basename(path))) return null;
   const [repo, slug, folder, ...tail] = relative(directory(areasHome(env)), path).split(sep);
   const isArchived = tail.length === 2 && tail[0] === 'archive';
   const area = `${repo}/${slug}`;
   if (!AREA_RE.test(area) || folder !== 'proposals' || !(tail.length === 1 || isArchived)) return null;
-  if (!DATE_PROPOSAL.test(basename(path))) return null;
   const live = isArchived ? join(dirname(dirname(path)), basename(path)) : path;
   return { path, live, repo, area, isArchived };
+}
+
+/** An exact archive path opens that version. A missing waiting path follows its latest resolution. */
+function proposalAt(given, env) {
+  if (!DATE_PROPOSAL.test(basename(given))) return null;
+  const path = regular(given);
+  if (path) return proposalLocation(path, env);
+  const live = join(directory(dirname(given)), basename(given));
+  const location = proposalLocation(live, env);
+  if (!location || location.isArchived) return null;
+  const paths = proposalArchives(live, env);
+  return paths.length ? proposalLocation(paths[0], env) : null;
+}
+
+function proposalArchives(live, env, digest) {
+  const canonical = archivedProposal(live);
+  const latest = readRepairCase(env, keyOf('proposal', live)).archive;
+  const version = digest && versionedArchive(live, digest);
+  return [...new Set([version, latest, canonical].filter(path => typeof path === 'string' && dirname(path) === dirname(canonical))
+    .map(regular).filter(path => path && dirname(path) === dirname(canonical)))];
 }
 
 function errorAt(given, env, { moved = false } = {}) {
@@ -95,6 +143,7 @@ function incidentOf(text) {
 function provenance(text, env) {
   const links = new Set();
   const possible = new Set();
+  const evidence = new Map();
   // Explicit pointers written in proposal prose; do not follow a general file link.
   for (const match of text.matchAll(/`(\/[^\r\n`]+)`|\]\((\/[^\r\n)]+)\)/gu)) {
     const path = match[1] ?? match[2];
@@ -104,13 +153,19 @@ function provenance(text, env) {
     if (error) {
       const { repo, rows } = errorRows(error);
       const named = [...rows.keys()].filter(id => text.includes(`\`${id}\``) || field(text, 'fingerprint') === id);
-      if (named.length === 1) links.add(keyOf('error', repo, named[0]));
+      if (named.length === 1) {
+        const key = keyOf('error', repo, named[0]);
+        links.add(key);
+        const digests = evidence.get(key) ?? new Set();
+        digests.add(sha256(JSON.stringify(rows.get(named[0]))));
+        evidence.set(key, digests);
+      }
       else for (const id of rows.keys()) possible.add(keyOf('error', repo, id));
     } else if (!proposal) {
       possible.add(keyOf('feedback', resolve(path)));
     }
   }
-  return { links: [...links].sort(), possible: [...possible].sort() };
+  return { links: [...links].sort(), possible: [...possible].sort(), evidence };
 }
 
 export function readRepairSource({ kind, given, fingerprint = null, env }) {
@@ -131,23 +186,33 @@ export function readRepairSource({ kind, given, fingerprint = null, env }) {
     const path = kind === 'proposal' ? proposal?.path : regular(given);
     if (!path) return { unreadable: true };
     const body = read(path);
-    let outcome = proposal?.isArchived ? OUTCOME.exec(body) : null;
-    const text = outcome ? body.slice(outcome[0].length) : body;
+    const archive = proposal?.isArchived ? archiveContent(body) : null;
+    const text = archive?.text ?? body;
+    const digest = sha256(text);
+    if (archive?.meta?.original && typeof archive.meta.original === 'string' && DATE_PROPOSAL.test(archive.meta.original)
+      && basename(archive.meta.original) === archive.meta.original) {
+      const live = join(dirname(proposal.live), archive.meta.original);
+      if (path === versionedArchive(live, digest)) proposal.live = live;
+    }
+    let outcome = archive?.outcome;
     if (proposal && !proposal.isArchived) {
-      const previous = proposalAt(archivedProposal(proposal.live), env);
-      if (previous?.isArchived) {
-        const archived = read(previous.path);
-        const decided = OUTCOME.exec(archived);
-        if (decided && archived.slice(decided[0].length) === text) outcome = decided;
+      for (const path of proposalArchives(proposal.live, env, digest)) {
+        const decided = archiveContent(read(path));
+        if (decided.outcome && decided.text === text) { outcome = decided.outcome; break; }
       }
     }
     const locator = incidentOf(text);
     if (kind === 'feedback' && !locator) return { missingLocator: true };
-    const { links, possible } = provenance(text, env);
+    const { links, possible, evidence } = provenance(text, env);
+    for (const recorded of [EVIDENCE.exec(text)?.slice(1), archive?.meta?.evidence]) {
+      if (Array.isArray(recorded) && recorded.length === 2 && recorded.every(value => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value))) {
+        evidence.set(recorded[0], new Set([recorded[1]]));
+      }
+    }
     return {
-      text, locator, proposal, outcome: outcome?.[1] ?? null,
+      text, locator, proposal, evidence, outcome: outcome ?? null,
       repo: proposal?.repo ?? null, area: proposal?.area ?? null,
-      ref: { kind, path, key: keyOf(kind, proposal?.live ?? path), digest: sha256(text),
+      ref: { kind, path, key: keyOf(kind, proposal?.live ?? path), digest,
         ...(locator ? { incident: sha256(JSON.stringify(locator)) } : {}), ...(links.length ? { links } : {}),
         ...(possible.length ? { possible } : {}) },
     };
