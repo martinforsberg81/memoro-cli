@@ -314,7 +314,8 @@ role tells the session to read LOG.md first.
 - A review uses `review-session:goal`, the open PR and its head. It judges,
   never builds: it writes REVIEW.md in its fixed form, then `mc goal stage merge`
   sends all registered PRs to merge, or `mc goal stage build` returns the goal to
-  build for another repair in any round. A review after repair is narrow:
+  build for up to two automatic repairs. A further failed verdict opens a
+  stop for the decision lane. A review after repair is narrow:
   its prompt names the previous review's heads and failed items, and lists the
   untouched areas the diff tripped. A review that dies still in review
   is retried once, then waits directly on Martin if it dies again.

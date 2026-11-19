@@ -175,6 +175,12 @@ function item(argv, deps) {
       // product and judgement are the old names of the one sort for a text change; a new record never carries them.
       fresh.state = 'prepared'; fresh.sort = isTextSort(f.sort) ? 'text' : f.sort; return fresh;
     }
+    if (verb === 'brief' && state === 'prepared' && f.sort === 'mechanical') {
+      if (!maybeRead(join(dir, 'brief.md'))?.trim()) return refuse('write the unresolved stop and its evidence in brief.md first');
+      if (f.text !== null || f.recommend !== null || f.reversible !== null || f['no-option']) return refuse('brief --sort mechanical takes no text name, option or reversibility flags');
+      fresh.state = 'for-martin'; fresh.sort = 'mechanical'; fresh.reversible = false; fresh.due_at = null;
+      return fresh;
+    }
     if (verb === 'brief' && state === 'prepared' && ['text','product','judgement','reserved'].includes(f.sort) && ['yes','no'].includes(f.reversible) && exists(join(dir,'brief.md'))) {
       const briefText = maybeRead(join(dir, 'brief.md'));
       if (isTextSort(f.sort)) {

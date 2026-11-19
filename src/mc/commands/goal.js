@@ -55,7 +55,8 @@
  * it back (`refusedMove`). A build session moves `build` to `review` — not
  * while a criterion is not met (`unmetGoalWords`) — or sets `blocked`; a
  * review session moves `review` to `merge`, or back to `build` when its
- * verdict (REVIEW.md) has a NOT OK line; a mend session
+ * verdict (REVIEW.md) has a NOT OK line. After two automatic repairs a
+ * failed verdict holds the goal for desk decision. A mend session
  * sets a status and requeues `merge`, and moves no stage; the interactive
  * plan session any stage forward.
  *
@@ -80,6 +81,7 @@ import { archiveGoal, finalizeDroppedGoal, moveDir } from '../goal-archive.js';
 import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
+import { readGoalDeskItem } from '../desk-items.js';
 import { addPr, backward, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, inStage, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, phaseOpen, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { addItem, ITEM_PARTS, ITEM_WORDS, moveGate, partsLacks, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
@@ -404,6 +406,14 @@ function logEntry(args, fields, ctx) {
   }
   const refused = refusedMove({ from: goal.stage, to: fields.stage, status: fields.status, env });
   if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
+  if (env.MC_ROLE === 'decision' && goal.stage === 'review' && goal.status === 'Martin'
+      && (fields.stage !== null || fields.status === 'ready')) {
+    const log = parseLog(read(join(target.dir, LOG_FILE)) ?? '');
+    if (reviewRecoveryExhausted(log)) {
+      stderr.write('mc: the decision recovery already returned to the review repair limit. Record what remains with mc martin item <id> brief --sort mechanical.\n');
+      return 2;
+    }
+  }
   // A review's move out of review follows its verdict (REVIEW.md): complete for the heads judged and the tripped areas, no NOT OK to merge, one to build.
   const verdict = reviewMove(goal, target, fields.stage, ctx);
   if (verdict.refusal) { stderr.write(`mc: ${verdict.refusal}\n`); return 2; }
@@ -423,6 +433,10 @@ function logEntry(args, fields, ctx) {
     const conflicted = mainConflictRefusal(goal, target, ctx);
     if (conflicted) { stderr.write(`mc: ${target.name} is not moved to ${fields.stage} — ${conflicted}\n`); return 1; }
   }
+  if (verdict.repairLimit) {
+    const reason = `${REVIEW_REPAIR_STOP} after ${MAX_REVIEW_REPAIRS} automatic repairs. Failed: ${verdict.failed.join(', ')}. See REVIEW.md.`;
+    fields = { ...fields, stage: null, status: 'Martin', comment: [reason, fields.comment].filter(Boolean).join('\n') };
+  }
   const moves = fields.stage !== null && fields.stage !== goal.stage;
   if (verdict.round) write(join(target.dir, `REVIEW-${verdict.round}.md`), verdict.text);
   let done = fields.done;
@@ -439,7 +453,7 @@ function logEntry(args, fields, ctx) {
       return 1;
     }
     now = outcome.goal;
-    if (moves) ctx.wake();
+    if (moves || verdict.repairLimit) ctx.wake();
     // The first move out of draft by an interactive caller frees a creation hold (`created: true`) and no other hold (D3, C3).
     if (goal.stage === 'draft' && now.stage !== 'draft' && env.MC_HEADLESS !== '1' && readHold(target.dir, read)?.created === true) {
       ctx.remove(join(target.dir, HOLD_FILE));
@@ -679,9 +693,23 @@ function mainConflictRefusal(goal, target, ctx) {
   return paths.length ? conflictReason(paths) : null;
 }
 
+const MAX_REVIEW_REPAIRS = 2;
+const REVIEW_REPAIR_STOP = 'no progress: review repair limit reached';
+
+/** A human can restart a stopped goal. Between those interventions a decision gets one recovery handoff. */
+function reviewRecoveryExhausted(log) {
+  const limitStop = entry => entry?.role === 'review' && entry.stage === 'review'
+    && entry.status === 'Martin' && entry.comment?.startsWith(REVIEW_REPAIR_STOP);
+  const held = log.slice(log.findLastIndex(entry => entry.status !== 'Martin') + 1);
+  if (!held.some(limitStop)) return false;
+  const restarted = log.findLastIndex((entry, index) => entry.status === 'ready' && log[index - 1]?.status === 'Martin'
+    && (entry.role === 'martin' || entry.tool === 'person' && !entry.role));
+  return log.slice(restarted + 1).filter(limitStop).length >= 2;
+}
+
 /**
  * What a review session's move out of review asks of REVIEW.md (D4, D5, D8), as `{}` for any other move, `{ refusal }`,
- * or `{ text, round, failed }`: the verdict's text, its archive number and the rejected ids whose evidence to renew.
+ * or the verdict, its archive number, the rejected evidence ids and whether the automatic repairs are exhausted.
  * The head of the first repository must be MC_REVIEW_HEAD; every id the goal requires has one line.
  * A move to merge has no NOT OK line and a move to build has one.
  */
@@ -705,11 +733,17 @@ function reviewMove(goal, target, to, ctx) {
   const ids = checked.failed.map((one) => one.id).join(', ');
   if (to === 'merge' && checked.failed.length) return { refusal: `${REVIEW_FILE} has NOT OK lines (${ids}) — a goal with a rejected item does not merge: mc goal stage build` };
   if (to === 'build' && !checked.failed.length) return { refusal: `${REVIEW_FILE} has no NOT OK line — every item is OK, so the goal is moved to merge: mc goal stage merge` };
-  let round = rejections(parseLog(read(join(target.dir, LOG_FILE)) ?? '')) + 1;
-  // A desk handoff under the old rejection limit could leave a numbered verdict without a move to build.
+  const repairs = rejections(parseLog(read(join(target.dir, LOG_FILE)) ?? ''));
+  let round = repairs + 1;
+  // A decision hold can archive a verdict without adding a move to build.
   const archived = new Set(ctx.listFiles(target.dir));
   while (archived.has(`REVIEW-${round}.md`)) round++;
-  return { text, round, failed: to === 'build' ? checked.failed.map((one) => one.id) : [] };
+  return {
+    text,
+    round,
+    failed: to === 'build' ? checked.failed.map((one) => one.id) : [],
+    repairLimit: to === 'build' && repairs >= MAX_REVIEW_REPAIRS,
+  };
 }
 
 /**
@@ -1699,9 +1733,13 @@ function goalLine(goal, ctx, isPhaseOpen) {
   const hold = readHold(goal.dir, ctx.read);
   // A finished goal has no next action, whatever its last entry said.
   const next = buildOutcome(goal, ctx, { hold, isPhaseOpen }) ?? (FINISHED.includes(goal.stage) ? '—' : oneLine(goal.log.at(-1)?.next ?? '—'));
-  const status = waitsOnPerson(goal) ? `${stageWords(goal)}, waits on a person`
-    : goal.stage === 'build' && noCriteria(goal) ? `${stageWords(goal)}, no criteria — not started`
-    : stageWords(goal);
+  let status = stageWords(goal);
+  if (waitsOnPerson(goal)) {
+    const item = readGoalDeskItem(goal, { env: ctx.env });
+    status = item?.state === 'for-martin' ? `${status}, waits on a person` : `${goal.stage} · decision`;
+  } else if (goal.stage === 'build' && noCriteria(goal)) {
+    status += ', no criteria — not started';
+  }
   const held = hold ? `, held by ${hold.by ?? '—'}` : '';
   return `${name} · ${goal.repos.join(',')} · ${status}${held} · ${criteriaWords(goal)} · ${sessions(goal.log)} sessions · ${next}`;
 }
