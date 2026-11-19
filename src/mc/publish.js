@@ -162,33 +162,38 @@ function markdownIndent(whitespace, column = 0) {
  * Pin structural blocks in order, including their surrounding nonblank lines.
  * In addition to possible headings, fences, raw HTML and reference definitions,
  * keep top-level indented code. Indentation alone is not code within a paragraph
- * or at a list item's content column, including after a blank line in a loose list.
+ * or at a list item's content column. Only a nonempty item continues across a
+ * blank line.
  */
 function learningStructure(text) {
   const structural = /\x60{3,}|~{3,}|<[A-Za-z/!?]|\]:|^[ \t>]*(?:#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$)/mu;
   const boundary = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:\x60{3,}|~{3,}|>|<[A-Za-z/!?])|(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$)/u;
   const listItem = /^( {0,3})([-+*]|\d{1,9}[.)])([ \t]+|$)(.*)$/u;
-  let listColumn = 0;
+  let list = null;
   return JSON.stringify(text.split(/\r?\n(?:[ \t]*\r?\n)+/u).filter(block => {
+    if (!list?.hasContent) list = null;
     let paragraph = false, code = false;
     for (const line of block.split(/\r?\n/u)) {
       if (!line.trim()) continue;
       const column = markdownIndent(/^[ \t]*/u.exec(line)[0]);
-      if (listColumn && column >= listColumn) continue;
-      if (column >= 4) {
-        if (!paragraph) { code = true; listColumn = 0; }
+      if (list && column >= list.column) {
+        list.hasContent = true;
         continue;
       }
-      if (boundary.test(line)) { paragraph = false; listColumn = 0; continue; }
+      if (column >= 4) {
+        if (!paragraph) { code = true; list = null; }
+        continue;
+      }
+      if (boundary.test(line)) { paragraph = false; list = null; continue; }
       const item = listItem.exec(line);
       // Only a nonempty bullet or a list starting at 1 can interrupt prose.
-      if (item && (!paragraph || listColumn || (item[4] && /^([-+*]|1[.)])$/u.test(item[2])))) {
+      if (item && (!paragraph || list || (item[4] && /^([-+*]|1[.)])$/u.test(item[2])))) {
         const markerEnd = item[1].length + item[2].length;
         const padding = markdownIndent(item[3], markerEnd) - markerEnd;
-        listColumn = markerEnd + (padding >= 1 && padding <= 4 ? padding : 1);
-        paragraph = Boolean(item[4]) && padding <= 4;
+        list = { column: markerEnd + (padding >= 1 && padding <= 4 ? padding : 1), hasContent: Boolean(item[4]) };
+        paragraph = list.hasContent && padding <= 4;
       } else {
-        if (!paragraph) listColumn = 0;
+        if (!paragraph) list = null;
         paragraph = true;
       }
     }

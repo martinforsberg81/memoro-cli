@@ -705,8 +705,11 @@ visible, it also preserves the blocks containing headings, possible fences,
 raw HTML or reference definitions, in their original order. A top-level
 indented code block is pinned too: four columns, including tab stops, start
 code at a block boundary, not in the middle of prose or at a list item's
-content indentation. Both the guard and the comparison with current main
-read area page blobs without trimming.
+content indentation. A marker-only item can take its first content on the
+next properly indented line. A blank before that content ends the empty item,
+so a later top-level indented code block is not a list continuation. An item
+that already has content can continue across a blank line. Both the guard
+and the comparison with current main read area page blobs without trimming.
 If the page changed on main, even only at its edges, the command requires a
 new check against current main.
 It gates the commit, publishes without force and hands the immutable PR

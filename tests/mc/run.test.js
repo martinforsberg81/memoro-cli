@@ -835,6 +835,9 @@ test('learning guards both entrances and records accurate, held, repair and lega
     const codeBlock = await l.change(child, accurate.name, AREA_PAGE, STALE_AREA.replace(INTRO, `    ${INTRO}`));
     assert.equal(codeBlock.code, 2, 'terminal: four columns turn the introductory prose into code');
     assert.match(codeBlock.stderr, /changes its Markdown structure or raw HTML/u);
+    const afterEmptyItem = await l.change(child, accurate.name, AREA_PAGE, STALE_AREA.replace(INTRO, `+\n\n    ${INTRO}`));
+    assert.equal(afterEmptyItem.code, 2, 'terminal: a blank line ends the empty item before the indented code');
+    assert.match(afterEmptyItem.stderr, /changes its Markdown structure or raw HTML/u);
     const refused = await l.change(child, accurate.name, 'docs/technical/command.md', 'Rewrite the standard.\n');
     assert.equal(refused.code, 2, refused.stderr);
     assert.match(refused.stderr, /not an edit to the declared area page/u);
