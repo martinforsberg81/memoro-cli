@@ -1,46 +1,48 @@
-/** Read-only evidence about a goal's build dispatches from the runner's existing logs. */
+/** Read-only evidence about a goal's build dispatches from existing runner logs. */
 import { join } from 'node:path';
 
-/** A tool's own session-start event, not a file, PID, exit, or announcement. */
-export function hasToolStart(text) {
+/** Only a tool's own start event supplies its session identity. */
+export function toolStartIds(text) {
+  const ids = new Set();
   for (const line of String(text ?? '').split('\n')) {
     try {
       const event = JSON.parse(line);
-      if (event?.type === 'thread.started' && typeof event.thread_id === 'string' && event.thread_id) return true;
-      if (event?.type === 'system' && event.subtype === 'init' && typeof event.session_id === 'string' && event.session_id) return true;
+      if (event?.type === 'thread.started' && typeof event.thread_id === 'string' && event.thread_id) ids.add(event.thread_id);
+      if (event?.type === 'system' && event.subtype === 'init' && typeof event.session_id === 'string' && event.session_id) ids.add(event.session_id);
     } catch { /* Incomplete or non-JSON output is not a start event. */ }
   }
-  return false;
+  return [...ids];
 }
 
+export function hasToolStart(text) { return toolStartIds(text).length > 0; }
+
 /**
- * The stem is sampled before the announcement and can be earlier; only
- * the same and previous second are considered here, so older traces stay unknown. A stem flattens the two names, so different goal names can
- * collide. A trace is attributable only when the recorded announcements and
- * existing candidate traces give it a unique owner and a unique candidate.
- * Rotated or missing announcements cannot establish identity on their own;
- * callers must additionally correlate the completed run before claiming a start.
+ * An announcement alone is not a tool boundary. Completed runs identify their
+ * goal and tool session; a trace identifies the same session in its start event.
+ * Match all three, and refuse ambiguous or missing records. The timestamp in a
+ * trace stem is sampled before the announcement, not necessarily within one
+ * second of it. The flattened stem alone never identifies a goal.
  */
-export function buildDispatches({ root, programme, goal, read }) {
+export function buildDispatches({ root, programme, goal, read, list }) {
   const dir = join(root, 'runner', 'log');
   const lines = [read(join(dir, 'runner.log.1')), read(join(dir, 'runner.log'))]
     .filter(Boolean).flatMap((text) => text.split('\n'));
   const announcements = [];
   for (const line of lines) {
     const match = line.match(/^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\s+goal:([a-z0-9-]+)\/([a-z0-9-]+): (build|review|draft|mend) starting \(/u);
-    if (!match) continue;
-    const time = Date.parse(match[1]);
-    const paths = [time - 1000, time].map((ms) => {
-      const stamp = new Date(ms).toISOString().replace(/\.000Z$/u, 'Z').replace(/[-:]/gu, '');
-      return join(dir, `goal-${match[2]}-${match[3]}-${stamp}.jsonl`);
-    });
-    announcements.push({ at: match[1], programme: match[2], goal: match[3], kind: match[4], paths });
+    if (match) announcements.push({ at: match[1], programme: match[2], goal: match[3], kind: match[4] });
   }
-  const owners = new Map();
-  for (const item of announcements) for (const path of item.paths) owners.set(path, (owners.get(path) ?? 0) + 1);
+  const rows = String(read(join(dir, 'runs.tsv')) ?? '').trim().split('\n').map((line) => line.split('\t'));
+  const header = rows.shift() ?? [];
+  const runs = rows.map((cells) => Object.fromEntries(header.map((key, i) => [key, cells[i]])))
+    .filter((row) => row.name === `goal:${programme}/${goal}` && row.kind === 'build-goal' && row.session && row.session !== '-' && Number.isFinite(Number(row.seconds)) && Number.isFinite(Date.parse(row.ts)));
+  const files = (list?.(dir) ?? []).filter((name) => name.startsWith(`goal-${programme}-${goal}-`) && name.endsWith('.jsonl'));
   return announcements.filter((item) => item.programme === programme && item.goal === goal && item.kind === 'build').map((item) => {
-    const candidates = item.paths.filter((path) => read(path) !== null);
-    const trace = candidates.length === 1 && owners.get(candidates[0]) === 1 ? candidates[0] : null;
-    return { at: item.at, trace, start: trace && hasToolStart(read(trace)) ? 'started' : 'unknown' };
+    const at = Date.parse(item.at);
+    // Runner durations are rounded and timestamps have second precision.
+    const matching = runs.filter((row) => Math.abs(Date.parse(row.ts) - Number(row.seconds) * 1000 - at) <= 2000);
+    const matches = matching.flatMap((row) => files.filter((name) => toolStartIds(read(join(dir, name))).includes(row.session)).map((name) => ({ row, name })));
+    const trace = matches.length === 1 && announcements.filter((other) => other.programme === programme && other.goal === goal && other.kind === 'build' && Math.abs(Date.parse(matches[0].row.ts) - Number(matches[0].row.seconds) * 1000 - Date.parse(other.at)) <= 2000).length === 1 ? join(dir, matches[0].name) : null;
+    return { at: item.at, trace, start: trace ? 'started' : 'unknown' };
   });
 }
