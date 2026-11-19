@@ -55,8 +55,7 @@
  * it back (`refusedMove`). A build session moves `build` to `review` — not
  * while a criterion is not met (`unmetGoalWords`) — or sets `blocked`; a
  * review session moves `review` to `merge`, or back to `build` when its
- * verdict (REVIEW.md) has a NOT OK line — the third time it keeps the goal in
- * review and sets Martin; a mend session
+ * verdict (REVIEW.md) has a NOT OK line; a mend session
  * sets a status and requeues `merge`, and moves no stage; the interactive
  * plan session any stage forward.
  *
@@ -426,7 +425,6 @@ function logEntry(args, fields, ctx) {
   }
   const moves = fields.stage !== null && fields.stage !== goal.stage;
   if (verdict.round) write(join(target.dir, `REVIEW-${verdict.round}.md`), verdict.text);
-  if (verdict.third) return thirdRejection({ target, goal, fields, round: verdict.round }, ctx);
   let done = fields.done;
   const back = moves && backward(goal.stage, fields.stage);
   const base = fields.comment;
@@ -683,9 +681,9 @@ function mainConflictRefusal(goal, target, ctx) {
 
 /**
  * What a review session's move out of review asks of REVIEW.md (D4, D5, D8), as `{}` for any other move, `{ refusal }`,
- * or `{ text, round, third }`: the verdict's text, the round it is (rejections so far, plus one) and whether a move to
- * build is the third rejection. The head of the first repository must be MC_REVIEW_HEAD; every id the goal requires
- * has one line; a move to merge has no NOT OK line and a move to build has one.
+ * or `{ text, round, failed }`: the verdict's text, its archive number and the rejected ids whose evidence to renew.
+ * The head of the first repository must be MC_REVIEW_HEAD; every id the goal requires has one line.
+ * A move to merge has no NOT OK line and a move to build has one.
  */
 function reviewMove(goal, target, to, ctx) {
   const { env, read } = ctx;
@@ -707,29 +705,11 @@ function reviewMove(goal, target, to, ctx) {
   const ids = checked.failed.map((one) => one.id).join(', ');
   if (to === 'merge' && checked.failed.length) return { refusal: `${REVIEW_FILE} has NOT OK lines (${ids}) — a goal with a rejected item does not merge: mc goal stage build` };
   if (to === 'build' && !checked.failed.length) return { refusal: `${REVIEW_FILE} has no NOT OK line — every item is OK, so the goal is moved to merge: mc goal stage merge` };
-  const prior = rejections(parseLog(read(join(target.dir, LOG_FILE)) ?? ''));
-  return { text, round: prior + 1, third: to === 'build' && prior >= MAX_REJECTIONS, failed: to === 'build' ? checked.failed.map((one) => one.id) : [] };
-}
-
-/** How many times a review may send a goal back to build: the next NOT OK is the desk's. */
-const MAX_REJECTIONS = 2;
-
-/**
- * The third rejection: no move. The goal stays in review, status Martin, with the comment that it was rejected a third
- * time and the items that failed; nothing is queued and the session ends.
- */
-function thirdRejection({ target, goal, fields, round }, ctx) {
-  const { stdout, stderr, env, read, write } = ctx;
-  const failed = checkVerdict({ text: read(join(target.dir, REVIEW_FILE)), goal: { ...goal, repos: [], success_criteria: [], version: 1 } }).failed;
-  const said = `rejected a third time — the goal stays in review for the desk${failed.length ? `; failed: ${failed.map((one) => one.id).join(', ')}` : ''}`;
-  const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: writerRole(env), done: fields.done, comment: [fields.comment, said].filter(Boolean).join(' — '), next: fields.next };
-  const outcome = setGoalState({ dir: target.dir, status: 'Martin', entry, read, write });
-  if (outcome.problems) {
-    for (const problem of outcome.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
-    return 1;
-  }
-  stdout.write(`mc: ${target.name} · ${stageWords(outcome.goal)} — ${said} (${REVIEW_FILE} kept as REVIEW-${round}.md)\n`);
-  return 0;
+  let round = rejections(parseLog(read(join(target.dir, LOG_FILE)) ?? '')) + 1;
+  // A desk handoff under the old rejection limit could leave a numbered verdict without a move to build.
+  const archived = new Set(ctx.listFiles(target.dir));
+  while (archived.has(`REVIEW-${round}.md`)) round++;
+  return { text, round, failed: to === 'build' ? checked.failed.map((one) => one.id) : [] };
 }
 
 /**
