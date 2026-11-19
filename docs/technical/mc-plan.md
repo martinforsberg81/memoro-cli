@@ -257,7 +257,8 @@ evidence. A collector link can corroborate the defect identity but not the
 archived evidence version: the collector can replace the digest at that path.
 An identity-only legacy link with no recorded digest is ambiguous and repair
 makes no order. A recorded digest for a different row does not close the
-selected row. A legacy feedback link can still corroborate a report with the
+selected row or let it consume a waiting proposal pinned to the other row.
+A legacy feedback link can still corroborate a report with the
 same original incident. Repair checks ownership and rechecks the selected
 evidence in the strict programme lock; it does not hold the lock while the
 role reads. Changed evidence or concurrent order changes cannot be committed

@@ -122,13 +122,19 @@ function archivedDisposition(source, env) {
   return possible || statuses.size > 1 ? 'ambiguous' : null;
 }
 
+function isWaitingVersion(candidate, source) {
+  if (!candidate?.ref || candidate.outcome || candidate.proposal.isArchived) return false;
+  const versions = candidate.evidence.get(source.ref.key);
+  return !versions || versions.has(source.ref.digest);
+}
+
 function waitingMatch(source, env) {
   if (source.ref.kind === 'proposal') return {};
   const matches = [];
   let possible = false;
   for (const { path } of pendingProposals(env)) {
     const candidate = readRepairSource({ kind: 'proposal', given: path, env });
-    if (!candidate.ref || candidate.outcome || candidate.proposal.isArchived) continue;
+    if (!isWaitingVersion(candidate, source)) continue;
     const strength = linkStrength(source.ref, candidate.ref);
     if (strength === 'certain') matches.push(candidate);
     if (strength === 'possible') possible = true;
@@ -157,7 +163,7 @@ function decisionFor(source, all, ctx) {
   if (owner.possible) return { status: 'ambiguous' };
   if (source.proposal?.isArchived) return { status: 'ambiguous' }; // Unknown archive disposition is not intake.
   if (previous.source?.digest === source.ref.digest && previous.status) return { status: previous.status };
-  if (generated?.ref && !generated.proposal.isArchived && !generated.outcome) source.associated = generated;
+  if (isWaitingVersion(generated, source)) source.associated = generated;
   else {
     const waiting = waitingMatch(source, ctx.env);
     if (waiting.possible) return { status: 'ambiguous' };
@@ -174,12 +180,11 @@ function generatedProposal(source, repo, area, summary, now, env) {
     return path;
   }
   const previous = readRepairCase(env, source.ref.key);
-  const archived = previous.proposal && existsSync(archivedProposal(previous.proposal));
   const day = now.toISOString().slice(0, 10);
   const system = repo === 'memoro-cli' ? 'mc' : 'memoro';
-  const suffix = archived ? `-${source.ref.digest}` : '';
-  const path = !archived && previous.proposal ? previous.proposal
-    : join(keyProposalsDir(area, env), `${day}-${system}-repair-${source.ref.key}${suffix}.md`);
+  // A prior proposal that was not reusable must not be repurposed for this reading.
+  const suffix = previous.proposal ? `-${source.ref.digest}` : '';
+  const path = join(keyProposalsDir(area, env), `${day}-${system}-repair-${source.ref.key}${suffix}.md`);
   const incident = source.locator?.task ? `Task ID: ${source.locator.task}`
     : source.locator ? `Incident timestamp: ${source.locator.timestamp}; build: ${source.locator.build}` : null;
   const fingerprint = source.ref.kind === 'error' ? `Fingerprint: \`${JSON.parse(source.text).fingerprint}\`` : null;
