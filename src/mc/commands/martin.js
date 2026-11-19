@@ -10,6 +10,7 @@ import { openInWorkArea } from '../work-open.js';
 import { interactive } from '../prompt.js';
 import { scanArgs } from './flags.js';
 import { interactiveToolRefusal } from '../interactive-tool.js';
+import { directoryAccessRefusal } from '../interactive-access.js';
 import { collectMartinQueue, renderMartinQueue } from '../martin-collect.js';
 import { deskItemQuestion, itemDirectory, listDeskItems, readDeskItem, syncDeskItems, updateDeskItem } from '../desk-items.js';
 import { drainDeskPreparation, prepareDeskItem } from '../desk-prepare.js';
@@ -86,7 +87,13 @@ export async function run(argv, deps = {}) {
   let last;
   try { last = readLastOpen({ env, read: deps.read || readDeskText }); } catch (error) { stderr.write(`mc: ${error.message}; correct or remove it, then open the desk again\n`); return 1; }
   const root = (deps.desk || martinDir)(env);
-  (deps.mkdir || mkdirSync)(root, { recursive: true });
+  try { (deps.mkdir || mkdirSync)(root, { recursive: true }); }
+  catch (error) {
+    const reason = directoryAccessRefusal(error, root);
+    if (!reason) throw error;
+    stderr.write(`mc: ${reason}\n`);
+    return 1;
+  }
   const data = openingFor({ env, home, now, last, deps, stderr });
   if (!data) return 1;
   const prompt = renderLaunchSnapshot(data);
