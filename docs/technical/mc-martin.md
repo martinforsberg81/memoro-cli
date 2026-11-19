@@ -720,7 +720,10 @@ indentation it does not meet. For paragraph continuation the guard uses actual
 [HTML block boundaries](https://spec.commonmark.org/0.31.2/#html-blocks),
 not the broader raw-block pinning check. An HTML block consumes its body and
 any closing delimiter without opening a paragraph. It ends at its delimiter,
-at a blank for a blank-terminated form, or when its containing item closes.
+before a terminating blank, when its containing item closes, or at end of
+input. In addition to the ordered conservative blocks, the guard preserves
+each recognized HTML block's full source span in order, including interior
+blank lines and whitespace and any consumed delimiter line.
 A complete tag that only starts a type 7 block cannot interrupt a paragraph;
 an inline autolink does not by itself end or prevent a paragraph. Both the
 guard and the comparison with current main read area page blobs without trimming.

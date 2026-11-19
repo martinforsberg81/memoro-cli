@@ -192,24 +192,38 @@ function learningHtmlBlock(content, paragraph) {
  * In addition to possible headings, fences, raw HTML and reference definitions,
  * keep top-level indented code. Indentation alone is not code within a paragraph
  * or at a list item's content column. Only a nonempty item continues across a
- * blank line.
+ * blank line. Also pin each recognized HTML leaf's source, which can span
+ * several of these conservative chunks.
  */
 function learningStructure(text) {
   const structural = /\x60{3,}|~{3,}|<[A-Za-z/!?]|\]:|^[ \t>]*(?:#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$)/mu;
   const boundary = /^(?:#{1,6}(?:[ \t]|$)|(?:\x60{3,}|~{3,}|>)|(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$)/u;
   const listMarker = /^([-+*]|\d{1,9}[.)])([ \t]+|$)(.*)$/u;
   const items = [];
+  const pinned = [], htmlSpans = [];
   // The leaf belongs to the deepest active item (or the document at depth zero).
   let html = null, fence = null;
-  return JSON.stringify(text.split(/\r?\n(?:[ \t]*\r?\n)+/u).filter(block => {
-    // A blank ends the leaf paragraph and any still-empty item.
-    if (items.at(-1)?.hasContent === false) items.pop();
-    if (html?.end === null) html = null;
+  function closeHtml(end) {
+    if (!html) return;
+    htmlSpans.push(text.slice(html.start, end));
+    html = null;
+  }
+  // Keep the conservative chunks unchanged, but count their original separators
+  // in source offsets. The first newline still belongs to the preceding line.
+  const chunks = text.split(/(\r?\n(?:[ \t]*\r?\n)+)/u);
+  let offset = 0;
+  for (let i = 0; i < chunks.length; i += 2) {
+    const block = chunks[i], separator = chunks[i + 1] ?? '';
+    const newline = /^\r?\n/u.exec(separator)?.[0] ?? '';
     let paragraph = false, code = false;
-    for (const line of block.split(/\r?\n/u)) {
+    for (const [rawLine, line] of (block + newline).matchAll(/([^\n]*?)(?:\r?\n|$)/gu)) {
+      if (!rawLine) continue;
+      const lineStart = offset;
+      offset += rawLine.length;
       const indent = /^[ \t]*/u.exec(line)[0];
       let column = markdownIndent(indent);
       let content = line.slice(indent.length);
+      if (!content && html?.end === null) closeHtml(lineStart);
       let depth = items.length;
       while (depth && column < items[depth - 1].column) depth--;
 
@@ -220,7 +234,7 @@ function learningStructure(text) {
         // A matched HTML leaf owns the whole line, even if it resembles a new
         // block or includes the end delimiter. Unmatched leaves close below.
         if (depth === items.length && html) {
-          if (html.end?.test(content)) html = null;
+          if (html.end?.test(content)) closeHtml(offset);
           break;
         }
         const fenceLine = relative < 4 && /^(\x60{3,}|~{3,})(.*)$/u.exec(content);
@@ -242,7 +256,8 @@ function learningStructure(text) {
           if (paragraph && !startsBlock && !startsItem) break;
           items.length = depth;
           paragraph = false;
-          html = fence = null;
+          closeHtml(lineStart);
+          fence = null;
         }
         if (parent) parent.hasContent = true;
         if (relative >= 4) {
@@ -252,7 +267,8 @@ function learningStructure(text) {
         }
         if (startsHtml) {
           paragraph = false;
-          if (!startsHtml.end?.test(content)) html = startsHtml;
+          html = { start: lineStart, end: startsHtml.end };
+          if (html.end?.test(content)) closeHtml(offset);
           break;
         }
         if (fenceLine && (fenceLine[1][0] === '~' || !fenceLine[2].includes('`'))) fence = fenceLine[1];
@@ -273,8 +289,17 @@ function learningStructure(text) {
         break;
       }
     }
-    return code || structural.test(block) || MARTIN_DECIDED.test(block);
-  }));
+    if (code || structural.test(block) || MARTIN_DECIDED.test(block)) pinned.push(block);
+    if (separator) {
+      // A blank ends the leaf paragraph and any still-empty item. Delimited
+      // HTML instead owns the blanks until its delimiter or item closure.
+      if (items.at(-1)?.hasContent === false) items.pop();
+      if (html?.end === null) closeHtml(offset);
+      offset += separator.length - newline.length;
+    }
+  }
+  closeHtml(text.length);
+  return JSON.stringify([pinned, htmlSpans]);
 }
 
 /**
