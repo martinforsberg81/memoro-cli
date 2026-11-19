@@ -9,15 +9,13 @@ page, `~/mc/programs/<programme>/README.md`; a session that must ask about an un
 means the programme was not designed. A recorded programme's document is written with
 [writing a programme document](writing-a-programme-document.md): it binds what the user gets, how it looks and how one sees that it works; the construction is the planner's and the builder's.
 
-Every programme is a bounded implementation plan, archived when its work is
-finished and written back. Its enduring direction belongs to the area pages.
+Every programme is a bounded implementation plan; enduring direction belongs to area pages.
 A recorded programme uses [the programme document](references/programme-document.md);
 a repair uses [the repair page](references/repair-page.md);
 a programme without a record uses [the programme page](references/programme-readme.md).
-Legacy pages preserve the held Aim in the appropriate area without silently
-changing its meaning. Finish active work where it stands, write back, then archive:
-use the supported manual route without a record, or the valid-record route when
-already established. Do not require the enduring direction to be declared over.
+For legacy pages, preserve the held Aim in the appropriate area without changing its meaning.
+Finish active work where it stands; archive after write-back even if the enduring direction continues.
+Use the supported manual route without a record, or the valid-record route when already established.
 
 ## Files
 
