@@ -190,8 +190,10 @@ function learningStructure(text) {
       if (item && (!paragraph || list || (item[4] && /^([-+*]|1[.)])$/u.test(item[2])))) {
         const markerEnd = item[1].length + item[2].length;
         const padding = markdownIndent(item[3], markerEnd) - markerEnd;
-        list = { column: markerEnd + (padding >= 1 && padding <= 4 ? padding : 1), hasContent: Boolean(item[4]) };
-        paragraph = list.hasContent && padding <= 4;
+        const hasContent = Boolean(item[4]);
+        const contentPadding = hasContent && padding >= 1 && padding <= 4 ? padding : 1;
+        list = { column: markerEnd + contentPadding, hasContent };
+        paragraph = hasContent && padding <= 4;
       } else {
         if (!paragraph) list = null;
         paragraph = true;
