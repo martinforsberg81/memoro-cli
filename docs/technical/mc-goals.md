@@ -256,6 +256,18 @@ session, after the lines that say where the goal is (`goalPrompt`,
 goal rows on the page say `criteria <met>/<all>`; the page's is green when all
 are met.
 
+The list's Next cell and goal detail also show the latest recorded build
+dispatch outcome when available. A tool start needs an announcement, a
+matching completed run's session identity and the tool's own start event; an
+announcement or exit alone is not a start. A credits gateway's pre-spawn
+refusal is named only when its diagnostic can be attributed to that dispatch;
+otherwise the start is unknown. These are historical evidence, not a change to
+eligibility. A ready build retains its recorded Next, or says that no bounded
+continuation was recorded. A committed build-to-review transition names
+independent review only while review is the current stage. A technical stop
+names its reason, desk and retained branch and PR, with the existing log and
+worktree detail below. A goal hold takes precedence over this summary.
+
 ## LOG.md
 
 Each session adds one entry, newest last:

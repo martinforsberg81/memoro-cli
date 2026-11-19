@@ -30,7 +30,7 @@ export function buildDispatches({ root, programme, goal, read, list }) {
   const announcements = [];
   for (const line of lines) {
     const match = line.match(/^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\s+goal:([a-z0-9-]+)\/([a-z0-9-]+): (build|review|draft|mend) starting \(/u);
-    if (match) announcements.push({ at: match[1], programme: match[2], goal: match[3], kind: match[4] });
+    if (match) announcements.push({ at: match[1], programme: match[2], goal: match[3], kind: match[4], line });
   }
   const rows = String(read(join(dir, 'runs.tsv')) ?? '').trim().split('\n').map((line) => line.split('\t'));
   const header = rows.shift() ?? [];
@@ -43,6 +43,14 @@ export function buildDispatches({ root, programme, goal, read, list }) {
     const matching = runs.filter((row) => Math.abs(Date.parse(row.ts) - Number(row.seconds) * 1000 - at) <= 2000);
     const matches = matching.filter((row) => row.session && row.session !== '-').flatMap((row) => files.filter((name) => toolStartIds(read(join(dir, name))).includes(row.session)).map((name) => ({ row, name })));
     const trace = matching.length === 1 && matches.length === 1 && announcements.filter((other) => other.programme === programme && other.goal === goal && other.kind === 'build' && Math.abs(Date.parse(matches[0].row.ts) - Number(matches[0].row.seconds) * 1000 - Date.parse(other.at)) <= 2000).length === 1 ? join(dir, matches[0].name) : null;
-    return { at: item.at, trace, start: trace ? 'started' : 'unknown' };
+    // A credits wrapper's own diagnostic is pre-spawn. Without a session ID,
+    // require the exact timestamped stem and reject every recorded collision;
+    // a missing or delayed stem is deliberately not proof of refusal.
+    const stamp = item.at.replace(/[-:]/gu, '');
+    const stem = `goal-${programme}-${goal}-${stamp}`;
+    const collisions = announcements.filter((other) => `goal-${other.programme}-${other.goal}-${other.at.replace(/[-:]/gu, '')}` === stem);
+    const stderr = String(read(join(dir, `${stem}.json.err`)) ?? '');
+    const refused = !trace && matching.length === 1 && matching[0].exit === '1' && collisions.length === 1 && item.line.includes(' · on credits (') && !hasToolStart(read(join(dir, `${stem}.jsonl`))) && /^mc: (?:codex|claude) API (?:is off \(mc run --billing (?:codex|claude) on\)|reserve unavailable \([^\n]*\))$/mu.test(stderr);
+    return { at: item.at, trace, start: trace ? 'started' : refused ? 'refused' : 'unknown' };
   });
 }

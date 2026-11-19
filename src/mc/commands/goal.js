@@ -1731,7 +1731,7 @@ function buildOutcome(goal, ctx) {
   const latest = buildDispatches({ root: workRoot(ctx.env), programme: goal.programme, goal: goal.goal, read: ctx.read, list: ctx.listFiles }).at(-1);
   if (!latest) return null;
   const next = (goal.log.at(-1)?.next ?? 'no bounded continuation recorded').replace(/\s*\n\s*/gu, ' ');
-  const start = latest.start === 'started' ? 'build started' : 'build start unknown — no tool boundary recorded';
+  const start = latest.start === 'started' ? 'build started' : latest.start === 'refused' ? 'build not started — provider preflight refused' : 'build start unknown — no tool boundary recorded';
   return `${start} · build remains eligible · Next: ${next}`;
 }
 
