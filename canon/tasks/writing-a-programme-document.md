@@ -6,11 +6,21 @@ description: Writing a programme document in mc — what the user gets and how o
 
 A programme document is an order, as a buyer of software hands it to the firm that builds it. Martin is the buyer: it is written with him in a session, he says there that it is ready, the desk sets it ready with `mc programs state <programme> ready`, and the planner cuts goals from its README.
 
+## From proposals to an order
+
+A user suggestion is evidence of a problem or a need. A selection of suggestions, even when grouped into numbered candidate parts, is a planning draft. Keep it in `draft` and name the decisions and evidence still needed. A request to collect suggestions authorizes preparing that draft.
+
+The desk prepares each candidate and works through its product design with Martin in the conversation. Establish what the person is trying to do, check the report against the running app, related work and the binding standards, then present one concrete design at a time with what the person will see and do. Include the cases and constraints that can change the design: existing workflows and controls, which item or session owns the work, phone and desktop behaviour, loading and failure, accessibility, and what is stored or shared. Show the appearance or write out the behaviour, as appropriate. Record the result of the conversation for each part. A reporter's proposed button, workflow or fix is input to that design.
+
+Complete planning and design for **every** part before bringing the order to Martin to set ready. Each part needs a settled user outcome and design, a chosen technical solution with its supporting investigations complete, and a checkable acceptance procedure. This includes behaviour-only changes and repairs. Goal cutting and build start from the ready order. They carry out the design agreed at the desk.
+
+## What the order settles
+
 An order is built to its end without him (Martin, 2026-11-17). Between ready and done nothing waits for him: no picture to accept, nothing to look at, listen to or try, no reading to approve. Every choice of his is made in the document before it is ready; the build is judged against the document and measured (`mc shot`, the checks), never by his use. An act of his the work needs (money, a console, a legal commitment) is done before ready or after the end, as an act of its own.
 
 An order is temporary: archived when its work has landed and not read again. What must last is written where it lasts before then: what runs in `docs/technical/`, aims and decisions on the area page, findings as proposals in their area ([proposals](proposals.md)).
 
-The document binds what the user gets, how it looks and how one sees that it works. How it is built is the planner's and the builder's to settle, so leave technical detail out unless the thing ordered rests on it. Which technical solution each part takes is still known before the order is ready (Martin, 2026-11-18): every investigation it depends on is finished first, its result kept in the programme's evidence or an area proposal the part names, and no part orders an investigation. Keep it short enough that he reads all of it.
+Keep the findings for the chosen technical solution in the programme's evidence or an area proposal the part names (Martin, 2026-11-18). The planner and builder settle routine construction within that solution. Include the technical details the order depends on and keep the document short enough to read in full.
 
 ## The document
 
