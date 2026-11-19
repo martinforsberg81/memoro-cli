@@ -6158,7 +6158,7 @@ test('a hold written while a review worktree is read starts no session and write
   assert.equal(goalEntries(f).length, before, 'no new entry');
 });
 
-test('an incomplete ordinary plan waits on Martin and holds later drafts without spinning', async () => {
+test('an incomplete ordinary plan waits for automatic decision and holds later drafts without spinning', async () => {
   const handoff = 'Missing produced.csv; technical desk verifies setup.';
   const oldLog = '## 2026-08-28T10:00Z · claude · draft · ready · by plan\n\nNext: Check old.csv.\n';
   for (const next of [null, handoff]) {
@@ -6175,7 +6175,7 @@ test('an incomplete ordinary plan waits on Martin and holds later drafts without
     assert.match(f.files[`${GOALS}/a/LOG.md`], /plan session ended without completing the draft/u);
     assert.equal(await goalCommand(['list', 'prog'], goalDeps), 0);
     const row = out.join('').split('\n').find((line) => line.startsWith('  prog/a ·'));
-    assert.ok(row?.includes('draft · Martin'), row);
+    assert.ok(row?.includes('draft · decision'), row);
     assert.equal(row.split(' · ').at(-1), next ?? '—', 'show the current handoff, not older draft history');
     assert.equal((await runner.pass()).ran, 0);
     assert.equal(f.calls.sessions.length, 1);
