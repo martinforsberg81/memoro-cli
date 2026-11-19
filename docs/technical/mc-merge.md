@@ -1377,7 +1377,15 @@ registered pull requests to merge. Phases hold later goals back until lower phas
 or dropped; there is no chain of execution branches for the merger to restack.
 The queue orders runnable jobs by arrival within each repository lane.
 
-### Repair-owned work
+**The merger is the installed mc** (ruling 37, 2026-10-10). `startMerger`
+spawns `merger-run.js` from the checkout the `mc` on PATH resolves to
+(`installedMergerRun`), never from the caller's own tree, and the first line
+of every merger reads `merger <pid> started — ~/memoro-cli at <sha>`. On
+2026-10-10 the merger that served 17:47-18:00 had been started by a build
+session from its workarea and ran that branch's code, with batches and
+without lanes.
+
+## Repair-owned work
 
 A repair goal in merge needs a handoff for the current, reconciled programme
 release. Its handoff names the revision and the registered pull requests'
@@ -1387,14 +1395,6 @@ admin does not waive it. A measured round checks it again immediately
 before the squash. An obsolete job leaves the queue without changing the
 goal or waking mend. Completion reads the same fence under the programme
 lock; an already landed GitHub change is not undone.
-
-**The merger is the installed mc** (ruling 37, 2026-10-10). `startMerger`
-spawns `merger-run.js` from the checkout the `mc` on PATH resolves to
-(`installedMergerRun`), never from the caller's own tree, and the first line
-of every merger reads `merger <pid> started — ~/memoro-cli at <sha>`. On
-2026-10-10 the merger that served 17:47-18:00 had been started by a build
-session from its workarea and ran that branch's code, with batches and
-without lanes.
 
 ## The async round, SIGTERM and where a red goes
 

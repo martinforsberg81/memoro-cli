@@ -368,19 +368,25 @@ test('repair delivery: a queued or in-flight PR cannot use a stale order or a la
     assert.equal(queued.report.stopped_at, 'repair-release');
     assert.match(queued.report.reason, /needs review/u);
     assert.throws(() => queue({ ...old, repoPath: old.repo_path, repairRevision: first }), /needs review/u);
-    for (const option of ['--admin', '--docs']) {
+    const throughMerge = async (flags, measure) => {
       const stdout = sink(), stderr = sink();
-      const code = await merge(['memoro-cli', '17', option], {
-        env: f.baseEnv, goalsOf, stdout, stderr, resolveRepoPath: () => '/known/memoro-cli',
+      const code = await merge(['memoro-cli', '17', ...flags], {
+        env: f.baseEnv, root: f.root, goalsOf, stdout, stderr, resolveRepoPath: () => '/known/memoro-cli',
+        prFiles: () => ['src/rows.js'], startMerger: () => assert.fail('obsolete delivery cannot start the merger'),
         gh: args => {
-          assert.equal(args[1], 'view', 'stale repair cannot squash through either command route');
+          assert.equal(args[1], 'view', 'stale repair cannot squash through a command route');
           return { ...forge(), stdout: JSON.stringify({ number: 17, title: 'Restore', baseRefName: 'main',
-            state: 'OPEN', headRefOid: sha, headRefName: 'goal/restore', files: [{ path: 'docs/technical/rows.md' }] }) };
+            state: 'OPEN', mergeable: 'MERGEABLE', headRefOid: sha, headRefName: 'goal/restore',
+            files: [{ path: 'docs/technical/rows.md' }] }) };
         },
-        measure: () => assert.fail('obsolete documentation delivery cannot start measurement'),
+        measure,
       });
+      return { code, said: stdout.text() + stderr.text() };
+    };
+    for (const flags of [[], ['--admin'], ['--docs']]) {
+      const { code, said } = await throughMerge(flags, () => assert.fail('obsolete documentation delivery cannot start measurement'));
       assert.equal(code, 1);
-      assert.match(stdout.text() + stderr.text(), /needs review/u);
+      assert.match(said, /needs review/u);
     }
 
     assert.equal(reopenRepair(f.dir, author).changed, true);
@@ -408,6 +414,17 @@ test('repair delivery: a queued or in-flight PR cannot use a stale order or a la
     assert.equal(oldAfterRelease.report.stopped_at, 'repair-release');
     assert.match(oldAfterRelease.report.reason, /different repair release/u);
     assert.equal(JSON.parse(readFileSync(file, 'utf8')).stage, 'merge', 'the newer handoff remains in merge');
+    const revised = readFileSync(page, 'utf8');
+    let measured = false;
+    const docs = await throughMerge(['--docs'], () => {
+      measured = true;
+      writeFileSync(page, `${revised}\nChanged during the documentation round.\n`);
+      return { ok: true };
+    });
+    assert.equal(measured, true);
+    assert.equal(docs.code, 1);
+    assert.match(docs.said, /needs review/u);
+    writeFileSync(page, revised);
     const [landedBeforeReadBack] = await land(current, async options => {
       assert.equal(await options.beforeMerge(), true);
       writeFileSync(page, `${readFileSync(page, 'utf8')}\nChanged while GitHub took the merge.\n`);
