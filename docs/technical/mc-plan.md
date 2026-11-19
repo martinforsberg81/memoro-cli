@@ -466,8 +466,11 @@ refresh](mc-goals.md#the-verbs) on promotion and the first build. In the
 next-draft worktree, fetch first, fast-forward an unbuilt branch to the fetched
 base, and verify there. On a branch with its own commits, verify the branch
 the refresh will retain. Do not discard work or promote on unverified setup.
-If a named premise changes before promotion, reverify it; unrelated movement
-does not invalidate the evidence.
+Before promotion, fetch again and confirm that the named premises still hold
+against the source of the branch refresh. Reverify on the updated setup if a
+named premise changed; unrelated main movement does not invalidate the evidence.
+If either fetch or a required fast-forward fails, or planning cannot establish
+what setup build will receive, leave the goal in draft and log why.
 
 A sound check missing its input in an open phase is logged and left draft and
 ready, with the blocking input and technical desk action in `mc goal log

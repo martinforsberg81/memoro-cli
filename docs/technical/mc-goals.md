@@ -262,9 +262,13 @@ start needs an announcement, a completed run of the matching kind with a
 session identity, and the tool's own start event (including Antigravity's
 native `init`); an announcement or exit alone is not a start. A credits
 gateway's pre-spawn refusal is named only when its diagnostic can be
-attributed to that dispatch; otherwise the start is unknown. These are
-historical evidence, not a change to eligibility. A ready build keeps the most
-recent recorded Next in its current build stage even
+attributed to that dispatch; an unmatched announcement is shown as an unknown
+start, not a refusal. These are historical evidence, not a change to eligibility.
+A ready build with neither a dispatch announcement nor an active main-red wait
+has no outcome summary: list falls back to the last log entry's Next (or `—`),
+and show keeps its ordinary log and worktree detail without a BUILD OUTCOME
+section. When a ready build does have a summary, it keeps the most recent
+recorded Next in its current build stage even
 after a runner bookkeeping entry, or says that no bounded continuation was
 recorded. An unopened phase or missing criterion does not give a build an
 assignment. While the runner's [main-red wait](#what-a-build-session-does)
@@ -650,8 +654,9 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   or bypass review, acceptance, publication or merge evidence. `MC_HEADLESS=1`
   Martin authority is refused; decision authority is allowed, but headless deploy, admin, production-data and credential hooks remain enforced. Decision may use `mc ask` at any active stage, not just the stage of a delivery role. Its mutations log `by decision`; criterion rewrites remain unmet until checked. Build, review and mend retain their ordinary limits.
 - **`show <p>/<g>`** — a status line (`<p>/<g> · stage · status · phase <n> · repos · class ·
-  criteria <met>/<all> · created …`, with `· prs …` when set), the goal as text (*Seen, not only stored*), the last three entries, and
-  each worktree's changed files, commits past `origin/main` and last commit date.
+  criteria <met>/<all> · created …`, with `· prs …` when set), the goal as text (*Seen, not only stored*), the
+  [BUILD OUTCOME summary](#goaljson) when available, the last three log entries,
+  and each worktree's changed files, commits past `origin/main` and last commit date.
 - **`list [<p>]`** — each programme's goals under a line per phase,
   `<p> · phase <n> · in progress` for the phase the programme is in, `· done`
   for one before it and `· after phase <n-1>` for one after it (a stated
@@ -659,8 +664,10 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   phase <m>[, <m>…]` for what the record says the phase waits for, and above
   them `<p> · record invalid — no phase is open` for an invalid record); under it,
   indented, one line per goal: `programme/goal · repos · stage · status ·
-  criteria <met>/<all> · n sessions · the last entry's Next` — `—` for a `done` or `dropped` goal,
-  whose last next action is over. A goal waiting for Martin reads `<stage> · Martin,
+  criteria <met>/<all> · n sessions · Next`. Next shows the
+  [build outcome](#goaljson) when available, otherwise the last log entry's
+  Next (or `—`). It is always `—` for a `done` or `dropped` goal, whose last
+  next action is over. A goal waiting for Martin reads `<stage> · Martin,
   waits on a person` (`waitsOnPerson`); a goal in `build` with no criterion
   `build · ready, no criteria — not started`. A goal that
   does not parse has no phase and is listed last, with its problems.
