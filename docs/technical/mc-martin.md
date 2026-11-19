@@ -707,8 +707,13 @@ indented code block is pinned too: four columns, including tab stops, start
 code at a block boundary, not in the middle of prose or at a list item's
 content indentation. A marker-only item can take its first content on the
 next properly indented line. A blank before that content ends the empty item,
-so a later top-level indented code block is not a list continuation. An item
-that already has content can continue across a blank line. Both the guard
+so a later top-level indented code block is not a list continuation. For this
+block decision, only an empty line or one containing just ASCII spaces and
+tabs is blank; a nonbreaking space is content. A blank closes the paragraph
+but can leave a nonempty item open. A paragraph can start on the marker line,
+on a properly indented following line, or after a blank in a nonempty item.
+Under-indented text stays in the item only as a continuation of an open
+paragraph, not of a heading, code or another non-paragraph block. Both the guard
 and the comparison with current main read area page blobs without trimming.
 If the page changed on main, even only at its edges, the command requires a
 new check against current main.

@@ -169,15 +169,31 @@ function learningStructure(text) {
   const structural = /\x60{3,}|~{3,}|<[A-Za-z/!?]|\]:|^[ \t>]*(?:#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$)/mu;
   const boundary = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:\x60{3,}|~{3,}|>|<[A-Za-z/!?])|(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$)/u;
   const listItem = /^( {0,3})([-+*]|\d{1,9}[.)])([ \t]+|$)(.*)$/u;
+  const listParagraph = (list, content, indent, open) => {
+    // Indented code cannot interrupt a paragraph, but it cannot open one either.
+    if (indent >= 4) return open;
+    const fence = /^(\x60{3,}|~{3,})(.*)$/u.exec(content);
+    if (list.fence) {
+      if (fence && fence[1].startsWith(list.fence) && /^[ \t]*$/u.test(fence[2])) list.fence = null;
+      return false;
+    }
+    if (fence) list.fence = fence[1];
+    if (boundary.test(content)) return false;
+    if (open) return !/^(?:=+|-+)[ \t]*$/u.test(content); // A setext underline ends the paragraph.
+    return !/^\[[^\]]+\]:/u.test(content) && listItem.exec(content)?.[4] !== '';
+  };
   let list = null;
   return JSON.stringify(text.split(/\r?\n(?:[ \t]*\r?\n)+/u).filter(block => {
     if (!list?.hasContent) list = null;
     let paragraph = false, code = false;
     for (const line of block.split(/\r?\n/u)) {
-      if (!line.trim()) continue;
-      const column = markdownIndent(/^[ \t]*/u.exec(line)[0]);
+      const indent = /^[ \t]*/u.exec(line)[0];
+      const content = line.slice(indent.length);
+      if (!content) continue;
+      const column = markdownIndent(indent);
       if (list && column >= list.column) {
         list.hasContent = true;
+        paragraph = listParagraph(list, content, column - list.column, paragraph);
         continue;
       }
       if (column >= 4) {
@@ -193,8 +209,9 @@ function learningStructure(text) {
         const hasContent = Boolean(item[4]);
         const contentPadding = hasContent && padding >= 1 && padding <= 4 ? padding : 1;
         list = { column: markerEnd + contentPadding, hasContent };
-        paragraph = hasContent && padding <= 4;
+        paragraph = hasContent && listParagraph(list, item[4], padding - contentPadding, false);
       } else {
+        // Under-indented text is lazy continuation only of an open paragraph.
         if (!paragraph) list = null;
         paragraph = true;
       }
