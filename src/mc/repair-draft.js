@@ -86,6 +86,21 @@ function writeCase(env, ref, state) {
   writeJsonAtomic(casePath(env, ref.key), { ...state, source: ref });
 }
 
+function waitingMatch(source, env) {
+  if (source.ref.kind === 'proposal') return {};
+  const matches = [];
+  let possible = false;
+  for (const { path } of pendingProposals(env)) {
+    const candidate = readRepairSource({ kind: 'proposal', given: path, env });
+    if (!candidate.ref || candidate.outcome || candidate.proposal.isArchived) continue;
+    const strength = linkStrength(source.ref, candidate.ref);
+    if (strength === 'certain') matches.push(candidate);
+    if (strength === 'possible') possible = true;
+  }
+  if (matches.length === 1) return { proposal: matches[0] };
+  return { possible: matches.length > 1 || possible };
+}
+
 function decisionFor(source, all, ctx) {
   const previous = readCase(ctx.env, source.ref.key);
   const generated = previous.proposal && readRepairSource({ kind: 'proposal', given: previous.proposal, env: ctx.env });
@@ -105,11 +120,22 @@ function decisionFor(source, all, ctx) {
   if (owner.possible) return { status: 'ambiguous' };
   if (source.proposal?.isArchived) return { status: 'ambiguous' }; // Unknown archive disposition is not intake.
   if (previous.source?.digest === source.ref.digest && previous.status) return { status: previous.status };
+  if (generated?.ref && !generated.proposal.isArchived && !generated.outcome) source.associated = generated;
+  else {
+    const waiting = waitingMatch(source, ctx.env);
+    if (waiting.possible) return { status: 'ambiguous' };
+    source.associated = waiting.proposal;
+  }
   return null;
 }
 
 function generatedProposal(source, repo, area, summary, now, env) {
   if (source.proposal) return source.proposal.live;
+  if (source.associated) {
+    const path = source.associated.proposal.live;
+    writeCase(env, source.ref, { proposal: path });
+    return path;
+  }
   const previous = readCase(env, source.ref.key);
   const archived = previous.proposal && existsSync(archivedProposal(previous.proposal));
   const day = now.toISOString().slice(0, 10);
@@ -173,7 +199,7 @@ function settle(source, answer, ctx) {
     || !['draft', 'resolved', 'insufficient', 'ambiguous'].includes(answer.status)) {
     throw new Error('repair session did not return a valid decision');
   }
-  const repo = source.repo ?? answer.repository;
+  const repo = source.repo ?? source.associated?.repo ?? answer.repository;
   if (!REPOS.includes(repo)) throw new Error('repair session did not identify the affected repository');
   if (answer.area && (!AREA_RE.test(answer.area) || !answer.area.startsWith(`${repo}/`))) throw new Error('repair session did not identify a valid area');
   const area = answer.area || source.area || fallbackArea(repo);
@@ -218,16 +244,20 @@ async function draftOne(request, source, ctx) {
   const start = locked(() => {
     const current = reread();
     const all = orders(ctx.env);
-    return { outcome: decisionFor(current, all, ctx), all };
+    return { outcome: decisionFor(current, all, ctx), all, current };
   });
   if (start.outcome) return start.outcome;
-  const answer = await ctx.judge({ source, orders: orderReading(start.all).map(({ name, end }) => ({ name, end })), env: ctx.env });
+  const answer = await ctx.judge({ source: start.current, orders: orderReading(start.all).map(({ name, end }) => ({ name, end })), env: ctx.env });
   return locked(() => {
     const current = reread();
     const all = orders(ctx.env);
     const outcome = decisionFor(current, all, ctx);
     if (outcome) return outcome;
     if (orderVersion(all) !== orderVersion(start.all)) throw new Error('open orders changed while this source was being read; run again');
+    if (current.associated?.ref.path !== start.current.associated?.ref.path
+      || current.associated?.ref.digest !== start.current.associated?.ref.digest) {
+      throw new Error('related proposal changed while the source was being read; run again');
+    }
     return settle(current, answer, ctx);
   });
 }

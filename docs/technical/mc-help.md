@@ -51,6 +51,14 @@ incident timestamp and build, or a digest that needs fingerprint selection
 exit 2 without ordering. The digest selection reports the available IDs.
 Sources, records and draft admission are in [mc-plan.md](mc-plan.md#internal-repair-drafts).
 
+Internal results are prefixed with `mc: `: `repair programme <programme> is
+draft — source <path>`, `resuming repair programme <programme>`, `source
+already ordered in <programme>`, or `repair programme <programme> is at
+Martin (item <id>)`. No-order results are `<source> — already fixed`,
+`<source> — insufficient evidence; proposal retained`, `<source> —
+previously declined`, `possible duplicate for <source>; no order made` and
+`no repair ready to order`.
+
 ## Proposal counts
 
 `mc proposals` reports waiting proposal counts per area and the total. It uses

@@ -201,8 +201,9 @@ export function finishTurn({ programme, home, list, read, write, lock, root }) {
   try {
     const dir = join(home, programme);
     const record = readRecord(dir, { read });
-    if (record.status !== 'valid' || !cuttable(record.record)) {
-      return { kind: 'settled', problems: [record.status === 'valid' ? `record reads ${record.record.state}` : 'record is invalid'] };
+    if (record.status !== 'valid') return { kind: 'settled', problems: ['record is invalid'] };
+    if (!cuttable(record.record)) {
+      return { kind: 'settled', problems: [repairDraftRefusal(record.record, programme) ?? `record reads ${record.record.state}`] };
     }
     const problems = cutProblems({ home, programme, list, read });
     if (problems.length > 0) return { kind: 'incomplete', problems };

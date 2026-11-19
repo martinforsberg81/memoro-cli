@@ -239,8 +239,9 @@ corroboration is not enough. An ordinary desk order can be found by its
 proposal archive outcome or its original README pointer if the move failed.
 Part 2 does not change the desk's ownership or archive operation.
 
-Feedback and collected errors that need a proposal get one in the appropriate
-area before drafting. Feedback uses the original task ID or a labelled
+Feedback and collected errors reuse a corroborated proposal if one already
+exists; otherwise they get one in the appropriate area before drafting.
+Feedback uses the original task ID or a labelled
 incident timestamp and build. Only minimum defect details and provenance are
 copied. Waiting sources stay in their area while a draft exists. Resolved
 sources archive their proposals with `Utfall: resolved — <where>`; an

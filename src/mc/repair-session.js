@@ -80,7 +80,9 @@ export async function judgeRepair({ source, orders, env }, deps = {}) {
   for (let round = 1; round <= MAX_TURNS; round++) {
     const timeoutMs = TIMEOUT_MS - (Date.now() - started);
     if (timeoutMs <= 0) throw new Error('repair session did not finish within five minutes');
-    const prompt = JSON.stringify({ source: { kind: source.ref.kind, repository: source.repo, evidence: source.text },
+    const repository = source.repo ?? source.associated?.repo;
+    const prompt = JSON.stringify({ source: { kind: source.ref.kind, repository, evidence: source.text,
+      ...(source.associated ? { relatedProposal: source.associated.text } : {}) },
       openOrders: orders, revisions, areas: areaKeys, evidence, repositoryRead: round < MAX_TURNS ? MAX_READS : 0 });
     const result = await (deps.session ?? runTool)(launch.bin, launch.args, {
       cwd: tmpdir(), env: child, timeoutMs, group: true, input: userMessageLine(prompt),
@@ -93,7 +95,7 @@ export async function judgeRepair({ source, orders, env }, deps = {}) {
       if (['draft', 'resolved'].includes(answer?.status) && !evidence.some(item => item.text)) {
         throw new Error('repair session did not check the current repository');
       }
-      if (answer?.area && (!areaKeys.includes(answer.area) || !answer.area.startsWith(`${source.repo ?? answer.repository}/`))) {
+      if (answer?.area && (!areaKeys.includes(answer.area) || !answer.area.startsWith(`${repository ?? answer.repository}/`))) {
         throw new Error('repair session did not name a declared area of the affected repository');
       }
       return answer;

@@ -703,6 +703,19 @@ describe('internal repair order drafting', () => {
     } finally { a.done(); }
   });
 
+  it('reuses an intake proposal that already identifies the submitted fingerprint', async () => {
+    const a = area();
+    try {
+      const e = digest(a, '2026-11-14', ['already-filed']);
+      const p = proposal(a, 'already-filed', `Fingerprint: \`already-filed\` from \`${e}\`.\n`);
+      const result = await direct(a, 'error', e, order('reuse-intake'));
+      assert.equal(result.code, 0, result.err);
+      assert.deepEqual(recordOf(a.home, 'reuse-intake').repair.sources.map(ref => ref.path), [e, p]);
+      assert.deepEqual(readdirSync(dirname(p)), [p.split('/').at(-1)]);
+      assert.equal((await direct(a, 'proposal', p)).out, 'mc: resuming repair programme reuse-intake\n');
+    } finally { a.done(); }
+  });
+
   it('refuses ordinary ready, plan and goal creation on repair-owned orders without changing the desk route', async () => {
     const a = area();
     try {
