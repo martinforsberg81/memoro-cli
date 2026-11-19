@@ -259,16 +259,20 @@ are met.
 The list's Next cell and goal detail show the latest recorded build dispatch
 outcome when available, including a repair build after rejection. A tool
 start needs an announcement, a completed run of the matching kind with a
-session identity, and the tool's own start event; an announcement or exit
-alone is not a start. A credits gateway's pre-spawn refusal is named only when
-its diagnostic can be attributed to that dispatch; otherwise the start is
-unknown. These are historical evidence, not a change to eligibility. A ready
-build keeps the most recent recorded Next in its current build stage even
+session identity, and the tool's own start event (including Antigravity's
+native `init`); an announcement or exit alone is not a start. A credits
+gateway's pre-spawn refusal is named only when its diagnostic can be
+attributed to that dispatch; otherwise the start is unknown. These are
+historical evidence, not a change to eligibility. A ready build keeps the most
+recent recorded Next in its current build stage even
 after a runner bookkeeping entry, or says that no bounded continuation was
 recorded. An unopened phase or missing criterion does not give a build an
-assignment. A recorded build-to-review transition names independent review
-only for a ready review in an open phase; a stopped review can still show the
-historical handoff. A technical stop names its reason and the technical desk.
+assignment. While the runner's [main-red wait](#what-a-build-session-does)
+is active, the summary names the repairs it waits for instead of reporting
+eligibility, without dropping the attempt outcome or recorded Next. A recorded
+build-to-review transition names independent review only for a ready review
+in an open phase; a stopped review can still show the historical handoff.
+A technical stop names its reason and the technical desk.
 It reports branch or worktree facts only when read from the worktree, and
 lists registered PRs separately; the goal detail keeps the existing log and
 worktree entries. A goal hold takes precedence over this summary.

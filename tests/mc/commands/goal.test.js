@@ -203,6 +203,62 @@ test('goal outcome: the same exit distinguishes a credits preflight refusal from
   }
 });
 
+test('goal outcome: an Antigravity repair start needs a matching native init, not a result alone', async () => {
+  const logDir = '/work/runner/log';
+  const trace = `${logDir}/goal-mc-plain-20261101T200000Z.jsonl`;
+  const f = fixture({ env: { MC_WORK_ROOT: '/work' }, files: seededGoal({
+    [`${logDir}/runner.log`]: '2026-11-01T20:00:00Z goal:mc/plain: repair starting (agy gemini-4-argon-high)\n',
+    [`${logDir}/runs.tsv`]: `${tsvHeader()}\n${tsvRow({ ts: '2026-11-01T20:00:10Z', name: 'goal:mc/plain', kind: 'repair', seconds: 10, session: 'conversation-1', exit: 1, tool: 'agy' })}\n`,
+  }) });
+  for (const [event, expected] of [
+    [{ event: 'init', init: { conversation_id: 'conversation-1' } }, /build started/u],
+    [{ event: 'init', init: { conversation_id: 'other-conversation' } }, /build start unknown — no tool boundary recorded/u],
+    [{ event: 'result', result: { conversation_id: 'conversation-1', status: 'FAILURE' } }, /build start unknown — no tool boundary recorded/u],
+  ]) {
+    f.store[trace] = `${JSON.stringify(event)}\n`;
+    for (const output of Object.values(await goalOutcomeViews(f))) assert.match(output, expected, JSON.stringify(event));
+  }
+});
+
+test('goal outcome: an active main-red wait retains the attempt and Next, then releases', async () => {
+  const logDir = '/work/runner/log';
+  const mendFile = '/work/runner/main-mend/memoro-cli.json';
+  const repair = (state) => JSON.stringify({ version: 1, entries: [{ id: 'm1', state, repo: 'memoro-cli', file: 'tests/red.test.js', branch: 'main-red/m1', owner: 'main-red:m1', base: 'main-head', worktree: null, pr: null }] });
+  const continuation = '## 2026-11-01T20:00Z · codex model · build · ready · by build\n\nNext: verify saved proposal\n';
+  const f = fixture({ env: { MC_WORK_ROOT: '/work' }, files: seededGoal({
+    [`${DIR}/LOG.md`]: `${continuation}\n## 2026-11-01T20:01Z · runner · build · ready\n\nComment: session not counted for progress: main-red repair unfinished in memoro-cli (m1) — no session starts on this goal until it has ended\n`,
+    [`${logDir}/runner.log`]: '2026-11-01T20:00:00Z goal:mc/plain: build starting (codex model)\n',
+    [`${logDir}/runs.tsv`]: 'ts\tname\tkind\tseconds\tsession\texit\n2026-11-01T20:00:10Z\tgoal:mc/plain\tbuild-goal\t10\tsession-1\t1\n',
+    [`${logDir}/goal-mc-plain-20261101T200000Z.jsonl`]: '{"type":"thread.started","thread_id":"session-1"}\n',
+  }) });
+  for (const state of ['queued', 'running', 'published']) {
+    f.store[mendFile] = repair(state);
+    for (const output of Object.values(await goalOutcomeViews(f))) {
+      assert.match(output, /build started · runner waits for main-red repair in memoro-cli \(m1\) · Next: verify saved proposal/u, state);
+      assert.doesNotMatch(output, /build remains eligible|technical desk/u, state);
+    }
+  }
+  const announcements = f.store[`${logDir}/runner.log`];
+  delete f.store[`${logDir}/runner.log`];
+  for (const output of Object.values(await goalOutcomeViews(f))) {
+    assert.match(output, /build start unknown — no tool boundary recorded · runner waits for main-red repair/u);
+  }
+  f.store[`${logDir}/runner.log`] = announcements;
+  for (const state of ['landed', 'dropped', 'Martin', 'unreadable']) {
+    f.store[mendFile] = state === 'unreadable' ? '{' : repair(state);
+    for (const output of Object.values(await goalOutcomeViews(f))) {
+      assert.match(output, /build started · build remains eligible · Next: verify saved proposal/u, state);
+      assert.doesNotMatch(output, /runner waits for main-red repair|technical desk/u, state);
+    }
+  }
+  f.store[mendFile] = repair('published');
+  f.store[`${DIR}/LOG.md`] = continuation;
+  for (const output of Object.values(await goalOutcomeViews(f))) {
+    assert.match(output, /build started · build remains eligible · Next: verify saved proposal/u);
+    assert.doesNotMatch(output, /runner waits for main-red repair/u);
+  }
+});
+
 test('mc goal new writes a GOAL.json skeleton and LOG.md, fetches each repository, and makes no worktree', async () => {
   const f = fixture();
   const code = await run(['new', 'mc/plain', '--repo', 'memoro-cli,memoro', '--class', 'large', '--title', 'Make the goal plain', '--structure', '1'], f.deps);

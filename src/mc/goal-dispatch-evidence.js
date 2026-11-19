@@ -1,5 +1,6 @@
 /** Read-only evidence about a goal's build dispatches from existing runner logs. */
 import { join } from 'node:path';
+import { agyInit } from './run-plan.js';
 import { runsKind } from './session-kind.js';
 
 const BUILD_KINDS = new Map([
@@ -15,6 +16,8 @@ export function toolStartIds(text) {
       const event = JSON.parse(line);
       if (event?.type === 'thread.started' && typeof event.thread_id === 'string' && event.thread_id) ids.add(event.thread_id);
       if (event?.type === 'system' && event.subtype === 'init' && typeof event.session_id === 'string' && event.session_id) ids.add(event.session_id);
+      const conversation = agyInit(event)?.conversation_id;
+      if (typeof conversation === 'string' && conversation) ids.add(conversation);
     } catch { /* Incomplete or non-JSON output is not a start event. */ }
   }
   return [...ids];

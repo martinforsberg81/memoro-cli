@@ -84,6 +84,7 @@ import { convertProject } from '../project-convert.js';
 import { addPr, backward, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, inStage, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, phaseOpen, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { addItem, ITEM_PARTS, ITEM_WORDS, moveGate, partsLacks, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
+import { buildWaitsForMain } from '../main-repair.js';
 import { queueMerge } from '../merger.js';
 import { workRoot } from '../paths.js';
 import { wakeRunner } from '../run-control.js';
@@ -1749,12 +1750,17 @@ function buildOutcome(goal, ctx, { hold, isPhaseOpen, worktrees }) {
     return `build stopped — ${oneLine(stop.comment)} · technical desk · retained work: ${retained} · LOG.md`;
   }
   if (goal.status !== 'ready') return null;
-  const latest = buildDispatches({ root: workRoot(ctx.env), programme: goal.programme, goal: goal.goal, read: ctx.read, list: ctx.listFiles }).at(-1);
-  if (!latest) return null;
+  const state = { root: workRoot(ctx.env), read: ctx.read };
+  const latest = buildDispatches({ ...state, programme: goal.programme, goal: goal.goal, list: ctx.listFiles }).at(-1);
+  const waits = buildWaitsForMain(goal, state);
+  if (!latest && !waits.length) return null;
   // Runner accounting entries have no Next. Do not look past a stage change for one.
   const next = oneLine(entries.findLast((entry) => entry.next)?.next ?? 'no bounded continuation recorded');
-  const start = latest.start === 'started' ? 'build started' : latest.start === 'refused' ? 'build not started — provider preflight refused' : 'build start unknown — no tool boundary recorded';
-  const eligibility = noCriteria(goal) ? 'build has no criteria' : isPhaseOpen(goal) ? 'build remains eligible' : 'build phase not open';
+  const start = latest?.start === 'started' ? 'build started' : latest?.start === 'refused' ? 'build not started — provider preflight refused' : 'build start unknown — no tool boundary recorded';
+  const eligibility = noCriteria(goal) ? 'build has no criteria'
+    : !isPhaseOpen(goal) ? 'build phase not open'
+    : waits.length ? `runner waits for main-red repair in ${waits.map(({ repo, ids }) => `${repo} (${ids.join(', ')})`).join('; ')}`
+    : 'build remains eligible';
   return `${start} · ${eligibility} · Next: ${next}`;
 }
 
