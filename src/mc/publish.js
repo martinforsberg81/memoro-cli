@@ -158,6 +158,35 @@ function markdownIndent(whitespace, column = 0) {
   return column;
 }
 
+// CommonMark 0.31.2 §4.6, in start-condition order. Types 1–5 end on a delimiter.
+const HTML_DELIMITED = [
+  { start: /^<(?:pre|script|style|textarea)(?=[ \t>]|$)/i, end: /<\/(?:pre|script|style|textarea)>/i },
+  { start: /^<!--/u, end: /-->/u },
+  { start: /^<\?/u, end: /\?>/u },
+  { start: /^<![A-Za-z]/u, end: />/u },
+  { start: /^<!\[CDATA\[/u, end: /\]\]>/u },
+];
+const HTML_BLOCK_TAGS = new Set(`address article aside base basefont blockquote body caption center col colgroup
+dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header
+hr html iframe legend li link main menu menuitem nav noframes ol optgroup option p param search section summary
+table tbody td tfoot th thead title tr track ul`.split(/\s+/u));
+const HTML_UNTIL_BLANK = { end: null };
+// Type 7 requires a whole open or closing tag on the line (§6.6 tag grammar).
+const HTML_ATTRIBUTE = /[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:[^ \t"'=<>\x60]+|'[^']*'|"[^"]*"))?/u;
+const HTML_COMPLETE_TAG = new RegExp(`^<(?:/[A-Za-z][A-Za-z0-9-]*[ \\t]*|[A-Za-z][A-Za-z0-9-]*(?:${HTML_ATTRIBUTE.source})*[ \\t]*/?)>[ \\t]*$`, 'u');
+
+function learningHtmlBlock(content, paragraph) {
+  if (!content.startsWith('<')) return null;
+  const delimited = HTML_DELIMITED.find(({ start }) => start.test(content));
+  if (delimited) return delimited;
+  const tag = /^<\/?([A-Za-z][A-Za-z0-9-]*)(?=[ \t>]|\/>|$)/u.exec(content)?.[1];
+  if (!tag) return null;
+  const name = tag.toLowerCase();
+  if (HTML_BLOCK_TAGS.has(name)) return HTML_UNTIL_BLANK;
+  if (paragraph || (!content.startsWith('</') && /^(?:pre|script|style|textarea)$/u.test(name))) return null;
+  return HTML_COMPLETE_TAG.test(content) ? HTML_UNTIL_BLANK : null;
+}
+
 /**
  * Pin structural blocks in order, including their surrounding nonblank lines.
  * In addition to possible headings, fences, raw HTML and reference definitions,
@@ -167,12 +196,15 @@ function markdownIndent(whitespace, column = 0) {
  */
 function learningStructure(text) {
   const structural = /\x60{3,}|~{3,}|<[A-Za-z/!?]|\]:|^[ \t>]*(?:#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$)/mu;
-  const boundary = /^(?:#{1,6}(?:[ \t]|$)|(?:\x60{3,}|~{3,}|>|<[A-Za-z/!?])|(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$)/u;
+  const boundary = /^(?:#{1,6}(?:[ \t]|$)|(?:\x60{3,}|~{3,}|>)|(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$)/u;
   const listMarker = /^([-+*]|\d{1,9}[.)])([ \t]+|$)(.*)$/u;
   const items = [];
+  // The leaf belongs to the deepest active item (or the document at depth zero).
+  let html = null, fence = null;
   return JSON.stringify(text.split(/\r?\n(?:[ \t]*\r?\n)+/u).filter(block => {
     // A blank ends the leaf paragraph and any still-empty item.
     if (items.at(-1)?.hasContent === false) items.pop();
+    if (html?.end === null) html = null;
     let paragraph = false, code = false;
     for (const line of block.split(/\r?\n/u)) {
       const indent = /^[ \t]*/u.exec(line)[0];
@@ -185,7 +217,19 @@ function learningStructure(text) {
       while (content) {
         const parent = items[depth - 1];
         const relative = column - (parent?.column ?? 0);
-        const startsBlock = relative < 4 && boundary.test(content);
+        // A matched HTML leaf owns the whole line, even if it resembles a new
+        // block or includes the end delimiter. Unmatched leaves close below.
+        if (depth === items.length && html) {
+          if (html.end?.test(content)) html = null;
+          break;
+        }
+        const fenceLine = relative < 4 && /^(\x60{3,}|~{3,})(.*)$/u.exec(content);
+        if (depth === items.length && fence) {
+          if (fenceLine && fenceLine[1].startsWith(fence) && /^[ \t]*$/u.test(fenceLine[2])) fence = null;
+          break;
+        }
+        const startsHtml = relative < 4 && learningHtmlBlock(content, paragraph);
+        const startsBlock = startsHtml || (relative < 4 && boundary.test(content));
         const marker = relative < 4 && !startsBlock ? listMarker.exec(content) : null;
         const style = marker?.[1].at(-1);
         // A sibling can be empty or have any start number; a new list cannot
@@ -198,6 +242,7 @@ function learningStructure(text) {
           if (paragraph && !startsBlock && !startsItem) break;
           items.length = depth;
           paragraph = false;
+          html = fence = null;
         }
         if (parent) parent.hasContent = true;
         if (relative >= 4) {
@@ -205,14 +250,12 @@ function learningStructure(text) {
           if (!parent && !paragraph) code = true;
           break;
         }
-        if (parent) {
-          const fence = /^(\x60{3,}|~{3,})(.*)$/u.exec(content);
-          if (parent.fence) {
-            if (fence && fence[1].startsWith(parent.fence) && /^[ \t]*$/u.test(fence[2])) parent.fence = null;
-            break;
-          }
-          if (fence) parent.fence = fence[1];
+        if (startsHtml) {
+          paragraph = false;
+          if (!startsHtml.end?.test(content)) html = startsHtml;
+          break;
         }
+        if (fenceLine && (fenceLine[1][0] === '~' || !fenceLine[2].includes('`'))) fence = fenceLine[1];
         if (startsItem) {
           const markerEnd = column + marker[1].length;
           column = markdownIndent(marker[2], markerEnd);

@@ -716,8 +716,14 @@ This applies at every list depth: a child marker opens an item, not a paragraph.
 Under-indented text stays in the list only as a continuation of an open
 paragraph in the active item, not of a heading, code or another non-paragraph
 block. Otherwise the line is classified outside any item whose content
-indentation it does not meet. Both the guard and the comparison with current
-main read area page blobs without trimming.
+indentation it does not meet. For paragraph continuation the guard uses actual
+[HTML block boundaries](https://spec.commonmark.org/0.31.2/#html-blocks),
+not the broader raw-block pinning check. An HTML block consumes its body and
+any closing delimiter without opening a paragraph. It ends at its delimiter,
+at a blank for a blank-terminated form, or when its containing item closes.
+A complete tag that only starts a type 7 block cannot interrupt a paragraph;
+an inline autolink does not by itself end or prevent a paragraph. Both the
+guard and the comparison with current main read area page blobs without trimming.
 If the page changed on main, even only at its edges, the command requires a
 new check against current main.
 It gates the commit, publishes without force and hands the immutable PR
