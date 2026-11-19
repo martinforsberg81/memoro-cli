@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeJsonAtomic } from './atomic-write.js';
-import { readTextOrNull } from './goals.js';
+import { readTextOrNull, WAITS_FOR_MAIN } from './goals.js';
 import { dequeue, mergesPath, parseQueue } from './merge-queue.js';
 import { realLock } from './runner-lock.js';
 import { mcHome, workRoot } from './paths.js';
@@ -25,6 +25,23 @@ export function readMainMends({ root = workRoot(), repo, read = readTextOrNull }
   const value = typeof text === 'string' ? JSON.parse(text) : text;
   if (value?.version !== 1 || !Array.isArray(value.entries)) throw new Error(`invalid main-mend state for ${repo}`);
   return value.entries;
+}
+
+/** A build waits for active repairs only; Martin, final and unreadable states do not hold it. */
+export function mainRepairWaits(goal, state) {
+  return goal.repos.flatMap((repo) => {
+    try {
+      const ids = readMainMends({ ...state, repo }).filter((entry) => ['queued', 'running', 'published'].includes(entry.state)).map((entry) => entry.id);
+      return ids.length ? [{ repo, ids }] : [];
+    } catch { return []; } // The runner reports unreadable repair state when it picks main-red work.
+  });
+}
+
+/** Only a ready build whose last entry records the runner's wait is held by those repairs. */
+export function buildWaitsForMain(goal, state) {
+  const last = goal.log.at(-1);
+  const waiting = goal.stage === 'build' && goal.status === 'ready' && last?.tool === 'runner' && String(last.comment ?? '').startsWith(WAITS_FOR_MAIN);
+  return waiting ? mainRepairWaits(goal, state) : [];
 }
 
 /** Every read-patch-write uses the runner's lock and whole-file atomic write. */
