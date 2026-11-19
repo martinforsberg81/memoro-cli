@@ -256,17 +256,22 @@ session, after the lines that say where the goal is (`goalPrompt`,
 goal rows on the page say `criteria <met>/<all>`; the page's is green when all
 are met.
 
-The list's Next cell and goal detail also show the latest recorded build
-dispatch outcome when available. A tool start needs an announcement, a
-matching completed run's session identity and the tool's own start event; an
-announcement or exit alone is not a start. A credits gateway's pre-spawn
-refusal is named only when its diagnostic can be attributed to that dispatch;
-otherwise the start is unknown. These are historical evidence, not a change to
-eligibility. A ready build retains its recorded Next, or says that no bounded
-continuation was recorded. A committed build-to-review transition names
-independent review only while review is the current stage. A technical stop
-names its reason, desk and retained branch and PR, with the existing log and
-worktree detail below. A goal hold takes precedence over this summary.
+The list's Next cell and goal detail show the latest recorded build dispatch
+outcome when available, including a repair build after rejection. A tool
+start needs an announcement, a completed run of the matching kind with a
+session identity, and the tool's own start event; an announcement or exit
+alone is not a start. A credits gateway's pre-spawn refusal is named only when
+its diagnostic can be attributed to that dispatch; otherwise the start is
+unknown. These are historical evidence, not a change to eligibility. A ready
+build keeps the most recent recorded Next in its current build stage even
+after a runner bookkeeping entry, or says that no bounded continuation was
+recorded. An unopened phase or missing criterion does not give a build an
+assignment. A recorded build-to-review transition names independent review
+only for a ready review in an open phase; a stopped review can still show the
+historical handoff. A technical stop names its reason and the technical desk.
+It reports branch or worktree facts only when read from the worktree, and
+lists registered PRs separately; the goal detail keeps the existing log and
+worktree entries. A goal hold takes precedence over this summary.
 
 ## LOG.md
 

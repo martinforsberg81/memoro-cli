@@ -7,7 +7,7 @@ import { after, before, describe, test } from 'node:test';
 
 import { jevContext, refusedMove, run, usage } from '../../../src/mc/commands/goal.js';
 import { addGoalWorktree, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, renderGoalText, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
-import { BUILD_ROLES } from '../../../src/mc/run-plan.js';
+import { BUILD_ROLES, tsvHeader, tsvRow } from '../../../src/mc/run-plan.js';
 import { seenAreas } from '../../../src/mc/review-verdict.js';
 import { runModule } from '../../../src/mc-verbs.js';
 import { phaseOpen, programmeOrder, programsGoals } from '../../../src/mc/goals.js';
@@ -116,10 +116,25 @@ function seededGoal(extra = {}) {
   return { [`${DIR}/GOAL.json`]: GOAL_TEXT, [`${DIR}/LOG.md`]: LOG_TEXT, ...extra };
 }
 
+/** Read the actual Next cell and goal detail from the same file/Git fixture. */
+async function goalOutcomeViews(f) {
+  const result = {};
+  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
+    const before = f.out().length;
+    assert.equal(await run(args, f.deps), 0, f.err());
+    result[args[0]] = f.out().slice(before);
+  }
+  return result;
+}
+
 test('goal outcome: a later unmatched announcement retains the eligible build continuation in list and show', async () => {
   const logDir = '/work/runner/log';
+  const completion = [
+    '## 2026-11-01T20:00Z · runner · build · ready', '',
+    `Comment: build session (1 of 5): met 0 of 1 criteria, heads memoro-cli ${HEADS['memoro-cli']}`, '',
+  ].join('\n');
   const files = seededGoal({
-    [`${DIR}/LOG.md`]: '## 2026-11-01T20:00Z · codex model · build · ready · by build\n\nNext: verify saved proposal\n',
+    [`${DIR}/LOG.md`]: `## 2026-11-01T20:00Z · codex model · build · ready · by build\n\nNext: verify saved proposal\n\n${completion}`,
     [`${logDir}/runner.log`]: '2026-11-01T20:00:00Z goal:mc/plain: build starting (codex)\n2026-11-01T21:00:00Z goal:mc/plain: build starting (codex)\n',
     [`${logDir}/runs.tsv`]: 'ts\tname\tkind\tseconds\tsession\texit\n2026-11-01T20:00:10Z\tgoal:mc/plain\tbuild-goal\t10\tsession-1\t1\n',
     [`${logDir}/goal-mc-plain-20261101T200000Z.jsonl`]: '{"type":"thread.started","thread_id":"session-1"}\n',
@@ -127,24 +142,24 @@ test('goal outcome: a later unmatched announcement retains the eligible build co
   const f = fixture({ files, env: { MC_WORK_ROOT: '/work' } });
   const announcements = f.store[`${logDir}/runner.log`];
   f.store[`${logDir}/runner.log`] = announcements.split('\n')[0] + '\n';
-  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
-    const before = f.out().length;
-    assert.equal(await run(args, f.deps), 0, f.err());
-    assert.match(f.out().slice(before), /build started · build remains eligible · Next: verify saved proposal/u);
+  for (const output of Object.values(await goalOutcomeViews(f))) {
+    assert.match(output, /build started · build remains eligible · Next: verify saved proposal/u);
   }
   f.store[`${logDir}/runner.log`] = announcements;
-  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
-    const before = f.out().length;
-    assert.equal(await run(args, f.deps), 0, f.err());
-    const output = f.out().slice(before);
+  for (const output of Object.values(await goalOutcomeViews(f))) {
     assert.match(output, /build start unknown — no tool boundary recorded · build remains eligible · Next: verify saved proposal/u);
     assert.doesNotMatch(output, /technical desk/u);
   }
-  f.store[`${DIR}/LOG.md`] = '## 2026-11-01T20:00Z · codex model · build · ready · by build\n\nDone: work\n';
-  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
-    const before = f.out().length;
-    assert.equal(await run(args, f.deps), 0, f.err());
-    assert.match(f.out().slice(before), /no bounded continuation recorded/u);
+  f.store[`${DIR}/GOAL.json`] = withGoal(GOAL_TEXT, { phase: 2 });
+  f.store[`${HOME}/mc/goals/prerequisite/GOAL.json`] = goalJson();
+  for (const output of Object.values(await goalOutcomeViews(f))) {
+    assert.match(output, /build start unknown — no tool boundary recorded · build phase not open · Next: verify saved proposal/u);
+    assert.doesNotMatch(output, /build remains eligible|technical desk/u);
+  }
+  f.store[`${DIR}/GOAL.json`] = GOAL_TEXT;
+  f.store[`${DIR}/LOG.md`] = `## 2026-11-01T20:00Z · codex model · build · ready · by build\n\nDone: work\n\n${completion}`;
+  for (const output of Object.values(await goalOutcomeViews(f))) {
+    assert.match(output, /no bounded continuation recorded/u);
   }
 });
 
@@ -173,7 +188,6 @@ test('goal outcome: the same exit distinguishes a credits preflight refusal from
   }
   f.store[`${stem}.jsonl`] = '';
   f.store[`${stem}.json.err`] = 'mc: codex API is off (mc run --billing codex on)\n';
-  f.store[`${logDir}/runs.tsv`] = 'ts\tname\tkind\tseconds\tsession\texit\n2026-11-01T20:00:10Z\tgoal:mc/plain\tbuild-goal\t10\t-\t1\n';
   f.store[`${logDir}/runs.tsv`] = 'ts\tname\tkind\tseconds\tsession\texit\n2026-11-01T20:00:10Z\tgoal:mc/plain\tbuild-goal\t10\tsession-missing-trace\t1\n';
   for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
     const before = f.out().length;
@@ -930,42 +944,71 @@ test('a commit after the mark makes the move refused', async () => {
 
 test('goal outcome: only a committed handoff names review and a technical stop retains its work', async () => {
   const fields = { stage: 'build', prs: ['memoro-cli#31'] };
-  const files = v2Files(fullEvidence(), fields);
+  const files = v2Files({
+    ...fullEvidence(),
+    [`${DIR}/LOG.md`]: '## 2026-11-01T19:59Z · codex model · build · ready · by build\n\nNext: old build task\n',
+  }, fields);
   const accepted = fixture({ files, env: BUILD, git: worktreeGit({ heads: { ...TWO_HEADS } }) });
   const refusedGit = worktreeGit({ heads: { ...TWO_HEADS }, published: { 'memoro-cli': TWO_HEADS['memoro-cli'] } });
   const refused = fixture({ files, env: BUILD, git: refusedGit });
   assert.equal(await run(MOVES_TO_REVIEW[1], accepted.deps), 0, accepted.err());
   assert.equal(await run(MOVES_TO_REVIEW[1], refused.deps), 1);
+  assert.deepEqual(goalField(refused.store[`${DIR}/GOAL.json`], 'prs'), fields.prs);
   for (const [f, handoff] of [[accepted, true], [refused, false]]) {
-    for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
-      const before = f.out().length;
-      assert.equal(await run(args, f.deps), 0, f.err());
-      const output = f.out().slice(before);
+    for (const output of Object.values(await goalOutcomeViews(f))) {
       if (handoff) assert.match(output, /build handed to review · independent review/u);
       else assert.doesNotMatch(output, /independent review/u);
     }
   }
-  const verdict = verdictText({ ids: [...V2_IDS, 'criterion 2'], repos: ['memoro-cli'], notOk: { 'criterion 1': 'needs repair' } }) + `head: memoro ${TWO_HEADS.memoro}\n`;
-  const returned = reviewed({ files: { ...accepted.store, [REVIEW_FILE]: verdict }, git: worktreeGit({ heads: { ...TWO_HEADS } }) });
-  assert.equal(await run(['stage', 'build'], returned.deps), 0, returned.err());
-  returned.deps.env.MC_WORK_ROOT = '/work';
-  returned.store['/work/runner/log/runner.log'] = '2026-11-01T20:00:00Z goal:mc/plain: build starting (codex)\n';
-  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
-    const before = returned.out().length;
-    assert.equal(await run(args, returned.deps), 0, returned.err());
-    const output = returned.out().slice(before);
-    assert.doesNotMatch(output, /build handed to review · independent review/u);
-    assert.match(output, /build start unknown — no tool boundary recorded · build remains eligible/u);
-    if (args[0] === 'show') assert.match(output, /review · ready · by build/u);
+  const heldReview = fixture({ files: {
+    ...accepted.store,
+    [`${DIR}/GOAL.json`]: withGoal(accepted.store[`${DIR}/GOAL.json`], { status: 'Martin' }),
+    [`${DIR}/LOG.md`]: accepted.store[`${DIR}/LOG.md`] + '\n## 2026-11-01T20:02Z · runner · review · Martin\n\n'
+      + 'Comment: the review ended with the goal still in review, a second time — review recovery cannot continue\n',
+  }, git: worktreeGit({ heads: { ...TWO_HEADS } }) });
+  for (const output of Object.values(await goalOutcomeViews(heldReview))) {
+    assert.match(output, /review · Martin/u);
+    assert.match(output, /build handed to review · historical handoff/u);
+    assert.doesNotMatch(output, /independent review|technical desk/u);
   }
-  const stopped = fixture({ files: v2Files({ [`${DIR}/LOG.md`]: '## 2026-11-01T20:00Z · codex model · build · Martin · by build\n\nComment: goal defect: criterion 1 — cannot run\n' }, { ...fields, status: 'Martin' }), git: worktreeGit({ heads: { ...TWO_HEADS } }) });
-  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
-    const before = stopped.out().length;
-    assert.equal(await run(args, stopped.deps), 0, stopped.err());
-    const output = stopped.out().slice(before);
-    assert.match(output, /build stopped — goal defect: criterion 1 — cannot run · technical desk · retained work: existing branch and PR · LOG\.md/u);
+  const verdict = verdictText({ ids: [...V2_IDS, 'criterion 2'], repos: ['memoro-cli'], notOk: { 'criterion 1': 'needs repair' } }) + `head: memoro ${TWO_HEADS.memoro}\n`;
+  const returned = reviewed({ files: { ...accepted.store, [REVIEW_FILE]: verdict }, env: { ...REVIEW, MC_WORK_ROOT: '/work' }, git: worktreeGit({ heads: { ...TWO_HEADS } }) });
+  assert.equal(await run(['stage', 'build'], returned.deps), 0, returned.err());
+  const logDir = '/work/runner/log';
+  returned.store[`${logDir}/runner.log`] = [
+    '2026-11-01T19:59:40Z goal:mc/plain: build starting (codex model, no check-in, no stall guard) · class large: subscription (route ready)',
+    '2026-11-01T20:01:00Z goal:mc/plain: repair starting (codex model, no check-in, no stall guard) · finish list: subscription (route ready)', '',
+  ].join('\n');
+  const completed = { name: 'goal:mc/plain', exit: 1, seconds: 10, model: 'model', tool: 'codex', billing: 'subscription' };
+  returned.store[`${logDir}/runs.tsv`] = [
+    tsvHeader(), tsvRow({ ...completed, ts: '2026-11-01T19:59:50Z', kind: 'build-goal', session: 'before-review' }), '',
+  ].join('\n');
+  returned.store[`${logDir}/goal-mc-plain-20261101T195940Z.jsonl`] = '{"type":"thread.started","thread_id":"before-review"}\n';
+  const checkReturned = async (start) => {
+    for (const [view, output] of Object.entries(await goalOutcomeViews(returned))) {
+      assert.doesNotMatch(output, /independent review|technical desk/u);
+      assert.ok(output.includes(`${start} · build remains eligible · Next: no bounded continuation recorded`), output);
+      if (view === 'show') assert.match(output, /LOG\n[\s\S]*review · ready · by build/u);
+    }
+  };
+  await checkReturned('build start unknown — no tool boundary recorded');
+  returned.store[`${logDir}/runs.tsv`] += tsvRow({ ...completed, ts: '2026-11-01T20:01:10Z', kind: 'repair', session: 'after-review' }) + '\n';
+  returned.store[`${logDir}/goal-mc-plain-20261101T200100Z.jsonl`] = '{"type":"thread.started","thread_id":"after-review"}\n';
+  await checkReturned('build started');
+
+  const stoppedFiles = v2Files({ [`${DIR}/LOG.md`]: '## 2026-11-01T20:00Z · codex model · build · Martin · by build\n\nComment: goal defect: criterion 1 — cannot run\n' }, { ...fields, status: 'Martin' });
+  const stopped = fixture({ files: stoppedFiles, git: worktreeGit({ heads: { ...TWO_HEADS }, dirty: ['memoro-cli'] }) });
+  for (const [view, output] of Object.entries(await goalOutcomeViews(stopped))) {
+    assert.match(output, /build stopped — goal defect: criterion 1 — cannot run · technical desk · retained work: existing branch; registered PR: memoro-cli#31 · LOG\.md/u);
     assert.equal((output.match(/technical desk/gu) ?? []).length, 1);
-    if (args[0] === 'show') assert.match(output, /WORKTREES[\s\S]*memoro-cli/u);
+    if (view === 'show') assert.match(output, /WORKTREES\n  memoro-cli +\/work\/programs\/mc\/goals\/plain\/memoro-cli +1 changed/u);
+  }
+  const noWorktrees = fixture({ files: stoppedFiles, git: () => failed('no worktree') });
+  for (const [view, output] of Object.entries(await goalOutcomeViews(noWorktrees))) {
+    assert.match(output, /build stopped — goal defect: criterion 1 — cannot run · technical desk · retained work: registered PR: memoro-cli#31 · LOG\.md/u);
+    assert.equal((output.match(/technical desk/gu) ?? []).length, 1);
+    assert.doesNotMatch(output, /existing branch|existing worktree/u);
+    if (view === 'show') assert.match(output, /WORKTREES\n  memoro-cli +\/work\/programs\/mc\/goals\/plain\/memoro-cli — no worktree/u);
   }
   stopped.store[`${DIR}/LOG.md`] = '## 2026-11-01T20:00Z · runner · build · Martin\n\nComment: three sessions ended without a word — see the logs under runner/log\n';
   for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {

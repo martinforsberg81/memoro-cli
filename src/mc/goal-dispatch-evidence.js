@@ -1,5 +1,11 @@
 /** Read-only evidence about a goal's build dispatches from existing runner logs. */
 import { join } from 'node:path';
+import { runsKind } from './session-kind.js';
+
+const BUILD_KINDS = new Map([
+  ['build', runsKind({ kind: 'build', variant: 'goal' })],
+  ['repair', runsKind({ kind: 'repair' })],
+]);
 
 /** Only a tool's own start event supplies its session identity. */
 export function toolStartIds(text) {
@@ -29,20 +35,21 @@ export function buildDispatches({ root, programme, goal, read, list }) {
     .filter(Boolean).flatMap((text) => text.split('\n'));
   const announcements = [];
   for (const line of lines) {
-    const match = line.match(/^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\s+goal:([a-z0-9-]+)\/([a-z0-9-]+): (build|review|draft|mend) starting \(/u);
+    const match = line.match(/^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\s+goal:([a-z0-9-]+)\/([a-z0-9-]+): (build|repair|review|plan|draft|mend) starting \(/u);
     if (match) announcements.push({ at: match[1], programme: match[2], goal: match[3], kind: match[4], line });
   }
   const rows = String(read(join(dir, 'runs.tsv')) ?? '').trim().split('\n').map((line) => line.split('\t'));
   const header = rows.shift() ?? [];
   const runs = rows.map((cells) => Object.fromEntries(header.map((key, i) => [key, cells[i]])))
-    .filter((row) => row.name === `goal:${programme}/${goal}` && row.kind === 'build-goal' && row.seconds !== '' && row.seconds !== '-' && Number.isFinite(Number(row.seconds)) && Number.isFinite(Date.parse(row.ts)));
+    .filter((row) => row.name === `goal:${programme}/${goal}` && row.seconds !== '' && row.seconds !== '-' && Number.isFinite(Number(row.seconds)) && Number.isFinite(Date.parse(row.ts)));
   const files = (list?.(dir) ?? []).filter((name) => name.startsWith(`goal-${programme}-${goal}-`) && name.endsWith('.jsonl'));
-  return announcements.filter((item) => item.programme === programme && item.goal === goal && item.kind === 'build').map((item) => {
-    const at = Date.parse(item.at);
+  return announcements.filter((item) => item.programme === programme && item.goal === goal && BUILD_KINDS.has(item.kind)).map((item) => {
     // Runner durations are rounded and timestamps have second precision.
-    const matching = runs.filter((row) => Math.abs(Date.parse(row.ts) - Number(row.seconds) * 1000 - at) <= 2000);
+    const matchesRun = (row, pick) => row.kind === BUILD_KINDS.get(pick.kind)
+      && Math.abs(Date.parse(row.ts) - Number(row.seconds) * 1000 - Date.parse(pick.at)) <= 2000;
+    const matching = runs.filter((row) => matchesRun(row, item));
     const matches = matching.filter((row) => row.session && row.session !== '-').flatMap((row) => files.filter((name) => toolStartIds(read(join(dir, name))).includes(row.session)).map((name) => ({ row, name })));
-    const trace = matching.length === 1 && matches.length === 1 && announcements.filter((other) => other.programme === programme && other.goal === goal && other.kind === 'build' && Math.abs(Date.parse(matches[0].row.ts) - Number(matches[0].row.seconds) * 1000 - Date.parse(other.at)) <= 2000).length === 1 ? join(dir, matches[0].name) : null;
+    const trace = matching.length === 1 && matches.length === 1 && announcements.filter((other) => other.programme === programme && other.goal === goal && matchesRun(matches[0].row, other)).length === 1 ? join(dir, matches[0].name) : null;
     // A credits wrapper's own diagnostic is pre-spawn. Without a session ID,
     // require the exact timestamped stem and reject every recorded collision;
     // a missing or delayed stem is deliberately not proof of refusal.

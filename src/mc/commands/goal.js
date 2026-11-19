@@ -81,7 +81,7 @@ import { archiveGoal, finalizeDroppedGoal, moveDir } from '../goal-archive.js';
 import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
-import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { addPr, backward, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, inStage, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, phaseOpen, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { addItem, ITEM_PARTS, ITEM_WORDS, moveGate, partsLacks, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { queueMerge } from '../merger.js';
@@ -1524,7 +1524,7 @@ function worktreeWords(state) {
  * files, its commits past origin/main and its last commit's date.
  */
 function showGoal(args, ctx) {
-  const { stdout, stderr, read } = ctx;
+  const { stdout, stderr, home, list, read } = ctx;
   if (args.length !== 1) { stderr.write(usage()); return 2; }
   const target = goalNamed(args[0], ctx);
   if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
@@ -1546,14 +1546,19 @@ function showGoal(args, ctx) {
   if (evidence.lines.length) stdout.write(`\nEVIDENCE\n${evidence.lines.join('\n')}\n`);
 
   const log = parseLog(read(join(target.dir, LOG_FILE)) ?? '');
-  const outcome = buildOutcome({ ...goal, ...target, log }, ctx);
+  const worktrees = worktreeStates(goal, target.dir, ctx);
+  const isPhaseOpen = (named) => {
+    const own = programsGoals({ home, read, list: (path) => path === home ? [named.programme] : list(path) });
+    return phaseOpen(named, own, programmeOrder(named.programme, { home, read }));
+  };
+  const outcome = buildOutcome({ ...goal, ...target, log }, ctx, { hold, isPhaseOpen, worktrees });
   if (outcome) stdout.write(`\nBUILD OUTCOME\n  ${outcome}\n`);
   stdout.write('\nLOG\n');
   if (log.length === 0) stdout.write('  no entries yet\n');
   for (const entry of log.slice(-3)) stdout.write(renderEntry(entry));
 
   stdout.write('\nWORKTREES\n');
-  for (const state of worktreeStates(goal, target.dir, ctx)) {
+  for (const state of worktrees) {
     if (!state.worktree) { stdout.write(`  ${state.repo}  ${state.path} — no worktree\n`); continue; }
     stdout.write(`  ${state.repo}  ${state.path}  ${state.changed} changed · ${state.ahead} commits past origin/main · last commit ${state.last}\n`);
   }
@@ -1661,7 +1666,7 @@ function goalAreas(named, at, ctx) {
  * states what the phase waits for; one whose record is invalid has the line
  * `<programme> · record invalid — no phase is open` and every unfinished phase
  * `waiting`. Under it, one line per goal: `programme/goal · repos ·
- * stage · status · criteria <met>/<all> · n sessions · the last entry's Next`. A
+ * stage · status · criteria <met>/<all> · n sessions · outcome or Next`. A
  * goal in build with no criterion reads `build · ready, no criteria — not started`; a
  * blocked one `<stage> · blocked, waits on a person`. Goals that do not parse
  * have no phase; they are listed last, with their first problems, not skipped.
@@ -1682,6 +1687,7 @@ function listGoals(args, ctx) {
     const current = currentPhase(all, one);
     const phases = [...new Set(own.filter((goal) => !goal.problems.length).map((goal) => goal.phase))].sort((a, b) => a - b);
     const order = programmeOrder(one, { home, read });
+    const isPhaseOpen = (goal) => phaseOpen(goal, own, order);
     const standing = order.kind === 'sequential' ? null : phaseStanding(own, order);
     if (order.kind === 'invalid') stdout.write(`${one} · record invalid — no phase is open\n`);
     for (const phase of phases) {
@@ -1692,7 +1698,9 @@ function listGoals(args, ctx) {
         if (at.after.length) state += ` · after phase ${at.after.join(', ')}`;
       }
       stdout.write(`${one} · phase ${phase} · ${state}\n`);
-      for (const goal of own.filter((item) => !item.problems.length && item.phase === phase)) stdout.write(`  ${goalLine(goal, ctx)}\n`);
+      for (const goal of own.filter((item) => !item.problems.length && item.phase === phase)) {
+        stdout.write(`  ${goalLine(goal, ctx, isPhaseOpen)}\n`);
+      }
     }
     for (const goal of own.filter((item) => item.problems.length)) stdout.write(`  ${goal.programme}/${goal.goal} · does not parse — ${goal.problems.join('; ')}\n`);
   }
@@ -1700,39 +1708,54 @@ function listGoals(args, ctx) {
 }
 
 /** One goal's line in `mc goal list`. */
-function goalLine(goal, ctx) {
-  const { read } = ctx;
+function goalLine(goal, ctx, isPhaseOpen) {
   const name = `${goal.programme}/${goal.goal}`;
+  const hold = readHold(goal.dir, ctx.read);
   // A finished goal has no next action, whatever its last entry said.
-  const next = buildOutcome(goal, ctx) ?? (FINISHED.includes(goal.stage) ? '—' : (goal.log.at(-1)?.next ?? '—').replace(/\s*\n\s*/gu, ' '));
+  const next = buildOutcome(goal, ctx, { hold, isPhaseOpen }) ?? (FINISHED.includes(goal.stage) ? '—' : oneLine(goal.log.at(-1)?.next ?? '—'));
   const status = waitsOnPerson(goal) ? `${stageWords(goal)}, waits on a person`
     : goal.stage === 'build' && noCriteria(goal) ? `${stageWords(goal)}, no criteria — not started`
     : stageWords(goal);
-  const hold = readHold(goal.dir, read);
   const held = hold ? `, held by ${hold.by ?? '—'}` : '';
   return `${name} · ${goal.repos.join(',')} · ${status}${held} · ${criteriaWords(goal)} · ${sessions(goal.log)} sessions · ${next}`;
 }
 
-/** The current stage owns the goal; historical dispatch evidence does not. */
-function buildOutcome(goal, ctx) {
-  if (readHold(goal.dir, ctx.read)) return null;
-  const last = goal.log.at(-1);
-  const transitions = goal.log.filter((entry, i, entries) => entry.stage && entry.stage !== entries[i - 1]?.stage);
-  const transition = transitions.at(-1);
-  if (goal.stage === 'review' && transition?.stage === 'review' && transition.role === 'build') {
-    return 'build handed to review · independent review';
+/** A registered PR does not establish the existence of a local checkout or branch. */
+function retainedWork(goal, ctx, states) {
+  const trees = states.filter((state) => state.worktree);
+  const hasBranch = trees.some(({ path }) => {
+    const head = ctx.git(path, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    return head.ok && head.stdout.trim() !== '' && head.stdout.trim() !== 'HEAD';
+  });
+  const facts = hasBranch ? ['existing branch'] : trees.length ? ['existing worktree'] : [];
+  if (goal.prs.length) facts.push(`registered PR: ${goal.prs.map(prRef).join(', ')}`);
+  return facts.join('; ') || 'none confirmed';
+}
+
+/** The committed stage, status and hold govern the assignment, not the dispatch history. */
+function buildOutcome(goal, ctx, { hold, isPhaseOpen, worktrees }) {
+  if (hold) return null;
+  const entries = inStage(goal.log, goal.stage);
+  if (goal.stage === 'review' && entries[0]?.role === 'build') {
+    const current = goal.status === 'ready' && isPhaseOpen(goal);
+    return `build handed to review · ${current ? 'independent review' : 'historical handoff'}`;
   }
-  if (goal.stage === 'build' && goal.status === 'Martin' && /^(?:no progress:|goal defect:|three sessions ended without a word)/u.test(last?.comment ?? '')) {
-    const reason = last.comment.replace(/\s*\n\s*/gu, ' ');
-    const retained = goal.prs.length ? 'existing branch and PR' : 'existing branch';
-    return `build stopped — ${reason} · technical desk · retained work: ${retained} · LOG.md`;
+  if (goal.stage !== 'build') return null;
+  if (goal.status === 'Martin') {
+    const heldEntries = entries.slice(entries.findLastIndex((entry) => entry.status !== 'Martin') + 1);
+    const stop = heldEntries.findLast((entry) => /^(?:no progress:|goal defect:|three sessions ended without a word)/u.test(entry.comment ?? ''));
+    if (!stop) return null;
+    const retained = retainedWork(goal, ctx, worktrees ?? worktreeStates(goal, goal.dir, ctx));
+    return `build stopped — ${oneLine(stop.comment)} · technical desk · retained work: ${retained} · LOG.md`;
   }
-  if (goal.stage !== 'build' || goal.status !== 'ready' || readHold(goal.dir, ctx.read)) return null;
+  if (goal.status !== 'ready') return null;
   const latest = buildDispatches({ root: workRoot(ctx.env), programme: goal.programme, goal: goal.goal, read: ctx.read, list: ctx.listFiles }).at(-1);
   if (!latest) return null;
-  const next = (goal.log.at(-1)?.next ?? 'no bounded continuation recorded').replace(/\s*\n\s*/gu, ' ');
+  // Runner accounting entries have no Next. Do not look past a stage change for one.
+  const next = oneLine(entries.findLast((entry) => entry.next)?.next ?? 'no bounded continuation recorded');
   const start = latest.start === 'started' ? 'build started' : latest.start === 'refused' ? 'build not started — provider preflight refused' : 'build start unknown — no tool boundary recorded';
-  return `${start} · build remains eligible · Next: ${next}`;
+  const eligibility = noCriteria(goal) ? 'build has no criteria' : isPhaseOpen(goal) ? 'build remains eligible' : 'build phase not open';
+  return `${start} · ${eligibility} · Next: ${next}`;
 }
 
 /**
