@@ -20,7 +20,7 @@ import { goalJson } from './_helpers/goal-file.js';
 import { runRepairDraft } from '../../src/mc/repair-draft.js';
 import { renderCliSections } from '../../src/mc/helper-cli-collect.js';
 import { judgeRepair } from '../../src/mc/repair-session.js';
-import { archivedProposal, sha256 } from '../../src/mc/repair-sources.js';
+import { archivedProposal, readRepairSource, sha256 } from '../../src/mc/repair-sources.js';
 
 const NOW = new Date('2026-11-14T10:20:30.456Z');
 
@@ -584,6 +584,10 @@ describe('internal repair order drafting', () => {
       '| fingerprint | hits | source | last seen | what |',
       ...ids.map(id => `| \`${id}\` | 1 | gate | 2026-11-14 | A command refused valid input |`), '',
       '## Failing now', ''].join('\n'));
+  const collect = (a, date, message, count = 1) => put(join(a.root, 'intake', `errors-memoro-cli-${date}.md`),
+    renderCliSections({ cli: { notes: [], byStatus: {}, open: [], rows: [
+      { fingerprint: 'gate-a', count, status: 'gate', lastSeen: '2026-11-14T10:00:00Z', message },
+    ] }, threshold: 2 }).join('\n'));
   const order = name => ({
     status: 'draft', name, title: 'Restore valid input', end: 'A valid request succeeds again.',
     repositories: ['memoro-cli'], repository: 'memoro-cli', reason: 'The input is documented.',
@@ -689,17 +693,15 @@ describe('internal repair order drafting', () => {
     const a = area();
     try {
       const feedback = put(join(a.root, 'feedback.md'), 'Task ID: event-102\nValid input fails.');
-      const collect = (date, message) => put(join(a.root, 'intake', `errors-memoro-cli-${date}.md`),
-        renderCliSections({ cli: { notes: [], byStatus: {}, open: [], rows: [
-          { fingerprint: 'gate-a', count: 1, status: 'gate', lastSeen: '2026-11-14T10:00:00Z', message },
-        ] }, threshold: 2 }).join('\n'));
-      const e = collect('2026-11-14', 'A command refused valid input');
+      const e = collect(a, '2026-11-14', 'A command refused valid input');
+      const { ref } = readRepairSource({ kind: 'error', given: e, env: a.env });
       const p = join(a.root, 'areas', 'memoro-cli', 'system', 'proposals', '2026-11-14-mc-declined-intake.md');
       const archived = archivedProposal(p);
-      const body = `Task ID: event-102\nSource \`${feedback}\`; fingerprint \`gate-a\` in \`${e}\`.\n`;
+      const body = `Task ID: event-102\nSource \`${feedback}\`; fingerprint \`gate-a\` in \`${e}\`.\n`
+        + `Repair evidence: ${ref.key} ${ref.digest}\n`;
       const declined = `Utfall: ej aktuellt — not a defect\n\n${body}`;
       put(archived, declined);
-      const later = collect('2026-11-15', 'A command refused valid input');
+      const later = collect(a, '2026-11-15', 'A command refused valid input');
       const moved = join(a.root, 'runner', 'log', 'intake', '2026-11-15', 'errors-memoro-cli-2026-11-14.md');
       mkdirSync(dirname(moved), { recursive: true });
       renameSync(e, moved);
@@ -716,13 +718,50 @@ describe('internal repair order drafting', () => {
       assert.equal((await direct(a, 'proposal', repeated)).out, `mc: ${repeated} — previously declined\n`);
       const uncertain = put(join(a.root, 'other-feedback.md'), 'Task ID: event-102\nA different symptom.');
       assert.equal((await direct(a, 'feedback', uncertain)).out, `mc: possible duplicate for ${uncertain}; no order made\n`);
-      const changed = collect('2026-11-16', 'New reproduction with a different result');
+      const changed = collect(a, '2026-11-16', 'New reproduction with a different result');
       const fixed = { status: 'resolved', reason: 'Fixed on main.', repository: 'memoro-cli' };
       assert.deepEqual(await direct(a, 'error', changed, fixed),
         { code: 0, err: '', out: `mc: ${changed} — already fixed\n` });
       assert.equal((await direct(a, 'error', later)).out, `mc: ${later} — previously declined\n`);
       assert.equal((await direct(a, 'error', changed)).out, `mc: ${changed} — already fixed\n`);
       assert.deepEqual(readdirSync(a.home), []);
+
+      const recurring = collect(a, '2026-11-17', 'A command refused valid input', 9);
+      const name = 'recurring-failure';
+      assert.deepEqual(await direct(a, 'error', recurring, order(name)),
+        { code: 0, err: '', out: `mc: repair programme ${name} is draft — source ${recurring}\n` });
+      const declinedInputs = [['error', moved], ['error', later], ['proposal', archived], ['proposal', repeated], ['feedback', feedback]];
+      for (const [kind, path] of declinedInputs) {
+        assert.equal((await direct(a, kind, path)).out, `mc: ${path} — previously declined\n`);
+      }
+      assert.equal((await direct(a, 'error', changed)).out, `mc: ${changed} — already fixed\n`);
+      assert.equal((await direct(a, 'error', recurring)).out, `mc: resuming repair programme ${name}\n`);
+      assert.deepEqual(readdirSync(a.home), [name]);
+      const sources = recordOf(a.home, name).repair.sources;
+      assert.deepEqual(sources.map(source => source.kind), ['error', 'proposal']);
+      assert.equal(sources[0].path, recurring);
+      assert.ok(existsSync(sources[1].path));
+      assert.equal(readFileSync(archived, 'utf8'), declined);
+    } finally { a.done(); }
+  });
+
+  it('does not treat a rewritten legacy collector link as proof of a declined evidence version', async () => {
+    const a = area();
+    try {
+      const day = '2026-11-14';
+      const e = collect(a, day, 'A command refused valid input');
+      const p = join(a.root, 'areas', 'memoro-cli', 'system', 'proposals', `${day}-mc-legacy-decline.md`);
+      const archived = archivedProposal(p);
+      const declined = `Utfall: ej aktuellt — not a defect\n\nFingerprint: \`gate-a\` in \`${e}\`.\n`;
+      put(archived, declined);
+      collect(a, day, 'A command refused valid input', 9);
+      assert.deepEqual(await direct(a, 'error', e),
+        { code: 0, err: '', out: `mc: possible duplicate for ${e}; no order made\n` });
+      assert.equal((await direct(a, 'proposal', archived)).out, `mc: ${archived} — previously declined\n`);
+      assert.deepEqual(readdirSync(a.home), []);
+      assert.deepEqual(readdirSync(dirname(p)), ['archive']);
+      assert.equal(readFileSync(archived, 'utf8'), declined);
+      assert.ok(existsSync(e));
     } finally { a.done(); }
   });
 

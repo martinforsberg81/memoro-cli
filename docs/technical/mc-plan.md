@@ -251,12 +251,17 @@ latest resolution once the waiting file has moved. An explicit archive path
 still reads its own version. An unestablished or ambiguous report keeps its
 proposal and a reason in `runner/repair-draft/`. Decline and resolution apply
 across corroborated routes to the same evidence version, not to changed
-evidence for the same fingerprint. Repair uses recorded source digests where
-available; a legacy archive can corroborate a linked fingerprint row or a
-feedback link with the same original incident. Repair
-checks ownership and rechecks the selected evidence in the strict programme
-lock; it does not hold the lock while the role reads. Changed evidence or
-concurrent order changes cannot be committed from a stale reading.
+evidence for the same fingerprint. A matching archive disposition is reported
+before using defect ownership to resume or point to an order for other
+evidence. A collector link can corroborate the defect identity but not the
+archived evidence version: the collector can replace the digest at that path.
+An identity-only legacy link with no recorded digest is ambiguous and repair
+makes no order. A recorded digest for a different row does not close the
+selected row. A legacy feedback link can still corroborate a report with the
+same original incident. Repair checks ownership and rechecks the selected
+evidence in the strict programme lock; it does not hold the lock while the
+role reads. Changed evidence or concurrent order changes cannot be committed
+from a stale reading.
 
 Ordinary `state ready`, `mc plan` and `mc goal new` refuse repair-owned
 drafts (exit 1). A state spelling is not a release. Part 2 has no release

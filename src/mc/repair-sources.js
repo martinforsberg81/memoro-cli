@@ -143,7 +143,6 @@ function incidentOf(text) {
 function provenance(text, env) {
   const links = new Set();
   const possible = new Set();
-  const evidence = new Map();
   // Explicit pointers written in proposal prose; do not follow a general file link.
   for (const match of text.matchAll(/`(\/[^\r\n`]+)`|\]\((\/[^\r\n)]+)\)/gu)) {
     const path = match[1] ?? match[2];
@@ -154,18 +153,14 @@ function provenance(text, env) {
       const { repo, rows } = errorRows(error);
       const named = [...rows.keys()].filter(id => text.includes(`\`${id}\``) || field(text, 'fingerprint') === id);
       if (named.length === 1) {
-        const key = keyOf('error', repo, named[0]);
-        links.add(key);
-        const digests = evidence.get(key) ?? new Set();
-        digests.add(sha256(JSON.stringify(rows.get(named[0]))));
-        evidence.set(key, digests);
-      }
-      else for (const id of rows.keys()) possible.add(keyOf('error', repo, id));
+        // A collector path can be overwritten. It corroborates identity, not a historical row.
+        links.add(keyOf('error', repo, named[0]));
+      } else for (const id of rows.keys()) possible.add(keyOf('error', repo, id));
     } else if (!proposal) {
       possible.add(keyOf('feedback', resolve(path)));
     }
   }
-  return { links: [...links].sort(), possible: [...possible].sort(), evidence };
+  return { links: [...links].sort(), possible: [...possible].sort() };
 }
 
 export function readRepairSource({ kind, given, fingerprint = null, env }) {
@@ -203,7 +198,8 @@ export function readRepairSource({ kind, given, fingerprint = null, env }) {
     }
     const locator = incidentOf(text);
     if (kind === 'feedback' && !locator) return { missingLocator: true };
-    const { links, possible, evidence } = provenance(text, env);
+    const { links, possible } = provenance(text, env);
+    const evidence = new Map();
     for (const recorded of [EVIDENCE.exec(text)?.slice(1), archive?.meta?.evidence]) {
       if (Array.isArray(recorded) && recorded.length === 2 && recorded.every(value => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value))) {
         evidence.set(recorded[0], new Set([recorded[1]]));

@@ -142,6 +142,9 @@ function decisionFor(source, all, ctx) {
   const generated = previous.proposal && readRepairSource({ kind: 'proposal', given: previous.proposal, env: ctx.env });
   const status = archiveStatus(source.outcome);
   if (status) return { status };
+  // A recorded source outcome wins over ownership of the defect at another evidence version.
+  const archived = source.outcome ? null : archivedDisposition(source, ctx.env);
+  if (archived) return { status: archived };
   let owner = owningOrder(source, all, ctx.env);
   if (!Object.keys(owner).length && generated?.ref) owner = owningOrder(generated, all, ctx.env);
   if (owner.ordered) return { status: 'ordered', name: owner.ordered };
@@ -153,8 +156,6 @@ function decisionFor(source, all, ctx) {
   }
   if (owner.possible) return { status: 'ambiguous' };
   if (source.proposal?.isArchived) return { status: 'ambiguous' }; // Unknown archive disposition is not intake.
-  const archived = archivedDisposition(source, ctx.env);
-  if (archived) return { status: archived };
   if (previous.source?.digest === source.ref.digest && previous.status) return { status: previous.status };
   if (generated?.ref && !generated.proposal.isArchived && !generated.outcome) source.associated = generated;
   else {
