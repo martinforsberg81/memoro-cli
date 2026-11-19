@@ -108,8 +108,9 @@ function archivedDisposition(source, env) {
       const shared = [...source.evidence].filter(([key]) => candidate.evidence.has(key));
       const unchanged = shared.filter(([key, digests]) => [...digests].some(digest => candidate.evidence.get(key).has(digest)));
       if (shared.length && !unchanged.length) continue;
-      if (strength === 'certain' && (source.ref.digest === candidate.ref.digest
-        || (shared.length > 0 && unchanged.length === shared.length))) statuses.add(status);
+      // Recorded versions already corroborate the archive; a collector rewrite can erase their live link.
+      if ((unchanged.length > 0 && unchanged.length === shared.length)
+        || (strength === 'certain' && source.ref.digest === candidate.ref.digest)) statuses.add(status);
       else if (strength) possible = true;
       continue;
     }

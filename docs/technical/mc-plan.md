@@ -253,9 +253,13 @@ proposal and a reason in `runner/repair-draft/`. Decline and resolution apply
 across corroborated routes to the same evidence version, not to changed
 evidence for the same fingerprint. A matching archive disposition is reported
 before using defect ownership to resume or point to an order for other
-evidence. A collector link can corroborate the defect identity but not the
-archived evidence version: the collector can replace the digest at that path.
-An identity-only legacy link with no recorded digest is ambiguous and repair
+evidence. The same recorded source key and evidence digest on waiting and
+archived proposals corroborate the version for its archived disposition,
+even when a collector file has moved or been replaced and no longer lists
+the original fingerprint. This does not establish general order ownership.
+A collector link alone can corroborate defect identity but not the archived
+evidence version: today's row is not proof of the archived one. An
+identity-only legacy link without a provable version is ambiguous and repair
 makes no order. A recorded digest for a different row does not close the
 selected row or let it consume a waiting proposal pinned to the other row.
 A legacy feedback link can still corroborate a report with the
