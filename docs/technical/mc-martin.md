@@ -712,9 +712,12 @@ block decision, only an empty line or one containing just ASCII spaces and
 tabs is blank; a nonbreaking space is content. A blank closes the paragraph
 but can leave a nonempty item open. A paragraph can start on the marker line,
 on a properly indented following line, or after a blank in a nonempty item.
-Under-indented text stays in the item only as a continuation of an open
-paragraph, not of a heading, code or another non-paragraph block. Both the guard
-and the comparison with current main read area page blobs without trimming.
+This applies at every list depth: a child marker opens an item, not a paragraph.
+Under-indented text stays in the list only as a continuation of an open
+paragraph in the active item, not of a heading, code or another non-paragraph
+block. Otherwise the line is classified outside any item whose content
+indentation it does not meet. Both the guard and the comparison with current
+main read area page blobs without trimming.
 If the page changed on main, even only at its edges, the command requires a
 new check against current main.
 It gates the commit, publishes without force and hands the immutable PR

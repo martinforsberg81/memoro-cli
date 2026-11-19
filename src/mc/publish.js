@@ -167,53 +167,67 @@ function markdownIndent(whitespace, column = 0) {
  */
 function learningStructure(text) {
   const structural = /\x60{3,}|~{3,}|<[A-Za-z/!?]|\]:|^[ \t>]*(?:#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$)/mu;
-  const boundary = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:\x60{3,}|~{3,}|>|<[A-Za-z/!?])|(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$)/u;
-  const listItem = /^( {0,3})([-+*]|\d{1,9}[.)])([ \t]+|$)(.*)$/u;
-  const listParagraph = (list, content, indent, open) => {
-    // Indented code cannot interrupt a paragraph, but it cannot open one either.
-    if (indent >= 4) return open;
-    const fence = /^(\x60{3,}|~{3,})(.*)$/u.exec(content);
-    if (list.fence) {
-      if (fence && fence[1].startsWith(list.fence) && /^[ \t]*$/u.test(fence[2])) list.fence = null;
-      return false;
-    }
-    if (fence) list.fence = fence[1];
-    if (boundary.test(content)) return false;
-    if (open) return !/^(?:=+|-+)[ \t]*$/u.test(content); // A setext underline ends the paragraph.
-    return !/^\[[^\]]+\]:/u.test(content) && listItem.exec(content)?.[4] !== '';
-  };
-  let list = null;
+  const boundary = /^(?:#{1,6}(?:[ \t]|$)|(?:\x60{3,}|~{3,}|>|<[A-Za-z/!?])|(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$)/u;
+  const listMarker = /^([-+*]|\d{1,9}[.)])([ \t]+|$)(.*)$/u;
+  const items = [];
   return JSON.stringify(text.split(/\r?\n(?:[ \t]*\r?\n)+/u).filter(block => {
-    if (!list?.hasContent) list = null;
+    // A blank ends the leaf paragraph and any still-empty item.
+    if (items.at(-1)?.hasContent === false) items.pop();
     let paragraph = false, code = false;
     for (const line of block.split(/\r?\n/u)) {
       const indent = /^[ \t]*/u.exec(line)[0];
-      const content = line.slice(indent.length);
-      if (!content) continue;
-      const column = markdownIndent(indent);
-      if (list && column >= list.column) {
-        list.hasContent = true;
-        paragraph = listParagraph(list, content, column - list.column, paragraph);
-        continue;
-      }
-      if (column >= 4) {
-        if (!paragraph) { code = true; list = null; }
-        continue;
-      }
-      if (boundary.test(line)) { paragraph = false; list = null; continue; }
-      const item = listItem.exec(line);
-      // Only a nonempty bullet or a list starting at 1 can interrupt prose.
-      if (item && (!paragraph || list || (item[4] && /^([-+*]|1[.)])$/u.test(item[2])))) {
-        const markerEnd = item[1].length + item[2].length;
-        const padding = markdownIndent(item[3], markerEnd) - markerEnd;
-        const hasContent = Boolean(item[4]);
-        const contentPadding = hasContent && padding >= 1 && padding <= 4 ? padding : 1;
-        list = { column: markerEnd + contentPadding, hasContent };
-        paragraph = hasContent && listParagraph(list, item[4], padding - contentPadding, false);
-      } else {
-        // Under-indented text is lazy continuation only of an open paragraph.
-        if (!paragraph) list = null;
-        paragraph = true;
+      let column = markdownIndent(indent);
+      let content = line.slice(indent.length);
+      let depth = items.length;
+      while (depth && column < items[depth - 1].column) depth--;
+
+      // Classify inline item contents the same way as a later indented line.
+      while (content) {
+        const parent = items[depth - 1];
+        const relative = column - (parent?.column ?? 0);
+        const startsBlock = relative < 4 && boundary.test(content);
+        const marker = relative < 4 && !startsBlock ? listMarker.exec(content) : null;
+        const style = marker?.[1].at(-1);
+        // A sibling can be empty or have any start number; a new list cannot
+        // interrupt prose unless it starts with content and (if ordered) at 1.
+        const startsItem = marker && (!paragraph || style === items[depth]?.style
+          || (marker[3] && /^([-+*]|0*1[.)])$/u.test(marker[1])));
+
+        if (depth < items.length) {
+          // Only the paragraph at the deepest active item can continue lazily.
+          if (paragraph && !startsBlock && !startsItem) break;
+          items.length = depth;
+          paragraph = false;
+        }
+        if (parent) parent.hasContent = true;
+        if (relative >= 4) {
+          // Within prose this is continuation text. Pin only top-level code.
+          if (!parent && !paragraph) code = true;
+          break;
+        }
+        if (parent) {
+          const fence = /^(\x60{3,}|~{3,})(.*)$/u.exec(content);
+          if (parent.fence) {
+            if (fence && fence[1].startsWith(parent.fence) && /^[ \t]*$/u.test(fence[2])) parent.fence = null;
+            break;
+          }
+          if (fence) parent.fence = fence[1];
+        }
+        if (startsItem) {
+          const markerEnd = column + marker[1].length;
+          column = markdownIndent(marker[2], markerEnd);
+          content = marker[3];
+          const padding = column - markerEnd;
+          const contentPadding = content && padding >= 1 && padding <= 4 ? padding : 1;
+          items.push({ column: markerEnd + contentPadding, style, hasContent: false });
+          depth++;
+          paragraph = false;
+          continue;
+        }
+        paragraph = !startsBlock && (paragraph
+          ? !/^(?:=+|-+)[ \t]*$/u.test(content) // A setext underline ends the paragraph.
+          : !/^\[[^\]]+\]:/u.test(content));
+        break;
       }
     }
     return code || structural.test(block) || MARTIN_DECIDED.test(block);
