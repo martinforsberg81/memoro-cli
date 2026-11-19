@@ -363,7 +363,11 @@ PRs land are the planning worktrees released. In layout 2
 copied to the programme's `evidence/<entry>/RESTRICTED-README.md`
 ([mc-layout.md § Data outside the repositories](mc-layout.md#data-outside-the-repositories)),
 and the programme's directory is moved whole to `~/mc/archive/programs/<programme>/` (a dated
-name if needed); its remaining documents are not deleted. A network failure
+name if needed); its remaining documents are not deleted. Before the move the shared
+writer records a versioned receipt of retained repository trees, their repository
+identity, tracked paths and inspected main commits in the programme directory.
+The rename carries that receipt to the shelf; older shelves need not have one.
+A network failure
 leaves the planning area intact so a later attempt can continue.
 
 `--archive` refuses session-selection flags and requires an explicit name.

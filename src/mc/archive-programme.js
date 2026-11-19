@@ -58,6 +58,7 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { writeArchiveReceipt } from './archive-receipt.js';
 import { appendRow, keptFiles, keptParagraph, relinkRemoved, remoteSlug } from './archive-plan.js';
 import { listProgrammes } from './brief-collect.js';
 import { FINISHED, programsGoals } from './goals.js';
@@ -230,6 +231,8 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
       // projects and documents with it — for archive/programs/ (ruling 57).
       let moved;
       try {
+        const inspected = present.filter((repo) => deps.git(repo.path, ['fetch', '-q', 'origin']).ok);
+        writeArchiveReceipt(areaPath, programme, inspected, gitOut);
         moved = shelveProgramme(areaPath, programme, env);
         onShelved?.(moved);
       } catch (error) {

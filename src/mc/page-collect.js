@@ -1,3 +1,4 @@
+import { shelvedMembership } from './archive-receipt.js';
 import { suggestionReading } from './helper-suggestions.js';
 /**
  * The page — the sections `mc` prints, gathered from files the runner, the
@@ -1581,7 +1582,7 @@ export function archiveStatus({ programme, home, root, items, env }) {
 }
 
 /** A completed local programme is not revived by its sessions, PRs or retained tree. */
-function archiveCompleted({ programme, home, root }) {
+function archiveCompleted({ programme, home, root, repositoryMembership = false }) {
   const list = (dir) => { try { return readdirSync(dir); } catch { return []; } };
   const read = (path) => { try { return readFileSync(path, 'utf8'); } catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw error; } };
   if (liveGoals({ home, programme, list }).length) return false;
@@ -1591,7 +1592,7 @@ function archiveCompleted({ programme, home, root }) {
   // A current directory is a successor, including one without a record.
   if (existsSync(dir)) return false;
   const state = readArchiveState({ root, programme, read });
-  return state.status === 'valid' && !!state.state.destination && existsSync(state.state.destination);
+  return !repositoryMembership && state.status === 'valid' && !!state.state.destination && existsSync(state.state.destination);
 }
 
 // A recordless programme directory is still current membership.
@@ -1621,7 +1622,9 @@ export function readProgrammes({
   // programme with no goal has about where it lives.
   const homes = {};
   for (const repo of present) {
-    for (const name of programmes(repo)) (homes[name] ||= []).push(repo.name);
+    for (const name of programmes(repo)) {
+      if (!shelvedMembership(name, repo, { env, git: runGit })) (homes[name] ||= []).push(repo.name);
+    }
   }
   const order = orderReader(env);
   const section = programmesSection({
@@ -1633,6 +1636,9 @@ export function readProgrammes({
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
     order,
   });
+  section.programmes = section.programmes.filter((group) => !archiveCompleted({ programme: group.programme, home: programsHome(env), root, repositoryMembership: !!homes[group.programme]?.length }));
+  section.dormant = section.programmes.filter((group) => group.dormant).length;
+  section.active = section.programmes.length - section.dormant;
   return { section, homes };
 }
 
@@ -1809,7 +1815,7 @@ export async function collectPage({
     runnerSessions: runner.sessions,
     sessionStrays: sessions.strays,
     goalRows: goalsOf({ goals, currents, alive, order }),
-    programmes: [...present.flatMap((repo) => listProgrammes(repo)), ...localProgrammes(programsHome(env))],
+    programmes: [...present.flatMap((repo) => listProgrammes(repo).filter((name) => !shelvedMembership(name, repo, { env, git: runGit }))), ...localProgrammes(programsHome(env))],
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
     order,
     strays: readStrays(root, { git }),
@@ -1828,6 +1834,7 @@ export async function collectPage({
   }
   programmes.programmes = programmes.programmes.filter((group) => !archiveCompleted({
     programme: group.programme, home: programsHome(env), root,
+    repositoryMembership: present.some((repo) => listProgrammes(repo).includes(group.programme) && !shelvedMembership(group.programme, repo, { env, git: runGit })),
   }));
   // A PR attached before completion filtering now belongs to the existing
   // outside-goal rows, not to an invisible programme frame.

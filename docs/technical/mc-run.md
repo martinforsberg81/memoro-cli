@@ -1022,6 +1022,11 @@ once in `runner.log`, the desk sync reports it and the item stays open.
 
 ## Programme archive turn
 
+The runner and manual archive use the same writer: after the repository step,
+it records retained trees in a versioned receipt in the programme directory before
+the fenced move. The receipt travels with the directory; see
+[archiving a programme](mc-plan.md#archiving-a-programme).
+
 Martin, 2026-11-15: a programme with a record is bounded. Once every goal is
 done or dropped, the runner checks that what the programme made true is written
 into `docs/technical/` and the area pages, archives the programme and sets its
