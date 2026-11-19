@@ -10,9 +10,10 @@ A programme document is an order, as a buyer of software hands it to the firm th
 
 A user suggestion is evidence of a problem or a need. A selection of suggestions, even when grouped into numbered candidate parts, is a planning draft. Keep it in `draft` and name the decisions and evidence still needed. A request to collect suggestions authorizes preparing that draft.
 
-The desk prepares each candidate and works through its product design with Martin in the conversation. Establish what the person is trying to do, check the report against the running app, related work and the binding standards, then present one concrete design at a time with what the person will see and do. Include the cases and constraints that can change the design: existing workflows and controls, which item or session owns the work, phone and desktop behaviour, loading and failure, accessibility, and what is stored or shared. Show the appearance or write out the behaviour, as appropriate. Record the result of the conversation for each part. A reporter's proposed button, workflow or fix is input to that design.
+Work through each part's product design with Martin in the conversation. Establish what the person is trying to do, check the report against the running app, related work and the binding standards, then present one concrete design at a time with what the person will see and do. Include the cases and constraints that can change the design: existing workflows and controls, which item or session owns the work, phone and desktop behaviour, loading and failure, accessibility, and what is stored or shared. Show the appearance or write out the behaviour as appropriate. A reporter's proposed fix is input to the design.
 
-Complete planning and design for **every** part before bringing the order to Martin to set ready. Each part needs a settled user outcome and design, a chosen technical solution with its supporting investigations complete, and a checkable acceptance procedure. This includes behaviour-only changes and repairs. Goal cutting and build start from the ready order. They carry out the design agreed at the desk.
+Record Martin's existing decisions for each part. Bring him a concrete proposal for each decision still open about the user experience, and mark it as pending in the draft.
+The desk resolves technical choices using [asking-martin](asking-martin.md).
 
 ## What the order settles
 
@@ -41,17 +42,16 @@ Keep the findings for the chosen technical solution in the programme's evidence 
   Show the new thing at one width in light theme, one picture per choice Martin makes.
   Add a phone picture only for a distinct choice. Do not picture dark: it follows memoro's `docs/technical/design-tokens.md`.
   Describe failed, empty, working, cut and return states in words, naming the app component they follow.
-  For an unchanged component, name it and show one picture of where it stands.
-  Show text as text. Say "Nothing a user sees" where true. At most ten pictures across the document.
-- **Proved by.** What a user would notice if it were built wrong.
+  Name and show an unchanged component in place. Show text as text. Say "Nothing a user sees" where true. At most ten pictures across the document.
+- **Proved by.** What would fail if the user outcome were wrong and how to check it. Name the workspace, prerequisites and usable data or fixtures.
+  Verify the setup that can be checked now. The build exercises the finished behaviour.
 - **Not in this part.** The nearest thing someone would expect and does not get.
 
 ## What is Martin's
 
-Put under Decided every choice he could have made otherwise, one plain line each.
-Where you gave one of his words a meaning, show the meaning as a picture or as a
-line there. Where you are unsure, say what you propose and that you are unsure.
-Before it is ready, read every part for a step that waits on him (a look, an acceptance, a trial, a word) and settle it: decide it now, make it measurable, or move his act before ready or after the end.
-Before it is brought to him it has had a programme review of the text as it stands (`mc programs review <programme>`; Martin, 2026-11-18), its findings settled. When Martin says it is ready, the desk sets it ready with `mc programs state <programme> ready`; he never runs the verb himself.
+Under Decided, give each choice Martin could have made otherwise one line and attribute it to him or the desk. Show any interpretation of his words as an image or text there. Mark uncertainty and state the proposal.
+Before offering readiness, give every part an agreed outcome and design, a chosen solution supported by completed investigations, and the acceptance procedure above. This includes behaviour-only changes and repairs.
+Read every part for a step that waits on him. Settle it now, make it measurable or move his act before ready or after done. Review the current text with `mc programs review <programme>` (Martin, 2026-11-18) and settle its findings.
+When Martin says the order is ready, the desk runs `mc programs state <programme> ready`.
 
 English, whole sentences, the plain word, each thing said once.

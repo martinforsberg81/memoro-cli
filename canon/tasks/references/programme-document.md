@@ -28,8 +28,8 @@ Repositories: <repositories this programme changes>.
 
 ## What runs today
 
-<What was read, at which revision, with files and lines; what the writer
-opened itself and what is a reader's report.>
+<What runs today as the user meets it. Cite the app, standards and source at
+the revision read. Attribute any finding drawn from a reader's report.>
 
 ## Parts
 
@@ -37,15 +37,18 @@ opened itself and what is a reader's report.>
 
 Closes: <The gap or gaps.>
 
-Solution: <What changes where: files/functions, data and states, commands,
-output, refusals/exit codes, budgets, migration, and what is reused.>
+Solution: <What the user does and what happens, including relevant existing
+and exceptional cases. Name the chosen approach and the constraints the order
+depends on, such as required reuse, binding limits or migration behaviour.>
 
 Design: <For everything a user sees, pictures and the components, tokens and
 assets used; for text in a terminal, each line written out as it will appear;
 otherwise “nothing a user sees”.>
 
-Proved by: <Each test's fault and its existing test file; say a new test area
-outright, since it requires a planning decision.>
+Proved by: <What would fail if the behaviour were wrong and how to check it.
+Name the workspace, prerequisites and usable data or fixtures. For tests,
+name the fault and existing test file. State any new test area explicitly
+for a planning decision.>
 
 Not in this part: <The nearest thing a builder might add.>
 
@@ -97,9 +100,10 @@ whether it stays, is reworded (show the new text) or goes. A Solution that says
 document comes to the desk, the writer goes through every Solution sentence that
 changes what a user sees and checks that Design shows or says it.
 
-Findings of an advisory reading are settled in the document with Martin before
-it is set ready. No part has a step that waits on Martin between ready and done
-([writing a programme document](../writing-a-programme-document.md)).
+The desk resolves the findings of the advisory reading before offering the
+whole order for readiness. A finding that changes an agreed outcome or design
+is worked through with Martin. The build runs from ready to done on the order
+and its checks ([writing a programme document](../writing-a-programme-document.md)).
 
 `## Decisions` is optional and belongs to the working README.
 When a goal lands, its functionality goes to `docs/technical/` and its section

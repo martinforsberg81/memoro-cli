@@ -200,12 +200,14 @@ setting the order ready is Martin's word that its work goes on. Any other hold i
 It is advice: Martin's interactive session calls it when he wants, it writes its report
 beside the programme as `PROGRAMME-REVIEW.md`, and no code reads the report: it gates
 nothing in mc, is bound to no version of the text and never goes stale.
-It records no verdict or currency. The desk keeps grouped proposals in draft
-while each part is planned and its design is agreed with Martin. Before the
-order is brought to him to set ready, the investigations must be finished, the
-solution and acceptance procedure must be known, and the current text must have
-had a programme review (see `canon/tasks/writing-a-programme-document.md`).
-`state ready` records the state selected by the desk.
+It records no verdict or currency. The desk keeps the order in draft while
+working through each part's user outcome and design with Martin. The desk
+settles the technical solution, its supporting investigations and how to check
+the result, then reviews the current text. The desk fixes review findings on
+procedure and setup, works through changes to an agreed outcome or design with
+Martin and reviews again if what a part delivers changes. Once the findings
+are settled, Martin decides whether the whole order is ready. The desk records
+his decision using `state ready` (see `canon/tasks/writing-a-programme-document.md`).
 The child has MC_ROLE=programme-review, MC_PROGRAMME and its own
 MC_PROGRAMME_REVIEW_TOKEN.
 The reader writes PROGRAMME-REVIEW.md with line one `findings: <n>`, then findings naming
