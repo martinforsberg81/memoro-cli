@@ -5,17 +5,22 @@
  * left exactly as it was. Every case runs under a temporary programmes home.
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { run as goal } from '../../src/mc/commands/goal.js';
+import { run as plan } from '../../src/mc/commands/plan.js';
 import { listingText, programmesListing, recordWriter, run as programs } from '../../src/mc/commands/programs.js';
 import { readProgrammes } from '../../src/mc/page-collect.js';
 import { changePhases, newRecord, normalized, readRecord, recordedProgrammes, recordPage, recordPageTemplate, RECORD_FILE, setRecordState, validateRecord, writeRecord } from '../../src/mc/programme-record.js';
 import { lockPath, realLock } from '../../src/mc/runner-lock.js';
 import { goalJson } from './_helpers/goal-file.js';
+import { runRepairDraft } from '../../src/mc/repair-draft.js';
+import { renderCliSections } from '../../src/mc/helper-cli-collect.js';
+import { judgeRepair } from '../../src/mc/repair-session.js';
+import { archivedProposal, readRepairSource, sha256 } from '../../src/mc/repair-sources.js';
 
 const NOW = new Date('2026-11-14T10:20:30.456Z');
 
@@ -566,6 +571,380 @@ describe('mc programs create for an area', () => {
       assert.match(taken.err, /exists already — the proposal was decided once; nothing was made/u);
       assert.ok(existsSync(a.proposal));
       assert.equal(existsSync(join(a.home, 'ops-repair')), false);
+    } finally { a.done(); }
+  });
+});
+
+describe('internal repair order drafting', () => {
+  const put = (path, text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); return path; };
+  const proposal = (a, word, text, date = '2026-11-14') =>
+    put(join(a.root, 'areas', 'memoro-cli', 'system', 'proposals', `${date}-mc-${word}.md`), text);
+  const digest = (a, date, ids, dir = join(a.root, 'intake')) => put(join(dir, `errors-memoro-cli-${date}.md`),
+    ['# mc itself', '## mc itself — this machine', '',
+      '| fingerprint | hits | source | last seen | what |',
+      ...ids.map(id => `| \`${id}\` | 1 | gate | 2026-11-14 | A command refused valid input |`), '',
+      '## Failing now', ''].join('\n'));
+  const collect = (a, date, message, count = 1, fingerprint = 'gate-a') => put(join(a.root, 'intake', `errors-memoro-cli-${date}.md`),
+    renderCliSections({ cli: { notes: [], byStatus: {}, open: [], rows: [
+      { fingerprint, count, status: 'gate', lastSeen: '2026-11-14T10:00:00Z', message },
+    ] }, threshold: 2 }).join('\n'));
+  const order = name => ({
+    status: 'draft', name, title: 'Restore valid input', end: 'A valid request succeeds again.',
+    repositories: ['memoro-cli'], repository: 'memoro-cli', reason: 'The input is documented.',
+    summary: 'A command refuses valid input.', today: 'The current command rejects the supported form at src/mc-cli.js:20.',
+    parts: ['Restore the command', 'Restore saved invocations', 'Restore short aliases'].map(name => ({
+      name, closes: 'A supported form is refused.', solution: 'Restore the documented argument handling.',
+      design: 'Return the existing success line.', provedBy: 'The valid form succeeds and unknown arguments are still rejected.',
+      notInPart: 'A new flag.',
+    })),
+  });
+  const unexpected = () => assert.fail('the session must not be started again');
+  async function repair(a, argv, judge = unexpected) {
+    let out = '', err = '';
+    const code = await runRepairDraft(argv, { env: a.env, judge, now: () => NOW,
+      stdout: { write: text => { out += text; } }, stderr: { write: text => { err += text; } } });
+    return { code, out, err };
+  }
+  const direct = (a, kind, path, verdict) => repair(a, [`--${kind}`, path], verdict ? () => verdict : unexpected);
+  const where = (a, name) => readFileSync(join(a.home, name, 'README.md'), 'utf8').split('## Where things are\n')[1];
+
+  it('writes a full draft linked to each input route without consuming its proposal', async () => {
+    const a = area();
+    try {
+      const p = proposal(a, 'one', 'Valid input fails.');
+      const f = put(join(a.root, 'feedback.md'), 'Incident timestamp: 2026-11-14T10:00:00Z; build: 1234\nA private report.');
+      const e = digest(a, '2026-11-14', ['gate-a']);
+      for (const [kind, file, name] of [['proposal', p, 'from-proposal'], ['feedback', f, 'from-feedback'], ['error', e, 'from-error']]) {
+        assert.deepEqual(await direct(a, kind, file, order(name)),
+          { code: 0, err: '', out: `mc: repair programme ${name} is draft — source ${file}\n` });
+        const record = recordOf(a.home, name);
+        assert.equal(record.created_by, 'repair');
+        assert.equal(record.state, 'draft');
+        assert.equal(record.repair.sources[0].path, file);
+        assert.match(record.repair.sources[0].digest, /^[a-f0-9]{64}$/u);
+        const waiting = record.repair.sources.find(ref => ref.kind === 'proposal');
+        assert.ok(existsSync(waiting.path));
+        assert.ok(!existsSync(archivedProposal(waiting.path)));
+        assert.ok(where(a, name).includes(file));
+        assert.ok(where(a, name).includes(waiting.path));
+        const page = readFileSync(join(a.home, name, 'README.md'), 'utf8');
+        assert.match(page, /Repositories: memoro-cli\.[\s\S]+## End[\s\S]+### Part 1 —[\s\S]+Proved by:/u);
+        assert.doesNotMatch(page + readFileSync(waiting.path, 'utf8'), /A private report\./u);
+      }
+      assert.deepEqual(readdirSync(a.home).sort(), ['from-error', 'from-feedback', 'from-proposal']);
+      const noLocator = put(join(a.root, 'no-locator.md'), 'Only a description and build: 4.');
+      assert.deepEqual(await direct(a, 'feedback', noLocator),
+        { code: 2, err: 'mc: feedback needs a task ID or incident timestamp and build\n', out: '' });
+      assert.equal((await direct(a, 'proposal', join(a.root, 'unreadable.md'))).code, 1);
+    } finally { a.done(); }
+  });
+
+  it('converges explicit incident and fingerprint links across all routes and a moved or later digest', async () => {
+    const a = area();
+    try {
+      const first = digest(a, '2026-11-13', ['shared']);
+      const feedback = put(join(a.root, 'feedback.md'), 'Task ID: event-101\nValid input fails.');
+      const p = proposal(a, 'related', `Task ID: event-101\nSource \`${feedback}\`; fingerprint \`shared\` in \`${first}\`.\n`);
+      const name = 'shared-repair';
+      assert.equal((await direct(a, 'proposal', p, order(name))).code, 0);
+      const moved = join(a.root, 'runner', 'log', 'intake', '2026-11-14', 'errors-memoro-cli-2026-11-13.md');
+      mkdirSync(dirname(moved), { recursive: true });
+      renameSync(first, moved);
+      const later = digest(a, '2026-11-14', ['shared']);
+      for (const [kind, file] of [['feedback', feedback], ['error', first], ['error', moved], ['error', later]]) {
+        assert.deepEqual(await direct(a, kind, file), { code: 0, err: '', out: `mc: resuming repair programme ${name}\n` });
+      }
+      const unrelated = proposal(a, 'uncertain', `Task ID: event-101\nPossibly a different problem.`);
+      assert.deepEqual(await direct(a, 'proposal', unrelated),
+        { code: 0, err: '', out: `mc: possible duplicate for ${unrelated}; no order made\n` });
+      assert.deepEqual(readdirSync(a.home), [name]);
+      assert.deepEqual(recordOf(a.home, name).repair.sources.map(ref => ref.path), [p, feedback, moved, later]);
+      assert.ok(existsSync(unrelated));
+    } finally { a.done(); }
+  });
+
+  it('records resolved, insufficient and unchanged declined evidence without ordering it', async () => {
+    const a = area();
+    try {
+      const fixed = proposal(a, 'fixed', 'Former bug.');
+      const weak = proposal(a, 'weak', 'A symptom with no reproduction.');
+      const old = proposal(a, 'old', 'Previously considered.', '2026-11-10');
+      put(archivedProposal(old), 'Utfall: ej aktuellt — not a defect\n\nPreviously considered.');
+      const resolved = { status: 'resolved', reason: 'Fixed at main abcdef.', repository: 'memoro-cli' };
+      const insufficient = { status: 'insufficient', reason: 'The input is not known.', repository: 'memoro-cli' };
+      assert.equal((await direct(a, 'proposal', fixed, resolved)).out, `mc: ${fixed} — already fixed\n`);
+      assert.equal(existsSync(fixed), false);
+      assert.match(readFileSync(archivedProposal(fixed), 'utf8'), /^Utfall: resolved — Fixed at main abcdef\./u);
+      assert.match((await direct(a, 'proposal', fixed)).out, /already fixed/u);
+      assert.equal((await direct(a, 'proposal', old)).out, `mc: ${old} — previously declined\n`);
+      assert.equal((await direct(a, 'proposal', weak, insufficient)).out, `mc: ${weak} — insufficient evidence; proposal retained\n`);
+      assert.match((await direct(a, 'proposal', weak)).out, /insufficient evidence/u);
+      assert.ok(existsSync(weak));
+      const key = sha256(JSON.stringify(['proposal', weak]));
+      assert.equal(JSON.parse(readFileSync(join(a.root, 'runner', 'repair-draft', `${key}.json`))).reason, insufficient.reason);
+      assert.equal((await repair(a, [])).out, 'mc: no repair ready to order\n');
+      assert.deepEqual(readdirSync(a.home), []);
+      put(weak, 'New evidence supplies the absent input.');
+      assert.match((await direct(a, 'proposal', weak, order('now-established'))).out, /now-established is draft/u);
+    } finally { a.done(); }
+  });
+
+  it('honours a corroborated archive decline across routes without closing changed evidence', async () => {
+    const a = area();
+    try {
+      const feedback = put(join(a.root, 'feedback.md'), 'Task ID: event-102\nValid input fails.');
+      const e = collect(a, '2026-11-14', 'A command refused valid input');
+      const { ref } = readRepairSource({ kind: 'error', given: e, env: a.env });
+      const p = join(a.root, 'areas', 'memoro-cli', 'system', 'proposals', '2026-11-14-mc-declined-intake.md');
+      const archived = archivedProposal(p);
+      const body = `Task ID: event-102\nSource \`${feedback}\`; fingerprint \`gate-a\` in \`${e}\`.\n`
+        + `Repair evidence: ${ref.key} ${ref.digest}\n`;
+      const declined = `Utfall: ej aktuellt — not a defect\n\n${body}`;
+      put(archived, declined);
+      const later = collect(a, '2026-11-15', 'A command refused valid input');
+      const moved = join(a.root, 'runner', 'log', 'intake', '2026-11-15', 'errors-memoro-cli-2026-11-14.md');
+      mkdirSync(dirname(moved), { recursive: true });
+      renameSync(e, moved);
+      assert.deepEqual(await direct(a, 'proposal', archived),
+        { code: 0, err: '', out: `mc: ${archived} — previously declined\n` });
+      for (const [kind, file] of [['error', moved], ['error', later], ['feedback', feedback]]) {
+        assert.deepEqual(await direct(a, kind, file, order('wrongly-reopened')),
+          { code: 0, err: '', out: `mc: ${file} — previously declined\n` });
+      }
+      assert.deepEqual(readdirSync(a.home), []);
+      assert.deepEqual(readdirSync(dirname(p)), ['archive']);
+      assert.equal(readFileSync(archived, 'utf8'), declined);
+      const repeated = proposal(a, 'same-report', body);
+      assert.equal((await direct(a, 'proposal', repeated)).out, `mc: ${repeated} — previously declined\n`);
+      const uncertain = put(join(a.root, 'other-feedback.md'), 'Task ID: event-102\nA different symptom.');
+      assert.equal((await direct(a, 'feedback', uncertain)).out, `mc: possible duplicate for ${uncertain}; no order made\n`);
+      const changed = collect(a, '2026-11-16', 'New reproduction with a different result');
+      const fixed = { status: 'resolved', reason: 'Fixed on main.', repository: 'memoro-cli' };
+      assert.deepEqual(await direct(a, 'error', changed, fixed),
+        { code: 0, err: '', out: `mc: ${changed} — already fixed\n` });
+      assert.equal((await direct(a, 'error', later)).out, `mc: ${later} — previously declined\n`);
+      assert.equal((await direct(a, 'error', changed)).out, `mc: ${changed} — already fixed\n`);
+      assert.deepEqual(readdirSync(a.home), []);
+
+      const recurring = collect(a, '2026-11-17', 'A command refused valid input', 9);
+      const name = 'recurring-failure';
+      assert.deepEqual(await direct(a, 'error', recurring, order(name)),
+        { code: 0, err: '', out: `mc: repair programme ${name} is draft — source ${recurring}\n` });
+      const declinedInputs = [['error', moved], ['error', later], ['proposal', archived], ['proposal', repeated], ['feedback', feedback]];
+      for (const [kind, path] of declinedInputs) {
+        assert.equal((await direct(a, kind, path)).out, `mc: ${path} — previously declined\n`);
+      }
+      assert.equal((await direct(a, 'error', changed)).out, `mc: ${changed} — already fixed\n`);
+      assert.equal((await direct(a, 'error', recurring)).out, `mc: resuming repair programme ${name}\n`);
+      assert.deepEqual(readdirSync(a.home), [name]);
+      const sources = recordOf(a.home, name).repair.sources;
+      assert.deepEqual(sources.map(source => source.kind), ['error', 'proposal']);
+      assert.equal(sources[0].path, recurring);
+      assert.ok(existsSync(sources[1].path));
+      assert.equal(readFileSync(archived, 'utf8'), declined);
+    } finally { a.done(); }
+  });
+
+  it('keeps identical recorded evidence declined after a collector rewrite removes its fingerprint', async () => {
+    const a = area();
+    try {
+      const day = '2026-11-14';
+      const e = collect(a, day, 'A command refused valid input');
+      const { ref } = readRepairSource({ kind: 'error', given: e, env: a.env });
+      const evidence = `Fingerprint: \`gate-a\` in \`${e}\`.\n\nRepair evidence: ${ref.key} ${ref.digest}\n`;
+      const archived = archivedProposal(join(a.root, 'areas', 'memoro-cli', 'system', 'proposals', `${day}-mc-declined.md`));
+      const declined = `Utfall: ej aktuellt — not a defect\n\n# Original report\n\n${evidence}`;
+      put(archived, declined);
+      const waiting = `# Alternate report\n\n${evidence}`;
+      const p = proposal(a, 'alternate', waiting);
+      let reads = 0;
+      const judge = () => { reads++; return order('duplicate-repair'); };
+      const expectDecline = async path => assert.deepEqual(await repair(a, ['--proposal', path], judge),
+        { code: 0, err: '', out: `mc: ${path} — previously declined\n` });
+
+      await expectDecline(p);
+      collect(a, day, 'An unrelated command failed', 1, 'gate-b');
+      await expectDecline(archived);
+      await expectDecline(p);
+      assert.equal(reads, 0);
+      assert.deepEqual(readdirSync(a.home), []);
+      assert.equal(readFileSync(archived, 'utf8'), declined);
+      assert.equal(readFileSync(p, 'utf8'), waiting);
+
+      const later = collect(a, '2026-11-15', 'New evidence for the original defect');
+      const { ref: changed } = readRepairSource({ kind: 'error', given: later, env: a.env });
+      assert.equal(changed.key, ref.key);
+      assert.notEqual(changed.digest, ref.digest);
+      const revised = proposal(a, 'revised', `Fingerprint: \`gate-a\` in \`${later}\`.\n\nRepair evidence: ${changed.key} ${changed.digest}\n`);
+      assert.deepEqual(await direct(a, 'proposal', revised, order('changed-evidence')),
+        { code: 0, err: '', out: `mc: repair programme changed-evidence is draft — source ${revised}\n` });
+      assert.deepEqual(readdirSync(a.home), ['changed-evidence']);
+      await expectDecline(p);
+      assert.equal(reads, 0);
+    } finally { a.done(); }
+  });
+
+  it('does not treat a rewritten legacy collector link as proof of a declined evidence version', async () => {
+    const a = area();
+    try {
+      const day = '2026-11-14';
+      const e = collect(a, day, 'A command refused valid input');
+      const p = join(a.root, 'areas', 'memoro-cli', 'system', 'proposals', `${day}-mc-legacy-decline.md`);
+      const archived = archivedProposal(p);
+      const declined = `Utfall: ej aktuellt — not a defect\n\nFingerprint: \`gate-a\` in \`${e}\`.\n`;
+      put(archived, declined);
+      collect(a, day, 'A command refused valid input', 9);
+      assert.deepEqual(await direct(a, 'error', e),
+        { code: 0, err: '', out: `mc: possible duplicate for ${e}; no order made\n` });
+      assert.equal((await direct(a, 'proposal', archived)).out, `mc: ${archived} — previously declined\n`);
+      assert.deepEqual(readdirSync(a.home), []);
+      assert.deepEqual(readdirSync(dirname(p)), ['archive']);
+      assert.equal(readFileSync(archived, 'utf8'), declined);
+      assert.ok(existsSync(e));
+    } finally { a.done(); }
+  });
+
+  it('archives a resolution for changed proposal evidence without replacing its prior decline', async () => {
+    const a = area();
+    try {
+      const changed = 'New reproduction identifies the supported input.\n';
+      const p = proposal(a, 'reconsidered', changed);
+      const archived = archivedProposal(p);
+      const declined = 'Utfall: ej aktuellt — not a defect\n\nThe input was unknown.\n';
+      put(archived, declined);
+      const fixed = { status: 'resolved', reason: 'Fixed on main.', repository: 'memoro-cli' };
+      const result = await direct(a, 'proposal', p, fixed);
+      assert.deepEqual(result, { code: 0, err: '', out: `mc: ${p} — already fixed\n` });
+      assert.ok(!existsSync(p));
+      assert.equal(readFileSync(archived, 'utf8'), declined);
+      const [replacement] = readdirSync(dirname(archived)).filter(name => join(dirname(archived), name) !== archived);
+      assert.ok(replacement, 'the resolution is a separate archive record');
+      const resolvedPath = join(dirname(archived), replacement);
+      assert.match(readFileSync(resolvedPath, 'utf8'), /^Utfall: resolved — Fixed on main\.\n/u);
+      assert.ok(readFileSync(resolvedPath, 'utf8').endsWith(changed));
+      assert.equal((await direct(a, 'proposal', p)).out, `mc: ${resolvedPath} — already fixed\n`);
+      assert.equal((await direct(a, 'proposal', archived)).out, `mc: ${archived} — previously declined\n`);
+      put(p, changed);
+      assert.equal((await direct(a, 'proposal', p)).out, `mc: ${p} — already fixed\n`);
+      assert.deepEqual(readdirSync(a.home), []);
+    } finally { a.done(); }
+  });
+
+  it('requires a selection from a multi-fingerprint digest and leaves the other defects available', async () => {
+    const a = area();
+    try {
+      const e = digest(a, '2026-11-14', ['beta', 'alpha']);
+      assert.deepEqual(await direct(a, 'error', e), {
+        code: 2, out: '', err: `mc: select a defect — mc repair --error ${e} --fingerprint <id>\n  alpha\n  beta\n`,
+      });
+      assert.deepEqual(readdirSync(a.home), []);
+      const select = id => repair(a, ['--error', e, '--fingerprint', id], ({ source }) => {
+        assert.equal(JSON.parse(source.text).fingerprint, id);
+        return order(`restore-${id}`);
+      });
+      assert.equal((await select('beta')).code, 0);
+      assert.deepEqual(readdirSync(a.home), ['restore-beta']);
+      assert.equal((await select('alpha')).code, 0);
+      assert.deepEqual(readdirSync(a.home).sort(), ['restore-alpha', 'restore-beta']);
+    } finally { a.done(); }
+  });
+
+  it('reuses an intake proposal that already identifies the submitted fingerprint', async () => {
+    const a = area();
+    try {
+      const e = digest(a, '2026-11-14', ['already-filed']);
+      const p = proposal(a, 'already-filed', `Fingerprint: \`already-filed\` from \`${e}\`.\n`);
+      const result = await direct(a, 'error', e, order('reuse-intake'));
+      assert.equal(result.code, 0, result.err);
+      assert.deepEqual(recordOf(a.home, 'reuse-intake').repair.sources.map(ref => ref.path), [e, p]);
+      assert.deepEqual(readdirSync(dirname(p)), [p.split('/').at(-1)]);
+      assert.equal((await direct(a, 'proposal', p)).out, 'mc: resuming repair programme reuse-intake\n');
+    } finally { a.done(); }
+  });
+
+  it('refuses ordinary ready, plan and goal creation on repair-owned orders without changing the desk route', async () => {
+    const a = area();
+    try {
+      const p = proposal(a, 'restricted', 'A defect to draft.');
+      const ordinary = proposal(a, 'desk', 'A documentation proposal.');
+      assert.equal((await direct(a, 'proposal', p, order('internal-repair'))).code, 0);
+      const desk = { ...a.env, MC_ROLE: 'martin' };
+      const command = ['state', 'internal-repair', 'ready'];
+      const ready = await call(command, desk);
+      assert.equal(ready.code, 1);
+      assert.match(ready.err, /repair programme internal-repair is draft/u);
+      assert.equal(recordOf(a.home, 'internal-repair').state, 'draft');
+      const err = [];
+      const dir = join(a.home, 'internal-repair');
+      const admitted = { ...recordOf(a.home, 'internal-repair'), state: 'ready' };
+      // The ownership guard is independent of an ordinary ready spelling.
+      put(join(dir, RECORD_FILE), JSON.stringify(admitted));
+      const deps = { env: a.env, cwd: a.root, known: AREA_DEPS.known, git: () => ({ ok: true, stdout: '', stderr: '' }),
+        stderr: { write: text => err.push(text) } };
+      assert.equal(await goal(['new', 'internal-repair/restore', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Restore'], deps), 1);
+      assert.equal(await plan(['internal-repair'], { ...deps, repos: [], ensure: unexpected }), 1);
+      assert.equal(err.filter(text => /repair programme internal-repair is draft/u.test(text)).length, 2);
+      assert.deepEqual(readdirSync(join(dir, 'goals')), []);
+      assert.equal((await call(['create', 'desk-repair', '--end', 'Update the text.', '--area', 'memoro-cli/operations', '--from-proposal', ordinary], desk, AREA_DEPS)).code, 0);
+      assert.equal((await call(['state', 'desk-repair', 'ready'], desk)).code, 0);
+      assert.equal(recordOf(a.home, 'desk-repair').state, 'ready');
+      assert.ok(existsSync(archivedProposal(ordinary)));
+      assert.equal((await direct(a, 'proposal', ordinary)).out, 'mc: source already ordered in desk-repair\n');
+      // Model the writer's already-made programme when its archive move failed.
+      const ordinaryText = readFileSync(archivedProposal(ordinary), 'utf8').split('\n\n')[1];
+      put(ordinary, ordinaryText);
+      rmSync(archivedProposal(ordinary));
+      assert.equal((await direct(a, 'proposal', ordinary)).out, 'mc: source already ordered in desk-repair\n');
+      assert.ok(existsSync(ordinary));
+    } finally { a.done(); }
+  });
+
+  it('bare drafting skips a stopped source and takes the oldest waiting filename', async () => {
+    const a = area();
+    try {
+      const stopped = proposal(a, 'stopped', 'A defect already at the desk.', '2026-11-09');
+      assert.equal((await direct(a, 'proposal', stopped, order('at-the-desk'))).code, 0);
+      const record = recordOf(a.home, 'at-the-desk');
+      record.repair.stop_item = 'fixture-stop';
+      put(join(a.home, 'at-the-desk', RECORD_FILE), JSON.stringify(record));
+      assert.equal((await direct(a, 'proposal', stopped)).out, 'mc: repair programme at-the-desk is at Martin (item fixture-stop)\n');
+      const first = proposal(a, 'z-oldest', 'The oldest other defect.', '2026-11-10');
+      proposal(a, 'a-newer', 'The newer defect.', '2026-11-11');
+      const result = await repair(a, [], ({ source }) => {
+        assert.equal(source.ref.path, first);
+        return order('oldest-actionable');
+      });
+      assert.equal(result.out, `mc: repair programme oldest-actionable is draft — source ${first}\n`);
+      assert.equal((await repair(a, [])).out, 'mc: resuming repair programme oldest-actionable\n');
+    } finally { a.done(); }
+  });
+
+  it('starts a repair identity without tools, credentials or an inherited goal and reads pinned source', async () => {
+    const a = area({ MC_ROLE: 'build-session:goal', MC_GOAL: 'old/goal', MC_PROGRAMME: 'old',
+      CLOUDFLARE_API_TOKEN: 'not-for-the-session', MEMORO_TOKEN: 'also-not-for-the-session' });
+    try {
+      const revision = 'c'.repeat(40);
+      const seen = [];
+      const verdict = order('served-by-repair');
+      const returned = await judgeRepair({ source: { ref: { kind: 'proposal' }, repo: 'memoro-cli', text: 'Sample evidence.' }, orders: [], env: a.env }, {
+        repos: [{ name: 'memoro-cli', path: '/repo' }],
+        launch: () => ({ ok: true, id: 'claude-code', spec: { bin: 'claude' } }),
+        git: (_path, args) => args[0] === 'rev-parse' ? revision : args[1] === `${revision}:docs/technical/mc-help.md` ? 'Existing behaviour.' : null,
+        billing: () => ({ billing: 'plan' }),
+        session: async (_bin, args, { env, input }) => {
+          assert.equal(args[args.indexOf('--tools') + 1], '');
+          assert.doesNotMatch(args.join(' '), /Sample evidence/u);
+          assert.equal(env.MC_ROLE, 'repair');
+          assert.equal(env.MC_HEADLESS, '1');
+          for (const key of ['MC_GOAL', 'MC_PROGRAMME', 'CLOUDFLARE_API_TOKEN', 'MEMORO_TOKEN']) assert.equal(env[key], undefined);
+          const prompt = JSON.parse(JSON.parse(input).message.content);
+          seen.push(prompt);
+          const result = seen.length === 1 ? { status: 'read', requests: [{ repository: 'memoro-cli', file: 'docs/technical/mc-help.md' }] } : verdict;
+          return { status: 0, stdout: JSON.stringify({ type: 'result', result: JSON.stringify(result) }) };
+        },
+      });
+      assert.deepEqual(returned, verdict);
+      assert.deepEqual(seen[1].evidence.map(({ revision, text }) => [revision, text]), [[revision, '1: Existing behaviour.']]);
     } finally { a.done(); }
   });
 });

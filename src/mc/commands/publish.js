@@ -48,6 +48,7 @@ import { run as merge } from './merge.js';
 import { writerRole } from './goal.js';
 import { commandUsage } from '../command-help.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
+import { AREAS_PATH, checkAreas } from '../areas.js';
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
 /** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
@@ -67,8 +68,14 @@ export async function run(argv, deps = {}) {
   const refused = scanned.error || ROUTES[''].check(scanned);
   if (refused) { stderr.write(`mc: ${refused}\n${usage()}`); return 2; }
   const { flags } = scanned;
+  const env = deps.env || process.env;
+  const learning = env.MC_ROLE === 'learning';
+  if (learning && (!deps.learningArea || !deps.beforeLearningPush || flags.goal || flags.base || !flags.json)) {
+    stderr.write('mc: learning publishes only a declared area correction — use mc learning publish <repo>/<area> --lesson <name> --source <reference>\n');
+    return 2;
+  }
 
-  const git = deps.git || ((args) => tryGit(cwd, args));
+  const git = deps.git || ((args, options) => tryGit(cwd, args, options));
   const gh = deps.gh || ((args) => ghCommand(args, cwd));
   const root = git(['rev-parse', '--show-toplevel']);
   if (!root) { stderr.write('mc: not inside a git worktree\n'); return 2; }
@@ -80,6 +87,10 @@ export async function run(argv, deps = {}) {
   const dirty = (git(['status', '--porcelain']) || '').split('\n').filter(Boolean);
   const remoteLine = git(['ls-remote', '--heads', 'origin', branch]) || '';
   const remoteHead = remoteLine.split(/\s+/u)[0] || null;
+  if (learning && remoteHead) {
+    stderr.write('mc: a published learning branch is immutable; reuse its PR or evaluate the lesson in another learning turn\n');
+    return 2;
+  }
   const remoteIsAncestor = remoteHead ? git(['merge-base', '--is-ancestor', remoteHead, 'HEAD']) !== null : true;
   const why = refusal({ branch, dirty, remoteHead, localHead, remoteIsAncestor });
   if (why) { stderr.write(`mc: ${why}\n`); return 1; }
@@ -89,17 +100,25 @@ export async function run(argv, deps = {}) {
   const checked = (deps.mainCheck || ((dir, opts) => checkAgainstMain(dir, opts)))(cwd, { base });
   if (!checked.fetch.ok) stderr.write(`mc: warning: git fetch origin failed (${checked.fetch.text}) — checked against the origin/${base} already held\n`);
   if (checked.paths.length) { stderr.write(`mc: ${conflictReason(checked.paths, base)}\n`); return 1; }
-  const env = deps.env || process.env;
   // The manager's curation is texts under docs/technical/ and none of Martin's (D6): what its branch changes is read against
   // origin/<base> here, before anything is pushed.
-  if (env.MC_ROLE === 'manager') {
-    const guarded = managerDiff(git, base);
+  if (learning || env.MC_ROLE === 'manager') {
+    if (learning && !checked.fetch.ok) return 1;
+    const guarded = managerDiff(git, base, learning ? deps.learningArea : null);
     if (guarded) { stderr.write(`mc: ${guarded}\n`); return 2; }
   }
   const goal = goalOfPublish({ given: flags.goal, env, cwd, branch, home: deps.home || programsHome(env), read: deps.readGoal || readTextOrNull, list: deps.listGoals });
   if (goal?.error) { stderr.write(`mc: ${goal.error}\n`); return 2; }
 
   const repo = repoName(git(['remote', 'get-url', 'origin']), root);
+  if (learning && (repo !== deps.learningArea.repo || branch !== deps.learningArea.branch)) {
+    stderr.write('mc: learning publishes only from its assigned area worktree — use mc learning area <repo>/<area>\n');
+    return 2;
+  }
+  if (learning) {
+    const stopped = await deps.beforeLearningPush({ repo, branch, head: localHead });
+    if (stopped) return stopped;
+  }
   const pushed = remoteHead !== localHead;
   if (pushed) {
     const push = (deps.push || ((name, opts) => pushBranch(cwd, name, { stderr, ...opts })))(branch);
@@ -143,7 +162,7 @@ export async function run(argv, deps = {}) {
       if (!edited.ok) { stderr.write(`mc: gh pr edit #${open.number} failed: ${edited.text}\n`); return 1; }
     }
   } else {
-    const base = flags.base || defaultBase(git);
+    const base = learning ? 'main' : (flags.base || defaultBase(git));
     const made = gh(['pr', 'create', '--base', base, '--head', branch, '--title', title, '--body', markedBody(body, localHead)]);
     if (!made.ok) { stderr.write(`mc: gh pr create failed: ${made.text}\n`); return 1; }
     created = true;
@@ -187,14 +206,30 @@ export async function run(argv, deps = {}) {
 }
 
 /**
- * The manager's guard over what the branch changes against origin/<base> since they diverged: the refusal text, or null.
- * A diff that cannot be read refuses too — the guard never lets through what it did not see.
+ * The manager's guard over what the branch changes since it diverged from
+ * origin/<base>. Learning narrows it to the assigned page on current main.
  */
-function managerDiff(git, base) {
-  const point = git(['merge-base', `origin/${base}`, 'HEAD']);
+function managerDiff(git, base, area) {
+  const main = `origin/${base}`;
+  const point = git(['merge-base', main, 'HEAD']);
   const names = point ? git(['diff', '--name-only', '--no-renames', point, 'HEAD']) : null;
   if (!point || names === null) return `the manager's publish cannot read what the branch changes against origin/${base}`;
-  const files = names.split('\n').filter(Boolean).map((path) => ({ path, before: git(['show', `${point}:${path}`]), after: git(['show', `HEAD:${path}`]) }));
+  // Leading whitespace can turn a heading into a code block. Use the same
+  // untrimmed reads for the learning guard and its current-main comparison.
+  const show = (ref, path) => git(['show', `${ref}:${path}`], { trim: !area });
+  const files = names.split('\n').filter(Boolean).map((path) => ({ path, before: show(point, path), after: show('HEAD', path) }));
+  if (area) {
+    const declared = checkAreas(git(['show', `${main}:${AREAS_PATH}`]), main);
+    const areaPage = declared.areas?.find(x => x.id === area.id)?.page;
+    if (areaPage !== area.page) return `learning: ${area.id} no longer declares ${area.page} on ${main}`;
+    if (!files.length) return `learning: no area information to publish`;
+    const refused = managerGuard(files, { areaPage });
+    if (refused) return refused;
+    const mode = (ref) => git(['ls-tree', ref, '--', areaPage])?.split(' ')[0];
+    if (mode('HEAD') !== '100644' || mode(main) !== '100644') return `learning: ${areaPage} must remain a regular area document`;
+    if (show(main, areaPage) !== files[0].before) return `learning: ${areaPage} changed on ${main} — integrate current main, verify the facts again and run mc gate`;
+    return null;
+  }
   return managerGuard(files);
 }
 

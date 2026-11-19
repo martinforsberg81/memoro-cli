@@ -7,7 +7,7 @@ import { after, before, describe, test } from 'node:test';
 
 import { jevContext, refusedMove, run, usage } from '../../../src/mc/commands/goal.js';
 import { addGoalWorktree, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, renderGoalText, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
-import { BUILD_ROLES } from '../../../src/mc/run-plan.js';
+import { BUILD_ROLES, tsvHeader, tsvRow } from '../../../src/mc/run-plan.js';
 import { seenAreas } from '../../../src/mc/review-verdict.js';
 import { runModule } from '../../../src/mc-verbs.js';
 import { phaseOpen, programmeOrder, programsGoals } from '../../../src/mc/goals.js';
@@ -115,6 +115,149 @@ const martinCall = (reason, ...goal) => ['martin', ...goal, '--kind', 'product',
 function seededGoal(extra = {}) {
   return { [`${DIR}/GOAL.json`]: GOAL_TEXT, [`${DIR}/LOG.md`]: LOG_TEXT, ...extra };
 }
+
+/** Read the actual Next cell and goal detail from the same file/Git fixture. */
+async function goalOutcomeViews(f) {
+  const result = {};
+  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
+    const before = f.out().length;
+    assert.equal(await run(args, f.deps), 0, f.err());
+    result[args[0]] = f.out().slice(before);
+  }
+  return result;
+}
+
+test('goal outcome: a later unmatched announcement retains the eligible build continuation in list and show', async () => {
+  const logDir = '/work/runner/log';
+  const completion = [
+    '## 2026-11-01T20:00Z · runner · build · ready', '',
+    `Comment: build session (1 of 5): met 0 of 1 criteria, heads memoro-cli ${HEADS['memoro-cli']}`, '',
+  ].join('\n');
+  const files = seededGoal({
+    [`${DIR}/LOG.md`]: `## 2026-11-01T20:00Z · codex model · build · ready · by build\n\nNext: verify saved proposal\n\n${completion}`,
+    [`${logDir}/runner.log`]: '2026-11-01T20:00:00Z goal:mc/plain: build starting (codex)\n2026-11-01T21:00:00Z goal:mc/plain: build starting (codex)\n',
+    [`${logDir}/runs.tsv`]: 'ts\tname\tkind\tseconds\tsession\texit\n2026-11-01T20:00:10Z\tgoal:mc/plain\tbuild-goal\t10\tsession-1\t1\n',
+    [`${logDir}/goal-mc-plain-20261101T200000Z.jsonl`]: '{"type":"thread.started","thread_id":"session-1"}\n',
+  });
+  const f = fixture({ files, env: { MC_WORK_ROOT: '/work' } });
+  const announcements = f.store[`${logDir}/runner.log`];
+  f.store[`${logDir}/runner.log`] = announcements.split('\n')[0] + '\n';
+  for (const output of Object.values(await goalOutcomeViews(f))) {
+    assert.match(output, /build started · build remains eligible · Next: verify saved proposal/u);
+  }
+  f.store[`${logDir}/runner.log`] = announcements;
+  for (const output of Object.values(await goalOutcomeViews(f))) {
+    assert.match(output, /build start unknown — no tool boundary recorded · build remains eligible · Next: verify saved proposal/u);
+    assert.doesNotMatch(output, /technical desk/u);
+  }
+  f.store[`${DIR}/GOAL.json`] = withGoal(GOAL_TEXT, { phase: 2 });
+  f.store[`${HOME}/mc/goals/prerequisite/GOAL.json`] = goalJson();
+  for (const output of Object.values(await goalOutcomeViews(f))) {
+    assert.match(output, /build start unknown — no tool boundary recorded · build phase not open · Next: verify saved proposal/u);
+    assert.doesNotMatch(output, /build remains eligible|technical desk/u);
+  }
+  f.store[`${DIR}/GOAL.json`] = GOAL_TEXT;
+  f.store[`${DIR}/LOG.md`] = `## 2026-11-01T20:00Z · codex model · build · ready · by build\n\nDone: work\n\n${completion}`;
+  for (const output of Object.values(await goalOutcomeViews(f))) {
+    assert.match(output, /no bounded continuation recorded/u);
+  }
+});
+
+test('goal outcome: the same exit distinguishes a credits preflight refusal from a start or unknown', async () => {
+  const logDir = '/work/runner/log';
+  const stem = `${logDir}/goal-mc-plain-20261101T200000Z`;
+  const f = fixture({ env: { MC_WORK_ROOT: '/work' }, files: seededGoal({
+    [`${DIR}/LOG.md`]: '## 2026-11-01T20:00Z · codex model · build · ready · by build\n\nNext: verify saved proposal\n',
+    [`${logDir}/runner.log`]: '2026-11-01T20:00:00Z goal:mc/plain: build starting (codex) · on credits (plan spent)\n',
+    [`${logDir}/runs.tsv`]: 'ts\tname\tkind\tseconds\tsession\texit\n2026-11-01T20:00:10Z\tgoal:mc/plain\tbuild-goal\t10\t-\t1\n',
+    [`${stem}.jsonl`]: '', [`${stem}.json.err`]: 'mc: codex API is off (mc run --billing codex on)\n',
+  }) });
+  for (const [trace, stderr, session, expected] of [
+    ['', 'mc: codex API is off (mc run --billing codex on)\n', '-', /build not started — provider preflight refused/u],
+    ['', 'disk offline\n', '-', /build start unknown — no tool boundary recorded/u],
+    ['{"type":"thread.started","thread_id":"session-1"}\n', '', 'session-1', /build started/u],
+  ]) {
+    f.store[`${stem}.jsonl`] = trace;
+    f.store[`${stem}.json.err`] = stderr;
+    f.store[`${logDir}/runs.tsv`] = `ts\tname\tkind\tseconds\tsession\texit\n2026-11-01T20:00:10Z\tgoal:mc/plain\tbuild-goal\t10\t${session}\t1\n`;
+    for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
+      const before = f.out().length;
+      assert.equal(await run(args, f.deps), 0, f.err());
+      assert.match(f.out().slice(before), expected);
+    }
+  }
+  f.store[`${stem}.jsonl`] = '';
+  f.store[`${stem}.json.err`] = 'mc: codex API is off (mc run --billing codex on)\n';
+  f.store[`${logDir}/runs.tsv`] = 'ts\tname\tkind\tseconds\tsession\texit\n2026-11-01T20:00:10Z\tgoal:mc/plain\tbuild-goal\t10\tsession-missing-trace\t1\n';
+  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
+    const before = f.out().length;
+    assert.equal(await run(args, f.deps), 0, f.err());
+    assert.match(f.out().slice(before), /build start unknown — no tool boundary recorded/u);
+  }
+  f.store[`${logDir}/runs.tsv`] = 'ts\tname\tkind\tseconds\tsession\texit\n2026-11-01T20:00:10Z\tgoal:mc/plain\tbuild-goal\t10\t-\t1\n';
+  f.store[`${logDir}/runner.log`] += '2026-11-01T20:00:00Z goal:mc/plain: review starting (codex)\n';
+  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
+    const before = f.out().length;
+    assert.equal(await run(args, f.deps), 0, f.err());
+    assert.match(f.out().slice(before), /build start unknown — no tool boundary recorded/u);
+  }
+});
+
+test('goal outcome: an Antigravity repair start needs a matching native init, not a result alone', async () => {
+  const logDir = '/work/runner/log';
+  const trace = `${logDir}/goal-mc-plain-20261101T200000Z.jsonl`;
+  const f = fixture({ env: { MC_WORK_ROOT: '/work' }, files: seededGoal({
+    [`${logDir}/runner.log`]: '2026-11-01T20:00:00Z goal:mc/plain: repair starting (agy gemini-4-argon-high)\n',
+    [`${logDir}/runs.tsv`]: `${tsvHeader()}\n${tsvRow({ ts: '2026-11-01T20:00:10Z', name: 'goal:mc/plain', kind: 'repair', seconds: 10, session: 'conversation-1', exit: 1, tool: 'agy' })}\n`,
+  }) });
+  for (const [event, expected] of [
+    [{ event: 'init', init: { conversation_id: 'conversation-1' } }, /build started/u],
+    [{ event: 'init', init: { conversation_id: 'other-conversation' } }, /build start unknown — no tool boundary recorded/u],
+    [{ event: 'result', result: { conversation_id: 'conversation-1', status: 'FAILURE' } }, /build start unknown — no tool boundary recorded/u],
+  ]) {
+    f.store[trace] = `${JSON.stringify(event)}\n`;
+    for (const output of Object.values(await goalOutcomeViews(f))) assert.match(output, expected, JSON.stringify(event));
+  }
+});
+
+test('goal outcome: an active main-red wait retains the attempt and Next, then releases', async () => {
+  const logDir = '/work/runner/log';
+  const mendFile = '/work/runner/main-mend/memoro-cli.json';
+  const repair = (state) => JSON.stringify({ version: 1, entries: [{ id: 'm1', state, repo: 'memoro-cli', file: 'tests/red.test.js', branch: 'main-red/m1', owner: 'main-red:m1', base: 'main-head', worktree: null, pr: null }] });
+  const continuation = '## 2026-11-01T20:00Z · codex model · build · ready · by build\n\nNext: verify saved proposal\n';
+  const f = fixture({ env: { MC_WORK_ROOT: '/work' }, files: seededGoal({
+    [`${DIR}/LOG.md`]: `${continuation}\n## 2026-11-01T20:01Z · runner · build · ready\n\nComment: session not counted for progress: main-red repair unfinished in memoro-cli (m1) — no session starts on this goal until it has ended\n`,
+    [`${logDir}/runner.log`]: '2026-11-01T20:00:00Z goal:mc/plain: build starting (codex model)\n',
+    [`${logDir}/runs.tsv`]: 'ts\tname\tkind\tseconds\tsession\texit\n2026-11-01T20:00:10Z\tgoal:mc/plain\tbuild-goal\t10\tsession-1\t1\n',
+    [`${logDir}/goal-mc-plain-20261101T200000Z.jsonl`]: '{"type":"thread.started","thread_id":"session-1"}\n',
+  }) });
+  for (const state of ['queued', 'running', 'published']) {
+    f.store[mendFile] = repair(state);
+    for (const output of Object.values(await goalOutcomeViews(f))) {
+      assert.match(output, /build started · runner waits for main-red repair in memoro-cli \(m1\) · Next: verify saved proposal/u, state);
+      assert.doesNotMatch(output, /build remains eligible|technical desk/u, state);
+    }
+  }
+  const announcements = f.store[`${logDir}/runner.log`];
+  delete f.store[`${logDir}/runner.log`];
+  for (const output of Object.values(await goalOutcomeViews(f))) {
+    assert.match(output, /build start unknown — no tool boundary recorded · runner waits for main-red repair/u);
+  }
+  f.store[`${logDir}/runner.log`] = announcements;
+  for (const state of ['landed', 'dropped', 'Martin', 'unreadable']) {
+    f.store[mendFile] = state === 'unreadable' ? '{' : repair(state);
+    for (const output of Object.values(await goalOutcomeViews(f))) {
+      assert.match(output, /build started · build remains eligible · Next: verify saved proposal/u, state);
+      assert.doesNotMatch(output, /runner waits for main-red repair|technical desk/u, state);
+    }
+  }
+  f.store[mendFile] = repair('published');
+  f.store[`${DIR}/LOG.md`] = continuation;
+  for (const output of Object.values(await goalOutcomeViews(f))) {
+    assert.match(output, /build started · build remains eligible · Next: verify saved proposal/u);
+    assert.doesNotMatch(output, /runner waits for main-red repair/u);
+  }
+});
 
 test('mc goal new writes a GOAL.json skeleton and LOG.md, fetches each repository, and makes no worktree', async () => {
   const f = fixture();
@@ -852,6 +995,82 @@ test('a commit after the mark makes the move refused', async () => {
     assert.equal(await run(['criterion', 'met', '2', '--evidence', 'again, at the new head'], f.deps), 0, f.err());
     assert.equal(await run(argv, f.deps), 0, f.err());
     assert.equal(stateOf(f), 'review · ready');
+  }
+});
+
+test('goal outcome: only a committed handoff names review and a technical stop retains its work', async () => {
+  const fields = { stage: 'build', prs: ['memoro-cli#31'] };
+  const files = v2Files({
+    ...fullEvidence(),
+    [`${DIR}/LOG.md`]: '## 2026-11-01T19:59Z · codex model · build · ready · by build\n\nNext: old build task\n',
+  }, fields);
+  const accepted = fixture({ files, env: BUILD, git: worktreeGit({ heads: { ...TWO_HEADS } }) });
+  const refusedGit = worktreeGit({ heads: { ...TWO_HEADS }, published: { 'memoro-cli': TWO_HEADS['memoro-cli'] } });
+  const refused = fixture({ files, env: BUILD, git: refusedGit });
+  assert.equal(await run(MOVES_TO_REVIEW[1], accepted.deps), 0, accepted.err());
+  assert.equal(await run(MOVES_TO_REVIEW[1], refused.deps), 1);
+  assert.deepEqual(goalField(refused.store[`${DIR}/GOAL.json`], 'prs'), fields.prs);
+  for (const [f, handoff] of [[accepted, true], [refused, false]]) {
+    for (const output of Object.values(await goalOutcomeViews(f))) {
+      if (handoff) assert.match(output, /build handed to review · independent review/u);
+      else assert.doesNotMatch(output, /independent review/u);
+    }
+  }
+  const heldReview = fixture({ files: {
+    ...accepted.store,
+    [`${DIR}/GOAL.json`]: withGoal(accepted.store[`${DIR}/GOAL.json`], { status: 'Martin' }),
+    [`${DIR}/LOG.md`]: accepted.store[`${DIR}/LOG.md`] + '\n## 2026-11-01T20:02Z · runner · review · Martin\n\n'
+      + 'Comment: the review ended with the goal still in review, a second time — review recovery cannot continue\n',
+  }, git: worktreeGit({ heads: { ...TWO_HEADS } }) });
+  for (const output of Object.values(await goalOutcomeViews(heldReview))) {
+    assert.match(output, /review · Martin/u);
+    assert.match(output, /build handed to review · historical handoff/u);
+    assert.doesNotMatch(output, /independent review|technical desk/u);
+  }
+  const verdict = verdictText({ ids: [...V2_IDS, 'criterion 2'], repos: ['memoro-cli'], notOk: { 'criterion 1': 'needs repair' } }) + `head: memoro ${TWO_HEADS.memoro}\n`;
+  const returned = reviewed({ files: { ...accepted.store, [REVIEW_FILE]: verdict }, env: { ...REVIEW, MC_WORK_ROOT: '/work' }, git: worktreeGit({ heads: { ...TWO_HEADS } }) });
+  assert.equal(await run(['stage', 'build'], returned.deps), 0, returned.err());
+  const logDir = '/work/runner/log';
+  returned.store[`${logDir}/runner.log`] = [
+    '2026-11-01T19:59:40Z goal:mc/plain: build starting (codex model, no check-in, no stall guard) · class large: subscription (route ready)',
+    '2026-11-01T20:01:00Z goal:mc/plain: repair starting (codex model, no check-in, no stall guard) · finish list: subscription (route ready)', '',
+  ].join('\n');
+  const completed = { name: 'goal:mc/plain', exit: 1, seconds: 10, model: 'model', tool: 'codex', billing: 'subscription' };
+  returned.store[`${logDir}/runs.tsv`] = [
+    tsvHeader(), tsvRow({ ...completed, ts: '2026-11-01T19:59:50Z', kind: 'build-goal', session: 'before-review' }), '',
+  ].join('\n');
+  returned.store[`${logDir}/goal-mc-plain-20261101T195940Z.jsonl`] = '{"type":"thread.started","thread_id":"before-review"}\n';
+  const checkReturned = async (start) => {
+    for (const [view, output] of Object.entries(await goalOutcomeViews(returned))) {
+      assert.doesNotMatch(output, /independent review|technical desk/u);
+      assert.ok(output.includes(`${start} · build remains eligible · Next: no bounded continuation recorded`), output);
+      if (view === 'show') assert.match(output, /LOG\n[\s\S]*review · ready · by build/u);
+    }
+  };
+  await checkReturned('build start unknown — no tool boundary recorded');
+  returned.store[`${logDir}/runs.tsv`] += tsvRow({ ...completed, ts: '2026-11-01T20:01:10Z', kind: 'repair', session: 'after-review' }) + '\n';
+  returned.store[`${logDir}/goal-mc-plain-20261101T200100Z.jsonl`] = '{"type":"thread.started","thread_id":"after-review"}\n';
+  await checkReturned('build started');
+
+  const stoppedFiles = v2Files({ [`${DIR}/LOG.md`]: '## 2026-11-01T20:00Z · codex model · build · Martin · by build\n\nComment: goal defect: criterion 1 — cannot run\n' }, { ...fields, status: 'Martin' });
+  const stopped = fixture({ files: stoppedFiles, git: worktreeGit({ heads: { ...TWO_HEADS }, dirty: ['memoro-cli'] }) });
+  for (const [view, output] of Object.entries(await goalOutcomeViews(stopped))) {
+    assert.match(output, /build stopped — goal defect: criterion 1 — cannot run · technical desk · retained work: existing branch; registered PR: memoro-cli#31 · LOG\.md/u);
+    assert.equal((output.match(/technical desk/gu) ?? []).length, 1);
+    if (view === 'show') assert.match(output, /WORKTREES\n  memoro-cli +\/work\/programs\/mc\/goals\/plain\/memoro-cli +1 changed/u);
+  }
+  const noWorktrees = fixture({ files: stoppedFiles, git: () => failed('no worktree') });
+  for (const [view, output] of Object.entries(await goalOutcomeViews(noWorktrees))) {
+    assert.match(output, /build stopped — goal defect: criterion 1 — cannot run · technical desk · retained work: registered PR: memoro-cli#31 · LOG\.md/u);
+    assert.equal((output.match(/technical desk/gu) ?? []).length, 1);
+    assert.doesNotMatch(output, /existing branch|existing worktree/u);
+    if (view === 'show') assert.match(output, /WORKTREES\n  memoro-cli +\/work\/programs\/mc\/goals\/plain\/memoro-cli — no worktree/u);
+  }
+  stopped.store[`${DIR}/LOG.md`] = '## 2026-11-01T20:00Z · runner · build · Martin\n\nComment: three sessions ended without a word — see the logs under runner/log\n';
+  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
+    const before = stopped.out().length;
+    assert.equal(await run(args, stopped.deps), 0, stopped.err());
+    assert.match(stopped.out().slice(before), /build stopped — three sessions ended without a word[^\n]*technical desk/u);
   }
 });
 
@@ -2543,32 +2762,21 @@ test('headless Martin still cannot move, rewrite criteria or drop', async () => 
   }
 });
 
-// ---- The learning role: it creates goals and writes the ones it created, and can do nothing to any other goal ----
+// ---- The learning role can only read goals ----
 
 const LEARNING = { MC_ROLE: 'learning', MC_HEADLESS: '1', MC_TOOL: 'claude', MC_SESSION_STARTED: '2026-11-01T20:00:00.000Z' };
 const snapshot = (f) => JSON.stringify(f.store);
 
-test('the learning role creates a goal and writes it: set, criterion add and draft → build succeed on a goal it created in this session', async () => {
-  const f = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: legacyRecord() }, env: LEARNING });
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned', '--structure', '1'], f.deps), 0, f.err());
-  for (const argv of [
-    ['set', 'mc/plain', 'goal', '--text', 'A lesson becomes a change.'],
-    ['criterion', 'add', 'mc/plain', '--criterion', 'It holds', '--check', 'mc gate x'],
-  ]) assert.equal(await run(argv, f.deps), 0, `${argv.join(' ')}: ${f.err()}`);
-  assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 0, `stage: ${f.err()}`);
-  assert.equal(stateOf(f), 'build · ready');
-  assert.equal(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria.length, 1);
-});
-
-test('the learning role is refused every verb on a goal it did not create, and nothing changes', async () => {
+test('the learning role cannot create or mutate goals, including ones an older session created', async () => {
   const further = [
+    ['new', 'mc/fresh', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'],
     ['stage', 'mc/plain', 'build'], ['stage', 'mc/plain', 'review'], ['ready', 'mc/plain', '--reason', 'x'], ['drop', 'mc/plain', '--reason', 'x'],
     ['criterion', 'set', 'mc/plain', '1', '--criterion', 'Changed'], ['log', 'mc/plain', '--comment', 'x'], ['set', 'mc/plain', 'goal', '--text', 'Changed'],
     ['criterion', 'add', 'mc/plain', '--criterion', 'Extra', '--check', 'x'], ['criterion', 'met', 'mc/plain', '1'],
   ];
   for (const argv of further) {
-    // A goal made by a person, and one a learning session of an earlier day made: neither is this session's.
-    for (const files of [inStage('draft'), inStage('draft', 'ready', { [`${DIR}/LOG.md`]: '## 2026-10-31T09:00Z · claude · draft · ready · by learning\n\nDone: created\n' })]) {
+    // Even an entry stamped as its own creation by an older version conveys no authority.
+    for (const files of [inStage('draft'), inStage('draft', 'ready', { [`${DIR}/LOG.md`]: '## 2026-11-01T20:00Z · claude · draft · ready · by learning\n\nDone: created\n' })]) {
       const f = fixture({ files, env: LEARNING });
       const before = snapshot(f);
       assert.equal(await run(argv, f.deps), 2, argv.join(' '));
@@ -2579,16 +2787,9 @@ test('the learning role is refused every verb on a goal it did not create, and n
   }
 });
 
-test('the learning role moves its own goal only from draft to build', async () => {
-  const f = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: legacyRecord() }, env: LEARNING });
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'], f.deps), 0, f.err());
-  const before = snapshot(f);
-  for (const stage of ['review', 'merge', 'done']) {
-    assert.equal(await run(['stage', 'mc/plain', stage], f.deps), 2, stage);
-    assert.equal(snapshot(f), before, `${stage}: nothing written`);
-  }
+test('the learning role cannot change a goal stage through the shared guard', () => {
   assert.match(refusedMove({ from: 'build', to: 'review', env: LEARNING }), /learning role/u);
-  assert.equal(refusedMove({ from: 'draft', to: 'build', env: LEARNING }), null);
+  assert.match(refusedMove({ from: 'draft', to: 'build', env: LEARNING }), /learning role/u);
 });
 
 // ---- Version 2: numbered parts, written by item, obligation, set and criterion verbs ----
@@ -2786,24 +2987,9 @@ test('every new writing verb is refused a build, review and mend session, and wr
   }
 });
 
-test('the learning role makes a version 2 goal and adds, sets and removes an item and sets and removes an obligation on it; each of the five is refused on a goal it did not create, with nothing written', async () => {
+test('the learning role cannot mutate version 2 goal items or obligations', async () => {
   const git = areasGit({ [CLI_PATH]: DECLARATION('documentation') });
-  const f = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: legacyRecord() }, env: LEARNING, git });
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'], f.deps), 0, f.err());
-  assert.equal(v2At(f).version, 2, 'made in version 2 without a flag');
-  for (const argv of [
-    ['item', 'add', 'mc/plain', 'problem', '--text', 'A lesson.', '--basis', 'measured'],
-    ['item', 'set', 'mc/plain', 'B1', '--text', 'A lesson, reworded.'],
-    ['item', 'add', 'mc/plain', 'change', '--text', 'Fix it.', '--where', 'src/mc'],
-    ['item', 'remove', 'mc/plain', 'C1', '--reason', 'not needed'],
-    ['obligation', 'set', 'mc/plain', 'memoro-cli/documentation', '--stand', 'untouched', '--text', 'No page changes.'],
-    ['obligation', 'remove', 'mc/plain', 'memoro-cli/documentation', '--reason', 'not an area'],
-  ]) assert.equal(await run(argv, f.deps), 0, `${argv.join(' ')}: ${f.err()}`);
-  assert.deepEqual(v2At(f).problem, [{ id: 'B1', text: 'A lesson, reworded.', basis: 'measured' }]);
-  assert.deepEqual([v2At(f).change, v2At(f).obligations], [[], []]);
-
-  // The same five on a goal a person made, and on one an earlier learning session made: refused, nothing written, no git.
-  const others = [inStage('draft'), inStage('draft', 'ready', { [`${DIR}/LOG.md`]: '## 2026-10-31T09:00Z · claude · draft · ready · by learning\n\nDone: created\n' })];
+  const others = [inStage('draft'), inStage('draft', 'ready', { [`${DIR}/LOG.md`]: '## 2026-11-01T20:00Z · claude · draft · ready · by learning\n\nDone: created\n' })];
   for (const files of others) {
     for (const argv of [
       ['item', 'add', 'mc/plain', 'decision', '--text', 'x', '--by', 'm', '--on', 'd'], ['item', 'set', 'mc/plain', 'D1', '--text', 'y'], ['item', 'remove', 'mc/plain', 'D1', '--reason', 'x'],
@@ -2812,7 +2998,7 @@ test('the learning role makes a version 2 goal and adds, sets and removes an ite
       const g = fixture({ files: { ...files, [`${DIR}/GOAL.json`]: goalJsonV2() }, env: LEARNING, git });
       const before = snapshot(g);
       assert.equal(await run(argv, g.deps), 2, argv.join(' '));
-      assert.match(g.err(), /learning role writes only goals it created in this session/u, argv.join(' '));
+      assert.match(g.err(), /learning role cannot use mc goal/u, argv.join(' '));
       assert.equal(snapshot(g), before, `${argv.join(' ')}: nothing written`);
       assert.deepEqual(showCalls(g), [], `${argv.join(' ')}: no declaration read`);
     }

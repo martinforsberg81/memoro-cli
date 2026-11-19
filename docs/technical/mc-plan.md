@@ -47,10 +47,15 @@ before it has documents on main, or after all its goals have been archived.
 
 ## A programme with a record
 
+Area learning is not a planning entrance. It does not create or alter
+programme orders; a functionality defect it finds stays linked to an area
+proposal. The programme's ordinary desk path is unchanged.
+
 A programme may have a record, `PROGRAMME.json` directly in its directory
 (`src/mc/programme-record.js`): a bounded piece of work serving a horizon, or storage for small area work
 without one. A programme without the file is also bounded. Version 2 has the
-following keys; `area`, `phases` and `legacy` are optional, and no others are accepted:
+following keys; `area`, `phases` and `repair` are optional. Removed signing fields
+and `legacy` remain readable on old records but are not written:
 
 | key | value |
 |---|---|
@@ -61,8 +66,9 @@ following keys; `area`, `phases` and `legacy` are optional, and no others are ac
 | `end` | one non-empty sentence saying when the programme is done |
 | `state` | `draft`, `ready` or `done` |
 | `created` | an ISO instant in UTC to the second |
-| `created_by` | `person` or `martin` |
+| `created_by` | `person`, `martin`, `repair` or the historical `manager` |
 | `phases` | optional: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}` |
+| `repair` | required for `created_by: "repair"`; absent for ordinary orders. Provenance for a functionality repair, with null horizon and no area-text order |
 
 `draft` means not finished; planning and build take nothing from it (`mc goal new`
 is refused, the planning turn does not run, no session starts on its goals).
@@ -73,10 +79,11 @@ Reading an older record normalizes it in memory: `open` reads as `ready`, `dropp
 as `done`, and removed fields are ignored. It does not change disk bytes or state.
 Only an actual write upgrades a record to version 2.
 
-A programme, a repair programme included, is created only by a person or by
-Martin's interactive session (`mc martin`); every headless role, the manager
-included, is refused (exit 2). Martin sets the state with
-`mc programs state <programme> draft|ready`.
+The ordinary desk writer creates a programme only for a person or Martin's
+interactive session (`mc martin`); every headless role is refused (exit 2).
+Martin sets an ordinary order's state with `mc programs state <programme>
+draft|ready`. The unpublished [repair drafting entry](#internal-repair-drafts)
+uses the same validated writer but confers no state authority.
 
 A record cannot name both a horizon and an area. A repair programme (`--area`)
 orders a set of small adjustments to one area as one document, and the planner
@@ -218,6 +225,54 @@ short template in `repair-page.md`. The older recordless page is
 the no-record page only when no README exists. `mc programs show` prints the
 `area` line and `--json` the key.
 
+### Internal repair drafts
+
+The draft is a full programme document with affected repositories, numbered
+parts, observable acceptance and original source pointers in Where things are.
+The validated record carries `repair.sources`: absolute source references
+(`kind`, `path`), logical keys and SHA-256 evidence digests. Fingerprint
+identity includes the repository, not the date or intake path; the evidence
+digest covers the selected fingerprint row. Proposal archive moves preserve
+proposal identity. Explicit source links and corroborating incident or
+fingerprint evidence join one order; a shared incident without that
+corroboration is not enough. An ordinary desk order can be found by its
+proposal archive outcome or its original README pointer if the move failed.
+Part 2 does not change the desk's ownership or archive operation.
+
+Feedback and collected errors reuse a corroborated proposal if one already
+exists; otherwise they get one in the appropriate area before drafting.
+Feedback uses the original task ID or a labelled
+incident timestamp and build. Only minimum defect details and provenance are
+copied. Waiting sources stay in their area while a draft exists. Resolved
+sources archive their proposals with `Utfall: resolved — <where>`. If the
+original archive name already holds a disposition for other evidence, the
+resolution gets a separate archive file and the waiting path points to the
+latest resolution once the waiting file has moved. An explicit archive path
+still reads its own version. An unestablished or ambiguous report keeps its
+proposal and a reason in `runner/repair-draft/`. Decline and resolution apply
+across corroborated routes to the same evidence version, not to changed
+evidence for the same fingerprint. A matching archive disposition is reported
+before using defect ownership to resume or point to an order for other
+evidence. The same recorded source key and evidence digest on waiting and
+archived proposals corroborate the version for its archived disposition,
+even when a collector file has moved or been replaced and no longer lists
+the original fingerprint. This does not establish general order ownership.
+A collector link alone can corroborate defect identity but not the archived
+evidence version: today's row is not proof of the archived one. An
+identity-only legacy link without a provable version is ambiguous and repair
+makes no order. A recorded digest for a different row does not close the
+selected row or let it consume a waiting proposal pinned to the other row.
+A legacy feedback link can still corroborate a report with the
+same original incident. Repair checks ownership and rechecks the selected
+evidence in the strict programme lock; it does not hold the lock while the
+role reads. Changed evidence or concurrent order changes cannot be committed
+from a stale reading.
+
+Ordinary `state ready`, `mc plan` and `mc goal new` refuse repair-owned
+drafts (exit 1). A state spelling is not a release. Part 2 has no release
+operation; older runners see the optional repair field as invalid and hold
+its goals. Ordinary desk-created area repairs keep their existing route.
+
 ## What the session is told
 
 `planLaunch` names the programme, asks it to read the aim first, names the
@@ -298,7 +353,7 @@ Decision logs record requested and identified role/programme, evidence source,
 conversation id and resume/exclude/fresh/refusal, without copying transcript
 or prompt content. Session ownership and headless restrictions are unchanged.
 
-The plan session owns the coherent programme README/design, prerequisite investigation/decisions, phases, complete goal briefs and executable checks; every finished brief moves to build in its assigned phase. It may also investigate,
+The plan session owns the coherent programme README/design, prerequisite investigation/decisions, phases, complete goal briefs and executable checks; a finished brief moves to build once its acceptance procedure and setup are verified. It may also investigate,
 write goals, build and land work itself, or take over a goal's branch when
 that costs less than a new build session. This broad freedom belongs to interactive planning with Martin at the terminal. The runner may complete one next draft under [the programme trigger](mc-goals.md#next-draft-planning) (Martin, 2026-11-09);
 a goal in `finish` gets a finish session and a red merge a mend session (a
@@ -318,7 +373,7 @@ for have finished, and the others run side by side. Build sessions neither rewri
 brief nor invent another unit inside it. How a programme is designed before
 its goals — its README (`canon/tasks/references/programme-readme.md`), the
 decisions put to Martin in one sitting, the cut into phases, and every
-finished goal set in `build` in its phase rather than parked in `draft` — is
+verified goal set in `build`, and a consumer awaiting its producer kept in draft — is
 `canon/tasks/designing-a-programme.md` (Martin, 2026-11-08).
 
 A plan session writes a review or build follow-up as a goal without asking
@@ -393,3 +448,39 @@ and `an existing README is left as it is`.
 and launch evidence for descendant review, wrong programme, unknown identity,
 explicit refusal, aliases and compatible continuation.
 `tests/mc/archive-programme.test.js` covers archive refusals and ordering.
+
+## Acceptance preparation before build
+
+Programme review assesses each part's proposed acceptance procedure for an
+observable failure, exercise of the promised behaviour and named workspace,
+dependencies and usable inputs. It uses the existing read-only exports and
+permitted checks; missing evidence is a finding, not a pass. For unbuilt
+functionality it assesses the procedure and prerequisites, not a final result.
+The desk corrects findings in the order before release.
+
+The programme planning turn promotes directly only on evidence naming the
+current check, required capability in the intended checkout and usable named
+input. Unrelated main movement does not invalidate those premises. Missing
+evidence or a changed check or relevant premise leaves a draft for next-draft
+planning, even without a producer. A consumer requiring a producer stays draft
+in a dependent phase; an open phase, including after a dropped producer, is not
+evidence of output. Planning verifies the procedure and setup against the
+checkout build will receive, accounting for the [unbuilt-branch
+refresh](mc-goals.md#the-verbs) on promotion and the first build. In the
+next-draft worktree, fetch first, fast-forward an unbuilt branch to the fetched
+base, and verify there. On a branch with its own commits, verify the branch
+the refresh will retain. Do not discard work or promote on unverified setup.
+Before promotion, fetch again and confirm that the named premises still hold
+against the source of the branch refresh. Reverify on the updated setup if a
+named premise changed; unrelated main movement does not invalidate the evidence.
+If either fetch or a required fast-forward fails, or planning cannot establish
+what setup build will receive, leave the goal in draft and log why.
+
+A sound check missing its input in an open phase is logged and left draft and
+ready, with the blocking input and technical desk action in `mc goal log
+--next`. The existing incomplete-session handoff keeps that Next visible; the
+desk returns the draft when the input is verifiably available. A wrong setup
+premise is reported by `mc goal defect` in
+draft; the desk verifies the change before returning it to planning. Changes to
+the programme promise go to the desk. This adds no runner admission service or
+separate review. The report and goal log carry the evidence.

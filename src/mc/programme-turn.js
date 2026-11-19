@@ -13,7 +13,7 @@ import { join, resolve } from 'node:path';
 import { deskItemId } from './desk-items.js';
 import { ARCHIVE_DIR, GOAL_FILE, GOALS_DIR, parseGoal } from './goals.js';
 import { NAME_RE } from './plan-schema.js';
-import { readRecord } from './programme-record.js';
+import { readRecord, repairDraftRefusal } from './programme-record.js';
 
 export const TURN_SCHEMA = 'mc-programme-turn';
 export const TURN_VERSION = 1;
@@ -152,7 +152,7 @@ export function cutProblems({ home, programme, list, read }) {
 }
 
 /** A record the turn cuts from: valid and ready. */
-export const cuttable = (record) => record?.state === 'ready';
+export const cuttable = (record) => record?.state === 'ready' && !record.repair;
 
 /**
  * Whether `programme` is due a planning turn now: `{ due: true, record }`, or `{ due: false, reason, notice }`.
@@ -162,6 +162,8 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
   const record = readRecord(dir, { read });
   if (record.status === 'none') return { due: false, reason: 'no record', notice: null };
   if (record.status === 'invalid') return { due: false, reason: 'its record is invalid', notice: null };
+  const refusal = repairDraftRefusal(record.record, programme);
+  if (refusal) return { due: false, reason: refusal, notice: null };
   if (record.record.state !== 'ready') return { due: false, reason: `its record reads ${record.record.state}`, notice: null };
   let readme;
   try { readme = read(join(dir, 'README.md')); } catch { readme = null; }
@@ -199,8 +201,9 @@ export function finishTurn({ programme, home, list, read, write, lock, root }) {
   try {
     const dir = join(home, programme);
     const record = readRecord(dir, { read });
-    if (record.status !== 'valid' || record.record.state !== 'ready') {
-      return { kind: 'settled', problems: [record.status === 'valid' ? `record reads ${record.record.state}` : 'record is invalid'] };
+    if (record.status !== 'valid') return { kind: 'settled', problems: ['record is invalid'] };
+    if (!cuttable(record.record)) {
+      return { kind: 'settled', problems: [repairDraftRefusal(record.record, programme) ?? `record reads ${record.record.state}`] };
     }
     const problems = cutProblems({ home, programme, list, read });
     if (problems.length > 0) return { kind: 'incomplete', problems };

@@ -48,8 +48,11 @@ lines name. Repair within your reach what the item names: write the missing
 statement into the right `docs/technical/` page or area page through a pull
 request, as a document change, within what the goal decided; a rule the goals did
 not settle, or a text of Martin's that would have to change, goes to a brief
-instead. Then close it with `mc martin item <id> close --by decision --summary …`
-so the runner reads the programme again. You do not archive the programme, set its
+instead. For an `@horizon` finding, preserve the reusable material in supporting
+files under the programme's recorded horizon and repair any references needed
+to use it there. Preserve the horizon's wording and decisions. Then close it
+with `mc martin item <id> close --by decision --summary …` so the runner reads
+the programme again. You do not archive the programme, set its
 record or edit its goals: the runner does that when the reading is OK.
 
 ## Decide here

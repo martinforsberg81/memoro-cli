@@ -22,6 +22,7 @@ import { HORIZON_STATES, PLAYBACK_PARTS, horizonsDir, parsePlaybackInput, planDr
 import { isTextSort, proposeText, textForm, textName } from '../desk-texts.js';
 import { DAY_MS, buildOpening, lastOpenPath, oneLine, readLastOpen } from '../desk-opening.js';
 import { addLesson, briefLesson, briefOptions, carryLesson, dismissLesson, lessonRefusal, listLessons, parseLessonInput, recordAnswerDiffers, renderChanges, LESSON_STATES } from '../desk-lessons.js';
+import { LEARNING_STATES, lessonLandedAt, projectedLessonState } from '../lesson-learning.js';
 
 // The opening's data moved to desk-opening.js; these stay importable from here.
 export { buildOpening, lastOpenPath, readLastOpen };
@@ -35,7 +36,7 @@ export const ROUTES = {
     if (flags.resume && positional[0] === 'new') return '--resume expects a conversation ID or prefix';
     return null;
   } },
-  brief: { booleans: ['--json'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
+  brief: { booleans: ['--json'], strictValues: ['--since'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
   get: { booleans: ['--all', '--json'], strictValues: ['--programme', '--goal'], check: ({ flags, positional }) => {
     if (positional.length) return `unknown argument ${positional[0]}`;
     const selectors = Number(flags.all) + Number(flags.programme !== null) + Number(flags.goal !== null);
@@ -88,15 +89,14 @@ export async function run(argv, deps = {}) {
   (deps.mkdir || mkdirSync)(root, { recursive: true });
   const data = openingFor({ env, home, now, last, deps, stderr });
   if (!data) return 1;
-  const opening = renderOpening(data);
-  const prompt = `${opening}\n## Desk instruction\n\nThis snapshot is reference material. Acknowledge that the desk is ready in one short Swedish sentence, then wait for Martin's instruction before choosing a topic or doing any work.\n`;
+  const prompt = renderLaunchSnapshot(data);
   const opened = await (deps.open || openInWorkArea)({
     env, areaRoot: root, conversationRoots: [root],
     worktree: { repo: null, path: root, is_git: false }, tool,
     pick: flags.new ? 'new' : flags.resume ? positional[0] || true : null,
     resumeTool: flags.tool, stdout, stderr, verb: 'martin', areaName: 'martin', bg: flags.bg,
     roleName: role.name || 'martin', roleSource: roleSourceOf(role), cache: role.cache,
-    model: flags.model, overlay: role.overlay, prompt, resumePrompt: `Current desk snapshot for this resumed conversation.\n\n${prompt}`,
+    model: flags.model, overlay: role.overlay, prompt, resumePrompt: prompt,
     defaultModel: role.model, defaultModelTool: role.tools?.[0] || null,
   });
   if (!opened.ok) { stderr.write(`mc: ${opened.reason}${opened.hint ? ` — ${opened.hint}` : ''}\n`); return opened.code ?? 1; }
@@ -304,7 +304,7 @@ function lesson(argv, deps) {
     stdout.write(`${name} · in-goal · ${f.goal}\n`);
     return 0;
   }
-  const done = dismissLesson({ env, name, reason: f.reason, role, since: env.MC_SESSION_STARTED || null, now });
+  const done = dismissLesson({ env, name, reason: f.reason, now });
   if (done.error) return fail(done.error);
   stdout.write(`${name} · dismissed\n`);
   return 0;
@@ -316,11 +316,16 @@ function lessons(argv, deps) {
   const parsed = scanArgs(argv, ROUTES.lessons);
   const error = parsed.error || ROUTES.lessons.check(parsed);
   if (error) { stderr.write(`mc: ${error}\n`); return 2; }
-  if (parsed.flags.state && !LESSON_STATES.includes(parsed.flags.state)) { stderr.write(`mc: unknown state ${parsed.flags.state}\n`); return 2; }
-  const found = listLessons({ env, state: parsed.flags.state });
+  const states = [...LESSON_STATES, ...LEARNING_STATES.filter(x => !['publishing', 'corrected', 'insufficient-evidence'].includes(x))];
+  if (parsed.flags.state && !states.includes(parsed.flags.state)) { stderr.write(`mc: unknown state ${parsed.flags.state}\n`); return 2; }
+  const found = listLessons({ env, state: parsed.flags.state }).map(x => {
+    const state = projectedLessonState(x);
+    return { ...x, state, ...(state !== x.state ? { original_state: x.state } : {}),
+      ...(state === 'landed' ? { pr: x.pr ?? x.learning?.reference, landed_at: lessonLandedAt(x) } : {}) };
+  });
   if (parsed.flags.json) { stdout.write(`${JSON.stringify(found, null, 2)}\n`); return 0; }
   const now = (deps.now || (() => new Date()))().getTime();
-  for (const x of found) stdout.write(`${x.name} · ${x.kind} · ${x.state} · ${x.goal ?? 'no goal'}${x.pr ? ` · ${x.pr}` : ''} · ${Math.max(0, Math.floor((now - Date.parse(x.at)) / DAY_MS))} days\n`);
+  for (const x of found) stdout.write(`${x.name} · ${x.kind} · ${x.state} · ${x.goal ?? 'no goal'}${x.pr ? ` · ${x.pr}` : ''} · ${Math.max(0, Math.floor((now - Date.parse(x.at)) / DAY_MS))} days${x.learning ? ` · ${x.learning.state}${x.learning.reference ? ` (${x.learning.reference})` : ''}` : ''}\n`);
   return 0;
 }
 
@@ -461,10 +466,10 @@ export function get(argv, deps = {}) {
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /** The opening, or null when the sync could not take the lock: the message is on stderr and nothing is printed or opened. */
-function openingFor({ env, home, now, last, deps, stderr }) {
+function openingFor({ env, home, now, last, since, deps, stderr }) {
   try { syncDeskItems({ env, home, now: () => now, reportIssue: issue => stderr.write(`mc: source issue ${issue.path}: ${issue.error}\n`), ...(deps.syncDeps || {}) }); }
   catch (error) { stderr.write(`mc: ${error.message}\n`); return null; }
-  return buildOpening({ env, home, now, last, read: deps.read || readDeskText });
+  return buildOpening({ env, home, now, last, since, read: deps.read || readDeskText });
 }
 
 /** What an item blocks, as the end of its line: `, blocks 2 later-phase goals of <programme>`, or nothing. */
@@ -486,7 +491,23 @@ function renderPlacing(placing) {
   return out;
 }
 
-/** The opening as the text the session starts from. */
+/** The bounded reference sent to new and resumed sessions. Full details are loaded on demand. */
+function renderLaunchSnapshot(data) {
+  const first = data.texts[0] ?? data.acts[0];
+  const decisions = data.decided.programmes.reduce((count, group) => count + group.items.length, 0);
+  return [
+    `Martin's desk, opened ${data.generated_at}.`,
+    `Waiting: ${plural(data.texts.length, 'proposed text change')}, ${plural(data.acts.length, 'reserved act')}.`,
+    ...(first ? [`First: ${oneLine(first.text ?? first.reference).slice(0, 160)} (mc martin item ${first.id}).`] : []),
+    `Since ${data.since}: ${plural(decisions, 'decision')}, ${plural(data.horizons?.reached.length ?? 0, 'horizon')} reached, ${plural(data.changes.landed.length, 'lesson')} landed.`,
+    `Details on request: mc martin brief --since ${data.since}. For the current queue use mc martin items --state for-martin, then mc martin item <id> for one brief.`,
+    '',
+    "Acknowledge that the desk is ready in one short Swedish sentence, then wait for Martin's instruction before choosing a topic or doing any work.",
+    '',
+  ].join('\n');
+}
+
+/** The full opening printed by mc martin brief. */
 export function renderOpening(data) {
   const out = [];
   out.push(`Martin's desk, opened ${data.generated_at}. Decided-without-you covers ${data.since} to ${data.generated_at}${data.last_opened ? '' : ' (first opening)'}.`);
@@ -537,9 +558,14 @@ function brief(argv, deps) {
   if (error) { stderr.write(`mc: ${error}\n`); return 2; }
   const now = (deps.now || (() => new Date()))();
   const home = deps.home || programsHome(env);
+  const since = parsed.flags.since === null ? undefined : new Date(parsed.flags.since);
+  if (since && (!Number.isFinite(since.getTime()) || since > now)) {
+    stderr.write('mc: --since expects a timestamp at or before now\n');
+    return 2;
+  }
   let last;
   try { last = readLastOpen({ env, read: deps.read || readDeskText }); } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
-  const data = openingFor({ env, home, now, last, deps, stderr });
+  const data = openingFor({ env, home, now, last, since: since?.toISOString(), deps, stderr });
   if (!data) return 1;
   stdout.write(parsed.flags.json ? `${JSON.stringify(data, null, 2)}\n` : renderOpening(data));
   return 0;

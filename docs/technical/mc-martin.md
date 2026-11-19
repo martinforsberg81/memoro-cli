@@ -48,19 +48,22 @@ has stopped (waiting in status `Martin`, wrong, or stuck).
 
 ## Opening
 
-Launch first syncs the durable desk items (below), then builds the opening from
-the item store, the item briefs, `runs.tsv` and the daily ceiling, with no
-model. New and resumed sessions receive the opening as reference material with
-an instruction to acknowledge readiness briefly in Swedish and wait for
-Martin to choose the work. `mc martin brief` prints the opening and starts no
-session; `brief --json` gives the same data as the text. `brief` writes nothing
-except the sync's own store writes, and neither it nor a refused or failed
-launch changes `last-open.json`.
+Launch first syncs the durable desk items (below). New and resumed sessions
+receive a compact snapshot with the queue counts, the first waiting item's
+title and ID, and counts of decisions, reached horizons and landed lessons
+since the previous opening. The prompt directs the session to acknowledge
+readiness in Swedish and wait for Martin to choose the work.
+
+`mc martin item <id>` reads one current brief. `mc martin brief` prints the
+full opening on demand and starts no session. `brief --json` gives the same
+data as the text. `brief --since <timestamp>` uses the supplied start time
+through the current reading time, so interval details remain available after
+launch advances the marker. `brief` writes nothing except the sync's own
+store writes. A refused or failed launch leaves `last-open.json` intact.
 
 The opening's data is built in `src/mc/desk-opening.js`, with no sync, lock or
 writer: texts, acts, stuck, not ready, decided and cost, each by one function,
-and the reading of `last-open.json`. `martin.js` re-exports them, and what the
-opening shows is unchanged. The page's DESK section ([mc-ui.md](mc-ui.md#desk))
+and the reading of `last-open.json`. `martin.js` re-exports them. The page's DESK section ([mc-ui.md](mc-ui.md#desk))
 calls the same functions, so it reads the same texts, acts, decided, not ready
 and cost from the store as the last sync left it. The page runs no sync, takes
 no lock and writes nothing. The module also holds the page's ledger reader,
@@ -69,7 +72,7 @@ the jev ledger, `decisions.jsonl`. Whether an ask went against the asking
 session's recommendation follows `mc decisions`: an `answered` row takes jev's
 choice and a `decided` row takes the recommendation.
 
-The opening has these parts, in this order (Horizons only when the desk holds one):
+The full opening printed by `mc martin brief` has these parts, in this order (Horizons only when the desk holds one):
 
 1. **Horizons** — present only when the horizon store holds a horizon or a
    record that cannot be read (*Horizons*, below); a desk that holds none opens
@@ -386,7 +389,11 @@ priority. Everything stored in a horizon is English text.
 
 **Store.** `~/mc/martin/horizons/<slug>/` holds `horizon.json` (the
 record), `playback.md` (written by `set`) and `reached.md` (what is now true for
-the user, written by `reached`), plus desk-authored `basis.md`. A slug is `[a-z0-9][a-z0-9-]{0,63}` and is not
+the user, written by `reached`), plus desk-authored `basis.md` and supporting investigations, references and
+other material used across programmes serving that horizon. The programme
+archive reading checks that such material can be used from the horizon before
+the active programme directory moves ([mc-run.md](mc-run.md#programme-archive-turn)).
+A slug is `[a-z0-9][a-z0-9-]{0,63}` and is not
 reused: a directory whose `horizon.json` can be read, in any state, holds the
 slug. The record is `{ schema: "mc-desk-horizon", version: 1, slug, title, state,
 position, set_at, set_by, reached_at, reached_by, reopened_at, reopened_by,
@@ -635,12 +642,10 @@ pass handles what they leave rather than moving their ownership into the runner.
 
 ## Lessons and the learning pass
 
-Learning has happened only when one of three things has changed on main: the
-code of how mc works (`src/mc/`), the prompts of the sessions (`canon/`), or a
-technical standard (`docs/technical/` of memoro-cli or memoro) (Martin,
-2026-11-14). A lesson is the input to that, never the result: it is general form
-of what a missing or wrong rule looked like, and it leaves the list only by
-landing a change or by a dismissal with a reason. mc never deletes a lesson.
+A lesson is evidence of a missing or wrong rule, not a build order. Learning
+updates verified facts in permanent areas; repair of functionality is
+separate (Martin, 2026-11-18, [system decisions](areas/system.md#decisions)).
+mc never deletes a lesson.
 
 **Store.** A lesson is `~/mc/martin/lessons/<date>-<slug>.md` (`desk-lessons.js`):
 a header, then exactly three parts, `## What happened`, `## The rule` and
@@ -665,10 +670,11 @@ and needs a reason from every role; `lesson brief <name> --text '<the text>' --f
 a lesson that contradicts a dated decision of Martin's: it writes an item of
 kind `lesson`, sort `text`, with the brief in the form above (exactly the three
 Swedish parts; a brief not in it is refused with exit 2 and the lesson left open),
-and dismisses the lesson with the item as its reason. Writers: a person and the roles `martin`, `decision` and
-`learning` for every verb; `review-session:goal` for `add` only. Any other role
-is refused with exit 2 and nothing is written. **No verb sets `landed`.**
-`reconcileLessons` is the only way: each chores round the runner reads every
+and uses the original dismissal field to link it. Writers: a person and the
+roles `martin` and `decision` for these verbs; `review-session:goal` for
+`add` only. Other roles are refused with exit 2 and nothing is written.
+
+**Legacy goal links.** Each chores round the runner reads every
 goal (the archive included); an `in-goal` lesson whose goal is `done` becomes
 `landed` with the goal's last registered pull request and the time, and one
 whose goal was `dropped` becomes `open` again with no goal. A goal that cannot
@@ -684,41 +690,101 @@ written leaves the item open. (3) `overturned`: the interactive desk, when Marti
 decided without him or a rule the learning pass landed. (4) `review-finding`:
 the review session, for a session's technical decision it finds wrong.
 (5) `unsettled`: the runner, when the decision pass has failed on an item twice
-and gives it to Martin (`decision_failures`); one per item. (6) `repeat`: the
-learning pass, for three or more items within thirty days whose preparation names
-the same rule.
+and gives it to Martin (`decision_failures`); one per item. (6) `repeat` is read
+from existing records.
 
-**The pass.** Each chores round, after preparation, `runLearningPass`
-(`desk-learning.js`) starts one session when it is due: five or more lessons are
-`open`, or the oldest open lesson is seven days old. It starts none when it
-already started one on the UTC day (`~/mc/runner/learning.json`, written when a
-session starts, so a crashed one counts), none while the desk ceiling is set and
-reached, and none without a usable first `decision` candidate (`routeClass`,
-never another list). The session has `MC_ROLE=learning`, `MC_HEADLESS=1`, the
-canon role `canon/roles/learning.md`, stands in `~/mc/martin/lessons/`, has a
-sixty-minute limit and writes a `runs.tsv` row of kind `learning` named
-`learning` (class `decision`). Quota endings pause the runner as the other desk
-passes do.
+**Area learning.** A person runs `mc learning` or the runner starts a scheduled
+turn. Both use `canon/roles/learning.md` with `MC_ROLE=learning` and
+`MC_HEADLESS=1`. This role makes no programme or goal and does not repeat the
+manager's curation. It reads evidence and decisions and records dispositions:
+`mc learning record <name> --accurate <source>`, `--missing <reason>`,
+`--proposal <path>`, or `--held <id>`. The last two require an existing area
+proposal or desk text item; use the existing text brief to propose changing
+held wording. Reuse the previously linked proposal or item when applicable.
 
-**Authority.** The learning role may read, create goals (`mc goal new`), write
-the ones it created in this session (`set`, `document add`, `criterion add`,
-`item add|set|remove` and `obligation set|remove`) and
-move such a goal from `draft` to `build` (`stage <programme>/<goal> build`). A
-goal was created in this session when its first LOG.md entry is by role
-`learning` from a session tool and is stamped no earlier than the minute
-`MC_SESSION_STARTED` names. Every other verb, and every verb on another goal,
-is refused with exit 2 and changes nothing; the role writes no programme README
-and no file in a repository. The role never starts another session and runs no
-reserved act. It may dismiss at most one lesson in five of those it was given
-(the open ones plus those it carried or dismissed since its session started).
+For a correction, `mc learning area <repo>/<area>` opens a worktree on a fresh
+branch from origin/main with the manager's worktree setup. From that checkout,
+`mc learning publish <repo>/<area> --lesson <name> --source <reference>`
+accepts a committed, factual edit to that one declared area page. Pass another
+`--lesson` to link another lesson addressed by the same correction. The
+manager's publication guard is narrowed for this role: it refuses changes to
+other files, Aim, Decisions and dated decisions. To keep the held sections
+visible, it also preserves the blocks containing headings, possible fences,
+raw HTML or reference definitions, in their original order. A top-level
+indented code block is pinned too: four columns, including tab stops, start
+code at a block boundary, not in the middle of prose or at a list item's
+content indentation. A marker-only item can take its first content on the
+next properly indented line. A blank before that content ends the empty item,
+so a later top-level indented code block is not a list continuation. For this
+block decision, only an empty line or one containing just ASCII spaces and
+tabs is blank; a nonbreaking space is content. A blank closes the paragraph
+but can leave a nonempty item open. A paragraph can start on the marker line,
+on a properly indented following line, or after a blank in a nonempty item.
+This applies at every list depth: a child marker opens an item, not a paragraph.
+Under-indented text stays in the list only as a continuation of an open
+paragraph in the active item, not of a heading, code or another non-paragraph
+block. Otherwise the line is classified outside any item whose content
+indentation it does not meet. For paragraph continuation the guard uses actual
+[HTML block boundaries](https://spec.commonmark.org/0.31.2/#html-blocks),
+not the broader raw-block pinning check. An HTML block consumes its body and
+any closing delimiter without opening a paragraph. It ends at its delimiter,
+before a terminating blank, when its containing item closes, or at end of
+input. In addition to the ordered conservative blocks, the guard preserves
+each recognized HTML block's full source span in order, including interior
+blank lines and whitespace and any consumed delimiter line.
+A complete tag that only starts a type 7 block cannot interrupt a paragraph;
+an inline autolink does not by itself end or prevent a paragraph. Both the
+guard and the comparison with current main read area page blobs without trimming.
+If the page changed on main, even only at its edges, the command requires a
+new check against current main.
+It gates the commit, publishes without force and hands the immutable PR
+branch to the ordinary merger. It says published for the handoff and on main only after a merge into
+main is observed. Bare `mc publish` and mutations through the old lesson and
+goal verbs are refused to this role. No reserved act is granted.
 
-**Figures.** Computed by `buildChanges` from the item store and the lessons,
-without a model. The part shows: each change landed since the last opening, as
-one line (the goal's title, where — code, prompt or standard — and its pull
-request; lessons landed by one goal and pull request are one line); then counts
-only: lessons `open` and `in-goal`, with the age in days of the oldest of each;
-a lesson `open` or `in-goal` for more than fourteen days, named as late; the
-lessons dismissed since the last opening, with their reasons. Then four
+Both entrances retire their own area worktrees when the turn ends, before
+releasing its reservation. A checkout under
+`runner/work/learning/<run-id>-<area>/<repo>` must still be registered on its
+assigned branch, clean (including untracked and ignored files), and have
+complete cwd evidence that no process stands in it. Its head must be reachable
+from `origin/main` or its published tracking branch. Immediately before
+removal, the [recursive open-file check](mc-tidy.md#recursive-open-file-evidence)
+must return a silent empty scan, ruling out open files even by processes
+standing elsewhere.
+Removal is through Git without force, then the local branch is retired;
+the remote branch is not changed. Uncertain, occupied, dirty or unpushed
+checkouts are kept and reported with their paths. Older or interrupted runs'
+checkouts are not adopted by a later turn.
+
+**Disposition records.** Each processed lesson has a versioned JSON sidecar
+at `lessons/.learning/<name>.json`; its Markdown, legacy state and goal links
+stay intact. The sidecar holds a digest of the lesson's evidence fields and
+the referenced desk item's evidence (including its brief and preparation).
+Whitespace alone and repository movement are not evidence changes. The
+snapshot offered to the session must match at the write. The record keeps
+the disposition, supporting reference, time and any linked proposal or held
+item. A publication records its area, source, branch, head and attempt, then
+its PR and observed state. Ordinary chores reconcile outstanding PRs; a
+closed unmerged PR is failed and not landed. A further attempt on the same
+evidence has one scheduled retry; after that failure it says
+`retry pending; run mc learning`. A manual turn bypasses the cadence and may
+try again, but uses the same desk budget and claim. Material evidence changes
+make the lesson actionable again under the normal trigger. Unchanged missing
+evidence remains open but does not wake a session
+([runner cadence](mc-run.md#what-runs-beside-it)). Old dismissal-based text links read
+as held and acquire an evidence baseline at reconciliation; an older mc ignores
+the sidecars and still reads the original Markdown.
+
+**Figures.** The terminal `What the system changed` shows the legacy goal
+landings since the last opening and an area-learning account: landed corrections,
+pending and failed publications, already accurate facts, linked repairs, and
+held decisions. `mc martin lessons` exposes the same projected state and the
+disposition; MAINTENANCE uses that projection for open, in-goal, late and
+landed this week. Only undisposed and insufficient evidence is open; only
+open evidence older than fourteen days is late. Legacy live goal links remain
+in-goal, and an area correction counts as landed only once its merge is
+observed. Dismissal-based text links count as held, not as dismissals.
+The desk retains the oldest ages and the dismissal reasons, then shows four
 weeks, oldest first, each week `(now − 7(w+1) days, now − 7w days]` and each
 with five numbers: items opened (`opened_at` in the week); the share of them
 that reached Martin (state `for-martin`, or closed by `martin`, or in an older store `default`); of

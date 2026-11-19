@@ -78,7 +78,16 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
 | `decision` | opus | `decision` | runner lane or a person’s `mc decision [<id>]`, unattended on its own `decision` list; full goal desk authority within headless hooks ([mc-martin.md](mc-martin.md)) |
 | `desk-prepare` | sonnet | `desk-prepare` | chores or the person’s `mc martin prepare`, one fresh headless evidence-only turn per new item on the `medium` list; no goal identity or mutation authority ([mc-martin.md](mc-martin.md)) |
-| `learning` | opus | `learning` | chores, at most once a UTC day when five lessons are open or the oldest is seven days old; one headless session in `~/mc/martin/lessons/` on the `decision` list. It may create goals and write the ones it created in the session, and nothing else ([mc-martin.md](mc-martin.md) § *Lessons and the learning pass*) |
+| `learning` | opus | `learning` | `mc learning` or chores, one headless session on the `decision` list in `~/mc/martin/lessons/`. It updates factual area information and records dispositions, never creates a programme or goal ([mc-martin.md](mc-martin.md) § *Lessons and the learning pass*) |
+| `repair` | opus | `repair` | Internal Part 2 entry only, with `MC_ROLE=repair` and `MC_HEADLESS=1`. It reads one defect to propose a bounded functionality repair or record why none is established. |
+
+The repair role has no execution tools and inherits neither another session's
+identity nor runtime secrets. The caller feeds selected evidence on stdin and
+services only bounded reads/searches of versioned standards, source, tests and
+scripts at pinned `origin/main` revisions. Each source has up to two rounds
+of four reads and five minutes for the model. Raw output is not written to a
+session transcript by mc. Only the caller validates and writes a disposition
+or a draft; the role cannot plan, review, release or act on production.
 
 `programme-review` reads the document, horizon playback/basis, cited code and
 standards, unread places and pictures at origin/main. Its eight questions and
@@ -109,14 +118,9 @@ mark criteria met administratively. The unattended `decision` role has the same 
 
 Horizons, what the desk holds as worked toward, are set, moved, reopened and dropped only by the interactive Martin role or a person; the unattended manager may mark one reached and may propose one as a text item, and never creates one. [mc-martin.md](mc-martin.md) § Horizons holds the rest.
 
-`MC_ROLE=learning` is refused every goal verb except reading (`show`, `list`),
-`new`, and `set`, `document add`, `criterion add`, `item add|set|remove`,
-`obligation set|remove` and `stage <programme>/<goal> build` on a goal it created in the running session (`learningRefusal`, and
-`refusedMove` allows only draft → build for it). `stage` to anything else,
-`ready`, `drop`, `criterion set|remove|met`, `log`, `pr`, `martin` and every verb on a
-goal it did not create exit 2 and change nothing. It adds lessons, carries and
-dismisses them (one in five); the `review-session:goal` role may only add
-one.
+`MC_ROLE=learning` only reads goals (`show`, `list`, `areas`) and programme
+records. Its dispositions and area publications use `mc learning`'s own
+subcommands. Headless refusals still apply when started from the terminal.
 
 Martin investigates source questions against shared technical standards and
 programme design before raising a choice. Resolved details are not escalated.
@@ -248,14 +252,23 @@ ends at an item boundary only when done, blocked, or cheaper to continue in a
 fresh session. A review judges the goal's criteria and PR head; it never
 builds. `roles.test.js` holds the selected parts and their shared instructions.
 
+Planning aims for a goal a build session can reasonably hand to independent
+review in one turn, not a new limit. When a build continues, its goal log records
+the concrete implemented or verified result and a specific remaining task in
+`Next`, including useful verification without a commit; if nothing useful was
+established it says so. This guidance changes neither eligibility nor runner
+stops. Repairable in-scope obstacles remain with build; a verified wrong brief
+or impossible premise follows the goal-defect technical desk route.
+
 **The plan session** (`plan-session.md`) is written around the programme's
 aim in `~/mc/programs/<programme>/README.md` (Martin, 2026-11-03). Its primary
 deliverable is the programme's planning: the README and design, the resolved
 prerequisite and policy decisions, the goal decomposition and phases, and
 complete goal briefs with contracts, exclusions, documents, success criteria and
-executable checks. Every complete brief moves from draft to build at once in its
-phase, including one waiting on an earlier phase; a brief with unresolved
-planning prerequisites stays draft (Martin, 2026-11-08). Within that it has, in
+executable checks. A complete brief moves from draft to build only with
+[verified acceptance setup](mc-plan.md#acceptance-preparation-before-build).
+A consumer awaiting a producer or a brief with unresolved planning
+prerequisites stays draft. Within that it has, in
 principle, full freedom to move the programme toward the aim, a goal's branch
 included: it may finish a goal's work itself when that is quicker than a new
 build session. That freedom is interactive. The runner may instead assign

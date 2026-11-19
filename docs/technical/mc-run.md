@@ -238,6 +238,11 @@ The in-process claim is taken in the same tick as the choice, before any
 await, so two lanes cannot choose the same goal before its current file exists.
 The phase rule and the stage transitions are in [mc-goals.md](mc-goals.md).
 
+Repair-owned drafts are held at selection and rechecked during goal admission,
+including goals that already read `build · ready`. Ordinary state values do
+not clear this hold. The programme planning turn also refuses repair-owned
+records. The runner does not launch the internal repair drafting entry.
+
 ## Lanes
 
 `mc run lanes <n>` sets one total across repositories and session kinds,
@@ -819,18 +824,22 @@ The off-by-default shared daily desk ceiling is checked before every turn; a
 hold is said once per round. Failed-attempt fallback, manual preparation, role
 authority and the setting are defined in [mc-martin.md](mc-martin.md).
 
-Right after preparation each chores round reconciles lessons with their goals
-(`reconcileLessons`: an `in-goal` lesson whose goal is done becomes `landed`
-with its pull request, one whose goal was dropped becomes `open`), then
-`runLearning` starts the learning pass when it is due: five or more open
-lessons, or one open seven days; at most one session a UTC day (marker
-`~/mc/runner/learning.json`), none while the desk ceiling is reached. The
-session has `MC_ROLE=learning`, `MC_HEADLESS=1`, a sixty-minute limit, the first
-usable `routeClass('decision')` candidate and `~/mc/martin/lessons/` as its
-directory, and writes a `runs.tsv` row of kind `learning`. Quota endings pause
-the runner. When the decision pass has failed twice on an item the runner also
-writes its `unsettled` lesson. See [mc-martin.md](mc-martin.md) § *Lessons and the
-learning pass*.
+Right after preparation each chores round reconciles legacy goal-linked lessons
+and outstanding area corrections. Pending PRs are observed independently of
+learning admission: a PR merged into main records the correction, and a
+closed unmerged PR records a failed publication. An unknown observation leaves
+it pending. Then `runLearning` starts the shared learning role when five
+lessons are actionable or an actionable lesson is seven days old. A first
+failed publication on unchanged evidence can wake one scheduled retry even
+alone. Insufficient evidence does not wake another turn until it changes.
+A scheduled start writes `~/mc/runner/learning.json` and counts for that UTC
+day even if the session crashes; no start while the desk ceiling is reached
+or no `decision` candidate is usable. The terminal and runner exclude each
+other through a process-owned claim and pass the same canon role and evidence
+snapshot to a headless session in `~/mc/martin/lessons/`, with a sixty-minute
+limit. Each start writes `kind: learning` in `runs.tsv`; scheduled quota
+endings pause the runner. Dispositions, publication authority and desk figures
+are in [mc-martin.md](mc-martin.md#lessons-and-the-learning-pass).
 
 No external supervisor is needed. The runner's chore pass — the
 helper's collect, the intake drain, the tidying — ends with one more chore, the
@@ -914,10 +923,15 @@ including across runner handover. Recheck the programme and the hold after admis
 before spawning. Use the selected goal's first repository worktree, role `plan`,
 kind `plan`, `MC_GOAL` and `MC_HEADLESS=1`; keep the normal routing, admission,
 provider refusals, offline holds, STOP and UPDATE behavior. Interactive planning
-checkouts are not runner work areas. The assignment is to finish the brief and
-reconcile the README and phases, then move that draft to build. An unresolved
-choice goes through goal-bound mc ask. A completed plan session leaving draft ready waits on Martin with an
-incomplete-session diagnostic, preventing an unchanged-work launch loop. A goal that is held when its session ends, of any kind, gets no status, stage or entry from the runner; after release it is taken up from the state its holder left. Provider refusals and offline endings
+checkouts are not runner work areas. The assignment is to finish the brief,
+reconcile the README and phases, and [verify the acceptance
+setup](mc-plan.md#acceptance-preparation-before-build) before moving the draft
+to build. An unresolved choice goes through goal-bound mc ask. A completed
+plan session leaving draft ready gets the [incomplete-session
+handoff](mc-goals.md#next-draft-planning), preventing an unchanged-work launch
+loop. A goal that is held when its session ends, of any kind, gets no status,
+stage or entry from the runner; after release it is taken up from the state
+its holder left. Provider refusals and offline endings
 retain normal retry behavior and are not evidence of planning failure.
 
 No draft means no plan session. Proposal arrival and daily proposal processing
@@ -964,8 +978,10 @@ settled by the session: it leaves the question at the desk with
 `mc martin propose --text <programme>/README.md --file <brief>` and ends.
 Only a question that is not such a choice is asked, with a goal-bound `mc ask` on the draft that
 needs it (one way to ask: jev, then a reader), and the other drafts go on. Drafts it
-leaves are not set to Martin: the next-draft sessions take them. Proposals are
-not processed.
+leaves are not set to Martin: the next-draft sessions take them. The role
+uses [current acceptance evidence](mc-plan.md#acceptance-preparation-before-build)
+to decide whether to promote directly or leave a draft. Proposals are not
+processed.
 
 **The cut.** After the session `finishTurn` reads the record again under the
 runner lock and reads the Part headings (`### Part <n> — …` inside
@@ -1042,12 +1058,12 @@ each goal's own review (`write-back:` line, [mc-goals.md](mc-goals.md#the-verdic
 is due when all hold:
 
 - the record is valid and `ready`;
-- `goals/` holds no live goal (a dot-entry is none), and `goals/.archive/` holds at
+- `goals/` holds no live goal (dot-entries and `goal_log.md` are archive metadata), and `goals/.archive/` holds at
   least one done goal: a programme whose goals were all dropped made nothing true
   and is never read or archived;
 - no desk item of kind `archive` with the reference `archive:<p>` is open;
 - no reading of it runs (the claim `archive:<p>`);
-- no OK reading is kept for exactly the current done goals (then only the archive
+- no OK reading is kept for exactly the current done goals and horizon (then only the archive
   is retried, below).
 
 **The reading.** One headless read-only session per programme, role
@@ -1063,7 +1079,13 @@ nothing, a dirty or unreachable leftover is never touched). The session writes
 checkout (the sha the runner read at the checkout, so a reading is of a known
 tree), one line per done goal (`<goal>: OK — <repo>/docs/technical/<page>.md §
 <section>[, …]`, `<goal>: OK — none — <reason>` or `<goal>: NOT OK — <what is true
-that no page says>`) and a last `verdict: OK` or `verdict: NOT OK`. A line is
+that no page says>`) and a last `verdict: OK` or `verdict: NOT OK`. When the record names a horizon, the
+reader also checks that investigations, references and other material needed
+by later programmes are usable from that horizon's basis or supporting files,
+independently of the active programme directory. The reading must then include
+one `@horizon: OK — <evidence or reason>` or
+`@horizon: NOT OK — <missing material>` line before the verdict.
+A line is
 parsed without a model (`parseWriteBack`); a missing or malformed file, a done
 goal with no line, a wrong sha or `verdict: OK` beside a NOT OK line is a failed
 reading.
@@ -1075,7 +1097,7 @@ reading.
 - *NOT OK:* a finding, not a counted failure. It opens one desk item of kind
   `archive`, reference `archive:<p>`, `prepared`, sort `mechanical`, with a
   model-free `prepared.md` carrying the NOT OK lines: a decision session writes
-  the missing statement and closes it by decision, and the programme is read
+  the missing statement or preserves the material under the recorded horizon and closes it by decision, and the programme is read
   again. A NOT OK reading after an item was closed by decision opens it
   `for-martin` (sort `mechanical`, `reversible: false`, with a Swedish `brief.md`).
 - *A failed reading* (malformed file, no file, a session that ended without

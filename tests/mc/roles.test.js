@@ -344,7 +344,8 @@ describe('reserved names', () => {
 
 describe('the role catalogue', () => {
   // A role that goes is removed on purpose, and one that arrives is added on
-  // purpose: `repair.md` went with ruling 21; `mend.md` with the goal
+  // purpose: the original `repair.md` went with ruling 21; the new role drafts orders.
+  // `mend.md` went with the goal
   // `headless-plan` (2026-11-02); plan, build and review became one file each,
   // and the passages verb files, with `plan-session-roles` (2026-11-03);
   // `finish-session.md` and `mend-session.md` took headless plan's goal work
@@ -352,7 +353,7 @@ describe('the role catalogue', () => {
   // went with the finish stage (2026-11-15): a rejected goal returns to build.
   it('is exactly the roles and verb files mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      'all-sessions.md', 'archive-reader.md', 'ask-reader.md', 'build-session.md', 'decision.md', 'desk-prepare.md', 'intake.md', 'learning.md', 'manager.md', 'martin.md', 'mend-session.md', 'plan-session.md', 'programme-review.md', 'review-session.md',
+      'all-sessions.md', 'archive-reader.md', 'ask-reader.md', 'build-session.md', 'decision.md', 'desk-prepare.md', 'intake.md', 'learning.md', 'manager.md', 'martin.md', 'mend-session.md', 'plan-session.md', 'programme-review.md', 'repair.md', 'review-session.md',
     ]);
   });
 });

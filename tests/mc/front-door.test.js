@@ -79,7 +79,7 @@ describe('bare mc', () => {
       assert.equal(result.status, 0, result.stderr);
       // The overview: its sections, and what it leaves to the operations view (`o`).
       for (const section of ['HORIZONS', 'MAINTENANCE']) {
-        assert.match(result.stdout, new RegExp(`^\\s+┌─ ${section}\\b`, 'mu'), `${section} is missing`);
+        assert.match(result.stdout, new RegExp(`^\\s+${section === 'MAINTENANCE' ? '┌─ ' : ''}${section}\\b`, 'mu'), `${section} is missing`);
       }
       for (const section of ['IN FLIGHT', 'NEEDS ATTENTION', 'PROGRAMMES', 'MERGE & DEPLOY', 'DEV', 'SYSTEM']) {
         assert.doesNotMatch(result.stdout, new RegExp(`^\\s+(?:┌─ |── )?${section}\\b`, 'mu'), `${section} belongs to the operations view`);

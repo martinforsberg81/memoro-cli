@@ -9,15 +9,13 @@ page, `~/mc/programs/<programme>/README.md`; a session that must ask about an un
 means the programme was not designed. A recorded programme's document is written with
 [writing a programme document](writing-a-programme-document.md): it binds what the user gets, how it looks and how one sees that it works; the construction is the planner's and the builder's.
 
-Every programme is a bounded implementation plan, archived when its work is
-finished and written back. Its enduring direction belongs to the area pages.
+Every programme is a bounded implementation plan; enduring direction belongs to area pages.
 A recorded programme uses [the programme document](references/programme-document.md);
 a repair uses [the repair page](references/repair-page.md);
 a programme without a record uses [the programme page](references/programme-readme.md).
-Legacy pages preserve the held Aim in the appropriate area without silently
-changing its meaning. Finish active work where it stands, write back, then archive:
-use the supported manual route without a record, or the valid-record route when
-already established. Do not require the enduring direction to be declared over.
+For legacy pages, preserve the held Aim in the appropriate area without changing its meaning.
+Finish active work where it stands; archive after write-back even if the enduring direction continues.
+Use the supported manual route without a record, or the valid-record route when already established.
 
 ## Files
 
@@ -40,8 +38,9 @@ already established. Do not require the enduring direction to be declared over.
 4. Cut work into goals buildable start to finish by headless sessions. Investigate, measure and design before the cut, not as
    the goal's first task ([goal design](references/goal-design.md)).
 5. Order by prerequisites and shared files. A programme whose record states its phases runs independent phases side by side: state a prerequisite, shared files included, with `mc programs after`. Elsewhere independent goals share a phase and dependent goals go later. In both a prerequisite is a phase dependency, never a note.
-6. Move every complete goal to `build` in its assigned phase, including those waiting for earlier
-   phases. `draft` means an unfinished brief, never a parking queue.
+6. Move a complete goal to `build` only with its acceptance procedure and setup verified.
+   Keep a consumer needing a producer in draft in a dependent phase; use the plan role's
+   next-draft procedure when evidence is missing or a relevant premise has changed.
 7. Write and read back the README against [the document structure](references/programme-document.md)
    (repairs use their short page). A programme is written with Martin in a session, when he says it is ready the desk sets it ready, and the planner cuts goals from its README.
    Landed sections leave the README.

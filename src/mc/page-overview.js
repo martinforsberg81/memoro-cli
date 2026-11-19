@@ -1,12 +1,11 @@
 /**
  * The page's overview: what a person reads first, as long as the work (docs/technical/mc-ui.md, The overview).
  *
- * In order: the compact header (at most two rows), DESK, the warnings, HORIZONS, its horizon groups and OTHER PROGRAMMES, each with its own fold (`a` draws those programmes), MAINTENANCE for what belongs to no
+ * In order: the compact header, DESK, the warnings, HORIZONS, its horizon groups and OTHER PROGRAMMES, MAINTENANCE for what belongs to no
  * programme, and one row for each merge and deploy that is queued or running. The operational panels, the hero frame and
  * the pipeline are the operations view (`o`), drawn by page-render.js.
  *
- * `overviewLines` draws from `data` alone — what `mc --json` prints. There is no row budget and nothing is folded but the
- * programmes with nothing under way, so a row never disappears from the page without a frame that counts it.
+ * `overviewLines` draws from `data` alone — what `mc --json` prints. There is no row budget or programme fold.
  *
  * Like page-horizons.js, this module imports nothing from page-render.js, which imports it.
  */
@@ -15,7 +14,7 @@ import { mergeFailureSummary } from './merge-red.js';
 import { ageWords } from './page-cache.js';
 import { deskLines } from './page-desk.js';
 import { clipCell } from './page-grid.js';
-import { horizonFacts, horizonFigures, horizonsLines } from './page-horizons.js';
+import { horizonFigures, horizonHeading, horizonsLines } from './page-horizons.js';
 import { dayWords, howLong, straysReading } from './page-maintenance.js';
 import { detail, frameTop, panelEnd } from './page-operations.js';
 import { sessionGoal } from './page-activity.js';
@@ -372,10 +371,10 @@ function mergeDeployLines(lines, c, wide, rows) {
 /* ----------------------------------------------------------------- overview */
 
 /**
- * The overview, as lines. `drawProgramme(lines, group, childWide)` draws each
- * programme's frame in name order within its group. `version` is mc's.
+ * The overview, as lines. `drawProgramme(group, width)` returns each
+ * programme's heading and details without the group's inset.
  */
-export function overviewLines(c, wide, data, { version = '', drawProgramme = () => {} } = {}) {
+export function overviewLines(c, wide, data, { version = '', drawProgramme }) {
   const sessions = data.runner?.sessions || [];
   const flight = flightRows(data);
   const lines = headerRows(c, wide, data, version);
@@ -389,32 +388,28 @@ export function overviewLines(c, wide, data, { version = '', drawProgramme = () 
 
   const groups = [...(data.programmes?.programmes || [])].sort((a, b) => String(a.programme).localeCompare(String(b.programme)));
   const assigned = new Set();
-  const inset = 4;
-  const childWide = wide - 2 * inset;
-  const drawChild = (rows) => lines.push(...rows.map((row) => row ? `${' '.repeat(inset)}${row}` : row));
-  const drawGroup = (title, members, facts = '') => {
-    if (width(title) <= wide - 8) lines.push(frameTop(c, wide, title));
-    else {
-      lines.push(frameTop(c, wide, ''));
-      detail(lines, c, wide - 2, 5, title, ['bold']);
+  const programmeIndent = '      ';
+  const drawGroup = (members) => {
+    let previousHasDetails = false;
+    for (const [index, group] of members.entries()) {
+      const { heading, body } = drawProgramme(group, wide - programmeIndent.length);
+      if (index && (previousHasDetails || body.length)) gap();
+      for (const row of [...heading, ...body]) lines.push(row ? programmeIndent + row : '');
+      previousHasDetails = body.length > 0;
     }
-    if (facts) detail(lines, c, wide - 2, 5, facts);
-    for (const group of members) {
-      const rows = [];
-      drawProgramme(rows, group, childWide);
-      drawChild(rows);
-    }
-    panelEnd(lines, c, wide);
     gap();
   };
   for (const figure of horizonFigures(data, sessions)) {
     const members = groups.filter((group) => !assigned.has(group.programme) && (figure.horizon.programmes || []).includes(group.programme));
     for (const group of members) assigned.add(group.programme);
-    const title = `${figure.horizon.position != null ? `${figure.horizon.position}  ` : ''}${figure.horizon.title || figure.horizon.slug}`;
-    drawGroup(title, members, horizonFacts(figure));
+    horizonHeading(lines, c, wide, figure);
+    drawGroup(members);
   }
   const other = groups.filter((group) => !assigned.has(group.programme));
-  if (other.length) drawGroup('OTHER PROGRAMMES', other);
+  if (other.length) {
+    lines.push(`  ${c('OTHER PROGRAMMES', 'bold')}`);
+    drawGroup(other);
+  }
 
   const rows = maintenanceRows(data);
   if (rows.length) { maintenanceLines(lines, c, wide, rows); gap(); }

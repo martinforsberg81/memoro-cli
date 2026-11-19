@@ -12,7 +12,7 @@ THE PAGE
 
 PLAN AND FOLLOW
   mc server set <dest>|clear      Set server; entrances accept --local, --bg
-  mc manager --headless --prompt <text>  One manual manager task
+  mc learning                         update permanent area information
   mc martin [brief [--json]]       Person: the desk; brief prints its opening
   mc martin get [--json]             Read the live decision queue
   mc plan [<programme>]            Person: open or resume a plan session
@@ -129,6 +129,7 @@ ${commandReference('server')}
 ${commandReference('session')}
 
 ${commandReference('manager')}
+${commandReference('learning')}
 
 ${commandReference('brief')}
 

@@ -19,7 +19,7 @@ function programmeLine(item, env) {
 /** What an archive item adds: the programme's directory, the archive turn's state file and the reading's file. */
 function archiveLine(item, env) {
   const programme = item.reference.slice('archive:'.length);
-  return `Programme: ${programme}. Programme directory: ${join(programsHome(env), programme)}; the archive reading's WRITE-BACK.md is there. The archive turn's failures are in ${archiveStatePath(workRoot(env), programme)}; read them and each session log they name. Close the gap the reading found — a goal that writes the missing pages into docs/technical/ and the area pages, or the repair of what failed — then close --by decision so the runner reads the write-back again. A text of Martin's that would have to change goes to a brief instead.\n`;
+  return `Programme: ${programme}. Programme directory: ${join(programsHome(env), programme)}; the archive reading's WRITE-BACK.md is there. The archive turn's failures are in ${archiveStatePath(workRoot(env), programme)}; read them and each session log they name. Close the gap the reading found — a goal that writes the missing pages into docs/technical/ and the area pages, supporting files under the recorded horizon for an @horizon finding, or the repair of what failed — then close --by decision so the runner reads the write-back again. A text of Martin's that would have to change goes to a brief instead.\n`;
 }
 
 /** What a manager item adds: the horizon its removed horizon turn served; nothing starts that turn again. */

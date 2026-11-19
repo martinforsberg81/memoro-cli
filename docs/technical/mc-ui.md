@@ -45,22 +45,20 @@ the live page; displaying them starts no provider request.
 and SYSTEM, which the overview no longer carries, each in its own frame and with no
 header above them: the header rows are the overview's. MARTIN QUEUE and MAINTENANCE are
 not drawn here: DESK and MAINTENANCE are the overview's. Every
-section is a frame, here and on every surface (below). SYSTEM is the frame at the
+operational section is a frame here (below). SYSTEM is the frame at the
 bottom, containing MC, runner diagnostics, Docker when present and BILLING. There
 is no separate SESSIONS section.
 
-**One frame.** Every section on every surface — the overview, `a` and `o` — is drawn in the one frame DESK has: a top rule
+**Frames.** The desk, maintenance and operational panels use the DESK frame: a top rule
 `┌─ TITLE  facts ───── key ┐` with the title in bold, the facts after two spaces
 (joined with ` · `) and the key that opens the section at the right, then the rows
-at indent 4, then the bottom rule `└────┘`. Each programme is its own frame, with
-its name as the title and its goal count and priority as the facts. A
+at indent 4, then the bottom rule `└────┘`. A
 frame with nothing beyond its title and facts — MERGE and DEPLOY with no detail, DEV with none running — is its top
 rule alone, with no bottom rule. In the overview a wrapped heading
-uses continuation rows and a bottom rule. There are no loose headings, no cyan rules and no
-separator before SYSTEM; the page has one style of rule. The rules are orange
+inside a frame uses continuation rows and a bottom rule. The frame rules are orange
 (256-colour SGR 38;5;208); red stays for what is broken. The rounded session
-frames (`╭╮`) and the pipeline's stage boxes are not sections and stay as they
-are. The primitives are `frameTop`, `panelHeading` and `panelEnd`
+frames (`╭╮`) and the pipeline's stage boxes use their own drawing.
+The frame primitives are `frameTop`, `panelHeading` and `panelEnd`
 (`page-operations.js`).
 
 One `a` / `all` toggles operations and Manager details; the next press
@@ -80,14 +78,16 @@ which have no header of their own.
 
 **The programmes.** Within each horizon and within OTHER PROGRAMMES, every listed
 programme is drawn in name order, with its phases, goals, sessions and pull requests.
-Programme frames are inset four columns at both edges of the group. The heading
-shows its name, and in Other its fallback horizon reference, then draft or phase
+Programme headings are inset four columns from their group heading. A programme
+with details has a blank row between it and adjacent programmes. Programmes
+without details are consecutive heading rows. Each heading has the programme
+name in bold, and in Other its fallback horizon reference, then draft or phase
 when applicable, or `ready` for a ready record without a phase, goal count,
 nonzero priority and finished-in-tree count, and `record invalid` when applicable.
 Held, blocked and malformed goals and sessions are drawn in their programme.
 Programme headings and tree text, including goal titles, metadata, holds and
 blockers, wrap within the inset at narrow widths. A goal's stage, criteria,
-session frame, PR references, metadata and reasons start three columns to the
+session, PR references, metadata and reasons start three columns to the
 right of its title row.
 
 **MAINTENANCE** is the last frame of the overview, headed `MAINTENANCE  <n> sources`. It has one row
@@ -101,7 +101,7 @@ reader, which `collectPage` wires and `maintenanceSection` calls:
 |---|---|---|---|
 | User feedback | anonymous `suggest_improvement`: last collection, saved copies and pending receipts; unavailable reads are errors | collection time in the reading | `mc helper --collect` |
 | Proposals | the `.md` files directly in each area's `~/mc/areas/<repo>/<area>/proposals/` (every area folder on disk; no archive), counted and aged by area | the file name's date, else its mtime | `mc proposals` |
-| Lessons | `mc martin lessons`' own list: open, in a goal, late (older than 14 days) and landed this week | the oldest open or carried lesson | `mc martin` |
+| Lessons | `mc martin lessons`' own list: open evidence, in a goal, late (open and older than 14 days) and landed this week (including merged area corrections) | the oldest open or carried lesson | `mc martin` |
 | Errors | the helper's newest digest of each repository: new errors, critical and high | when the digest was collected | `mc helper --intake` |
 | Tests | the last full test of each repository, from the nightly record | the oldest run | `mc gate` |
 | Dependencies | the last audit of each repository: critical and high | the oldest read | `mc deps` |
@@ -209,8 +209,11 @@ The default page draws HORIZONS below DESK and the warnings (`page-horizons.js`,
 and running sessions. Its programme and session totals include Other; its open-goal
 total includes only open horizons. A zero running total is omitted.
 
-Each open horizon has a frame in desk order (`position`, then set time, then slug),
-with its number and title and a grey facts row. The facts count programmes, drafts,
+Each open horizon has a heading in desk order (`position`, then set time, then slug),
+with its number and title in bold at the left and its facts aligned to the right
+edge. A thin neutral grey rule runs between title and facts. When both cannot fit,
+the rule continues to the right edge after the title and the facts move to
+right-aligned continuation rows. The facts count programmes, drafts,
 open goals, explicit goal holds, associated PRs and plan, programme and goal
 sessions in that group, including dormant programmes. Done and dropped goals still
 in the live tree read `<n> finished in tree`. Programme and open-goal counts remain
@@ -221,7 +224,7 @@ change the under-way totals.
 Programmes not assigned to an open horizon are in OTHER PROGRAMMES, omitted when
 empty. A readable empty or missing store shows `0 open`; if the section data is
 absent, the groups start with Other. Horizon store and record read failures are red
-immediately below the roll-up, within its frame and before the horizon frames.
+immediately below the roll-up and before the horizon headings.
 Programme headings in Other say `no horizon`,
 `horizon unknown · record invalid` (with the invalid record in red), or give
 the slug and its displayed state: `reached`, `dropped`, `not held` or `unreadable`.
@@ -241,19 +244,19 @@ null. Each programme in `programmes.programmes` gains `number`, `horizon` (the
 slug its valid record names, else null) and `horizon_state` (`open`, `reached`,
 `dropped`, `not held` for a slug without a readable horizon record, or null),
 and `record_state` (a valid record's state, otherwise null).
-Red in a programme's frame means that someone must act: status `Martin` or `blocked`, a
+Red in a programme means that someone must act: status `Martin` or `blocked`, a
 malformed goal, a refused archive, a failed merge. A goal that gets no session although
 nothing is wrong with it is paused, and a pause is grey: in a draft programme, and on a held
 goal, an unfinished goal whose status is `ready` reads `status paused`, and its hold is a grey
 row `held by <by> since <at> — <reason>`. The programme's heading alone says `draft`; no goal
-repeats it. A hold reason already drawn for an earlier goal in the same frame reads `as above`.
+repeats it. A hold reason already drawn for an earlier goal in the same programme reads `as above`.
 `Martin` and `blocked` stay red in a draft programme. All of it is derived at render time from
 the group's record state and the goal's hold, without changing the goal-row JSON contract.
 A pause does not cancel a running session or stop queued merges.
 
 ### PROGRAMMES
 
-A programme's frame is drawn inline in the overview; the rest of this section describes it.
+A programme's details are drawn inline in the overview.
 
 Nonzero programme priorities appear on the programme heading. Type
 `priority mc inbox --set 10` at the page prompt to set one or several; zero
@@ -267,8 +270,8 @@ A programme with a record (`PROGRAMME.json`, [mc-plan.md](mc-plan.md#a-programme
 a goal; a draft counts as under way, other empty records as having nothing under way. A programme without a record appears as before.
 
 `programmesSection` and `goalsOf` (`page-collect.js`) build programme → phase
-→ goal → PR. Each programme is a frame (above) with a bold name. Each phase has its own
-bold heading inside it. All unfinished
+→ goal → PR. Each programme has a bold name. Each phase has an indented heading
+in the secondary text tone. All unfinished
 phases and goals are visible, including a phase that waits, headed `after phase
 N` (the phase the programme is in, for a sequential programme) or, in a
 programme whose record states its phases, `after phase <m>[, <m>…]` with every
@@ -284,8 +287,8 @@ its phase until the session ends. The runner archives a finished goal at its nex
 ([mc-run.md](mc-run.md)), so what remains is usually a goal waiting on a
 refusal. A programme heading carries ` · n finished in tree` for its finished goals (`n`
 is `finished` in `--json`); a phase with nothing drawn is not drawn, and a
-programme with nothing to draw is its top rule alone. Under a `NEEDS ATTENTION`
-sub-heading in the programme's frame: a malformed goal, without an inferred phase; a finished goal the
+programme with nothing to draw is its heading alone. Under a `NEEDS ATTENTION`
+sub-heading in the programme: a malformed goal, without an inferred phase; a finished goal the
 runner refused to archive, with the red line `not archived — <why>` (`archive_refused`
 on the goal row in `--json`, from the runner's last such log entry after the
 entry that set the stage, else null); and a finished goal with an open pull
@@ -553,7 +556,9 @@ day, grey once landed, and cyan bold otherwise. Primary text uses the
 terminal's own foreground. The page maps the shared palette's `grey`
 bookkeeping tone to standard ANSI white (SGR 37), not dark grey (SGR 90),
 so secondary text stays legible on dark backgrounds. There is no dim text.
-Every frame's rules use orange (256-colour SGR 38;5;208). Other colours still
+Frame rules use orange (256-colour SGR 38;5;208). The horizon heading rule uses
+ANSI bright black (SGR 90). In the programme tree `ready` uses the secondary
+text tone. Other colours still
 depend on the terminal palette; NO_COLOR and non-TTY output carry no escapes. Painting
 happens after clipping plain text so no escape sequence is cut. Plain and
 painted rows occupy the same columns.

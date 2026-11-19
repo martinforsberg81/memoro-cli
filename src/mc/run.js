@@ -82,7 +82,7 @@ import { loggedTick } from './nightly-loop.js';
 import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
-import { readRecord } from './programme-record.js';
+import { readRecord, repairDraftRefusal } from './programme-record.js';
 import { RUNNER_DISK, RUNNER_MEMORY, planAreaName, programsHome, restrictedProgrammeDir, runnerDir, runnerScratchDir, workRoot } from './paths.js';
 import { archiveGoal, finalizeDroppedGoal, goalArchiveDue } from './goal-archive.js';
 import {
@@ -96,7 +96,7 @@ import { PR_LIST_ARGS } from './open-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
-import { answerMainMend, failMainMend, mainMendBranch, mainMendPrompt, readMainMends, removeFinishedWorktrees, updateMainMends } from './main-repair.js';
+import { answerMainMend, buildWaitsForMain, failMainMend, mainMendBranch, mainMendPrompt, mainRepairWaits, readMainMends, removeFinishedWorktrees, updateMainMends } from './main-repair.js';
 import { answerDeployMend, deployMendBranch, deployMendPrompt, failDeployMend, readDeployMends, REPOS as DEPLOY_REPOS, removeCopies, retryFailed, retryHolder, retryVerdict, updateDeployMends, FINISHED as DEPLOY_MEND_FINISHED } from './deploy-repair.js';
 import { deployAlive, readDeploys } from './deploys.js';
 import { deployCheckTick } from './deploy-check.js';
@@ -106,7 +106,7 @@ import { drainDeskPreparation } from './desk-prepare.js';
 import { deskBudget } from './desk-budget.js';
 import { itemDirectory, listDeskItems, readDeskItem, syncDeskItems } from './desk-items.js';
 import { decisionEligible, decisionFailure, decisionPrompt, decisionUnfinished } from './desk-decision.js';
-import { readHorizon } from './desk-horizons.js';
+import { horizonsDir, readHorizon } from './desk-horizons.js';
 import { MANAGER_CLAIM, areaPages, areaRepositories, curationDue, curationPrompt, curationState, curationWorktreesDir, headOf, proposalBacklog, readCurationState, curationStatePath, setUpCurationWorktrees, settleCurationWorktrees } from './manager-pulse.js';
 import { ARCHIVE_CHECKOUTS_PREFIX, FAILURES_TO_ITEM, WRITE_BACK_FILE, archiveDue, archiveName, archiveOnOk, archiveReadPrompt, archiveCheckInPrompt, archiveReference, finishDestination, keepReading, openRestrictedItem, parseWriteBack, readArchiveState, recordArchiveFailure, statedProgrammes } from './archive-turn.js';
 import { archiveProgramme } from './archive-programme.js';
@@ -116,6 +116,7 @@ import { releaseWorkArea } from './work-area.js';
 import { finishTurn, goalCount, programmeDirs, programmeDue, readTurnState, recordTurnFailure, removeReadCheckouts, setUpReadCheckouts, turnName } from './programme-turn.js';
 import { runLearningPass } from './desk-learning.js';
 import { reconcileLessons } from './desk-lessons.js';
+import { reconcileAreaLearning } from './learning-publication.js';
 import { readProgrammePriority } from './programme-priority.js';
 import { seenAreas, trippedAreas } from './review-verdict.js';
 import { runsKind } from './session-kind.js';
@@ -1416,11 +1417,15 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } catch (error) { say(`lessons: reconcile failed — ${error?.message || error}`); }
     if (offlineHeld() || stopRequested() || updateRequested()) return;
     try {
+      reconcileAreaLearning({ env: deps.env, now: deps.now(), repos, gh: deps.gh, queue: deps.deskLearning?.queue, say });
       const out = await runLearningPass({ env: deps.env, now: deps.now, deps: {
-        ...(deps.deskLearning || {}), route: routeClass, logRun,
+        ...(deps.deskLearning || {}), repos, route: routeClass, logRun, say,
         budget: options => deskBudget({ ...options, read: deps.read }),
       } });
-      if (out.started) say(`learning: pass ran (${out.reason}); exit ${out.ok ? 0 : 'non-zero'}`);
+      if (out.started) {
+        say(`learning: pass ran (${out.reason}); exit ${out.ok ? 0 : 'non-zero'}`);
+        for (const line of out.account) say(line);
+      }
       else if (out.reason) say(`learning: waiting — ${out.reason}`);
       if (out.quota && out.quotaScope !== 'model') await quotaPause(out.quotaReset);
     } catch (error) { say(`learning: waiting — ${error?.message || error}`); }
@@ -1631,6 +1636,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         return { name: goalName(goal), repo: goal.repos[0], kind, variant: goalVariant(kind), since: goal.log.at(-1)?.at ?? '', resumed: false, goal };
       })];
   }
+
 
   /** `programme`'s order of phases, read now from its record; an invalid one is said once while it lasts (`invalidSaid`). */
   function orderOf(programme) {
@@ -2152,7 +2158,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (updateRequested()) return 'skipped:update';
       // A file left by an earlier reading is not this one's.
       remove(join(dir, WRITE_BACK_FILE));
-      const prompt = archiveReadPrompt({ programme, dir, goals: due.goals, dropped: due.dropped, checkouts: set.paths, archive: archiveDirIn(programsHome(deps.env), programme) });
+      const horizon = due.record.horizon;
+      const prompt = archiveReadPrompt({ programme, dir, horizonDir: horizon ? join(horizonsDir(deps.env), horizon) : null, goals: due.goals, dropped: due.dropped, checkouts: set.paths, archive: archiveDirIn(programsHome(deps.env), programme) });
       const instructions = instructionsFor(launch.id, role.overlay);
       const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
       const stem = `archive-${programme}-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;
@@ -2188,7 +2195,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const seconds = Math.round((deps.now().getTime() - t0) / 1000);
       // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
       const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
-      const parsed = parseWriteBack(deps.read(join(dir, WRITE_BACK_FILE)), { goals: due.goals, checkouts: shas });
+      const parsed = parseWriteBack(deps.read(join(dir, WRITE_BACK_FILE)), { goals: due.goals, checkouts: shas, horizon });
       let note = `${read.note},${due.goals.length} goal${due.goals.length === 1 ? '' : 's'}`;
       if (!parsed.ok) {
         if (!providerEnding) {
@@ -2198,7 +2205,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         }
       } else if (parsed.verdict === 'OK') {
         try {
-          keepReading({ ...archiveSeams(programme), at: stamp(), goals: due.goals, lines: [] });
+          keepReading({ ...archiveSeams(programme), at: stamp(), goals: due.goals, lines: [], horizon });
           outcome = 'kept';
           note = `${note},write-back OK`;
         } catch (error) { say(`${name}: the OK reading was not kept — ${error.message || String(error)}`); }
@@ -2399,28 +2406,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   const mendState = (repo) => ({ root, repo, read: deps.read, write: writeJson, lock });
 
-  /** The main-red repair states a build waits for: queued, running or published. Martin and the final states do not hold a build. */
-  const MAIN_WAIT_STATES = ['queued', 'running', 'published'];
-  /** The goal's repairs a build waits for, by repository (`{ repo, ids }`); a state that cannot be read waits for nothing. */
-  function mainRepairWaits(goal) {
-    return goal.repos.map((repo) => {
-      let entries = [];
-      try { entries = readMainMends(mendState(repo)).filter((entry) => MAIN_WAIT_STATES.includes(entry.state)); }
-      catch { entries = []; } // mainMendWork reports the unreadable state at the next pick.
-      return { repo, ids: entries.map((entry) => entry.id) };
-    }).filter((wait) => wait.ids.length);
-  }
   /** Each goal whose pick is held by main's wait is said once while it lasts, by the repairs it waits for (`waitSaid`). */
   const waitSaid = new Map();
-  /**
-   * Whether a build goal waits for main's repair: its last entry is the runner's `WAITS_FOR_MAIN` and a repository of
-   * the goal still has a repair in `MAIN_WAIT_STATES`. Any other last entry is never held here, and the hold ends by
-   * itself when the repair ends.
-   */
   function heldForMain(goal) {
-    const last = goal.log.at(-1);
-    const waiting = goal.stage === 'build' && goal.status === 'ready' && last?.tool === 'runner' && String(last.comment ?? '').startsWith(WAITS_FOR_MAIN);
-    const waits = waiting ? mainRepairWaits(goal) : [];
+    const waits = buildWaitsForMain(goal, { root, read: deps.read });
     const name = goalName(goal);
     if (!waits.length) { waitSaid.delete(name); return false; }
     const key = waits.map(({ repo, ids }) => `${repo} (${ids.join(', ')})`).join('; ');
@@ -2725,10 +2714,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function heldBy(goal) {
     const name = goalName(goal);
     const programme = readRecord(join(programsHome(deps.env), goal.programme), { read: deps.read });
-    if (programme.status === 'valid' && programme.record.state === 'draft') {
+    const repair = programme.status === 'valid' && repairDraftRefusal(programme.record, goal.programme);
+    if (repair || (programme.status === 'valid' && programme.record.state === 'draft')) {
       const key = `draft:${goal.programme}`;
       if (holdsSaid.get(name) !== key) {
-        say(`${name}: ${goal.programme} is draft — no session is started`);
+        say(`${name}: ${repair || `${goal.programme} is draft`} — no session is started`);
         holdsSaid.set(name, key);
       }
       return true;
@@ -3235,7 +3225,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       else goalState(goal, name, {}, { comment: `${BUILD_SESSION} (${sessions} of ${BUILD_SESSION_LIMIT}): ${count}, heads ${headsText}` });
       return;
     }
-    const waits = mainRepairWaits(goal);
+    const waits = mainRepairWaits(goal, { root, read: deps.read });
     if (waits.length) {
       const said = `${WAITS_FOR_MAIN} in ${waits.map(({ repo, ids }) => `${repo} (${ids.join(', ')})`).join('; ')}`;
       if (limited([said, `Heads: ${headsText}`, `Criteria: ${count}`])) return;
@@ -3501,7 +3491,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
       refuseProvider(read, launch, picked.billing, settings.model);
-      const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
+      const entriesAfter = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner');
+      const spoke = entriesAfter.length > entriesBefore;
       // A goal held when its session ends belongs to its hold's owner (D2): no stage, status or entry is written here.
       const holdAtEnd = readHold(goal.dir, deps.read);
       if (result.handedOff) { say(`${name}: handed to the merger — lane released`); }
@@ -3510,7 +3501,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       else if (planning) {
         const now = stateNow(goal);
         if (!read.quota && !read.interrupted && now.stage === 'draft' && now.status === 'ready') {
-          goalState(goal, name, { status: 'Martin' }, { comment: 'the plan session ended without completing the draft — inspect LOG.md and the session log before continuing planning' });
+          const last = spoke ? entriesAfter.at(-1) : null;
+          goalState(goal, name, { status: 'Martin' }, {
+            comment: 'the plan session ended without completing the draft — inspect LOG.md and the session log before continuing planning',
+            next: last?.role === PLAN_ROLE && last.stage === 'draft' && last.status === 'ready' ? last.next : null,
+          });
         }
       }
       else if (mend && !read.quota && !read.interrupted) afterMend(goal, name, { stage: goal.stage, status: goal.status });

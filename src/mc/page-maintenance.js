@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { readAreas } from './areas.js';
 import { areaKeysOnDisk, keyProposalsDir } from './area-proposals.js';
 import { LATE_DAYS, listLessons } from './desk-lessons.js';
+import { lessonLandedAt, projectedLessonState } from './lesson-learning.js';
 import { run } from './git.js';
 import { ageWords } from './page-cache.js';
 
@@ -104,12 +105,15 @@ export function proposalsReading({ areas = [], now = new Date() } = {}) {
 
 /** Lessons, as `mc martin lessons` lists them: `lessons` are `listLessons`' rows. What waits is the open and the carried. */
 export function lessonsReading({ lessons = [], now = new Date() } = {}) {
-  const by = (state) => lessons.filter((lesson) => lesson.state === state);
+  const by = (state) => lessons.filter((lesson) => projectedLessonState(lesson) === state);
   const open = by('open'); const carried = by('in-goal');
   const live = [...open, ...carried];
   const age = (lesson) => seconds(Date.parse(lesson.at), now);
-  const late = live.filter((lesson) => Math.floor(age(lesson) / 86400) > LATE_DAYS);
-  const landedWeek = by('landed').filter((lesson) => Number.isFinite(Date.parse(lesson.landed_at)) && seconds(Date.parse(lesson.landed_at), now) <= WEEK_S);
+  const late = open.filter((lesson) => Math.floor(age(lesson) / 86400) > LATE_DAYS);
+  const landedWeek = by('landed').filter((lesson) => {
+    const at = Date.parse(lessonLandedAt(lesson));
+    return Number.isFinite(at) && at <= now.getTime() && seconds(at, now) <= WEEK_S;
+  });
   const oldest = oldestOf(live.map(age).filter(Number.isFinite));
   const group = (label, list, named) => ({ label, count: list.length, oldest_seconds: oldestOf(list.map(age).filter(Number.isFinite)), ...(named ? { items: list.map((lesson) => lesson.name) } : {}) });
   return {

@@ -117,7 +117,7 @@ import {
 } from './scratch.js';
 import { realLock } from './runner-lock.js';
 import { CACHE_KIND_ROOT, cachePathAllowed, gatherCacheFacts, rebuildableCache } from './tidy-caches.js';
-import { cwdsOfUser, processesStandingIn } from './standing.js';
+import { cwdsOfUser, openFilesIn, processesStandingIn } from './standing.js';
 import { pidAlive } from './status-collect.js';
 import { serversFor } from './test-environment.js';
 import {
@@ -1128,20 +1128,6 @@ function readJsonOrNull(path) {
 /** The names in a directory; none when it cannot be read. */
 function listNames(dir) {
   try { return readdirSync(dir).filter((name) => !name.startsWith('.')).sort(); } catch { return []; }
-}
-
-/**
- * The pids holding a file open anywhere under `path` (`lsof +D`), or null
- * when lsof cannot say. lsof exits 1 both for "nothing open" and for a
- * failure; only a silent exit 1 is read as nothing.
- */
-function openFilesIn(path) {
-  const r = spawnSync('lsof', ['-t', '+D', path], { encoding: 'utf8', timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
-  if (r.error || String(r.stderr || '').trim()) return null;
-  const pids = String(r.stdout || '').split('\n').map((line) => Number(line.trim())).filter((pid) => Number.isInteger(pid) && pid > 0);
-  if (r.status === 0) return [...new Set(pids)];
-  if (r.status === 1 && !pids.length && !String(r.stderr || '').trim()) return [];
-  return null;
 }
 
 /** File-scoped, bounded lsof evidence; hidden browser profiles are never traversed. */

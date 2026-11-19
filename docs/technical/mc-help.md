@@ -22,13 +22,42 @@ trees inline under their horizons or in Other. `mc goal` writes the
 brief, criteria, phase, stage and log; `mc plan` and `mc martin` are the person's interactive entrances
 (`mc helper` is the eye and has none); `mc manager` is headless only
 (`mc manager --headless --prompt`, [mc-manager.md](mc-manager.md)) and the runner starts it itself. A session already
-running uses the goal verbs, not an entrance that starts another session.
+running uses its own verbs, not an entrance that starts another session.
+`mc learning` is a terminal command for factual area updates, starting the
+same headless role as chores; its in-session routes and refusal rules are in
+[mc-martin.md](mc-martin.md#lessons-and-the-learning-pass).
 Projects went on 2026-11-03; migration is described in
 [mc-goals.md § From a project](mc-goals.md#from-a-project).
 
 A retired route answers with where the work went and exit 2, not an alias
 that silently performs the old operation. `mc status` points to the page and
 `mc goal show`; free-standing workarea entrances are retired too.
+
+## Internal repair drafting
+
+`src/mc/repair-draft.js` exports `runRepairDraft(argv)` for the next repair
+handoff. It is not a CLI route or a help entry. `mc repair` (including
+`--help` and source flags) is an unknown command, exit 2. No ordinary desk
+command calls the internal entry.
+
+The internal entry takes no arguments or one of `--proposal <path>`,
+`--feedback <file>` and `--error <digest-file> [--fingerprint <id>]`.
+Without a selection it examines waiting dated area proposals by filename
+then path, skipping unchanged non-actionable, ambiguous, stopped and
+already ordered sources. It can resume an existing repair draft. Explicit
+selection reports the disposition instead. A missing or unreadable source
+exits 1; malformed arguments, incident feedback without a task ID or an
+incident timestamp and build, or a digest that needs fingerprint selection
+exit 2 without ordering. The digest selection reports the available IDs.
+Sources, records and draft admission are in [mc-plan.md](mc-plan.md#internal-repair-drafts).
+
+Internal results are prefixed with `mc: `: `repair programme <programme> is
+draft — source <path>`, `resuming repair programme <programme>`, `source
+already ordered in <programme>`, or `repair programme <programme> is at
+Martin (item <id>)`. No-order results are `<source> — already fixed`,
+`<source> — insufficient evidence; proposal retained`, `<source> —
+previously declined`, `possible duplicate for <source>; no order made` and
+`no repair ready to order`.
 
 ## Proposal counts
 

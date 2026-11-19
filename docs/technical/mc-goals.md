@@ -256,6 +256,31 @@ session, after the lines that say where the goal is (`goalPrompt`,
 goal rows on the page say `criteria <met>/<all>`; the page's is green when all
 are met.
 
+The list's Next cell and goal detail show the latest recorded build dispatch
+outcome when available, including a repair build after rejection. A tool
+start needs an announcement, a completed run of the matching kind with a
+session identity, and the tool's own start event (including Antigravity's
+native `init`); an announcement or exit alone is not a start. A credits
+gateway's pre-spawn refusal is named only when its diagnostic can be
+attributed to that dispatch; an unmatched announcement is shown as an unknown
+start, not a refusal. These are historical evidence, not a change to eligibility.
+A ready build with neither a dispatch announcement nor an active main-red wait
+has no outcome summary: list falls back to the last log entry's Next (or `—`),
+and show keeps its ordinary log and worktree detail without a BUILD OUTCOME
+section. When a ready build does have a summary, it keeps the most recent
+recorded Next in its current build stage even
+after a runner bookkeeping entry, or says that no bounded continuation was
+recorded. An unopened phase or missing criterion does not give a build an
+assignment. While the runner's [main-red wait](#what-a-build-session-does)
+is active, the summary names the repairs it waits for instead of reporting
+eligibility, without dropping the attempt outcome or recorded Next. A recorded
+build-to-review transition names independent review only for a ready review
+in an open phase; a stopped review can still show the historical handoff.
+A technical stop names its reason and the technical desk.
+It reports branch or worktree facts only when read from the worktree, and
+lists registered PRs separately; the goal detail keeps the existing log and
+worktree entries. A goal hold takes precedence over this summary.
+
 ## LOG.md
 
 Each session adds one entry, newest last:
@@ -452,6 +477,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 
 - **`new <p>/<g> --repo <r>[,<r>] --class fast|medium|large --title "…" [--phase <n>] [--stage draft] [--structure 1|2]`** — makes a
   goal, refused unless its flags are valid and its names are new.
+  The learning role is refused every mutation (exit 2); it uses `mc learning` for dispositions.
   Before fetching or writing, a draft programme record refuses (exit 1):
   `mc: <programme> is draft — mc programs show <programme>`.
   Without a record, `MC_HEADLESS=1` refuses (exit 1): `mc: <programme> has no
@@ -498,8 +524,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   names the declared rule areas that still have no obligation.
   The item and obligation verbs write the brief like `set`: a build, review
   or mend session is refused (exit 2, nothing written), and so is the
-  learning role on a goal it did not create; it may use them on a goal it
-  created in its session, as it may `set` and `criterion add`. Plan,
+  learning role on any goal: it reads only. Plan,
   interactive Martin, decision and a person may. A version 1 goal is refused
   them.
 - **`document add <p>/<g> --label "…" --path "…"`** — appends a document;
@@ -630,8 +655,9 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   or bypass review, acceptance, publication or merge evidence. `MC_HEADLESS=1`
   Martin authority is refused; decision authority is allowed, but headless deploy, admin, production-data and credential hooks remain enforced. Decision may use `mc ask` at any active stage, not just the stage of a delivery role. Its mutations log `by decision`; criterion rewrites remain unmet until checked. Build, review and mend retain their ordinary limits.
 - **`show <p>/<g>`** — a status line (`<p>/<g> · stage · status · phase <n> · repos · class ·
-  criteria <met>/<all> · created …`, with `· prs …` when set), the goal as text (*Seen, not only stored*), the last three entries, and
-  each worktree's changed files, commits past `origin/main` and last commit date.
+  criteria <met>/<all> · created …`, with `· prs …` when set), the goal as text (*Seen, not only stored*), the
+  [BUILD OUTCOME summary](#goaljson) when available, the last three log entries,
+  and each worktree's changed files, commits past `origin/main` and last commit date.
 - **`list [<p>]`** — each programme's goals under a line per phase,
   `<p> · phase <n> · in progress` for the phase the programme is in, `· done`
   for one before it and `· after phase <n-1>` for one after it (a stated
@@ -639,8 +665,10 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   phase <m>[, <m>…]` for what the record says the phase waits for, and above
   them `<p> · record invalid — no phase is open` for an invalid record); under it,
   indented, one line per goal: `programme/goal · repos · stage · status ·
-  criteria <met>/<all> · n sessions · the last entry's Next` — `—` for a `done` or `dropped` goal,
-  whose last next action is over. A goal waiting for Martin reads `<stage> · Martin,
+  criteria <met>/<all> · n sessions · Next`. Next shows the
+  [build outcome](#goaljson) when available, otherwise the last log entry's
+  Next (or `—`). It is always `—` for a `done` or `dropped` goal, whose last
+  next action is over. A goal waiting for Martin reads `<stage> · Martin,
   waits on a person` (`waitsOnPerson`); a goal in `build` with no criterion
   `build · ready, no criteria — not started`. A goal that
   does not parse has no phase and is listed last, with its problems.
@@ -1394,7 +1422,9 @@ Each stage has one owner, and a goal passes each once:
 
 - `draft` — a plan session writes the goal, interactively or through the
   next-draft assignment below. The plan session moves it to `build`
-  when it is complete (*Completeness gate*). (Named `plan` until 2026-11-07.)
+  when it is complete (*Completeness gate*) and the [acceptance setup is
+  verified](mc-plan.md#acceptance-preparation-before-build).
+  (Named `plan` until 2026-11-07.)
 - `build` — the runner's build sessions, while it is `ready`; legacy `blocked` outside merge reconciles to Martin without a launch. Three sessions in a row without a commit or a criterion met, or five build sessions since it began building or was last set ready after a stop, stop it with `no progress:` and `Martin`; a build session that finds the goal wrong reports it with `mc goal defect`, also `Martin`.
 - `review` — one review session decides; one that dies is run again once, a second crash or dirty refusal waits directly on Martin. A review that finds the goal wrong reports it with `mc goal defect`.
 - `finish` — no longer entered. A goal found in it (`finish · ready`) is moved to `build` by the runner with a log entry; with REVIEW.md it gets a repair build.
@@ -1483,11 +1513,15 @@ and reserved-act rules. Interactive planning checkouts remain separate.
 
 Complete exactly the selected draft's parts as `mc goal show` names them, its
 stand on every rule area, its documents and executable success checks,
-reconcile the programme README and phases, and move it to build immediately
-when ready. Resolve a remaining policy
+reconcile the programme README and phases, and move it to build when its
+acceptance procedure and intended setup are verified ([mc-plan.md](mc-plan.md#acceptance-preparation-before-build)). Resolve a remaining policy
 choice through goal-bound `mc ask` under [mc-jev.md](mc-jev.md). Do not implement the draft or process the
 proposal backlog in the headless planning turn. A completed session leaving
-`draft · ready` waits on Martin with an incomplete-session diagnostic, unless the draft is held when the session ends: then nothing is set, and a held draft is offered to planning again after release; provider
+`draft · ready` waits on Martin with an incomplete-session diagnostic. The
+stop entry carries the current plan session's last draft-ready entry's Next,
+if supplied, so the blocked input and desk action remain visible in the list.
+If the draft is held when the session ends, nothing is set, and a held draft
+is offered to planning again after release; provider
 refusals/offline failures keep their existing retries. Broader programme design
 and proposal intake remain interactive. This restores neither the no-draft
 nor the daily-proposal turn: a programme is planned by that turn only when its
