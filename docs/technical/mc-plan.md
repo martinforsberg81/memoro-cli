@@ -273,6 +273,24 @@ drafts (exit 1). A state spelling is not a release. Part 2 has no release
 operation; older runners see the optional repair field as invalid and hold
 its goals. Ordinary desk-created area repairs keep their existing route.
 
+For a repair-owned draft, programme review requires the live entrance's
+programme-bound repair identity on both claim and receipt write. The reader
+must use a different tool/model pair. A new authorised attempt revokes the
+previous receipt before inspecting the order or looking for a reader. The
+reader sees a disposable snapshot of README and the programme-local files
+linked or named in backticks under `evidence/` or `design/`. An additional
+programme-local input can be named as `Binding design:` or `Binding evidence:`
+followed by its backticked path on the same line. Binding files must be regular
+files reached without symlinks; the snapshot is limited to 64 MiB total.
+Source provenance pointers to proposals or intake files are not binding inputs.
+An isolated, successful reader must write a fresh findings report (up to
+64 KiB) with numbered findings, their part, entry, evidence and narrowest fix,
+and a Not checked section. The wrapper compares the live inputs again before
+storing the report and its receipt with the manifest and report digests. An
+input change during the reading, failed reader, invalid report or superseded
+attempt stores no usable receipt. A report alone grants no authority. The
+ordinary desk reading remains advisory.
+
 ## What the session is told
 
 `planLaunch` names the programme, asks it to read the aim first, names the

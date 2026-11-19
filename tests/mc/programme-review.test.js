@@ -13,13 +13,15 @@ import { test } from 'node:test';
 import * as claude from '../../src/adapters/claude-code.js';
 import { run as ask } from '../../src/mc/commands/ask.js';
 import { run as programs } from '../../src/mc/commands/programs.js';
-import { newRecord, recordPageTemplate, writeRecord } from '../../src/mc/programme-record.js';
+import { newRecord, RECORD_FILE, recordPageTemplate, writeRecord } from '../../src/mc/programme-record.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { applyObservation, normaliseCapacity } from '../../src/mc/model-capacity.js';
 import {
   PROGRAMME_REVIEW_FILE, PROGRAMME_REVIEW_LAUNCH, PROGRAMME_REVIEW_LIMIT_MS,
 } from '../../src/mc/programme-review.js';
 import { TIMEOUT_EXIT } from '../../src/mc/run-plan.js';
+import { withRepairAuthor } from '../../src/mc/repair-authority.js';
+import { currentRepairReview } from '../../src/mc/repair-review.js';
 
 const NOW = new Date('2026-11-15T10:00:00Z');
 const AFTER_START = NOW.getTime() + 60_000;
@@ -78,7 +80,8 @@ function programmeSetup(t) {
     const code = await programs(argv, { env: identity, stdout, stderr, known: () => known, lock, now: () => NOW, review: { ...deps, ...extra } });
     return { code, out: stdout.text(), err: stderr.text() };
   };
-  const files = () => Object.fromEntries(readdirSync(dir).map((file) => [file, readFileSync(join(dir, file), 'utf8')]));
+  const files = () => Object.fromEntries(readdirSync(dir, { withFileTypes: true }).filter(file => file.isFile())
+    .map(({ name }) => [name, readFileSync(join(dir, name), 'utf8')]));
   const reads = (before = () => {}) => async (spawned) => {
     await before(spawned);
     writeFileSync(join(dir, PROGRAMME_REVIEW_FILE), 'findings: 0\n\nNo findings.\n');
@@ -87,6 +90,74 @@ function programmeSetup(t) {
   return { ...shared, dir, page, env, checkout, deps, call, reads, files,
     martin: { ...env, MC_ROLE: 'martin', MC_HEADLESS: undefined, MC_GOAL: undefined } };
 }
+
+const NO_FINDINGS = 'findings: 0\n\n## Not checked\nNone.\n';
+
+function repairSetup(t) {
+  const f = programmeSetup(t);
+  const artifact = join(f.dir, 'evidence', 'current.txt');
+  mkdirSync(join(f.dir, 'evidence'));
+  writeFileSync(artifact, 'original evidence');
+  writeFileSync(join(f.dir, 'README.md'), `${f.page}\n- [Evidence](evidence/current.txt)\n- Source: \`/proposals/waiting.md\`\n`);
+  rmSync(join(f.dir, RECORD_FILE));
+  writeRecord(f.dir, newRecord({ end: 'The promised result runs.', createdBy: 'repair', now: NOW, repair: {
+    sources: [{ kind: 'proposal', path: '/proposals/waiting.md', key: 'a'.repeat(64), digest: 'b'.repeat(64) }],
+  } }));
+  const receipt = () => currentRepairReview(f.dir, { read: path => existsSync(path) ? readFileSync(path, 'utf8') : null });
+  const call = (identity, session, review) => f.call(['review', 'p'], { identity, extra: { session, ...review } });
+  const reader = ({ report = NO_FINDINGS, status = 0, during } = {}) => async spawned => {
+    assert.equal(spawned.env.MC_REPAIR_TOKEN, undefined);
+    assert.notEqual(spawned.cwd, f.dir);
+    assert.equal(readFileSync(join(f.checkout, 'order', 'evidence', 'current.txt'), 'utf8'), 'original evidence');
+    during?.();
+    assert.equal(readFileSync(join(f.checkout, 'order', 'evidence', 'current.txt'), 'utf8'), 'original evidence');
+    if (report !== null) writeFileSync(join(spawned.cwd, PROGRAMME_REVIEW_FILE), report);
+    return { ...DONE, status };
+  };
+  return { ...f, artifact, receipt, call, reader, asAuthor: fn => withRepairAuthor(f.baseEnv, 'p', fn) };
+}
+
+test('repair review: only the live assigned author gets a receipt of fixed binding inputs from an independent reader', async t => {
+  const f = repairSetup(t);
+  await f.asAuthor(async author => {
+    for (const unrelated of [f.martin, { ...author, MC_REPAIR_TOKEN: 'b'.repeat(48) }, { ...author, MC_PROGRAMME: 'other' }]) {
+      const refused = await f.call(unrelated, () => assert.fail('unrelated session launched a reader'));
+      assert.equal(refused.code, 2);
+      assert.match(refused.err, /only the assigned repair session/u);
+      assert.equal(f.receipt(), null);
+    }
+    writeFileSync(join(f.dir, PROGRAMME_REVIEW_FILE), NO_FINDINGS);
+    assert.equal(f.receipt(), null, 'a report alone is not a reading');
+    const alone = await f.call(author, () => assert.fail('the author cannot be its own reader'), { catalog: catalogOf([OPUS]) });
+    assert.equal(alone.code, 2);
+    const result = await f.call(author, f.reader());
+    assert.equal(result.code, 0, result.err);
+    assert.deepEqual(f.receipt().receipt.reader, { tool: 'codex', model: 'gpt-6.2-sol' });
+    assert.deepEqual(f.receipt().receipt.manifest.inputs.map(([path]) => path), ['README.md', 'evidence/current.txt']);
+    writeFileSync(f.artifact, 'edited after reading');
+    assert.equal(f.receipt(), null, 'the valid report and receipt no longer describe current evidence');
+  });
+});
+
+test('repair review: a reverted binding edit, failed reader, malformed or missing fresh output never grants a receipt', async t => {
+  const f = repairSetup(t);
+  await f.asAuthor(async author => {
+    for (const [reader, why] of [
+      [f.reader({ during: () => { writeFileSync(f.artifact, 'changed'); writeFileSync(f.artifact, 'original evidence'); } }), /binding programme input changed/u],
+      [f.reader({ status: 1 }), /reading failed \(exit 1\)/u],
+      [f.reader({ report: 'findings: 1\n\n## Not checked\nNone.\n' }), /fresh, valid findings report/u],
+      [f.reader({ report: null }), /fresh, valid findings report/u],
+    ]) {
+      const good = await f.call(author, f.reader());
+      assert.equal(good.code, 0, good.err);
+      assert.ok(f.receipt());
+      const rejected = await f.call(author, reader);
+      assert.equal(rejected.code, 2);
+      assert.match(rejected.err, why);
+      assert.equal(f.receipt(), null, 'failed follow-up revoked the preceding receipt');
+    }
+  });
+});
 
 test('programme review: real command launches its own identity on named origin/main exports, and writes review file', async (t) => {
   const f = programmeSetup(t);

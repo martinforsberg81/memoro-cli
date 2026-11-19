@@ -40,6 +40,7 @@ import { commandUsage } from '../command-help.js';
 import { writeFileAtomic } from '../atomic-write.js';
 import { realLock } from '../runner-lock.js';
 import { programmeRepositories, programmeReviewCall } from '../programme-review.js';
+import { beginRepairReview, repairReviewCall } from '../repair-review.js';
 
 export function usage() {
   return commandUsage('programs');
@@ -478,12 +479,19 @@ async function reviewVerb({ positional: [name] }, deps) {
   const target = { name, dir: join(programsHome(env), name) };
   const ctx = { env, stdout, stderr, read: readTextOrNull, write: writeFileAtomic, remove: unlinkSync,
     lock: deps.lock ?? realLock, now: deps.now ?? (() => new Date()), alive: deps.alive };
-  if (!reviewAuthor(env)) { stderr.write('mc: only Martin at the desk calls a programme reading — mc martin opens the desk\n'); return 2; }
-  const text = ctx.read(join(target.dir, 'README.md'));
-  if (text === null) { stderr.write(`mc: ${name} has no README.md to read\n`); return 2; }
-  const known = (deps.known ?? (() => knownRepositories(env)))().map((path) => ({ repo: repoNameOf(path), path }));
-  const found = programmeRepositories(text, known);
-  if (found.error) { stderr.write(`mc: ${found.error}\n`); return 2; }
-  try { return await programmeReviewCall({ target, ctx, text, repos: found.repos, deps: deps.review ?? {} }); }
+  const record = readRecord(target.dir, { read: ctx.read });
+  const repair = record.status === 'valid' && Boolean(record.record.repair);
+  if (!repair && !reviewAuthor(env)) { stderr.write('mc: only Martin at the desk calls a programme reading — mc martin opens the desk\n'); return 2; }
+  try {
+    const reviewDeps = deps.review ?? {};
+    const attempt = repair ? beginRepairReview({ target, ctx, deps: reviewDeps }) : null;
+    const text = attempt ? attempt.snapshot.text : ctx.read(join(target.dir, 'README.md'));
+    if (text === null) { stderr.write(`mc: ${name} has no README.md to read\n`); return 2; }
+    const known = (deps.known ?? (() => knownRepositories(env)))().map((path) => ({ repo: repoNameOf(path), path }));
+    const found = programmeRepositories(text, known);
+    if (found.error) { stderr.write(`mc: ${found.error}\n`); return 2; }
+    return await (attempt ? repairReviewCall({ target, ctx, repos: found.repos, ...attempt, deps: reviewDeps })
+      : programmeReviewCall({ target, ctx, text, repos: found.repos, deps: reviewDeps }));
+  }
   catch (error) { stderr.write(`mc: programme-review ${name}: ${error.message}\n`); return 2; }
 }
