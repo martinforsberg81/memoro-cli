@@ -4,7 +4,7 @@ description: Writing a programme document in mc — what the user gets and how o
 ---
 # Writing a programme document
 
-A programme document is an order, as a buyer of software hands it to the firm that builds it. Martin is the buyer: it is written with him in a session, he says there that it is ready, the desk sets it ready with `mc programs state <programme> ready`, and the planner cuts goals from its README.
+A programme document is an order, as a buyer of software hands it to the firm that builds it. Write it with Martin, the buyer; the planner cuts goals from its README once it is ready.
 
 ## From proposals to an order
 
@@ -25,36 +25,24 @@ Keep the findings for the chosen technical solution in the programme's evidence 
 ## The document
 
 - Open with what a user can do or see afterwards that they cannot today.
-- One coherent thing to say yes or no to. If Martin could want half of it,
-  it is two programmes.
-- A part is something that is built, cut by what a user gets and not by
-  layer. It can land by itself, and it keeps its number.
+- One thing to say yes or no to. If Martin could want half, it is two programmes.
+- Three to eight parts, cut by user outcome, not layer. Each can land alone and keeps its number.
 - Order says the sequence of the parts and what the desk does beside the build; it holds no step of Martin's.
-- Three to eight parts.
-- About 1,500 words, as a recommendation and not a limit (Martin, 2026-11-18):
-  a document that needs more to state every case the user meets takes it, and
-  no case is cut to fit. Split it into several programmes where that makes each
-  clearer to say yes or no to; look first for construction that has come in.
-  What runs today is written as a user meets it, from the app and the
-  standards; code is read only for a fact the order depends on.
+- Aim for 1,500 words, but never cut a user case to fit (Martin, 2026-11-18).
+  Cut unnecessary construction first; split into programmes if that makes the choices clearer.
+  Describe what runs today as users meet it, from the app and standards; read code only for facts the order needs.
 
 ## A part
 
 - **Closes.** What is wrong or missing today, as the user meets it.
-- **Solution.** What happens, from the user's first step to the last, and
-  every case that is not the plain one: nothing to show, too much, a failure,
-  a second visit, the phone. Then only the construction the order rests on:
-  what must be reused, what must not change, a limit that binds.
-- **Design.** What the user gets and how one sees that it works. One picture
-  for each thing Martin decides: the new thing as it will look, at one width,
-  in the light theme. A second picture only where the phone is a choice of its
-  own. No picture in the dark theme: how dark looks follows memoro
-  `docs/technical/design-tokens.md`. States (failed, empty, working, cut, a
-  second visit) are said in words by the app component they follow, and are
-  not pictured. Where a part reuses a component as it is, the design names the
-  component and shows one picture of where it stands. A surface of text is
-  shown as its text. "Nothing a user sees" where that is so. At most ten
-  pictures and about 1,500 words across the document.
+- **Solution.** The user's steps and every exception: empty, too much, failure, return visit, phone.
+  Include only the construction the order relies on: required reuse, unchanged behaviour and binding limits.
+- **Design.** What the user gets and how one sees that it works.
+  Show the new thing at one width in light theme, one picture per choice Martin makes.
+  Add a phone picture only for a distinct choice. Do not picture dark: it follows memoro's `docs/technical/design-tokens.md`.
+  Describe failed, empty, working, cut and return states in words, naming the app component they follow.
+  For an unchanged component, name it and show one picture of where it stands.
+  Show text as text. Say "Nothing a user sees" where true. At most ten pictures across the document.
 - **Proved by.** What a user would notice if it were built wrong.
 - **Not in this part.** The nearest thing someone would expect and does not get.
 
