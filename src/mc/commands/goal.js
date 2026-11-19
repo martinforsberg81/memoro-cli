@@ -71,6 +71,7 @@ import { appendFileSync, existsSync, readFileSync, readdirSync, realpathSync, un
 import { isAbsolute, join, relative, sep } from 'node:path';
 
 import { commandUsage } from '../command-help.js';
+import { buildDispatches } from '../goal-dispatch-evidence.js';
 import { isSourceArea, proposedStand, proposedWords, readAreas } from '../areas.js';
 import { checkVerdict, trippedAreas } from '../review-verdict.js';
 import { dropItems, evidenceIds, readEvidence, evidenceLines, evidenceRefusal, itemKey, makeRecord, removeCriterionItem, setItem as setEvidence, worktreeHeads } from '../goal-evidence.js';
@@ -205,6 +206,7 @@ export async function run(argv, deps = {}) {
     realpath: deps.realpath,
     write: deps.write || writeFileAtomic,
     list: deps.list || listDirsOf,
+    listFiles: deps.listFiles || ((path) => { try { return readdirSync(path); } catch { return []; } }),
     git: deps.git || gitIn,
     // The merge check before review and merge (main-conflict.js); a test stands in for it.
     mainCheck: deps.mainCheck,
@@ -1544,6 +1546,8 @@ function showGoal(args, ctx) {
   if (evidence.lines.length) stdout.write(`\nEVIDENCE\n${evidence.lines.join('\n')}\n`);
 
   const log = parseLog(read(join(target.dir, LOG_FILE)) ?? '');
+  const outcome = continuingBuildOutcome({ ...goal, ...target, log }, ctx);
+  if (outcome) stdout.write(`\nBUILD OUTCOME\n  ${outcome}\n`);
   stdout.write('\nLOG\n');
   if (log.length === 0) stdout.write('  no entries yet\n');
   for (const entry of log.slice(-3)) stdout.write(renderEntry(entry));
@@ -1688,7 +1692,7 @@ function listGoals(args, ctx) {
         if (at.after.length) state += ` · after phase ${at.after.join(', ')}`;
       }
       stdout.write(`${one} · phase ${phase} · ${state}\n`);
-      for (const goal of own.filter((item) => !item.problems.length && item.phase === phase)) stdout.write(`  ${goalLine(goal, read)}\n`);
+      for (const goal of own.filter((item) => !item.problems.length && item.phase === phase)) stdout.write(`  ${goalLine(goal, ctx)}\n`);
     }
     for (const goal of own.filter((item) => item.problems.length)) stdout.write(`  ${goal.programme}/${goal.goal} · does not parse — ${goal.problems.join('; ')}\n`);
   }
@@ -1696,16 +1700,27 @@ function listGoals(args, ctx) {
 }
 
 /** One goal's line in `mc goal list`. */
-function goalLine(goal, read) {
+function goalLine(goal, ctx) {
+  const { read } = ctx;
   const name = `${goal.programme}/${goal.goal}`;
   // A finished goal has no next action, whatever its last entry said.
-  const next = FINISHED.includes(goal.stage) ? '—' : (goal.log.at(-1)?.next ?? '—').replace(/\s*\n\s*/gu, ' ');
+  const next = continuingBuildOutcome(goal, ctx) ?? (FINISHED.includes(goal.stage) ? '—' : (goal.log.at(-1)?.next ?? '—').replace(/\s*\n\s*/gu, ' '));
   const status = waitsOnPerson(goal) ? `${stageWords(goal)}, waits on a person`
     : goal.stage === 'build' && noCriteria(goal) ? `${stageWords(goal)}, no criteria — not started`
     : stageWords(goal);
   const hold = readHold(goal.dir, read);
   const held = hold ? `, held by ${hold.by ?? '—'}` : '';
   return `${name} · ${goal.repos.join(',')} · ${status}${held} · ${criteriaWords(goal)} · ${sessions(goal.log)} sessions · ${next}`;
+}
+
+/** Dispatch evidence is historical; it does not change an eligible build's owner. */
+function continuingBuildOutcome(goal, ctx) {
+  if (goal.stage !== 'build' || goal.status !== 'ready' || readHold(goal.dir, ctx.read)) return null;
+  const latest = buildDispatches({ root: workRoot(ctx.env), programme: goal.programme, goal: goal.goal, read: ctx.read, list: ctx.listFiles }).at(-1);
+  if (!latest) return null;
+  const next = (goal.log.at(-1)?.next ?? 'no bounded continuation recorded').replace(/\s*\n\s*/gu, ' ');
+  const start = latest.start === 'started' ? 'build started' : 'build start unknown — no tool boundary recorded';
+  return `${start} · build remains eligible · Next: ${next}`;
 }
 
 /**

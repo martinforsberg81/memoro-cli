@@ -116,6 +116,28 @@ function seededGoal(extra = {}) {
   return { [`${DIR}/GOAL.json`]: GOAL_TEXT, [`${DIR}/LOG.md`]: LOG_TEXT, ...extra };
 }
 
+test('goal outcome: a later unmatched announcement retains the eligible build continuation in list and show', async () => {
+  const logDir = '/work/runner/log';
+  const files = seededGoal({
+    [`${DIR}/LOG.md`]: '## 2026-11-01T20:00Z · codex model · build · ready · by build\n\nNext: verify saved proposal\n',
+    [`${logDir}/runner.log`]: '2026-11-01T20:00:00Z goal:mc/plain: build starting (codex)\n2026-11-01T21:00:00Z goal:mc/plain: build starting (codex)\n',
+    [`${logDir}/runs.tsv`]: 'ts\tname\tkind\tseconds\tsession\texit\n2026-11-01T20:00:10Z\tgoal:mc/plain\tbuild-goal\t10\tsession-1\t1\n',
+    [`${logDir}/goal-mc-plain-20261101T200000Z.jsonl`]: '{"type":"thread.started","thread_id":"session-1"}\n',
+  });
+  const f = fixture({ files, env: { MC_WORK_ROOT: '/work' } });
+  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
+    const before = f.out().length;
+    assert.equal(await run(args, f.deps), 0, f.err());
+    const output = f.out().slice(before);
+    assert.match(output, /build start unknown — no tool boundary recorded · build remains eligible · Next: verify saved proposal/u);
+    assert.doesNotMatch(output, /technical desk/u);
+  }
+  f.store[`${DIR}/LOG.md`] = '## 2026-11-01T20:00Z · codex model · build · ready · by build\n\nDone: work\n';
+  const before = f.out().length;
+  assert.equal(await run(['show', 'mc/plain'], f.deps), 0, f.err());
+  assert.match(f.out().slice(before), /no bounded continuation recorded/u);
+});
+
 test('mc goal new writes a GOAL.json skeleton and LOG.md, fetches each repository, and makes no worktree', async () => {
   const f = fixture();
   const code = await run(['new', 'mc/plain', '--repo', 'memoro-cli,memoro', '--class', 'large', '--title', 'Make the goal plain', '--structure', '1'], f.deps);
