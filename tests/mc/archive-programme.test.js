@@ -23,7 +23,7 @@ import { formatRow, logRows } from '../../src/mc/archive-plan.js';
 import { run } from '../../src/mc/commands/plan.js';
 import { renderGoal } from '../../src/mc/goals.js';
 import { shelvedMembership } from '../../src/mc/archive-receipt.js';
-import { readProgrammes } from '../../src/mc/page-collect.js';
+import { collectPage, readProgrammes } from '../../src/mc/page-collect.js';
 
 function git(cwd, args) {
   const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
@@ -430,21 +430,32 @@ describe('archiveProgramme with the runner\'s fence', () => {
     const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area });
     const readGit = (cwd, argv) => { const r = git(cwd, argv); return r.ok ? r.stdout.trimEnd() : null; };
     const listed = () => readProgrammes({ env: fx.env, repos: fx.repos }).section.programmes.map((p) => p.programme);
-    assert.deepEqual(listed(), ['gone']);
+    const overview = async () => {
+      const page = await collectPage({ env: fx.env, repos: fx.repos, offline: true, checkout: null,
+        claudeSettings: () => null, exec: async () => ({ ok: false, stdout: '' }),
+        run: () => ({ status: 1, stdout: '' }), git: () => null,
+        cache: { loadPrs: () => ({ prs: [], fetched: null, age_seconds: 0 }), savePrs: () => {} } });
+      return { members: page.programmes.programmes.map((p) => p.programme), other: page.horizons.none };
+    };
+    const check = async (members) => {
+      assert.deepEqual(listed(), members);
+      assert.deepEqual(await overview(), { members, other: members });
+    };
+    await check(['gone']);
     assert.equal(await archiveProgramme('gone', a), 0, a.stderr.out.text);
     const receipt = join(fx.root, 'work', 'archive', 'programs', 'gone', '.archive-receipt.json');
     const saved = readFileSync(receipt, 'utf8');
     assert.equal(shelvedMembership('gone', fx.repos[0], { env: fx.env, git: readGit }), true);
-    assert.deepEqual(listed(), []);
+    await check([]);
     const mismatch = JSON.parse(saved);
     mismatch.entries[0].path = 'docs/project/other';
     writeFileSync(receipt, JSON.stringify(mismatch));
-    assert.deepEqual(listed(), ['gone']);
+    await check(['gone']);
     rmSync(receipt);
-    assert.deepEqual(listed(), ['gone']);
+    await check(['gone']);
     writeFileSync(receipt, saved);
     mkdirSync(area, { recursive: true });
-    assert.deepEqual(listed(), ['gone'], 'a recordless successor takes precedence');
+    await check(['gone']); // A recordless successor takes precedence.
     rmSync(area, { recursive: true });
     const tracked = join(fx.repo, 'docs', 'project', 'gone', 'README.md');
     const contents = readFileSync(tracked, 'utf8');
@@ -457,7 +468,7 @@ describe('archiveProgramme with the runner\'s fence', () => {
     git(fx.repo, ['add', '-A']);
     git(fx.repo, ['commit', '-q', '-m', 'restore membership']);
     git(fx.repo, ['push', '-q', 'origin', 'HEAD:main']);
-    assert.deepEqual(listed(), ['gone'], 'deletion and reintroduction break path identity');
+    await check(['gone']); // Deletion and reintroduction break path identity.
   });
 
   it('a fence that fires after the docs PR landed stops before any release: the planning session, the directory and restricted data are as they were, and the landed PR stays', async () => {
@@ -487,6 +498,13 @@ describe('archiveProgramme with the runner\'s fence', () => {
     const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area, fence: () => (++asks === 3 ? 'a goal is live' : null) });
     assert.equal(await archiveProgramme('gone', a), 1);
     assert.ok(existsSync(area), 'the directory did not move');
+    assert.deepEqual(readProgrammes({ env: fx.env, repos: fx.repos }).section.programmes.map((p) => p.programme), ['gone']);
+    const page = await collectPage({ env: fx.env, repos: fx.repos, offline: true, checkout: null,
+      claudeSettings: () => null, exec: async () => ({ ok: false, stdout: '' }),
+      run: () => ({ status: 1, stdout: '' }), git: () => null,
+      cache: { loadPrs: () => ({ prs: [], fetched: null, age_seconds: 0 }), savePrs: () => {} } });
+    assert.deepEqual(page.programmes.programmes.map((p) => p.programme), ['gone']);
+    assert.deepEqual(page.horizons.none, ['gone']);
     assert.ok(existsSync(join(entry, 'README.md')), 'restricted data was not cleared');
     assert.equal(existsSync(join(fx.root, 'work', 'archive', 'programs', 'gone')), false);
     assert.deepEqual(calls.release, [true, false], 'release is the planning session\'s, already asked for before the last fence');

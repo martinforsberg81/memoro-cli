@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -2346,6 +2346,11 @@ describe('collectPage', () => {
       assert.ok(frame.heading.includes(expected.status === 'pending' ? 'archive pending' : 'archive needs attention'));
       if (reason) assert.ok(frame.body.some((line) => line.includes(reason)), lines.join('\n'));
     };
+    // Closed and foreign items do not mask the due turn.
+    const foreignAt = '2026-10-01T00:00:00Z';
+    for (const [reference, stateName] of [['archive:other', 'for-martin'], ['archive:finished', 'closed']]) {
+      writeDeskItem({ schema: 'mc-desk-item', version: 1, id: deskItemId('archive', reference, foreignAt), kind: 'archive', reference, source_at: foreignAt, opened_at: foreignAt, state: stateName, sort: 'text', reversible: null, due_at: null, outcome: null }, { env: fx.env });
+    }
     await check({ status: 'pending' });
     state.failures.push({ at: '2026-11-01T00:00:00Z', reason: 'first failure' }); save();
     await check({ status: 'attention', reason: 'first failure' }, 'first failure');
@@ -2354,6 +2359,23 @@ describe('collectPage', () => {
     writeDeskItem(item, { env: fx.env });
     writeFileSync(join(itemDirectory(item, fx.env), 'prepared.md'), 'repair write-back\n');
     await check({ status: 'attention', reason: 'repair write-back' }, 'repair write-back');
+    // Reserved items and a retry keep their own reason ahead of recorded failures.
+    item.sort = 'reserved'; writeDeskItem(item, { env: fx.env });
+    writeFileSync(join(itemDirectory(item, fx.env), 'brief.md'), '# Repair the record\n');
+    await check({ status: 'attention', reason: 'see the desk' }, 'see the desk');
+    writeFileSync(join(itemDirectory(item, fx.env), 'brief.md'), 'verdict: NOT OK\n');
+    await check({ status: 'attention', reason: 'see the desk' }, 'see the desk');
+    writeFileSync(join(itemDirectory(item, fx.env), 'brief.md'), 'Fix the archive record\n');
+    await check({ status: 'attention', reason: 'Fix the archive record' }, 'Fix the archive record');
+    const live = join(dir, 'goals', 'new-work');
+    mkdirSync(live, { recursive: true });
+    let page = await fx.collect();
+    assert.equal(page.programmes.programmes.find((g) => g.programme === 'finished').archive, null);
+    rmSync(live, { recursive: true });
+    // A pending previous destination belongs to the old archive, not its successor.
+    state.destination = join(fx.root, 'archive', 'programs', 'finished'); save();
+    await check({ status: 'attention', reason: 'previous archive repair' }, 'previous archive repair');
+    state.destination = null; save();
     item.state = 'closed'; writeDeskItem(item, { env: fx.env });
     state.items.push({ id: item.id, opened_at: source }); save();
     await check({ status: 'pending' });
@@ -2361,10 +2383,35 @@ describe('collectPage', () => {
     const unreadable = await fx.collect();
     assert.match(unreadable.programmes.programmes.find((g) => g.programme === 'finished').archive.reason, /is unreadable/u);
     save();
+    rmSync(archived, { recursive: true });
+    page = await fx.collect();
+    assert.equal(page.programmes.programmes.find((g) => g.programme === 'finished').archive, null, 'ready without an archived done goal is ordinary work');
     writeFileSync(record, JSON.stringify({ ...JSON.parse(readFileSync(record, 'utf8')), state: 'done' }));
     const completed = await fx.collect();
     assert.deepEqual(completed.horizons.open[0].programmes, []);
     assert.ok(!completed.programmes.programmes.some((g) => g.programme === 'finished'));
+  });
+
+  it('keeps the final-record repair on the desk after the programme moves', async (t) => {
+    const fx = horizonsFixture({ plan: ['finished'] });
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    fx.horizon('first', 'open', 1);
+    fx.record('finished', 'first');
+    const dir = join(programsHome(fx.env), 'finished');
+    const destination = join(fx.root, 'archive', 'programs', 'finished');
+    mkdirSync(dirname(destination), { recursive: true });
+    renameSync(dir, destination);
+    const stateFile = join(fx.root, 'runner', 'archive-turn', 'finished.json');
+    mkdirSync(dirname(stateFile), { recursive: true });
+    writeFileSync(stateFile, JSON.stringify({ schema: 'mc-archive-turn', version: 1, programme: 'finished', failures: [], items: [], reading: null, destination }));
+    const at = '2026-11-02T00:00:00Z';
+    const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('archive', 'archive:finished', at), kind: 'archive', reference: 'archive:finished', source_at: at, opened_at: at, state: 'for-martin', sort: 'reserved', reversible: null, due_at: null, outcome: null };
+    writeDeskItem(item, { env: fx.env });
+    const page = await fx.collect();
+    assert.deepEqual(page.horizons.open[0].programmes, []);
+    assert.ok(!page.programmes.programmes.some((g) => g.programme === 'finished'));
+    assert.deepEqual(page.desk.acts.filter((entry) => entry.id === item.id).map((entry) => entry.reference), ['archive:finished']);
+    assert.deepEqual(maintenanceItems(page).filter((entry) => entry.key === 'pr:memoro#9000').map((entry) => entry.key), ['pr:memoro#9000']);
   });
 
   it('collects a draft with no goals into JSON and draws draft at 160 and 80 columns', async (t) => {
