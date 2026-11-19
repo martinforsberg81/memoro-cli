@@ -71,7 +71,13 @@ the gate logs with their paths, the head judged — is recorded in the goal's
 `LOG.md` with its commands and results. The PR body may repeat it, but a later
 session cites the log entry, never the PR alone, and never proof no entry holds.
 
-End with `mc goal log --done "…" --comment "…" --next "…"`. A goal has a
+End with `mc goal log --done "…" --comment "…" --next "…"`. When work
+remains, record the concrete result implemented or verified and a
+specific remaining task in `Next`, even if useful verification made no commit.
+If nothing useful was established, say so plainly. The note guides the next
+session; it does not grant eligibility or bypass the existing stops.
+
+The goal has a
 stage and a status (`build · ready` while it is yours), and the stage only
 moves forward. You do one of two things to it, nothing else:
 

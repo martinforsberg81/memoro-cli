@@ -15,6 +15,9 @@ create a second `PLAN.md`.
 A goal (`GOAL.json`, written with the `mc goal` verbs) is what the runner
 builds. It is a means toward the aim, not the aim itself; the plan
 decides its decomposition, phase and complete brief.
+Aim to size each goal so one build session can reasonably implement it and
+hand it to independent review in one turn. This is a planning target, not a
+new session limit or a reason to narrow the intended solution.
 
 A goal moves from `draft` to `build` only after its acceptance procedure and
 setup are verified for the intended build, including the normal branch refresh
