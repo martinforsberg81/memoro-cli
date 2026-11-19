@@ -298,7 +298,7 @@ Decision logs record requested and identified role/programme, evidence source,
 conversation id and resume/exclude/fresh/refusal, without copying transcript
 or prompt content. Session ownership and headless restrictions are unchanged.
 
-The plan session owns the coherent programme README/design, prerequisite investigation/decisions, phases, complete goal briefs and executable checks; every finished brief moves to build in its assigned phase. It may also investigate,
+The plan session owns the coherent programme README/design, prerequisite investigation/decisions, phases, complete goal briefs and executable checks; a finished brief moves to build once its acceptance procedure and setup are verified. It may also investigate,
 write goals, build and land work itself, or take over a goal's branch when
 that costs less than a new build session. This broad freedom belongs to interactive planning with Martin at the terminal. The runner may complete one next draft under [the programme trigger](mc-goals.md#next-draft-planning) (Martin, 2026-11-09);
 a goal in `finish` gets a finish session and a red merge a mend session (a
@@ -318,7 +318,7 @@ for have finished, and the others run side by side. Build sessions neither rewri
 brief nor invent another unit inside it. How a programme is designed before
 its goals — its README (`canon/tasks/references/programme-readme.md`), the
 decisions put to Martin in one sitting, the cut into phases, and every
-finished goal set in `build` in its phase rather than parked in `draft` — is
+verified goal set in `build`, and a consumer awaiting its producer kept in draft — is
 `canon/tasks/designing-a-programme.md` (Martin, 2026-11-08).
 
 A plan session writes a review or build follow-up as a goal without asking
@@ -408,8 +408,9 @@ planning, even without a producer. A consumer requiring a producer stays draft
 in a dependent phase; an open phase, including after a dropped producer, is not
 evidence of output. Next-draft planning verifies the procedure and setup in the
 goal checkout before promotion. A sound check missing its input in an open phase
-uses the existing draft technical handoff; the desk returns it when the input is
-verifiably available. A wrong setup premise is reported by `mc goal defect` in
+is logged and left draft and ready; the runner's existing incomplete-session
+handoff sends it to the desk, which returns it when the input is verifiably
+available. A wrong setup premise is reported by `mc goal defect` in
 draft; the desk verifies the change before returning it to planning. Changes to
 the programme promise go to the desk. This adds no runner admission service or
 separate review. The report and goal log carry the evidence.

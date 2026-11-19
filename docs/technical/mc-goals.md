@@ -1482,8 +1482,8 @@ and reserved-act rules. Interactive planning checkouts remain separate.
 
 Complete exactly the selected draft's parts as `mc goal show` names them, its
 stand on every rule area, its documents and executable success checks,
-reconcile the programme README and phases, and move it to build immediately
-when ready. Resolve a remaining policy
+reconcile the programme README and phases, and move it to build when its
+acceptance procedure and intended setup are verified ([mc-plan.md](mc-plan.md#acceptance-preparation-before-build)). Resolve a remaining policy
 choice through goal-bound `mc ask` under [mc-jev.md](mc-jev.md). Do not implement the draft or process the
 proposal backlog in the headless planning turn. A completed session leaving
 `draft · ready` waits on Martin with an incomplete-session diagnostic, unless the draft is held when the session ends: then nothing is set, and a held draft is offered to planning again after release; provider
