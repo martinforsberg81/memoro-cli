@@ -43,12 +43,12 @@ function linkStrength(a, b) {
 
 function owningOrder(source, all, env) {
   const ordered = foundIn(source.outcome, /^ordered in(?: programme)? ([a-z0-9-]+)$/u);
-  if (ordered) return { ordered };
   const matches = [];
   let possible = false;
   for (const order of all) {
     const { record, dir } = order;
     if (record.repair) {
+      if (record.repair.disposition?.action === 'decline' && !record.repair.stop_item) continue;
       const strengths = record.repair.sources.map(known => linkStrength(source.ref, known));
       if (strengths.includes('certain')) matches.push(order);
       else if (!order.archived && record.state !== 'done' && strengths.includes('possible')) possible = true;
@@ -71,9 +71,9 @@ function owningOrder(source, all, env) {
   }
   if (matches.length > 1 || (!matches.length && possible)) return { possible: true };
   const [order] = matches;
-  if (!order) return {};
+  if (!order) return ordered ? { ordered } : {};
   if (order.record.repair?.stop_item && !order.archived) return { stopped: order };
-  if (order.record.repair && order.record.state === 'draft' && !order.archived) return { draft: order };
+  if (order.record.repair && !order.record.repair.desk && order.record.state === 'draft' && !order.archived) return { draft: order };
   return { ordered: order.name };
 }
 
@@ -148,7 +148,7 @@ function decisionFor(source, all, ctx) {
   const previous = readRepairCase(ctx.env, source.ref.key);
   const generated = previous.proposal && readRepairSource({ kind: 'proposal', given: previous.proposal, env: ctx.env });
   const status = archiveStatus(source.outcome);
-  if (status) return { status };
+  if (status || (previous.status === 'declined' && previous.source?.digest === source.ref.digest)) return { status: status ?? 'declined' };
   // A recorded source outcome wins over ownership of the defect at another evidence version.
   const archived = source.outcome ? null : archivedDisposition(source, ctx.env);
   if (archived) return { status: archived };

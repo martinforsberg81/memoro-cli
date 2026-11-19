@@ -15,9 +15,11 @@ import { archiveDue, archiveOnOk, keepReading, parseWriteBack, readArchiveState 
 import { writeFileAtomic, writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { run as ask } from '../../src/mc/commands/ask.js';
 import { run as goal } from '../../src/mc/commands/goal.js';
+import { run as martin } from '../../src/mc/commands/martin.js';
 import { run as merge } from '../../src/mc/commands/merge.js';
 import { run as programs } from '../../src/mc/commands/programs.js';
 import { goalReferences, listDirsOf, readTextOrNull, REVIEW_ROLE } from '../../src/mc/goals.js';
+import { itemStore, readDeskItem, syncDeskItems } from '../../src/mc/desk-items.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { landJob, queueMerge } from '../../src/mc/merger.js';
 import { newRecord, readRecord, RECORD_FILE, recordPageTemplate, writeRecord } from '../../src/mc/programme-record.js';
@@ -30,6 +32,7 @@ import { TIMEOUT_EXIT } from '../../src/mc/run-plan.js';
 import { withRepairAuthor } from '../../src/mc/repair-authority.js';
 import { currentRepairReview } from '../../src/mc/repair-review.js';
 import { reopenRepair, repairReleaseState } from '../../src/mc/repair-release.js';
+import { archivedProposal, readRepairSource, settleRepairSources } from '../../src/mc/repair-sources.js';
 import { repairGoalAdmission } from '../../src/mc/repair-reconcile.js';
 import { finishTurn, programmeDue } from '../../src/mc/programme-turn.js';
 import { realLock } from '../../src/mc/runner-lock.js';
@@ -87,9 +90,9 @@ function programmeSetup(t) {
     }
     return { ok: true };
   } };
-  const call = async (argv = ['review', 'p'], { identity = env, extra = {}, lock = (_root, fn) => fn() } = {}) => {
+  const call = async (argv = ['review', 'p'], { identity = env, extra = {}, lock = (_root, fn) => fn(), command = {} } = {}) => {
     const stdout = sink(), stderr = sink();
-    const code = await programs(argv, { env: identity, stdout, stderr, known: () => known, lock, now: () => NOW, review: { ...deps, ...extra } });
+    const code = await programs(argv, { env: identity, stdout, stderr, known: () => known, lock, now: () => NOW, review: { ...deps, ...extra }, ...command });
     return { code, out: stdout.text(), err: stderr.text() };
   };
   const files = () => Object.fromEntries(readdirSync(dir, { withFileTypes: true }).filter(file => file.isFile())
@@ -496,6 +499,181 @@ test('repair archival: stale inputs and an old write-back cannot complete a newe
     assert.equal(readRecord(archived).record.state, 'done');
   });
 });
+
+for (const [action, confirmation, lateLanding] of [
+  ['decline', 'declined', false], ['decline', 'declined', true],
+  ['return', 'returned to repair', false], ['takeover', 'taken over by Martin', false],
+]) {
+  test(`repair stop: desk sync and ${action} after a part landed${lateLanding ? ' with a late merged PR' : ''}`, async t => {
+    const f = repairSetup(t);
+    const home = join(f.root, 'programs');
+    const page = join(f.dir, 'README.md');
+    const firstPage = readFileSync(page, 'utf8').replace('## Order',
+      '### Part 2 — Restore another row\n\nSolution: Restore the settled row order.\n\n## Order');
+    writeFileSync(page, firstPage);
+    const landed = join(f.dir, 'goals', '.archive', 'landed');
+    const remaining = join(f.dir, 'goals', 'remaining');
+    const proposal = join(f.root, 'areas', 'memoro-cli', 'system', 'proposals', '2026-11-19-mc-restore.md');
+    for (const dir of [landed, remaining, join(proposal, '..')]) mkdirSync(dir, { recursive: true });
+    writeFileSync(proposal, '# Rows in the wrong order\n');
+    const ref = readRepairSource({ kind: 'proposal', given: proposal, env: f.baseEnv }).ref;
+    const original = readRecord(f.dir).record;
+    writeJsonAtomic(join(f.dir, RECORD_FILE), { ...original, repair: { sources: [ref] } });
+    writeFileSync(join(landed, 'GOAL.json'), goalJson({ stage: 'done', documents: [{ label: 'Part 1', path: page }] }));
+    const remainingText = goalJson({ stage: 'build', documents: [{ label: 'Part 2', path: page }], prs: ['memoro-cli#17'] });
+    writeFileSync(join(remaining, 'GOAL.json'), remainingText);
+
+    const record = () => readRecord(f.dir).record;
+    const seams = { root: f.root, home, programme: 'p', list: listDirsOf, read: readTextOrNull, writeJson: writeJsonAtomic, lock: realLock };
+    const plan = () => programmeDue({ ...seams, state: { status: 'none' } });
+    const due = () => archiveDue({ ...seams, state: readArchiveState(seams) });
+    const admit = revision => repairGoalAdmission(f.dir, 'remaining', { revision });
+    const desk = async args => {
+      const stdout = sink(), stderr = sink();
+      const code = await martin(args, { env: f.martin, stdout, stderr, now: () => NOW });
+      return { code, out: stdout.text(), err: stderr.text() };
+    };
+    const reason = 'Behåll den redan rättade raden.';
+    const disposition = ['disposition', 'p', action, '--reason', reason];
+    const summary = 'Två rader visas i fel ordning. Beställningen föreslår en ny gruppordning och går utanför reparationsmandatet. Återstående arbete är stoppat.';
+    await f.asAuthor(async author => {
+      const read = await f.review(author, f.reader());
+      assert.equal(read.code, 0, read.err);
+      assert.equal((await f.call(['release', 'p'], { identity: author })).code, 0);
+      const prior = record().repair.release.revision;
+      const planner = { ...f.baseEnv, MC_HEADLESS: '1', MC_REPAIR_REVISION: prior };
+      const reconciled = await f.call(['reconcile', 'p', '--reason', 'Reviewed both parts.'], { identity: planner });
+      assert.equal(reconciled.code, 0, reconciled.err);
+      assert.equal(admit(prior).release.revision, prior);
+      if (lateLanding) realLock(f.root, () => settleRepairSources({ env: f.baseEnv, sources: [ref], programme: 'p', action: 'order' }), { strict: true });
+      writeFileSync(page, firstPage.replace('Restore the settled row order.', 'Choose a new grouping.'));
+      assert.equal(reopenRepair(f.dir, author).ok, true);
+      const stop = ['repair-stop', 'p', '--title', 'ny gruppordning', '--summary', summary];
+      let textItem;
+      if (action === 'return') {
+        const brief = join(f.root, 'brief.md');
+        writeFileSync(brief, '## Vad den säger\n\nOrdningen är fast.\n\n## Vad som föreslås\n\nEn annan gruppordning.\n\n## Vad som hittades\n\nTvå rader visas fel.\n');
+        const proposed = await desk(['propose', '--text', 'Den fasta gruppordningen', '--file', brief]);
+        assert.equal(proposed.code, 0, proposed.err);
+        textItem = proposed.out.match(/\b[a-f0-9]{24}\b/u)?.[0];
+        assert.ok(textItem);
+        stop.push('--item', textItem);
+      }
+      const unrelated = await f.call(stop, { identity: { ...author, MC_REPAIR_TOKEN: 'b'.repeat(48) } });
+      assert.equal(unrelated.code, 1);
+      assert.equal(record().state, 'draft');
+      const held = await f.call(stop, { identity: author, lock: realLock });
+      assert.equal(held.code, 0, held.err);
+      const id = record().repair.stop_item;
+      assert.equal(held.out, `mc: repair programme p is at Martin (item ${id})\n`);
+      assert.match((await f.call(['list'])).out, /p · Martin/u);
+      assert.equal(plan().due, false);
+      assert.match(admit(prior).problems[0], /at Martin/u);
+      assert.equal(due().due, false);
+
+      rmSync(join(itemStore(f.baseEnv), id), { recursive: true });
+      syncDeskItems({ env: f.baseEnv });
+      syncDeskItems({ env: f.baseEnv });
+      const open = readDeskItem(id, { env: f.baseEnv });
+      assert.equal(open.state, 'for-martin');
+      assert.deepEqual(open.landed, ['landed']);
+      const opening = (await desk(['brief'])).out;
+      const section = opening.indexOf('## Reparationsbeställningar som väntar på dig');
+      assert.ok(section > opening.indexOf('## Your acts') && section < opening.indexOf('## Not ready'));
+      assert.ok(opening.includes(`p — ny gruppordning (item ${id})`) && opening.includes(summary));
+      assert.doesNotMatch(opening, /Stuck after the decision pass/u);
+      if (textItem) {
+        assert.ok(opening.includes(`Textändring: item ${textItem}`));
+        assert.equal(opening.split('Ordningen är fast.').length, 2, 'linked brief appears once in its established section');
+      }
+      const item = JSON.parse((await desk(['item', id])).out);
+      assert.match(item.brief, /Redan landat: landed/u);
+      const close = await desk(['item', id, 'close', '--by', 'martin', '--summary', 'Close outside the programme.']);
+      assert.equal(close.code, 2);
+      assert.match(close.err, /mc programs disposition p/u);
+      assert.deepEqual(readDeskItem(id, { env: f.baseEnv }), open);
+      assert.equal(plan().due, false);
+      assert.equal((await f.call(disposition, { identity: { ...f.martin, MC_HEADLESS: '1' } })).code, 2);
+      assert.equal((await f.call(disposition, { identity: {} })).code, 2);
+      assert.equal(record().state, 'Martin');
+
+      const result = await f.call(disposition, { lock: realLock, identity: f.martin,
+        command: { readPr: () => lateLanding ? 'MERGED' : 'OPEN', wake: () => {} } });
+      assert.equal(result.code, 0, result.err);
+      assert.equal(result.out, `mc: p — ${confirmation}\n`);
+      syncDeskItems({ env: f.baseEnv });
+      const closed = readDeskItem(id, { env: f.baseEnv });
+      assert.equal(closed.state, 'closed');
+      assert.equal(closed.outcome.disposition, action);
+      assert.equal(closed.outcome.summary, reason);
+      assert.doesNotMatch((await desk(['brief'])).out, /Reparationsbeställningar som väntar på dig/u);
+      assert.deepEqual(record().repair.sources, [ref]);
+      assert.equal(plan().due, false);
+      assert.ok(admit(prior).problems);
+      assert.ok(existsSync(join(landed, 'GOAL.json')));
+      if (action === 'decline') {
+        assert.equal(existsSync(proposal), false);
+        if (lateLanding) assert.match(readFileSync(archivedProposal(proposal), 'utf8'), /^Utfall: ordered in programme p/u);
+        assert.match(readRepairSource({ kind: 'proposal', given: proposal, env: f.baseEnv }).outcome, /^declined — p:/u);
+        assert.match(readFileSync(join(remaining, 'GOAL.json'), 'utf8'), /"stage": "dropped"/u);
+        assert.equal(due().due, false, 'ordinary goal cleanup has not archived the dropped goal yet');
+        renameSync(remaining, join(f.dir, 'goals', '.archive', 'remaining'));
+        const picked = due();
+        assert.equal(picked.mode, 'read');
+        assert.deepEqual(picked.goals, lateLanding ? ['landed', 'remaining'] : ['landed']);
+        assert.deepEqual(picked.dropped, lateLanding ? [] : ['remaining']);
+        assert.deepEqual(picked.partiallyLanded, lateLanding ? ['remaining'] : undefined);
+        assert.throws(() => keepReading({ ...seams, revision: prior, goals: ['landed'], at: NOW.toISOString() }), /different repair disposition/u);
+        const destination = join(f.root, 'archive', 'programs', 'p');
+        mkdirSync(join(destination, '..'), { recursive: true });
+        const archive = () => archiveOnOk({ ...seams, restrictedDir: join(f.root, 'restricted'), proposalsTarget: () => assert.fail('no legacy proposal'),
+          write: writeFileAtomic, remove: path => rmSync(path), exists: existsSync,
+          archive: async ({ fence, onShelved }) => {
+            assert.equal(fence(), null);
+            renameSync(f.dir, destination);
+            onShelved(destination);
+            return 0;
+          },
+        });
+        assert.equal((await archive()).stale, true, 'decline alone does not authorize archival');
+        keepReading({ ...seams, revision: picked.revision, goals: picked.goals, at: NOW.toISOString() });
+        assert.equal(due().mode, 'archive');
+        const archived = await archive();
+        assert.equal(archived.ok, true, archived.reason);
+        assert.equal(readRecord(destination).record.state, 'done');
+        // Recover the projection even when the disposition has already moved with the order.
+        writeJsonAtomic(join(itemStore(f.baseEnv), id, 'item.json'), open);
+        syncDeskItems({ env: f.baseEnv });
+        assert.deepEqual(readDeskItem(id, { env: f.baseEnv }), closed);
+      } else {
+        assert.equal(record().state, 'draft');
+        assert.equal(readFileSync(join(remaining, 'GOAL.json'), 'utf8'), remainingText);
+        assert.equal(existsSync(proposal), true);
+        if (action === 'return') {
+          assert.equal(record().repair.desk, undefined);
+          const release = await f.call(['release', 'p'], { identity: author });
+          assert.match(release.err, /needs review/u);
+        } else {
+          assert.equal(record().repair.desk, true);
+          const ready = () => f.call(['state', 'p', 'ready'], { identity: f.martin });
+          const premature = await ready();
+          assert.match(premature.err, /released part changed/u);
+          assert.equal(record().state, 'draft');
+          const attemptedRepair = await f.review(author, () => assert.fail('desk takeover read by old author'));
+          assert.equal(attemptedRepair.code, 2);
+          const out = sink(), err = sink();
+          assert.equal(await goal(['set', 'p/remaining', 'contract', '--text', 'The desk approved the revised grouping.'],
+            { env: f.martin, stdout: out, stderr: err }), 0, err.text());
+          const authorised = await ready();
+          assert.equal(authorised.code, 0, authorised.err);
+          assert.equal(plan().due, false, 'the desk has already reconciled the cut');
+          assert.match(admit(prior).problems[0], /different repair release/u);
+          assert.equal(admit().release.revision, record().repair.release.revision);
+        }
+      }
+    });
+  });
+}
 
 test('programme review: real command launches its own identity on named origin/main exports, and writes review file', async (t) => {
   const f = programmeSetup(t);

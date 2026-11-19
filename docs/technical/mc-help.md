@@ -51,6 +51,13 @@ incident timestamp and build, or a digest that needs fingerprint selection
 exit 2 without ordering. The digest selection reports the available IDs.
 Sources, records and draft admission are in [mc-plan.md](mc-plan.md#internal-repair-drafts).
 
+`mc programs repair-stop <programme> --title <text> --summary <text>
+[--item <id>]` is for the live assigned repair author. Only interactive Martin
+can use `mc programs disposition <programme> decline|return|takeover --reason
+<text>`. An unauthorised disposition or malformed invocation exits 2 without
+writing. A valid call whose record or inputs prevent the transition exits 1.
+See [repair scope stops](mc-martin.md#repair-scope-stops).
+
 Internal results are prefixed with `mc: `: `repair programme <programme> is
 draft — source <path>`, `resuming repair programme <programme>`, `source
 already ordered in <programme>`, or `repair programme <programme> is at

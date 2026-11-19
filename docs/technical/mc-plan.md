@@ -64,7 +64,7 @@ and `legacy` remain readable on old records but are not written:
 | `horizon` | the slug of the horizon served, or `null` |
 | `area` | optional: `<repo>/<id>`, an area a repository declares; allowed only with `horizon` `null` |
 | `end` | one non-empty sentence saying when the programme is done |
-| `state` | `draft`, `ready` or `done` |
+| `state` | `draft`, `ready`, `done` or `Martin` with a repair scope stop |
 | `created` | an ISO instant in UTC to the second |
 | `created_by` | `person`, `martin`, `repair` or the historical `manager` |
 | `phases` | optional: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}` |
@@ -72,12 +72,16 @@ and `legacy` remain readable on old records but are not written:
 
 `draft` means not finished; planning and build take nothing from it (`mc goal new`
 is refused, the planning turn does not run, no session starts on its goals).
-`ready` means goals may be cut and built; `done` means archived.
-Every new record is draft.
+`ready` means goals may be cut and built subject to their admission rules;
+`done` means finished. Every new record is draft. For a taken-over repair,
+only interactive Martin can prepare its goals while it is draft; a declined
+repair with landed work reads ready for write-back only.
 
 Reading an older record normalizes it in memory: `open` reads as `ready`, `dropped`
 as `done`, and removed fields are ignored. It does not change disk bytes or state.
 Only an actual write upgrades a record to version 2.
+Older mc rejects new repair metadata as an invalid record rather than
+treating a stopped or disposed order as an ordinary ready record.
 
 The ordinary desk writer creates a programme only for a person or Martin's
 interactive session (`mc martin`); every headless role is refused (exit 2).
@@ -268,7 +272,7 @@ evidence in the strict programme lock; it does not hold the lock while the
 role reads. Changed evidence or concurrent order changes cannot be committed
 from a stale reading.
 
-Ordinary `state` is not a release or a resume of a repair-owned order.
+Ordinary `state` is not a release or a resume of an order still owned by repair.
 `mc plan` and `mc goal new` refuse its draft and a stale ready order (exit 1).
 Ordinary desk-created area repairs keep their existing route.
 
@@ -306,6 +310,39 @@ forward under a new release. Goal review records the released revision and
 the authorized PR heads before queueing. A later release requires a new
 handoff even for a goal the planner keeps unchanged; see
 [merge admission](mc-merge.md#repair-owned-work).
+
+### Repair scope stops and dispositions
+
+The assigned author records a scope stop with `mc programs repair-stop
+<programme> --title <text> --summary <text> [--item <id>]`. The record moves
+to `Martin` under the programme lock and loses its review receipt. It keeps
+its source links and last reconciliation. The stop records the Swedish scope
+summary, the goals already done, and, when necessary, a link to an existing
+held-text or reserved-act item. The terminal
+[desk](mc-martin.md#repair-scope-stops) can recover the stop from the
+programme record even if the item write was interrupted. No part of delivery
+may use the stopped record, even if it already has a runnable goal or queued PR.
+
+Only interactive Martin records a disposition. `return` puts the order back
+in repair draft with the narrowing in the disposition and with sources and
+goals retained. It needs a new reading, release and reconciliation. `takeover`
+puts it back in desk draft: the desk may run ordinary advisory review and
+prepare the goal contracts using the goal verbs. The desk's `mc programs
+state <programme> ready` validates the coverage and reconciles the contracts
+with the new manifest in one write. Superseded work is not delivered; a reused
+goal must qualify against the new release and obtain a fresh merge handoff.
+This does not change the ready command for programmes without repair provenance.
+
+`decline` retires unfinished goals and records a declined source outcome for
+the evidenced version. It does not remove local worktrees in the disposition:
+ordinary dropped-goal cleanup proves that it may close PRs and remove trees.
+An in-flight merge prevents recording decline until its outcome is known.
+If a landed PR belongs to a retired goal, that goal stays retired but its
+landed work is included in the reading. A recorded decline interrupted by a
+retirement or source move must be retried with the same action and reason.
+With landed work the record is ready for write-back only, under the decline's
+own revision. Without landed work it is done without a write-back. Decline
+cannot open a planning or delivery turn.
 
 ## What the session is told
 

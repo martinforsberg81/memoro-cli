@@ -2168,7 +2168,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // A file left by an earlier reading is not this one's.
       remove(join(dir, WRITE_BACK_FILE));
       const horizon = due.record.horizon;
-      const prompt = archiveReadPrompt({ programme, dir, horizonDir: horizon ? join(horizonsDir(deps.env), horizon) : null, goals: due.goals, dropped: due.dropped, checkouts: set.paths, archive: archiveDirIn(programsHome(deps.env), programme), revision: due.revision });
+      const prompt = archiveReadPrompt({ programme, dir, horizonDir: horizon ? join(horizonsDir(deps.env), horizon) : null, goals: due.goals, dropped: due.dropped, partiallyLanded: due.partiallyLanded, checkouts: set.paths, archive: archiveDirIn(programsHome(deps.env), programme), revision: due.revision });
       const instructions = instructionsFor(launch.id, role.overlay);
       const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
       const stem = `archive-${programme}-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;

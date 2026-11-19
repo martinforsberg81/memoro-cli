@@ -67,7 +67,7 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 | role | model | started as | who launches it |
 |---|---|---|---|
 | `plan-session` | opus | `plan` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; the runner also assigns one next draft in its goal worktree |
-| `programme-review` | sonnet | `programme-review` | `mc programs review`, called only by Martin's interactive session: an in-session advisory document reading that records no verdict and gates nothing, never scheduled by the runner; review catalogue/author exclusion, 30-minute limit and no cap ([mc-plan.md](mc-plan.md#programme-state-and-advisory-reading)) |
+| `programme-review` | sonnet | `programme-review` | `mc programs review`, called by Martin's interactive session for an advisory reading or by the assigned repair author for a release receipt; never scheduled by the runner; review catalogue/author exclusion, 30-minute limit and no cap ([mc-plan.md](mc-plan.md#programme-state-and-advisory-reading)) |
 | `ask-reader` | opus | `ask-reader` | `mc ask`, when jev did not settle a question: one fresh headless read-only session, in a read-only copy of the asker's worktree, on the `decision` list (not the asker's own model when another can run), limit 10 minutes; never the runner. It may use only `mc goal show\|list\|areas` and `mc ask answer`, and its run row (kind `ask-reader`) counts under the desk's daily ceiling ([mc-jev.md](mc-jev.md) § *The reader*) |
 | `archive-reader` | sonnet | `archive-reader` | `mc run`, once per programme with a record whose goals are all finished: one headless read-only session on a fresh checkout at `origin/main` that writes `WRITE-BACK.md` in the programme directory ([mc-run.md](mc-run.md) § *Programme archive turn*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build`, a repair build when a review rejected it ([mc-goals.md](mc-goals.md) § *Repair and mend*) |
@@ -88,6 +88,11 @@ scripts at pinned `origin/main` revisions. Each source has up to two rounds
 of four reads and five minutes for the model. Raw output is not written to a
 session transcript by mc. Only the caller validates and writes a disposition
 or a draft; the role cannot plan, review, release or act on production.
+
+The internal handoff commands validate a live programme-bound repair lease
+before reviewing, releasing or stopping a repair order. The model itself
+does not receive that lease or execution tools. Programme dispositions are
+interactive Martin's alone; repair cannot close a scope stop.
 
 `programme-review` reads the document, horizon playback/basis, cited code and
 standards, unread places and pictures at origin/main. Its eight questions and

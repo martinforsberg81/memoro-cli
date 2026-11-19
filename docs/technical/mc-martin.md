@@ -381,6 +381,24 @@ end with exit 1 and the lock's message. Sync runs in one hold. `mc martin` launc
 `mc martin brief [--json]` prints it; the read-only `mc martin get` remains
 unchanged.
 
+## Repair scope stops
+
+The terminal desk opening and `mc martin brief` show
+**Reparationsbeställningar som väntar på dig** after **Your acts** and before
+**Not ready**, only when a repair scope stop is open. Each row names the
+programme, the scope excursion, the item id and the Swedish brief, including
+work already landed. A linked text change or reserved act is named by item id;
+its brief remains in its own section. The live overview adds no section.
+
+`mc martin item <id>` reads the scope brief and its eventual disposition.
+Ordinary sync projects a missing item from the programme and keeps it open
+until disposition; generic item close refuses. Interactive Martin uses
+`mc programs disposition <programme> decline|return|takeover --reason <text>`
+to close it. This records why alongside the programme, not only in the item;
+it does not dispose of a separately linked text change or act. The
+[programme contract](mc-plan.md#repair-scope-stops-and-dispositions) defines
+the resulting ownership and delivery state.
+
 ## Horizons
 
 A horizon is what Martin has decided is worked toward now, roughly one to two months, across several programmes, not a standing aim per area. A one-end deliverable is a programme. Before drafting, the desk reads [writing a horizon](../../canon/tasks/writing-a-horizon.md); it confirms each part in Swedish and stores the playback in English. The desk keeps a standing

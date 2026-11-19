@@ -238,10 +238,11 @@ The in-process claim is taken in the same tick as the choice, before any
 await, so two lanes cannot choose the same goal before its current file exists.
 The phase rule and the stage transitions are in [mc-goals.md](mc-goals.md).
 
-Repair-owned drafts are held at selection and rechecked during goal admission,
-including goals that already read `build · ready`. Ordinary state values do
-not clear this hold. The programme planning turn also refuses repair-owned
-records. The runner does not launch the internal repair drafting entry.
+Repair-owned drafts, stops and stale releases are held at selection and
+rechecked during goal admission, including goals that already read
+`build · ready`. Ordinary state values do not clear the hold. The programme
+planning turn needs the current release; build also needs its reconciliation.
+The runner does not launch the internal repair drafting entry.
 
 ## Lanes
 
@@ -1063,6 +1064,11 @@ archival. The write-back names the release on its first line, `release:
 landed goals; an old OK cannot authorize archiving a newer release. The
 archive rechecks the release and the retained reading at its fence and
 checks the revision again when recording completion after moving the order.
+An interactive decline with landed work substitutes its own archive-only
+revision for delivery authority. Ordinary dropped-goal cleanup still runs;
+the archive waits until live directories have gone. Any retired goal with a
+confirmed landed PR is judged for what landed, not the remainder. Neither
+this revision nor its write-back authorizes planning, build or merge.
 
 Martin, 2026-11-15: a programme with a record is bounded. Once every goal is
 done or dropped, the runner checks that what the programme made true is written

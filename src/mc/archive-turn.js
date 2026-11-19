@@ -17,7 +17,7 @@
  * A programme without a record is never read or archived here: for it
  * `mc plan <programme> --archive` stays a person's act.
  */
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { deskItemId } from './desk-items.js';
 import { archiveDirIn, parseGoal, GOAL_FILE, GOAL_LOG_FILE } from './goals.js';
 import { NAME_RE } from './plan-schema.js';
@@ -103,6 +103,27 @@ export function archivedGoals({ home, programme, list, read }) {
   return { done, dropped, problems, repos: [...repos].sort() };
 }
 
+// A decline authorizes write-back of what actually landed, not delivery of
+// the discarded order. Its distinct disposition revision cannot reuse an OK
+// from an earlier release, or be consumed by planning, build or merge.
+function archiveAdmission(dir, { read, record, revision } = {}) {
+  if (record === undefined) {
+    const found = readRecord(dir, { read });
+    if (found.status === 'invalid') return { problems: [`${basename(dir)} has no valid programme record`] };
+    record = found.record;
+  }
+  const disposition = record?.repair?.disposition;
+  if (record?.state === 'ready' && disposition?.action === 'decline' && !record.repair.stop_item) {
+    return revision !== undefined && revision !== disposition.revision
+      ? { problems: ['the write-back belongs to a different repair disposition'] }
+      : { release: { revision: disposition.revision } };
+  }
+  return repairGoalAdmission(dir, null, { record, revision, read });
+}
+
+const archiveRevision = record => record?.repair?.disposition?.action === 'decline'
+  ? record.repair.disposition.revision : record?.repair?.release?.revision;
+
 /** Ignore archive metadata while keeping the fence closed for other entries. */
 export const liveGoals = ({ home, programme, list }) => list(join(home, programme, 'goals')).filter((name) => !name.startsWith('.') && name !== GOAL_LOG_FILE);
 
@@ -142,7 +163,7 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
     const found = readRecord(pending, { read });
     if (found.status === 'valid') {
       if (found.record.repair && found.record.state !== 'done') {
-        const current = repairGoalAdmission(pending, null, { read, record: found.record });
+        const current = archiveAdmission(pending, { read, record: found.record });
         if (!current?.release || !keptReading(state, current.release.revision)) return { due: false, reason: current?.problems?.[0] ?? 'its write-back belongs to a different repair release', notice: null };
       }
       // A write that has failed opens an item at the second failure; while it is open no write is tried, so a write that keeps
@@ -157,7 +178,7 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
   if (record.status === 'none') return { due: false, reason: 'no record', notice: null };
   if (record.status === 'invalid') return { due: false, reason: 'its record is invalid', notice: null };
   if (record.record.state !== 'ready') return { due: false, reason: `its record reads ${record.record.state}`, notice: null };
-  const repair = repairGoalAdmission(dir, null, { read, record: record.record });
+  const repair = archiveAdmission(dir, { read, record: record.record });
   if (repair?.problems) return { due: false, reason: repair.problems[0], notice: null };
   if (liveGoals({ home, programme, list }).length) return { due: false, reason: 'it holds a live goal', notice: null };
   if (openArchiveItem(items, programme)) {
@@ -165,12 +186,23 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
   }
   const goals = archivedGoals({ home, programme, list, read });
   if (goals.problems.length) return { due: false, reason: 'an archived goal cannot be read', notice: `${programme}: ${goals.problems.join('; ')} — no write-back reading is taken until that is repaired` };
+  const partiallyLanded = record.record.repair?.disposition?.landed ?? [];
+  for (const name of partiallyLanded) {
+    if (goals.done.includes(name)) continue;
+    if (!goals.dropped.includes(name)) return { due: false, reason: `landed goal ${name} is missing`, notice: null };
+    const parsed = parseGoal(read(join(archiveDirIn(home, programme), name, GOAL_FILE)) || '');
+    goals.repos = [...new Set([...goals.repos, ...parsed.repos])].sort();
+    goals.dropped = goals.dropped.filter(goal => goal !== name);
+    goals.done.push(name);
+  }
+  goals.done.sort();
   // A programme whose goals were all dropped is no programme that made anything true: nothing is read or archived.
   if (!goals.done.length) return { due: false, reason: 'no goal reached done', notice: null };
   const reading = state.status === 'valid' ? state.state.reading : null;
   const revision = repair?.release?.revision;
   const kept = keptReading(state, revision) && (reading.horizon ?? null) === record.record.horizon && reading.goals.join('\n') === goals.done.join('\n');
   return { due: true, mode: kept ? 'archive' : 'read', record: record.record, goals: goals.done, dropped: goals.dropped, repos: goals.repos,
+    ...(partiallyLanded.length ? { partiallyLanded } : {}),
     ...(revision ? { revision } : {}) };
 }
 
@@ -240,16 +272,18 @@ export function parseWriteBack(text, { goals, checkouts, horizon = null, revisio
 }
 
 /** What the reader is told: the programme, what to read, the file to write and its forms. */
-export function archiveReadPrompt({ programme, dir, goals, dropped = [], checkouts, archive, horizonDir = null, revision }) {
+export function archiveReadPrompt({ programme, dir, goals, dropped = [], partiallyLanded = [], checkouts, archive, horizonDir = null, revision }) {
   const read = Object.entries(checkouts).map(([repo, path]) => `${repo}: \`${path}\``).join('; ');
   const goalList = goals.map((goal) => `- ${goal}: \`${join(archive, goal)}\` (GOAL.json, LOG.md, ${REVIEW_FILE})`).join('\n');
   const droppedLine = dropped.length ? ` Dropped goals (${dropped.join(', ')}) made nothing true and are not judged.` : '';
+  const partialLine = partiallyLanded.length
+    ? ` Goals ${partiallyLanded.join(', ')} are retired but have a landed PR. Judge only what landed on main, not the promised goal or its abandoned work.` : '';
   const horizonCheck = horizonDir
     ? `Read the programme README and evidence for investigations, references and other material needed by a later programme serving the same horizon. Check that the material is usable in \`${horizonDir}\` (basis.md or supporting files), including its referenced files. Add one \`@horizon: OK — <paths and what they preserve, or why no material carries forward>\` or \`@horizon: NOT OK — <what must be carried forward>\` line before the verdict. Do not move or write the material yourself.\n`
     : '';
-  return `You are the headless archive reader for programme ${programme}, with nobody present. Every goal of the programme is finished; the programme is archived by the system only if what it made true is written into docs/technical/ and the area pages. Its directory is \`${dir}\`; read its README.md first. The done goals, each with its goal file, log and review, are:\n${goalList}${droppedLine}\n`
+  return `You are the headless archive reader for programme ${programme}, with nobody present. Every goal of the programme is finished; the programme is archived by the system only if what it made true is written into docs/technical/ and the area pages. Its directory is \`${dir}\`; read its README.md first. The goals to judge, each with its goal file, log and review, are:\n${goalList}${droppedLine}${partialLine}\n`
     + horizonCheck
-    + (revision ? `The first line of ${WRITE_BACK_FILE} must be \`release: ${revision}\` for this repair release.\n` : '')
+    + (revision ? `The first line of ${WRITE_BACK_FILE} must be \`release: ${revision}\` for this repair release or decline.\n` : '')
     + `Read checkouts at origin/main are ${read}; read code and docs there and change nothing in them. For each done goal decide what it made true of the app that a reader of docs/technical/ and the area pages needs, and read the pages to see whether they say it. Write ${dir}/${WRITE_BACK_FILE} and nothing else, with: one line \`read: <repo> <sha>\` per checkout (the sha its HEAD is at); one line per done goal, \`<goal>: OK — <repo>/docs/technical/<page>.md § <section>[, …]\`, \`<goal>: OK — none — <reason>\` or \`<goal>: NOT OK — <what is true that no page says>\`; and a last line \`verdict: OK\` when every check is OK, else \`verdict: NOT OK\`. Your role page says the rest.`;
 }
 
@@ -279,7 +313,7 @@ function withState({ root, programme, read, writeJson, lock }, change) {
 export function keepReading({ at, goals, lines = [], horizon = null, home, revision, ...seams }) {
   return withState(seams, (state) => {
     if (home) {
-      const current = repairGoalAdmission(join(home, seams.programme), null, { read: seams.read, revision: revision ?? null });
+      const current = archiveAdmission(join(home, seams.programme), { read: seams.read, revision: revision ?? null });
       if (current?.problems || (revision && current?.release?.revision !== revision)) {
         throw new Error(current?.problems?.[0] ?? 'the write-back belongs to a different repair release');
       }
@@ -425,8 +459,8 @@ function setDoneSafely(setDone, dir, seams) {
 
 function finishRepairArchive(dir, { revision, read, root, lock, write }) {
   return changeProgrammeRecord(dir, record => {
-    if (record.state === 'done' && record.repair?.release?.revision === revision) return record;
-    const current = repairGoalAdmission(dir, null, { read, record, revision });
+    if (record.state === 'done' && archiveRevision(record) === revision) return record;
+    const current = archiveAdmission(dir, { read, record, revision });
     if (current?.release?.revision !== revision) return { problems: current?.problems ?? ['the archive belongs to a different repair release'] };
     return { ...record, state: 'done' };
   }, { root, read, lock, write }, 'repair-archive-finish');
@@ -450,11 +484,11 @@ export async function archiveOnOk({ programme, home, restrictedDir, proposalsTar
   if (liveGoals({ home, programme, list }).length) return { ok: false, reason: 'the programme holds a live goal' };
   const record = readRecord(dir, { read });
   if (record.status !== 'valid' || record.record.state !== 'ready') return { ok: false, reason: `its record does not read valid and ready (${record.status === 'valid' ? record.record.state : record.status})` };
-  const repair = repairGoalAdmission(dir, null, { read, record: record.record });
+  const repair = archiveAdmission(dir, { read, record: record.record });
   const revision = repair?.release?.revision;
   const currentRepair = () => {
     if (!record.record.repair) return null;
-    const current = repairGoalAdmission(dir, null, { read, revision });
+    const current = archiveAdmission(dir, { read, revision });
     if (!current?.release) return current?.problems?.[0] ?? 'its repair release is no longer current';
     const due = archiveDue({ programme, home, root, list, read, state: readArchiveState({ root, programme, read }) });
     return due.due && due.mode === 'archive' && due.revision === revision ? null : 'no current write-back for this repair release';
@@ -487,7 +521,7 @@ export async function archiveOnOk({ programme, home, restrictedDir, proposalsTar
 /** What the state write alone does (D: a destination named in the state and its record still open): sets it done, clears it. */
 export function finishDestination({ programme, destination, read, write, setDone = setRecordState, root, writeJson, lock }) {
   const record = readRecord(destination, { read });
-  const revision = record.record?.repair?.release?.revision;
+  const revision = archiveRevision(record.record);
   if (record.record?.repair && (!revision || !keptReading(readArchiveState({ root, programme, read }), revision))) {
     return { ok: false, reason: 'no current write-back for the shelved repair release' };
   }

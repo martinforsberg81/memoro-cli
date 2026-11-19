@@ -11,7 +11,7 @@ import { interactive } from '../prompt.js';
 import { scanArgs } from './flags.js';
 import { interactiveToolRefusal } from '../interactive-tool.js';
 import { collectMartinQueue, renderMartinQueue } from '../martin-collect.js';
-import { deskItemQuestion, itemDirectory, listDeskItems, readDeskItem, syncDeskItems, updateDeskItem } from '../desk-items.js';
+import { deskItemQuestion, itemDirectory, listDeskItems, readDeskItem, REPAIR_STOP_KIND, repairStopBrief, syncDeskItems, updateDeskItem } from '../desk-items.js';
 import { drainDeskPreparation, prepareDeskItem } from '../desk-prepare.js';
 import { deskBudget, readDeskText, setDeskCeiling } from '../desk-budget.js';
 import { sessionIdentity } from '../session-role.js';
@@ -149,7 +149,8 @@ function item(argv, deps) {
   if (!verb) {
     const source = record.kind === 'decision' ? readDecisionRows(env).find((x) => `decision:${x.at}` === record.reference) || null
       : collectMartinQueue({ home: deps.home || programsHome(env) }).items.find((x) => x.reference === record.reference) || null;
-    const dir = itemDirectory(record, env); const prepared = maybeRead(join(dir, 'prepared.md')); const brief = maybeRead(join(dir, 'brief.md'));
+    const dir = itemDirectory(record, env); const prepared = maybeRead(join(dir, 'prepared.md'));
+    const brief = record.kind === REPAIR_STOP_KIND ? repairStopBrief(record) : maybeRead(join(dir, 'brief.md'));
     stdout.write(`${JSON.stringify({ ...record, source, prepared, brief }, null, 2)}\n`); return 0;
   }
   const role = writerRole(env);
@@ -164,6 +165,7 @@ function item(argv, deps) {
     if (!fresh) { stderr.write(`mc: unknown item ${id}; no item state or verb applies\n`); code = 2; return null; }
     const dir = itemDirectory(fresh, env), state = fresh.state;
     const refuse = (message) => { code = refused(fresh, verb, stderr, message); return null; };
+    if (fresh.kind === REPAIR_STOP_KIND) return refuse(`answer it with mc programs disposition ${fresh.reference.slice('repair-stop:'.length)} decline|return|takeover --reason "<text>"`);
     if (verb === 'prepared' && state === 'new' && f.sort && ['mechanical','technical','text','product','judgement','reserved'].includes(f.sort) && exists(join(dir,'prepared.md'))) {
       // product and judgement are the old names of the one sort for a text change; a new record never carries them.
       fresh.state = 'prepared'; fresh.sort = isTextSort(f.sort) ? 'text' : f.sort; return fresh;
@@ -498,6 +500,7 @@ function renderLaunchSnapshot(data) {
   return [
     `Martin's desk, opened ${data.generated_at}.`,
     `Waiting: ${plural(data.texts.length, 'proposed text change')}, ${plural(data.acts.length, 'reserved act')}.`,
+    ...(data.repair_stops?.length ? ['', ...renderRepairStops(data.repair_stops)] : []),
     ...(first ? [`First: ${oneLine(first.text ?? first.reference).slice(0, 160)} (mc martin item ${first.id}).`] : []),
     `Since ${data.since}: ${plural(decisions, 'decision')}, ${plural(data.horizons?.reached.length ?? 0, 'horizon')} reached, ${plural(data.changes.landed.length, 'lesson')} landed.`,
     `Details on request: mc martin brief --since ${data.since}. For the current queue use mc martin items --state for-martin, then mc martin item <id> for one brief.`,
@@ -505,6 +508,15 @@ function renderLaunchSnapshot(data) {
     "Acknowledge that the desk is ready in one short Swedish sentence, then wait for Martin's instruction before choosing a topic or doing any work.",
     '',
   ].join('\n');
+}
+
+function renderRepairStops(items) {
+  const out = ['## Reparationsbeställningar som väntar på dig'];
+  for (const item of items) {
+    out.push('', `### ${item.reference.slice('repair-stop:'.length)} — ${item.title} (item ${item.id})`, '', repairStopBrief(item));
+    if (item.link) out.push('', `${item.link.kind === 'text' ? 'Textändring' : 'Åtgärd'}: item ${item.link.id}`);
+  }
+  return out;
 }
 
 /** The full opening printed by mc martin brief. */
@@ -526,6 +538,7 @@ export function renderOpening(data) {
     out.push(`Item ${item.id}, waiting since ${item.source_at}${blocksPhrase(item)}.`);
     out.push('', item.brief ?? '(brief.md is missing)');
   });
+  if (data.repair_stops?.length) out.push('', ...renderRepairStops(data.repair_stops));
   out.push('', '## Decided without you');
   if (!data.decided.programmes.length) out.push('', 'Nothing was decided without you in this interval.');
   for (const group of data.decided.programmes) {

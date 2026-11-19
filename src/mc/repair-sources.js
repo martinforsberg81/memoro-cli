@@ -1,12 +1,13 @@
 /** Read repair evidence without giving the drafting session paths it can open. */
 import { createHash } from 'node:crypto';
-import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 import { areaKeysOnDisk, areasHome, FALLBACK_AREAS, keyProposalsDir, listAllProposals } from './area-proposals.js';
 import { digestDirs } from './helper-collect.js';
 import { workRoot } from './paths.js';
 import { AREA_RE } from './programme-record.js';
+import { writeJsonAtomic } from './atomic-write.js';
 
 export const sha256 = text => createHash('sha256').update(text).digest('hex');
 const keyOf = (kind, ...identity) => sha256(JSON.stringify([kind, ...identity]));
@@ -63,11 +64,79 @@ function archiveContent(body) {
   if (!outcome) return { text: body };
   const contents = body.slice(outcome[0].length);
   const header = ARCHIVE_META.exec(contents);
-  if (header && outcome[1].startsWith('resolved — ')) {
+  if (header && /^(?:resolved|declined)(?:\s|$)|^ordered in programme /u.test(outcome[1])) {
     try { return { outcome: outcome[1], text: contents.slice(header[0].length), meta: JSON.parse(header[1]) }; }
     catch { /* A legacy proposal may contain prose that looks like a header. */ }
   }
   return { outcome: outcome[1], text: contents };
+}
+
+/**
+ * Record the outcome of the evidenced version, never remove a later waiting
+ * proposal. Under the strict programme lock; archive and index precede unlink
+ * so a retry can finish any of the three writes.
+ */
+export function settleRepairSources({ env, sources, programme, action, reason }) {
+  const declining = action === 'decline';
+  const outcome = declining ? `declined — ${programme}: ${reason.replace(/\s+/gu, ' ').trim()}` : `ordered in programme ${programme}`;
+  for (const ref of sources) {
+    const previous = readRepairCase(env, ref.key);
+    let archive;
+    if (ref.kind === 'proposal') {
+      const live = ref.path;
+      const location = proposalLocation(live, env);
+      if (!location || location.isArchived || directory(dirname(live)) !== dirname(live)) continue;
+      const source = readRepairSource({ kind: 'proposal', given: live, env });
+      const waiting = lstatSync(live, { throwIfNoEntry: false });
+      const current = source.ref?.key === ref.key && source.ref?.digest === ref.digest && (!waiting || waiting.isFile());
+      const prior = current ? source : proposalArchives(live, env, ref.digest)
+        .map(path => readRepairSource({ kind: 'proposal', given: path, env }))
+        .find(found => found.ref?.key === ref.key && found.ref?.digest === ref.digest);
+      if (prior?.outcome === outcome && prior.proposal.isArchived) archive = prior.proposal.path;
+      else if (prior) {
+        const target = archivedProposal(live);
+        mkdirSync(dirname(target), { recursive: true });
+        if (!lstatSync(dirname(target)).isDirectory()) throw new Error('proposal archive is not a directory owned by the area');
+        if (!sameOutcome(target, outcome, prior.text)) {
+          const save = (path, meta) => {
+            try {
+              writeFileSync(path, `Utfall: ${outcome}\n\n${meta ? `Repair archive: ${JSON.stringify(meta)}\n\n` : ''}${prior.text}`,
+                { flag: 'wx', mode: 0o600 });
+              return true;
+            } catch (error) {
+              if (error.code !== 'EEXIST') throw error;
+              return sameOutcome(path, outcome, prior.text);
+            }
+          };
+          if (save(target, null)) archive = target;
+          else {
+            // The ordered version is provenance; a later decline must not
+            // rewrite that file, including when it was versioned itself.
+            archive = declining ? declinedArchive(live, ref.digest, programme) : versionedArchive(live, ref.digest);
+            if (!save(archive, { original: basename(live), programme })) throw new Error(`conflicting proposal outcome at ${archive}`);
+          }
+        } else archive = target;
+      } else if (!declining && !waiting) {
+        throw new Error(`cannot find the ordered proposal version: ${live}`);
+      }
+      writeJsonAtomic(repairCasePath(env, ref.key), { ...previous, ...(archive ? { archive } : {}),
+        source: ref, status: declining ? 'declined' : 'ordered', programme, ...(declining ? { reason } : {}) });
+      if (archive && current && waiting && readRepairSource({ kind: 'proposal', given: live, env }).ref?.digest === ref.digest) unlinkSync(live);
+    } else {
+      writeJsonAtomic(repairCasePath(env, ref.key), { ...previous, source: ref, programme,
+        status: declining ? 'declined' : 'ordered', ...(declining ? { reason } : {}) });
+    }
+  }
+}
+
+function sameOutcome(path, outcome, text) {
+  if (!lstatSync(path, { throwIfNoEntry: false })?.isFile()) return false;
+  const found = archiveContent(readFileSync(path, 'utf8'));
+  return found.outcome === outcome && found.text === text;
+}
+
+function declinedArchive(live, digest, programme) {
+  return versionedArchive(live, digest).replace(/\.md$/u, `-declined-${sha256(programme)}.md`);
 }
 
 function proposalLocation(path, env) {
@@ -96,7 +165,7 @@ function proposalArchives(live, env, digest) {
   const canonical = archivedProposal(live);
   const latest = readRepairCase(env, keyOf('proposal', live)).archive;
   const version = digest && versionedArchive(live, digest);
-  return [...new Set([version, latest, canonical].filter(path => typeof path === 'string' && dirname(path) === dirname(canonical))
+  return [...new Set([latest, version, canonical].filter(path => typeof path === 'string' && dirname(path) === dirname(canonical))
     .map(regular).filter(path => path && dirname(path) === dirname(canonical)))];
 }
 
@@ -187,7 +256,7 @@ export function readRepairSource({ kind, given, fingerprint = null, env }) {
     if (archive?.meta?.original && typeof archive.meta.original === 'string' && DATE_PROPOSAL.test(archive.meta.original)
       && basename(archive.meta.original) === archive.meta.original) {
       const live = join(dirname(proposal.live), archive.meta.original);
-      if (path === versionedArchive(live, digest)) proposal.live = live;
+      if (path === versionedArchive(live, digest) || (archive.meta.programme && path === declinedArchive(live, digest, archive.meta.programme))) proposal.live = live;
     }
     let outcome = archive?.outcome;
     if (proposal && !proposal.isArchived) {

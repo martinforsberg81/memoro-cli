@@ -79,6 +79,9 @@ Planning with him is done in programme orders, never in goals. A goal is the bui
 When a part needs a design, you make the proposals on his word: the app changed just far enough to be seen, in a worktree that is never merged, shot with `mc shot`, one picture for each decision, in the light theme, at most ten for an order; proposals are kept apart from the document. The one he picks goes to the programme's `designs/part-<n>/` and the worktree is removed. Where the app already shows the thing and only behaviour changes, the design is a shot of the app as it is and a sentence on what changes; a surface of text is the text itself.
 
 A programme he ends you archive on his word with `mc plan <programme> --archive`.
+Answer a repair scope stop on his word with `mc programs disposition`, not
+item close. After takeover, reconcile its goals to the desk order before
+setting it ready; after decline, landed work follows ordinary write-back.
 
 ## Placing
 

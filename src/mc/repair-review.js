@@ -53,7 +53,7 @@ export function currentRepairReview(dir, { read, snapshot = repairSnapshot(dir) 
 
 const boundDraft = (target, ctx, deps) => {
   const found = readRecord(target.dir, { read: ctx.read });
-  return found.status === 'valid' && found.record.repair && !found.record.repair.stop_item && found.record.state === 'draft'
+  return found.status === 'valid' && found.record.repair && !found.record.repair.desk && !found.record.repair.stop_item && found.record.state === 'draft'
     && isRepairAuthor(ctx.env, target.name, deps.authorAlive);
 };
 

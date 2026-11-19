@@ -29,6 +29,22 @@ const V1_KEYS = Object.freeze(['schema', 'version', 'horizon', 'area', 'end', 's
 const DIGEST = /^[a-f0-9]{64}$/u;
 const REVISION = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
 const partNumber = value => Number.isSafeInteger(value) && value >= 1;
+const itemId = value => typeof value === 'string' && /^[a-f0-9]{24}$/u.test(value);
+const present = value => typeof value === 'string' && Boolean(value.trim());
+const names = value => Array.isArray(value) && value.every(name => typeof name === 'string' && NAME_RE.test(name));
+
+function validStop(stop) {
+  return stop && itemId(stop.id) && present(stop.at) && present(stop.title) && present(stop.summary)
+    && names(stop.landed) && (stop.link === undefined || (itemId(stop.link.id) && ['text', 'reserved'].includes(stop.link.kind)));
+}
+
+function validDisposition(disposition, stop) {
+  return disposition && disposition.item === stop?.id && itemId(disposition.item)
+    && ['decline', 'return', 'takeover'].includes(disposition.action) && present(disposition.at) && present(disposition.reason)
+    && (disposition.action === 'decline'
+      ? typeof disposition.revision === 'string' && REVISION.test(disposition.revision) && names(disposition.landed)
+      : disposition.revision === undefined && disposition.landed === undefined);
+}
 
 function validReconciliation(found) {
   return found && typeof found.revision === 'string' && REVISION.test(found.revision)
@@ -53,9 +69,12 @@ export function validRepairSource(source) {
 
 function validRepair(repair) {
   return repair && typeof repair === 'object' && !Array.isArray(repair)
-    && Object.keys(repair).every(key => ['sources', 'stop_item', 'release', 'reconciled'].includes(key))
+    && Object.keys(repair).every(key => ['sources', 'stop_item', 'release', 'reconciled', 'stop', 'disposition', 'desk'].includes(key))
     && Array.isArray(repair.sources) && repair.sources.length > 0 && repair.sources.every(validRepairSource)
     && (repair.stop_item === undefined || (typeof repair.stop_item === 'string' && /^[a-z0-9-]+$/u.test(repair.stop_item)))
+    && (repair.stop === undefined || validStop(repair.stop))
+    && (repair.disposition === undefined || validDisposition(repair.disposition, repair.stop))
+    && (repair.desk === undefined || repair.desk === true)
     && (repair.release === undefined || (repair.release && Object.keys(repair.release).every(key => ['revision', 'manifest'].includes(key))
       && typeof repair.release.revision === 'string' && REVISION.test(repair.release.revision) && validRepairManifest(repair.release.manifest)))
     && (repair.reconciled === undefined || validReconciliation(repair.reconciled));
@@ -185,6 +204,8 @@ export function validateRecord(value) {
     }
   }
   if (value.state === 'Martin' && !value.repair?.stop_item) problems.push('state: Martin requires a repair stop');
+  if (value.repair?.stop && (value.state === 'Martin' ? value.repair.stop_item !== value.repair.stop.id
+    : value.repair.stop_item !== undefined || !value.repair.disposition)) problems.push('repair stop and programme state disagree');
   if (value.phases !== undefined) problems.push(...phasesProblems(value.phases));
   return problems;
 }

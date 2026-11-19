@@ -41,8 +41,9 @@ import { writeFileAtomic } from '../atomic-write.js';
 import { realLock } from '../runner-lock.js';
 import { programmeRepositories, programmeReviewCall } from '../programme-review.js';
 import { beginRepairReview, repairReviewCall } from '../repair-review.js';
-import { releaseRepair, repairReleaseState } from '../repair-release.js';
-import { reconcileRepair } from '../repair-reconcile.js';
+import { isDesk, releaseRepair, repairReleaseState } from '../repair-release.js';
+import { reconcileRepair, setDeskRepairState } from '../repair-reconcile.js';
+import { disposeRepair, REPAIR_DISPOSITIONS, stopRepair } from '../repair-stop.js';
 
 export function usage() {
   return commandUsage('programs');
@@ -62,6 +63,11 @@ export const ROUTES = {
   state: { check: ({ positional }) => stateCheck(positional) },
   review: { check: ({ positional }) => programmeNameCheck('review', positional) },
   release: { check: ({ positional }) => programmeNameCheck('release', positional) },
+  'repair-stop': { strictValues: ['--title', '--summary', '--item'], check: ({ positional, flags }) => programmeNameCheck('repair-stop', positional)
+    ?? (!flags.title?.trim() || !flags.summary?.trim() ? 'mc programs repair-stop needs --title and --summary' : null) },
+  disposition: { strictValues: ['--reason'], check: ({ positional, flags }) => positional.length === 2 && NAME_RE.test(positional[0])
+    && REPAIR_DISPOSITIONS.includes(positional[1]) && flags.reason?.trim() ? null
+    : 'use mc programs disposition <programme> decline|return|takeover --reason "<text>"' },
   reconcile: { strictValues: ['--reason'], check: ({ positional, flags }) => programmeNameCheck('reconcile', positional)
     ?? (!flags.reason?.trim() ? 'mc programs reconcile needs --reason "…"' : null) },
   after: { booleans: ['--none'], check: (scanned) => afterCheck(scanned) },
@@ -72,7 +78,7 @@ export const ROUTES = {
   '*': { booleans: ['--json'], check: ({ positional }) => `mc programs has no ${positional[0]}` },
 };
 
-const VERBS = ['list', 'priority', 'create', 'record', 'state', 'after', 'show', 'review', 'release', 'reconcile'];
+const VERBS = ['list', 'priority', 'create', 'record', 'state', 'after', 'show', 'review', 'release', 'reconcile', 'repair-stop', 'disposition'];
 
 function stateCheck(positional) {
   if (positional.length !== 2) return 'mc programs state needs <programme> draft|ready';
@@ -173,6 +179,8 @@ export async function run(argv, deps = {}) {
   if (verb === 'review') return reviewVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'release') return releaseVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'reconcile') return reconcileVerb(scanned, { ...deps, env, stdout, stderr });
+  if (verb === 'repair-stop') return stopVerb(scanned, { ...deps, env, stdout, stderr });
+  if (verb === 'disposition') return dispositionVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'after') return afterVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'show') return showVerb(scanned, { env, stdout, stderr });
 
@@ -182,7 +190,8 @@ export async function run(argv, deps = {}) {
     const dir = join(home, name);
     const result = readRecord(dir);
     const view = recordView(result);
-    if (view?.repair && view.state === 'ready' && !repairReleaseState(dir, result.record)?.release) return { ...view, needs_review: true };
+    if (view?.repair && view.state === 'ready' && view.repair.disposition?.action !== 'decline'
+        && !repairReleaseState(dir, result.record)?.release) return { ...view, needs_review: true };
     return view;
   } });
   if (verb === 'priority') {
@@ -372,7 +381,9 @@ function stateVerb({ positional }, { env, stdout, stderr, lock, now = new Date()
     return 1;
   }
   try {
-    const outcome = setRecordState(dir, targetState, { root: workRoot(env), ...(lock ? { lock } : {}) });
+    const outcome = readRecord(dir).record?.repair?.desk
+      ? setDeskRepairState(dir, targetState, env, { lock })
+      : setRecordState(dir, targetState, { root: workRoot(env), lock });
     if (!outcome.ok) {
       for (const problem of outcome.problems.length ? outcome.problems : [`${name} has no valid record — mc programs show ${name}`]) stderr.write(`mc: ${problem}\n`);
       return 1;
@@ -502,6 +513,29 @@ function releaseVerb({ positional: [name] }, { env, stdout, stderr, lock, author
   } catch (error) { stderr.write(`mc: repair release ${name}: ${error.message}\n`); return 1; }
 }
 
+function stopVerb({ positional: [name], flags }, { env, stdout, stderr, lock, authorAlive, now }) {
+  try {
+    const result = stopRepair(join(programsHome(env), name), env,
+      { title: flags.title, summary: flags.summary, item: flags.item }, { lock, alive: authorAlive, now: now?.() });
+    if (!result.ok) { stderr.write(`mc: ${result.problems[0] ?? `no valid record for ${name}`}\n`); return 1; }
+    stdout.write(`mc: repair programme ${name} is at Martin (item ${result.record.repair.stop_item})\n`);
+    return 0;
+  } catch (error) { stderr.write(`mc: could not stop ${name}: ${error.message}\n`); return 1; }
+}
+
+function dispositionVerb({ positional: [name, action], flags }, { env, stdout, stderr, lock, now, readPr, wake = () => wakeRunner(workRoot(env)) }) {
+  if (!isDesk(env)) { stderr.write('mc: only interactive Martin may dispose of a repair stop — mc martin opens the desk\n'); return 2; }
+  try {
+    const result = disposeRepair(join(programsHome(env), name), env,
+      { action, reason: flags.reason.trim() }, { lock, now: now?.(), readPr });
+    if (!result.ok) { stderr.write(`mc: ${result.problems[0] ?? `no valid record for ${name}`}\n`); return 1; }
+    const words = { decline: 'declined', return: 'returned to repair', takeover: 'taken over by Martin' };
+    stdout.write(`mc: ${name} — ${words[action]}\n`);
+    wake();
+    return 0;
+  } catch (error) { stderr.write(`mc: could not dispose of ${name}: ${error.message}\n`); return 1; }
+}
+
 function reconcileVerb({ positional: [programme], flags }, { env, stdout, stderr, lock }) {
   try {
     const result = reconcileRepair({ home: programsHome(env), programme, env, lock, reason: flags.reason });
@@ -520,7 +554,7 @@ async function reviewVerb({ positional: [name] }, deps) {
   const ctx = { env, stdout, stderr, read: readTextOrNull, write: writeFileAtomic, remove: unlinkSync,
     lock: deps.lock ?? realLock, now: deps.now ?? (() => new Date()), alive: deps.alive };
   const record = readRecord(target.dir, { read: ctx.read });
-  const repair = record.status === 'valid' && Boolean(record.record.repair);
+  const repair = record.status === 'valid' && Boolean(record.record.repair && !record.record.repair.desk);
   if (!repair && !reviewAuthor(env)) { stderr.write('mc: only Martin at the desk calls a programme reading — mc martin opens the desk\n'); return 2; }
   try {
     const reviewDeps = deps.review ?? {};
