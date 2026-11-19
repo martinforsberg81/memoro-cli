@@ -75,6 +75,22 @@ test('a fake session can brief an item for Martin as a proposed change to a text
   assert.equal(JSON.parse(readFileSync(join(f.root,'programs/alpha/goals/first/GOAL.json'))).status,'Martin');
 });
 
+test('decision can hand an unresolved repair stop to Martin with its evidence and no further automatic attempt', async t => {
+  const f = fixture(t), item = f.add('alpha/first');
+  f.deps.session = async () => {
+    const args = ['item', item.id, 'brief', '--sort', 'mechanical'];
+    const io = { env: { ...f.env, MC_ROLE: 'decision' }, now: () => NOW, stdout: sink, stderr: sink };
+    assert.equal(await martin(args, io), 2, 'a brief needs recorded evidence');
+    writeFileSync(join(itemDirectory(item, f.env), 'brief.md'), 'Reparationen prövades. Samma fel återkom. Beslutspasset hittade ingen lösning.');
+    assert.equal(await martin(args, io), 0);
+    return result;
+  };
+  const runner = f.runner();
+  assert.equal((await runner.pass()).ran, 1);
+  assert.deepEqual([f.state(item).state, f.state(item).sort, f.state(item).decision_failures], ['for-martin', 'mechanical', undefined]);
+  assert.equal((await runner.pass()).ran, 0);
+});
+
 test('an unfinished item retries once then becomes a non-reversible mechanical brief with failure evidence', async t => {
   const f = fixture(t), item = f.add('alpha/first'), r = f.runner();
   await r.pass(); assert.equal(f.state(item).state,'prepared');

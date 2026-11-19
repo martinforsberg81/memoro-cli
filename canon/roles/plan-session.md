@@ -171,7 +171,8 @@ the next reader.
   (`no progress:`, status `Martin`).
 - A **review session** judges and moves it to `merge` (all OK) or back to
   `build` (a NOT OK line), with REVIEW.md in its fixed form. A repair build
-  takes REVIEW.md's NOT OK items and returns the goal to review.
+  takes REVIEW.md's NOT OK items and returns the goal to review. A failed
+  verdict after two automatic repairs goes to the decision pass.
 - A **mend session** handles merge failures only: conflict, failed candidate
   check, or moved judged head. It repairs and requeues merge; bounded repeated
   recovery waits on Martin. No pre-merge blocker goes to mend.

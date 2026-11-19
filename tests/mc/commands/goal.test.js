@@ -1022,8 +1022,9 @@ test('goal outcome: only a committed handoff names review and a technical stop r
     [`${DIR}/LOG.md`]: accepted.store[`${DIR}/LOG.md`] + '\n## 2026-11-01T20:02Z · runner · review · Martin\n\n'
       + 'Comment: the review ended with the goal still in review, a second time — review recovery cannot continue\n',
   }, git: worktreeGit({ heads: { ...TWO_HEADS } }) });
-  for (const output of Object.values(await goalOutcomeViews(heldReview))) {
-    assert.match(output, /review · Martin/u);
+  const heldViews = await goalOutcomeViews(heldReview);
+  assert.match(heldViews.list, /review · decision/u);
+  for (const output of Object.values(heldViews)) {
     assert.match(output, /build handed to review · historical handoff/u);
     assert.doesNotMatch(output, /independent review|technical desk/u);
   }
@@ -1174,8 +1175,8 @@ test('a review session\'s move back removes the records of the NOT OK ids criter
   assert.deepEqual(Object.keys(evidenceOf(person)), ['criterion 1', 'criterion 2', 'V1', 'obligation Documentation'], 'a person\'s move back removes none');
 
   const third = await moveOut('build', inReviewFiles({ [`${DIR}/LOG.md`]: withLog(rejectedLog(2))[`${DIR}/LOG.md`] }));
-  assert.equal(stateOf(third), 'build · ready', 'the third rejection returns to repair');
-  assert.deepEqual(Object.keys(evidenceOf(third)), ['criterion 2', 'obligation Documentation'], 'later rounds also clear only the rejected evidence');
+  assert.equal(stateOf(third), 'review · Martin', 'exhausted repairs wait for a decision');
+  assert.deepEqual(Object.keys(evidenceOf(third)), ['criterion 2', 'obligation Documentation'], 'the held verdict also clears only the rejected evidence');
 });
 
 test('a person and the plan role move a goal to review as they did, with no record and no worktree; martin and decision too, and all are still refused with a criterion not met', async () => {
@@ -1544,30 +1545,46 @@ test('the first and second rejection move review to build, each leaving REVIEW.m
   }
 });
 
-test('later rejections still dispatch repair and keep past verdicts', async () => {
+test('a failed review exhausts automatic repairs, preserves the verdict and waits for a decision', async () => {
   const text = verdictText({ ids: V2_IDS, notOk: { 'criterion 1': 'still red', bugs: 'goal.js:12' } });
   const logPath = `${DIR}/LOG.md`;
   const oldThird = `${DIR}/REVIEW-3.md`;
-  const previousVerdict = verdictText({ ids: V2_IDS, notOk: { bugs: 'earlier failure' } });
-  for (const { prior, extra, archived } of [
-    { prior: 2, extra: {}, archived: 3 },
-    { prior: 3, extra: {}, archived: 4 },
-    { prior: 2, extra: { [oldThird]: previousVerdict }, archived: 4 },
-  ]) {
-    const log = withLog(rejectedLog(prior))[logPath];
-    const f = await moveOut('build', reviewFiles(text, { v2: true, log, extra }));
-    assert.equal(f.code, 0, f.err());
-    assert.equal(stateOf(f), 'build · ready');
-    assert.deepEqual(f.queued, []);
-    const entries = parseLog(f.store[logPath]);
-    const last = entries.at(-1);
-    assert.deepEqual([last.stage, last.status, last.role], ['build', 'ready', 'review']);
-    assert.equal(f.store[REVIEW_FILE], text);
-    assert.equal(f.store[`${DIR}/REVIEW-${archived}.md`], text);
-    if (extra[oldThird]) assert.equal(f.store[oldThird], previousVerdict);
-    const goal = parseGoal(f.store[`${DIR}/GOAL.json`]);
-    assert.equal(goalSession({ ...goal, log: entries, verdict: f.store[REVIEW_FILE] }), 'repair');
+  const priorVerdict = verdictText({ ids: V2_IDS, notOk: { bugs: 'earlier failure' } });
+  const log = withLog(rejectedLog(2))[logPath];
+  const f = await moveOut('build', reviewFiles(text, { v2: true, log, extra: { [oldThird]: priorVerdict } }));
+  assert.equal(f.code, 0, f.err());
+  assert.equal(stateOf(f), 'review · Martin');
+  assert.deepEqual(f.queued, []);
+  const entries = parseLog(f.store[logPath]);
+  const last = entries.at(-1);
+  assert.deepEqual([last.stage, last.status, last.role], ['review', 'Martin', 'review']);
+  assert.match(last.comment, /^no progress: review repair limit reached.*Failed: criterion 1, bugs/u);
+  assert.equal(f.store[oldThird], priorVerdict);
+  assert.equal(f.store[`${DIR}/REVIEW-4.md`], text);
+  assert.equal(f.store[REVIEW_FILE], text);
+  const goal = parseGoal(f.store[`${DIR}/GOAL.json`]);
+  assert.equal(goalSession({ ...goal, log: entries, verdict: text }), null);
+  const firstDecision = fixture({ files: f.store, env: { MC_ROLE: 'decision', MC_HEADLESS: '1' } });
+  assert.equal(await run(['stage', 'mc/plain', 'build'], firstDecision.deps), 0, firstDecision.err());
+  assert.equal(stateOf(firstDecision), 'build · ready');
+});
+
+test('a second review repair stop requires a brief after the decision recovery', async () => {
+  const stop = '## 2026-11-06T12:00Z · claude · review · Martin · by review\n\nComment: no progress: review repair limit reached after 2 automatic repairs. Failed: bugs. See REVIEW.md.\n';
+  const log = withLog(rejectedLog(2))[`${DIR}/LOG.md`] + '\n' + stop
+    + '\n## 2026-11-06T13:00Z · claude · build · ready · by decision\n\nDone: recovery handoff\n'
+    + '\n## 2026-11-06T14:00Z · claude · review · ready · by build\n\nDone: repaired\n'
+    + '\n' + stop.replace('T12:', 'T15:');
+  const files = reviewFiles(verdictText({ notOk: { 'criterion 1': 'still red' } }), { log, goal: { status: 'Martin' } });
+  for (const args of [['stage', 'mc/plain', 'build'], ['ready', 'mc/plain']]) {
+    const f = fixture({ files, env: { MC_ROLE: 'decision', MC_HEADLESS: '1' } });
+    assert.equal(await run(args, f.deps), 2, f.err());
+    assert.match(f.err(), /brief --sort mechanical/u);
+    assert.equal(stateOf(f), 'review · Martin');
   }
+  const person = fixture({ files, env: { MC_ROLE: 'martin' } });
+  assert.equal(await run(['stage', 'mc/plain', 'build'], person.deps), 0, person.err());
+  assert.equal(stateOf(person), 'build · ready');
 });
 
 test('a move to finish in the log from before, and rejections before the goal\'s latest move into draft, are not counted', async () => {

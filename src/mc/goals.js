@@ -601,7 +601,7 @@ function countStart(log) {
 
 /**
  * How many times review sent the goal back to build since its latest move into draft or its creation.
- * Used for numbering review verdicts. Moves to the retired `finish` stage are excluded.
+ * Used for numbering review verdicts and bounding automatic repairs. Moves to the retired `finish` stage are excluded.
  */
 export function rejections(log) {
   const from = countStart(log);

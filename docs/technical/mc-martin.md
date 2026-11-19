@@ -617,7 +617,22 @@ the goal in `Martin`.
 A goal defect (`goal defect: <part> — <found>`, reported by a build, review or
 finish session) is `technical`; a stop for no progress (`no progress: …`, the
 runner after three build sessions that committed nothing and met no criterion)
-is `mechanical`. Preparation names the sort; the decision verifies the claim,
+is `mechanical`. A further failed review after two automatic repairs uses
+`no progress: review repair limit reached` and follows the same preparation
+and decision queue. Decision gets one recovery handoff. A repeat limit stop
+goes back to decision to document the unresolved result. Decision cannot
+resume delivery again at that stop until Martin acts. The goal's internal
+status `Martin` holds delivery during automatic handling. The programme page
+and `mc goal list` show it as `decision` until its current item is
+`for-martin`.
+
+A decision that cannot settle a mechanical stop writes `brief.md` with the
+cause, attempted recovery, remaining obstacle and what would unblock it, then
+runs `mc martin item <id> brief --sort mechanical`. The brief transitions the
+item to `for-martin` and ends automated decision attempts. The original
+verdict and goal remain available for Martin to act on.
+
+Preparation names the sort; the decision verifies the claim,
 amends the goal with the verbs, records it and sets it ready with
 `mc goal ready`. An amendment that would change a text Martin holds is a brief
 for Martin. A second defect or stop on a goal whose text has not been amended

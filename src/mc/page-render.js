@@ -661,7 +661,7 @@ export function pipelineStages(data) {
     return {
       stage,
       count: stage === 'proposals' ? proposals : here.length,
-      martin: here.filter(goal => goal.status === 'Martin').length,
+      martin: here.filter(goal => goal.status === 'Martin' && goal.person !== false).length,
       blocked: here.filter(goal => goal.status === 'blocked').length,
       marks,
     };

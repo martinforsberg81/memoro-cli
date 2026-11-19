@@ -172,7 +172,9 @@ lane as soon as every registered PR is queued; nothing follows that command.
      reviewed head.
    - Not OK: write the complete verdict with each failure and where it was
      found, then `mc goal stage build`. A repair build fixes it and returns it
-     to review. Follow the same handoff in each round.
+     to review. After two automatic repairs a further failed verdict holds the
+     goal for the decision pass. Use the same stage command and leave the
+     failed verdict and its evidence.
 2. **One proposal, always** — whichever stage: one file in
    `~/mc/areas/<repo>/<area>/proposals/` of the area it concerns, in the
    proposals skill's form, with what you noticed beyond this goal:
