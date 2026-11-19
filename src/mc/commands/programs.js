@@ -41,6 +41,8 @@ import { writeFileAtomic } from '../atomic-write.js';
 import { realLock } from '../runner-lock.js';
 import { programmeRepositories, programmeReviewCall } from '../programme-review.js';
 import { beginRepairReview, repairReviewCall } from '../repair-review.js';
+import { releaseRepair, repairReleaseState } from '../repair-release.js';
+import { reconcileRepair } from '../repair-reconcile.js';
 
 export function usage() {
   return commandUsage('programs');
@@ -59,6 +61,9 @@ export const ROUTES = {
   record: { strictValues: ['--end', '--horizon'], check: (scanned) => writeCheck('record', scanned) },
   state: { check: ({ positional }) => stateCheck(positional) },
   review: { check: ({ positional }) => programmeNameCheck('review', positional) },
+  release: { check: ({ positional }) => programmeNameCheck('release', positional) },
+  reconcile: { strictValues: ['--reason'], check: ({ positional, flags }) => programmeNameCheck('reconcile', positional)
+    ?? (!flags.reason?.trim() ? 'mc programs reconcile needs --reason "…"' : null) },
   after: { booleans: ['--none'], check: (scanned) => afterCheck(scanned) },
   show: { booleans: ['--json'], check: ({ positional }) => (
     positional.length !== 1 ? 'mc programs show needs one programme'
@@ -67,7 +72,7 @@ export const ROUTES = {
   '*': { booleans: ['--json'], check: ({ positional }) => `mc programs has no ${positional[0]}` },
 };
 
-const VERBS = ['list', 'priority', 'create', 'record', 'state', 'after', 'show', 'review'];
+const VERBS = ['list', 'priority', 'create', 'record', 'state', 'after', 'show', 'review', 'release', 'reconcile'];
 
 function stateCheck(positional) {
   if (positional.length !== 2) return 'mc programs state needs <programme> draft|ready';
@@ -166,12 +171,20 @@ export async function run(argv, deps = {}) {
   if (verb === 'create' || verb === 'record') return writeVerb(verb, scanned, { ...deps, env, stdout, stderr });
   if (verb === 'state') return stateVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'review') return reviewVerb(scanned, { ...deps, env, stdout, stderr });
+  if (verb === 'release') return releaseVerb(scanned, { ...deps, env, stdout, stderr });
+  if (verb === 'reconcile') return reconcileVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'after') return afterVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'show') return showVerb(scanned, { env, stdout, stderr });
 
   const read = deps.read || (() => readProgrammes({ env }));
   const home = programsHome(env);
-  const listing = programmesListing(read(), { record: (name) => recordView(readRecord(join(home, name))) });
+  const listing = programmesListing(read(), { record: (name) => {
+    const dir = join(home, name);
+    const result = readRecord(dir);
+    const view = recordView(result);
+    if (view?.repair && view.state === 'ready' && !repairReleaseState(dir, result.record)?.release) return { ...view, needs_review: true };
+    return view;
+  } });
   if (verb === 'priority') {
     try {
       const result = setProgrammePriorities(scanned.positional, Number(scanned.flags.set), {
@@ -215,8 +228,10 @@ export function programmesListing({ section, homes = {} }, { record = () => null
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /** The last cell of a line whose programme has a record. */
-function recordCell(record) {
+function recordCell(record, name) {
   if (record.problems) return 'record invalid';
+  if (record.repair && record.state === 'Martin') return `${name} · Martin`;
+  if (record.needs_review) return `${name} · ready (needs review)`;
   return `record ${record.state} · ${record.horizon ? `horizon ${record.horizon}` : 'no horizon'}`;
 }
 
@@ -232,7 +247,7 @@ function cells(item) {
     item.repos.join(',') || '—',
     item.goals ? `${plural(item.goals, 'goal')}${rollup ? ` · ${rollup}` : ''}` : 'no goal',
     meta ? `plan ${meta}` : 'no plan session',
-    ...(item.record ? [recordCell(item.record)] : []),
+    ...(item.record ? [recordCell(item.record, item.name)] : []),
   ];
 }
 
@@ -472,6 +487,31 @@ function afterVerb({ positional, flags }, { env, stdout, stderr, read, lock }) {
 /** Only Martin at the desk commissions a programme reading: no headless role, the manager included, and no other session. */
 function reviewAuthor(env) {
   return Boolean(env.MC_ROLE) && normalizeSessionRole(env.MC_ROLE) === 'martin' && env.MC_HEADLESS !== '1';
+}
+
+function releaseVerb({ positional: [name] }, { env, stdout, stderr, lock, authorAlive }) {
+  try {
+    const result = releaseRepair(join(programsHome(env), name), env, { lock, alive: authorAlive });
+    if (!result.ok) {
+      stderr.write(`mc: ${result.problems[0] ?? `${name} is not a repair-owned programme`}\n`);
+      return 1;
+    }
+    stdout.write(`mc: repair programme ${name} is ready for planning\n`);
+    wakeRunner(workRoot(env));
+    return 0;
+  } catch (error) { stderr.write(`mc: repair release ${name}: ${error.message}\n`); return 1; }
+}
+
+function reconcileVerb({ positional: [programme], flags }, { env, stdout, stderr, lock }) {
+  try {
+    const result = reconcileRepair({ home: programsHome(env), programme, env, lock, reason: flags.reason });
+    if (!result.ok) {
+      stderr.write(`mc: ${result.problems[0] ?? `${programme} has no valid record`}\n`);
+      return 1;
+    }
+    stdout.write(`mc: ${programme} · release ${result.record.repair.reconciled.revision} reconciled\n`);
+    return 0;
+  } catch (error) { stderr.write(`mc: could not reconcile ${programme}: ${error.message}\n`); return 1; }
 }
 
 async function reviewVerb({ positional: [name] }, deps) {

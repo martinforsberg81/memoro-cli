@@ -18,14 +18,25 @@ import { canonRoot } from './canon.js';
 import { NAME_RE } from './plan-schema.js';
 import { workRoot } from './paths.js';
 import { realLock } from './runner-lock.js';
+import { validRepairManifest } from './repair-manifest.js';
 
 export const RECORD_FILE = 'PROGRAMME.json';
 export const RECORD_SCHEMA = 'mc-programme';
 export const RECORD_VERSION = 2;
-export const RECORD_STATES = Object.freeze(['draft', 'ready', 'done']);
+export const RECORD_STATES = Object.freeze(['draft', 'ready', 'Martin', 'done']);
 export const RECORD_AUTHORS = Object.freeze(['person', 'martin', 'manager', 'repair']);
 const V1_KEYS = Object.freeze(['schema', 'version', 'horizon', 'area', 'end', 'state', 'created', 'created_by', 'phases']);
 const DIGEST = /^[a-f0-9]{64}$/u;
+const REVISION = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
+const partNumber = value => Number.isSafeInteger(value) && value >= 1;
+
+function validReconciliation(found) {
+  return found && typeof found.revision === 'string' && REVISION.test(found.revision)
+    && typeof found.reason === 'string' && found.reason.trim()
+    && Array.isArray(found.parts) && found.parts.every(row => Array.isArray(row) && partNumber(row[0]) && DIGEST.test(row[1]))
+    && Array.isArray(found.goals) && found.goals.every(row => Array.isArray(row) && NAME_RE.test(row[0])
+      && DIGEST.test(row[1]) && Array.isArray(row[2]) && row[2].every(partNumber));
+}
 
 /** A source reference is data, not a path to be opened without revalidating it. */
 export function validRepairSource(source) {
@@ -42,9 +53,12 @@ export function validRepairSource(source) {
 
 function validRepair(repair) {
   return repair && typeof repair === 'object' && !Array.isArray(repair)
-    && Object.keys(repair).every(key => ['sources', 'stop_item'].includes(key))
+    && Object.keys(repair).every(key => ['sources', 'stop_item', 'release', 'reconciled'].includes(key))
     && Array.isArray(repair.sources) && repair.sources.length > 0 && repair.sources.every(validRepairSource)
-    && (repair.stop_item === undefined || (typeof repair.stop_item === 'string' && /^[a-z0-9-]+$/u.test(repair.stop_item)));
+    && (repair.stop_item === undefined || (typeof repair.stop_item === 'string' && /^[a-z0-9-]+$/u.test(repair.stop_item)))
+    && (repair.release === undefined || (repair.release && Object.keys(repair.release).every(key => ['revision', 'manifest'].includes(key))
+      && typeof repair.release.revision === 'string' && REVISION.test(repair.release.revision) && validRepairManifest(repair.release.manifest)))
+    && (repair.reconciled === undefined || validReconciliation(repair.reconciled));
 }
 
 /** The caller must already hold the strict programme lock. Do not release or change state here. */
@@ -56,9 +70,9 @@ export function linkRepairSource(dir, record, source) {
   writeFileAtomic(join(dir, RECORD_FILE), `${JSON.stringify(updated, null, 2)}\n`);
 }
 
-// Part 2 has no release authority. State alone must never open this record.
+// State alone must never open or reopen a repair-owned order.
 export function repairDraftRefusal(record, programme) {
-  return record?.repair ? `repair programme ${programme} is draft — its release is not available` : null;
+  return record?.repair ? `repair programme ${programme} is ${record.state} — mc repair --resume ${programme}` : null;
 }
 /**
  * The fields the removed signing wrote into version 2 records on disk: every one of them starts with `signed_` or
@@ -67,7 +81,7 @@ export function repairDraftRefusal(record, programme) {
  * rule rather than listed by name, so that no source names a field that is gone.
  */
 const REMOVED_KEY = /^(?:signed_|cut_)[a-z_]+$|^legacy$/u;
-const DISK_STATES = Object.freeze(['draft', 'ready', 'done', 'open', 'dropped']);
+const DISK_STATES = Object.freeze([...RECORD_STATES, 'open', 'dropped']);
 
 /** The one value of `area`: `<repo>/<id>`, an area a repository declares; the programme repairs that area's text and serves no horizon. */
 export const AREA_RE = /^[a-z0-9][a-z0-9-]{0,63}\/[a-z][a-z0-9-]*$/u;
@@ -160,8 +174,9 @@ export function validateRecord(value) {
     if (value.horizon !== null) problems.push('area: allowed only with horizon null — a programme serves a horizon or repairs an area, not both');
   }
   if (typeof value.end !== 'string' || !value.end.trim()) problems.push('end: a non-empty sentence saying when the programme is done');
+  const offered = value.repair ? RECORD_STATES : RECORD_STATES.filter(state => state !== 'Martin');
   const states = value.version === 1 ? ['open', 'done'] : DISK_STATES;
-  if (!states.includes(value.state)) problems.push(`state: one of ${RECORD_STATES.join(', ')}`);
+  if (!states.includes(value.state)) problems.push(`state: one of ${offered.join(', ')}`);
   if (!isInstant(value.created)) problems.push('created: an ISO instant in UTC to the second');
   if (!RECORD_AUTHORS.includes(value.created_by)) problems.push(`created_by: one of ${RECORD_AUTHORS.join(', ')}`);
   if (value.repair !== undefined || value.created_by === 'repair') {
@@ -169,6 +184,7 @@ export function validateRecord(value) {
       problems.push('repair: a repair-owned record without a horizon or area-text order, with at least one valid source reference');
     }
   }
+  if (value.state === 'Martin' && !value.repair?.stop_item) problems.push('state: Martin requires a repair stop');
   if (value.phases !== undefined) problems.push(...phasesProblems(value.phases));
   return problems;
 }
@@ -269,7 +285,7 @@ export function createProgramme(dir, page, record) {
  * `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
  */
 export function changePhases(dir, change, options = {}) {
-  return replaceRecord(dir, (record) => {
+  return changeProgrammeRecord(dir, (record) => {
     const phases = change(record.phases);
     return phases === undefined ? record : { ...record, phases };
   }, options, 'programme-phases');
@@ -282,14 +298,14 @@ export function changePhases(dir, change, options = {}) {
  * Returns `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
  */
 export function setRecordState(dir, state, options = {}) {
-  return replaceRecord(dir, (record) => {
-    const refusal = state !== 'draft' && repairDraftRefusal(record, basename(dir));
+  return changeProgrammeRecord(dir, (record) => {
+    const refusal = repairDraftRefusal(record, basename(dir));
     return refusal ? { problems: [refusal] } : { ...record, state };
   }, options, 'programme-state');
 }
 
 /** Fresh read, validation and atomic replacement share the runner's strict lock. Create stays create-only. */
-function replaceRecord(dir, change, { root = workRoot(), lock = realLock, read, write = writeFileAtomic }, name, { state, beforeWrite } = {}) {
+export function changeProgrammeRecord(dir, change, { root = workRoot(), lock = realLock, read, write = writeFileAtomic }, name, { state, beforeWrite } = {}) {
   return lock(root, () => {
     const found = readRecord(dir, read ? { read } : {});
     if (found.status !== 'valid') return { ok: false, status: found.status, problems: found.problems ?? [] };

@@ -21,7 +21,8 @@ import { join } from 'node:path';
 import { deskItemId } from './desk-items.js';
 import { archiveDirIn, parseGoal, GOAL_FILE, GOAL_LOG_FILE } from './goals.js';
 import { NAME_RE } from './plan-schema.js';
-import { readRecord, setRecordState } from './programme-record.js';
+import { changeProgrammeRecord, readRecord, setRecordState } from './programme-record.js';
+import { repairGoalAdmission } from './repair-reconcile.js';
 import { sameHead, writeBackFault } from './review-verdict.js';
 
 export const ARCHIVE_SCHEMA = 'mc-archive-turn';
@@ -108,6 +109,9 @@ export const liveGoals = ({ home, programme, list }) => list(join(home, programm
 /** Whether a desk item of kind archive is open for `programme`. */
 const openArchiveItem = (items, programme) => items.some((item) => item.kind === ARCHIVE_ITEM_KIND && item.reference === archiveReference(programme) && item.state !== 'closed');
 
+const keptReading = (state, revision) => state.status === 'valid' && state.state.reading?.verdict === 'OK'
+  && (state.state.reading.revision ?? null) === (revision ?? null);
+
 /**
  * A destination named in the state whose record does not yet read done: the programme's directory has moved and the write
  * that sets its record done has not finished. Null when there is none, or it reads done. The desk sync keeps the programme's
@@ -137,6 +141,10 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
     // that already reads done is only cleared from the state.
     const found = readRecord(pending, { read });
     if (found.status === 'valid') {
+      if (found.record.repair && found.record.state !== 'done') {
+        const current = repairGoalAdmission(pending, null, { read, record: found.record });
+        if (!current?.release || !keptReading(state, current.release.revision)) return { due: false, reason: current?.problems?.[0] ?? 'its write-back belongs to a different repair release', notice: null };
+      }
       // A write that has failed opens an item at the second failure; while it is open no write is tried, so a write that keeps
       // failing opens no further item. A record already done is only cleared from the state, item or not.
       if (found.record.state !== 'done' && openArchiveItem(items, programme)) return { due: false, reason: 'an archive desk item is open', notice: null };
@@ -149,6 +157,8 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
   if (record.status === 'none') return { due: false, reason: 'no record', notice: null };
   if (record.status === 'invalid') return { due: false, reason: 'its record is invalid', notice: null };
   if (record.record.state !== 'ready') return { due: false, reason: `its record reads ${record.record.state}`, notice: null };
+  const repair = repairGoalAdmission(dir, null, { read, record: record.record });
+  if (repair?.problems) return { due: false, reason: repair.problems[0], notice: null };
   if (liveGoals({ home, programme, list }).length) return { due: false, reason: 'it holds a live goal', notice: null };
   if (openArchiveItem(items, programme)) {
     return { due: false, reason: 'an archive desk item is open', notice: null };
@@ -158,8 +168,10 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
   // A programme whose goals were all dropped is no programme that made anything true: nothing is read or archived.
   if (!goals.done.length) return { due: false, reason: 'no goal reached done', notice: null };
   const reading = state.status === 'valid' ? state.state.reading : null;
-  const kept = reading && reading.verdict === 'OK' && (reading.horizon ?? null) === record.record.horizon && reading.goals.join('\n') === goals.done.join('\n');
-  return { due: true, mode: kept ? 'archive' : 'read', record: record.record, goals: goals.done, dropped: goals.dropped, repos: goals.repos };
+  const revision = repair?.release?.revision;
+  const kept = keptReading(state, revision) && (reading.horizon ?? null) === record.record.horizon && reading.goals.join('\n') === goals.done.join('\n');
+  return { due: true, mode: kept ? 'archive' : 'read', record: record.record, goals: goals.done, dropped: goals.dropped, repos: goals.repos,
+    ...(revision ? { revision } : {}) };
 }
 
 /* ------------------------------------------------------------- the reading */
@@ -172,10 +184,11 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
  * <section>[, …]`, `<goal>: OK — none — <reason>`, `<goal>: NOT OK — <what is true that no page says>`), the last line
  * is not `verdict: OK` or `verdict: NOT OK`, or the verdict is OK beside a NOT OK line (or NOT OK with none).
  */
-export function parseWriteBack(text, { goals, checkouts, horizon = null }) {
+export function parseWriteBack(text, { goals, checkouts, horizon = null, revision }) {
   if (text === null || text === undefined) return { ok: false, problems: [`${WRITE_BACK_FILE} is missing`] };
   const problems = [];
   const lines = String(text).split('\n').map((line) => line.trim()).filter(Boolean);
+  if (revision && lines.shift() !== `release: ${revision}`) problems.push('the write-back belongs to a different repair release');
   const reads = []; const judged = new Map(); let verdict = null; let horizonJudgment = null;
   for (const [index, line] of lines.entries()) {
     const readLine = line.match(/^read: (\S+) ([0-9a-f]{7,64})$/u);
@@ -227,7 +240,7 @@ export function parseWriteBack(text, { goals, checkouts, horizon = null }) {
 }
 
 /** What the reader is told: the programme, what to read, the file to write and its forms. */
-export function archiveReadPrompt({ programme, dir, goals, dropped = [], checkouts, archive, horizonDir = null }) {
+export function archiveReadPrompt({ programme, dir, goals, dropped = [], checkouts, archive, horizonDir = null, revision }) {
   const read = Object.entries(checkouts).map(([repo, path]) => `${repo}: \`${path}\``).join('; ');
   const goalList = goals.map((goal) => `- ${goal}: \`${join(archive, goal)}\` (GOAL.json, LOG.md, ${REVIEW_FILE})`).join('\n');
   const droppedLine = dropped.length ? ` Dropped goals (${dropped.join(', ')}) made nothing true and are not judged.` : '';
@@ -236,6 +249,7 @@ export function archiveReadPrompt({ programme, dir, goals, dropped = [], checkou
     : '';
   return `You are the headless archive reader for programme ${programme}, with nobody present. Every goal of the programme is finished; the programme is archived by the system only if what it made true is written into docs/technical/ and the area pages. Its directory is \`${dir}\`; read its README.md first. The done goals, each with its goal file, log and review, are:\n${goalList}${droppedLine}\n`
     + horizonCheck
+    + (revision ? `The first line of ${WRITE_BACK_FILE} must be \`release: ${revision}\` for this repair release.\n` : '')
     + `Read checkouts at origin/main are ${read}; read code and docs there and change nothing in them. For each done goal decide what it made true of the app that a reader of docs/technical/ and the area pages needs, and read the pages to see whether they say it. Write ${dir}/${WRITE_BACK_FILE} and nothing else, with: one line \`read: <repo> <sha>\` per checkout (the sha its HEAD is at); one line per done goal, \`<goal>: OK — <repo>/docs/technical/<page>.md § <section>[, …]\`, \`<goal>: OK — none — <reason>\` or \`<goal>: NOT OK — <what is true that no page says>\`; and a last line \`verdict: OK\` when every check is OK, else \`verdict: NOT OK\`. Your role page says the rest.`;
 }
 
@@ -262,8 +276,16 @@ function withState({ root, programme, read, writeJson, lock }, change) {
 }
 
 /** The OK reading kept, for exactly the goals it judged: the archive is tried again on it without a new reading. */
-export function keepReading({ at, goals, lines = [], horizon = null, ...seams }) {
-  return withState(seams, (state) => { state.reading = { at, verdict: 'OK', goals: [...goals], lines, ...(horizon ? { horizon } : {}) }; });
+export function keepReading({ at, goals, lines = [], horizon = null, home, revision, ...seams }) {
+  return withState(seams, (state) => {
+    if (home) {
+      const current = repairGoalAdmission(join(home, seams.programme), null, { read: seams.read, revision: revision ?? null });
+      if (current?.problems || (revision && current?.release?.revision !== revision)) {
+        throw new Error(current?.problems?.[0] ?? 'the write-back belongs to a different repair release');
+      }
+    }
+    state.reading = { at, verdict: 'OK', goals: [...goals], lines, ...(horizon ? { horizon } : {}), ...(revision ? { revision } : {}) };
+  });
 }
 
 /** Where the programme's directory moved to: recorded before anything else can fail, so the record's state is set later. */
@@ -401,6 +423,15 @@ function setDoneSafely(setDone, dir, seams) {
   try { return setDone(dir, 'done', seams); } catch (error) { return { ok: false, status: 'unwritten', problems: [error?.message || String(error)] }; }
 }
 
+function finishRepairArchive(dir, { revision, read, root, lock, write }) {
+  return changeProgrammeRecord(dir, record => {
+    if (record.state === 'done' && record.repair?.release?.revision === revision) return record;
+    const current = repairGoalAdmission(dir, null, { read, record, revision });
+    if (current?.release?.revision !== revision) return { problems: current?.problems ?? ['the archive belongs to a different repair release'] };
+    return { ...record, state: 'done' };
+  }, { root, read, lock, write }, 'repair-archive-finish');
+}
+
 /**
  * The archive on an OK reading (C3): `{ ok: true, destination }` (the programme is archived and its record reads done),
  * `{ ok: false, restricted: [entries] }` (the programme holds restricted data: nothing is moved), or `{ ok: false, reason }`.
@@ -419,9 +450,22 @@ export async function archiveOnOk({ programme, home, restrictedDir, proposalsTar
   if (liveGoals({ home, programme, list }).length) return { ok: false, reason: 'the programme holds a live goal' };
   const record = readRecord(dir, { read });
   if (record.status !== 'valid' || record.record.state !== 'ready') return { ok: false, reason: `its record does not read valid and ready (${record.status === 'valid' ? record.record.state : record.status})` };
+  const repair = repairGoalAdmission(dir, null, { read, record: record.record });
+  const revision = repair?.release?.revision;
+  const currentRepair = () => {
+    if (!record.record.repair) return null;
+    const current = repairGoalAdmission(dir, null, { read, revision });
+    if (!current?.release) return current?.problems?.[0] ?? 'its repair release is no longer current';
+    const due = archiveDue({ programme, home, root, list, read, state: readArchiveState({ root, programme, read }) });
+    return due.due && due.mode === 'archive' && due.revision === revision ? null : 'no current write-back for this repair release';
+  };
+  const blocked = currentRepair();
+  if (blocked) return { ok: false, stale: true, reason: blocked };
   const entries = list(restrictedDir).filter((entry) => !entry.startsWith('.'));
   if (entries.length) return { ok: false, restricted: entries };
   const fence = () => {
+    const problem = currentRepair();
+    if (problem) return problem;
     if (liveGoals({ home, programme, list }).length) return 'a goal appeared in the programme';
     const held = list(restrictedDir).filter((entry) => !entry.startsWith('.'));
     return held.length ? `restricted data appeared (${held.join(', ')})` : null;
@@ -433,7 +477,8 @@ export async function archiveOnOk({ programme, home, restrictedDir, proposalsTar
   if (noted) return { ok: false, reason: `the destination ${destination} was not recorded: ${noted.message || String(noted)}` };
   const where = destination || (exists(dir) ? dir : null);
   if (!where) return { ok: false, reason: 'the programme directory is gone and no destination was recorded' };
-  const set = setDoneSafely(setDone, where, { root, lock, read, write: (path, text) => write(path, text) });
+  const set = setDoneSafely(revision ? (dir, _state, options) => finishRepairArchive(dir, { revision, ...options }) : setDone,
+    where, { root, lock, read, write: (path, text) => write(path, text) });
   if (!set.ok) return { ok: false, reason: `the record at ${where} could not be set to done: ${set.problems?.join('; ') || set.status}`, destination: where };
   try { clearDestination({ programme, ...seams }); } catch (error) { return { ok: false, reason: `the destination was not cleared: ${error.message || String(error)}`, destination: where }; }
   return { ok: true, destination: where };
@@ -441,7 +486,13 @@ export async function archiveOnOk({ programme, home, restrictedDir, proposalsTar
 
 /** What the state write alone does (D: a destination named in the state and its record still open): sets it done, clears it. */
 export function finishDestination({ programme, destination, read, write, setDone = setRecordState, root, writeJson, lock }) {
-  const set = setDoneSafely(setDone, destination, { root, lock, read, write });
+  const record = readRecord(destination, { read });
+  const revision = record.record?.repair?.release?.revision;
+  if (record.record?.repair && (!revision || !keptReading(readArchiveState({ root, programme, read }), revision))) {
+    return { ok: false, reason: 'no current write-back for the shelved repair release' };
+  }
+  const set = setDoneSafely(revision ? (dir, _state, options) => finishRepairArchive(dir, { revision, ...options }) : setDone,
+    destination, { root, lock, read, write });
   if (!set.ok) return { ok: false, reason: `the record at ${destination} could not be set to done: ${set.problems?.join('; ') || set.status}` };
   try { clearDestination({ programme, root, read, writeJson, lock }); } catch (error) { return { ok: false, reason: `the destination was not cleared: ${error.message || String(error)}` }; }
   return { ok: true, destination };

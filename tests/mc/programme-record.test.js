@@ -883,7 +883,7 @@ describe('internal repair order drafting', () => {
         stderr: { write: text => err.push(text) } };
       assert.equal(await goal(['new', 'internal-repair/restore', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Restore'], deps), 1);
       assert.equal(await plan(['internal-repair'], { ...deps, repos: [], ensure: unexpected }), 1);
-      assert.equal(err.filter(text => /repair programme internal-repair is draft/u.test(text)).length, 2);
+      assert.equal(err.filter(text => /repair programme internal-repair needs review/u.test(text)).length, 2);
       assert.deepEqual(readdirSync(join(dir, 'goals')), []);
       assert.equal((await call(['create', 'desk-repair', '--end', 'Update the text.', '--area', 'memoro-cli/operations', '--from-proposal', ordinary], desk, AREA_DEPS)).code, 0);
       assert.equal((await call(['state', 'desk-repair', 'ready'], desk)).code, 0);

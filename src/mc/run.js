@@ -82,7 +82,8 @@ import { loggedTick } from './nightly-loop.js';
 import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
-import { readRecord, repairDraftRefusal } from './programme-record.js';
+import { readRecord } from './programme-record.js';
+import { repairGoalAdmission } from './repair-reconcile.js';
 import { RUNNER_DISK, RUNNER_MEMORY, planAreaName, programsHome, restrictedProgrammeDir, runnerDir, runnerScratchDir, workRoot } from './paths.js';
 import { archiveGoal, finalizeDroppedGoal, goalArchiveDue } from './goal-archive.js';
 import {
@@ -1940,17 +1941,21 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (rechecked && !rechecked.admitted) return 'skipped:disk';
       if (stopRequested()) return 'stop';
       if (updateRequested()) return 'skipped:update';
-      const prompt = programmePlanPrompt({ programme, dir, horizon: due.record.horizon, repos: repos.map(repo => repo.name), checkouts: set.paths });
-      const instructions = instructionsFor(launch.id, role.overlay);
-      const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
+      if (due.revision && turnDue(programme).revision !== due.revision) return 'skipped:programme-changed';
       const stem = `programme-${programme}-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;
       const out = join(paths.log, stem);
       scratch = join(paths.scratch, stem);
       marker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind: 'plan', stem, started: stamp() };
       deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
+      const released = due.revision ? join(scratch, 'released-order') : null;
+      if (released) for (const { path, bytes } of due.snapshot.files) deps.write(join(released, path), bytes);
+      const prompt = programmePlanPrompt({ programme, dir, horizon: due.record.horizon, repos: repos.map(repo => repo.name), checkouts: set.paths, released, revision: due.revision });
+      const instructions = instructionsFor(launch.id, role.overlay);
+      const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
       const current = { name, step: null, kind: 'plan', variant: null, programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
         effort: settings.effort, advisor: settings.advisor, class: 'plan', billing: picked.billing,
         check_in_minutes: requireCapability(launch.id, 'WATCH')?.checkIn ? settings.checkInMinutes : null, check_ins: 0, started: stamp(), pid, worktree: dir,
+        ...(due.revision ? { repair_revision: due.revision } : {}),
         ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
         role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
       writeJson(currentPath, current);
@@ -1962,7 +1967,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
           ...watchFor(launch, settings, { prompt, name, checkInText: programmePlanCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). No MC_GOAL: this session is the programme's, not a goal's.
-          env: { MC_HEADLESS: '1', MC_ROLE: roleName, MC_PROGRAMME: programme, MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch },
+          env: { MC_HEADLESS: '1', MC_ROLE: roleName, MC_PROGRAMME: programme, MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch,
+            ...(due.revision ? { MC_REPAIR_REVISION: due.revision } : {}) },
           unsetEnv: ['MC_GOAL', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', ...dropEnv(launch)] });
         admission.release?.();
         result = await pending;
@@ -1977,7 +1983,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const count = goalCount({ home: programsHome(deps.env), programme, list: deps.list });
       // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
       const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
-      const ended = finishTurn({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, write: deps.write, lock, root });
+      const ended = finishTurn({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, write: deps.write, lock, root, revision: due.revision });
       let note = `${read.note},${count} goal${count === 1 ? '' : 's'}`;
       if (ended.kind === 'cut') note = `${note},cut`;
       else if (ended.kind === 'settled') note = `${note},not cut (${ended.problems.join('; ')})`;
@@ -2079,6 +2085,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } catch (error) { result = { ok: false, reason: error.message || String(error) }; }
     for (const line of captured.join('').split('\n').filter(Boolean)) say(`${name}: ${line}`);
     if (result.ok) { say(`${name}: programme archived — ${result.destination}, its record reads done`); return 'ran'; }
+    if (result.stale) { say(`${name}: archive deferred — ${result.reason}`); return 'skipped:programme-changed'; }
     if (result.restricted) {
       try {
         const opened = openRestrictedItem({ ...archiveSeams(programme), entries: result.restricted, at: stamp(), env: deps.env, write: deps.write, itemDirectory });
@@ -2129,7 +2136,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (offlineHeld()) { say(`${name}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
       // Read again after admission: a goal made, an item opened or the record changed meanwhile leaves nothing to read.
       const again = archiveDueNow(programme);
-      if (!again.due || again.mode !== 'read') { say(`${name}: programme changed during admission — reading deferred (${again.reason ?? again.mode})`); return 'skipped:programme-changed'; }
+      if (!again.due || again.mode !== 'read' || again.revision !== due.revision) { say(`${name}: programme changed during admission — reading deferred (${again.reason ?? again.mode})`); return 'skipped:programme-changed'; }
       // The repositories of the done goals and every repository that declares areas, each at origin/main.
       const wanted = new Map();
       for (const repo of repos) if (due.repos.includes(repo.name)) wanted.set(repo.name, repo);
@@ -2156,10 +2163,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (rechecked && !rechecked.admitted) return 'skipped:disk';
       if (stopRequested()) return 'stop';
       if (updateRequested()) return 'skipped:update';
+      if (due.revision && archiveDueNow(programme).revision !== due.revision) return 'skipped:programme-changed';
       // A file left by an earlier reading is not this one's.
       remove(join(dir, WRITE_BACK_FILE));
       const horizon = due.record.horizon;
-      const prompt = archiveReadPrompt({ programme, dir, horizonDir: horizon ? join(horizonsDir(deps.env), horizon) : null, goals: due.goals, dropped: due.dropped, checkouts: set.paths, archive: archiveDirIn(programsHome(deps.env), programme) });
+      const prompt = archiveReadPrompt({ programme, dir, horizonDir: horizon ? join(horizonsDir(deps.env), horizon) : null, goals: due.goals, dropped: due.dropped, checkouts: set.paths, archive: archiveDirIn(programsHome(deps.env), programme), revision: due.revision });
       const instructions = instructionsFor(launch.id, role.overlay);
       const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
       const stem = `archive-${programme}-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;
@@ -2170,6 +2178,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const current = { name, step: null, kind: 'plan', variant: null, programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
         effort: settings.effort, advisor: settings.advisor, class: 'large', billing: picked.billing,
         check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0, started: stamp(), pid, worktree: dir,
+        ...(due.revision ? { repair_revision: due.revision } : {}),
         ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
         role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
       writeJson(currentPath, current);
@@ -2195,9 +2204,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const seconds = Math.round((deps.now().getTime() - t0) / 1000);
       // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
       const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
-      const parsed = parseWriteBack(deps.read(join(dir, WRITE_BACK_FILE)), { goals: due.goals, checkouts: shas, horizon });
+      const parsed = parseWriteBack(deps.read(join(dir, WRITE_BACK_FILE)), { goals: due.goals, checkouts: shas, horizon, revision: due.revision });
       let note = `${read.note},${due.goals.length} goal${due.goals.length === 1 ? '' : 's'}`;
-      if (!parsed.ok) {
+      if (due.revision && archiveDueNow(programme).revision !== due.revision) {
+        note = `${note},repair release changed — write-back not kept`;
+      } else if (!parsed.ok) {
         if (!providerEnding) {
           const reason = `archive reading exited ${result.status ?? 1}: ${parsed.problems.join('; ')}`;
           countArchive(programme, { reason, log: `${out}.jsonl` });
@@ -2205,7 +2216,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         }
       } else if (parsed.verdict === 'OK') {
         try {
-          keepReading({ ...archiveSeams(programme), at: stamp(), goals: due.goals, lines: [], horizon });
+          keepReading({ ...archiveSeams(programme), at: stamp(), goals: due.goals, lines: [], horizon, home: programsHome(deps.env), revision: due.revision });
           outcome = 'kept';
           note = `${note},write-back OK`;
         } catch (error) { say(`${name}: the OK reading was not kept — ${error.message || String(error)}`); }
@@ -2729,12 +2740,17 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * Whether `goal` is held (`mc goal hold`, read now). A held goal gets no planning, delivery or decision session;
    * the first pass that would have started one says so, once for each hold.
    */
+  function goalRelease(goal, revision) {
+    const dir = join(programsHome(deps.env), goal.programme);
+    return repairGoalAdmission(dir, goal.goal, { read: deps.read, revision });
+  }
+
   function heldBy(goal) {
     const name = goalName(goal);
     const programme = readRecord(join(programsHome(deps.env), goal.programme), { read: deps.read });
-    const repair = programme.status === 'valid' && repairDraftRefusal(programme.record, goal.programme);
+    const repair = programme.record?.repair && goalRelease(goal)?.problems?.[0];
     if (repair || (programme.status === 'valid' && programme.record.state === 'draft')) {
-      const key = `draft:${goal.programme}`;
+      const key = `order:${repair || goal.programme}`;
       if (holdsSaid.get(name) !== key) {
         say(`${name}: ${repair || `${goal.programme} is draft`} — no session is started`);
         holdsSaid.set(name, key);
@@ -3285,6 +3301,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    */
   async function runGoal(goal, { lane = 0 } = {}) {
     const name = goalName(goal);
+    const release = goalRelease(goal);
+    if (release?.problems) return 'skipped:held';
+    const revision = release?.release?.revision;
     const logPath = join(goal.dir, LOG_FILE);
     const [repoName] = goal.repos;
     const worktree = join(goal.dir, repoName);
@@ -3412,6 +3431,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
         check_in_minutes: requireCapability(launch.id, 'WATCH')?.checkIn ? settings.checkInMinutes : null, check_ins: 0,
         started: stamp(), pid, worktree: cwd,
+        ...(revision ? { repair_revision: revision } : {}),
         ...(marked?.generation ? { generation: marked.generation } : {}),
         ...(deps.identity?.(pid) || {}),
         role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }),
@@ -3446,7 +3466,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         // and the existing finally blocks release admission and the slot.
         if (stopRequested()) return 'stop';
         if (updateRequested()) return 'skipped:update';
-        if (heldBy(goal)) return 'skipped:held';
+        if (heldBy(goal) || (revision && goalRelease(goal, revision)?.problems)) return 'skipped:held';
         const listed = goals();
         const order = planning ? orderOf(goal.programme) : null;
         // Stated phases: the draft must still be the programme's next, and no other plan session of it may be on.
@@ -3485,6 +3505,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
             ...(review ? { MC_REVIEW_HEAD: pr.head, MC_REVIEW_PR: String(pr.number), MC_SESSION_STARTED: new Date(t0).toISOString() } : {}),
             ...(review && judged.seen?.length ? { MC_REVIEW_SEEN: judged.seen.join(' ') } : {}),
             ...(writeBack ? { MC_REVIEW_WRITE_BACK: '1' } : {}),
+            ...(revision ? { MC_REPAIR_REVISION: revision } : {}),
             ...(settings.model ? { MC_MODEL: settings.model } : {}),
             ...scratchEnv,
           },
@@ -3513,7 +3534,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const spoke = entriesAfter.length > entriesBefore;
       // A goal held when its session ends belongs to its hold's owner (D2): no stage, status or entry is written here.
       const holdAtEnd = readHold(goal.dir, deps.read);
-      if (result.handedOff) { say(`${name}: handed to the merger — lane released`); }
+      if (revision && goalRelease(goal, revision)?.problems) say(`${name}: repair release changed while the session ran — its result cannot advance delivery`);
+      else if (result.handedOff) { say(`${name}: handed to the merger — lane released`); }
       else if (holdAtEnd) say(`${name}: held by ${holdAtEnd.by ?? '—'} since ${holdAtEnd.at ?? '—'} when its session ended — stage and status stay, nothing is written`);
       // A quota or API ending answers nothing about the goal: the next pick takes it again.
       else if (planning) {

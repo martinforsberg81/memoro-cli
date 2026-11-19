@@ -268,10 +268,9 @@ evidence in the strict programme lock; it does not hold the lock while the
 role reads. Changed evidence or concurrent order changes cannot be committed
 from a stale reading.
 
-Ordinary `state ready`, `mc plan` and `mc goal new` refuse repair-owned
-drafts (exit 1). A state spelling is not a release. Part 2 has no release
-operation; older runners see the optional repair field as invalid and hold
-its goals. Ordinary desk-created area repairs keep their existing route.
+Ordinary `state` is not a release or a resume of a repair-owned order.
+`mc plan` and `mc goal new` refuse its draft and a stale ready order (exit 1).
+Ordinary desk-created area repairs keep their existing route.
 
 For a repair-owned draft, programme review requires the live entrance's
 programme-bound repair identity on both claim and receipt write. The reader
@@ -290,6 +289,16 @@ storing the report and its receipt with the manifest and report digests. An
 input change during the reading, failed reader, invalid report or superseded
 attempt stores no usable receipt. A report alone grants no authority. The
 ordinary desk reading remains advisory.
+
+The assigned repair author releases with `mc programs release <programme>`.
+It requires a receipt on the current manifest with no outstanding findings.
+Making a correction or recording a reasoned answer under Read changes the
+README: the new version must be read before release. The command commits a
+new revision and its manifest under the programme lock. It does not take an
+ordinary programme or trust a ready spelling without the current manifest.
+A stale ready record keeps that spelling on disk and says `ready (needs
+review)` in the terminal list. An authorised reopen changes it to draft and
+revokes the receipt without removing sources, goals or the previous cut.
 
 ## What the session is told
 

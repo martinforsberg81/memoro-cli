@@ -940,6 +940,19 @@ remain outside this trigger. See [next draft planning](mc-goals.md#next-draft-pl
 
 ## Programme planning turn
 
+A released repair order is planned on a fixed copy of the released inputs.
+The turn carries the release revision and is due until that revision is
+reconciled, even if every part already has goals. The programme planner
+creates goals only against that current release and records its comparison
+with `mc programs reconcile <programme> --reason <text>`. Changed unfinished
+work is updated by the goal verbs; a changed contract must be back in draft
+or build without carried criterion marks. The planner may return a repair
+goal from review or merge to build while reconciling. Removed parts retire
+their unfinished work. Landed goals are kept as evidence and cannot cover a
+changed part by number alone. The runner checks both the programme manifest
+and the reconciled goal contract before delivery, and passes the revision to
+the session. A result from a superseded session does not advance the goal.
+
 Martin, 2026-11-16: a programme whose record is `ready` is cut
 into its phases and goals from `README.md`, with nobody present.
 `programmeDue` (`programme-turn.js`) is model-free and reads at every pick. A turn is due when
@@ -1037,6 +1050,13 @@ file that cannot be read starts no turn and counts nothing; the runner says it
 once in `runner.log`, the desk sync reports it and the item stays open.
 
 ## Programme archive turn
+
+For a repair order the current reconciled release also gates write-back and
+archival. The write-back names the release on its first line, `release:
+<revision>`. The runner retains an OK only for that revision and the same
+landed goals; an old OK cannot authorize archiving a newer release. The
+archive rechecks the release and the retained reading at its fence and
+checks the revision again when recording completion after moving the order.
 
 Martin, 2026-11-15: a programme with a record is bounded. Once every goal is
 done or dropped, the runner checks that what the programme made true is written

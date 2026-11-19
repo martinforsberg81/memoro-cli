@@ -42,7 +42,8 @@ import { addWorktree, createWorkArea, dropEmptyArea, inspectWorkArea, releaseWor
 import { attachRepoDeps } from '../shared-deps.js';
 import { openInWorkArea } from '../work-open.js';
 import { layoutVersion, planAreaName, planAreaRoot, programsHome, workRoot } from '../paths.js';
-import { readRecord, repairDraftRefusal } from '../programme-record.js';
+import { readRecord } from '../programme-record.js';
+import { repairReleaseState } from '../repair-release.js';
 import { readCanonRole, reservedRoleHint, reservedRoleName, roleSourceOf } from '../roles.js';
 import { ask, interactive, select } from '../prompt.js';
 import { run as runGit } from '../git.js';
@@ -134,8 +135,10 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
-  const found = readRecord(join(programsHome(env), programme));
-  const repairRefusal = found.status === 'valid' && repairDraftRefusal(found.record, programme);
+  const programmeDir = join(programsHome(env), programme);
+  const found = readRecord(programmeDir);
+  const repair = repairReleaseState(programmeDir, found.record);
+  const repairRefusal = repair?.problems?.[0] ?? (repair && opts.archive ? 'repair orders use ordinary runner archival after current write-back' : null);
   if (repairRefusal) { stderr.write(`mc: ${repairRefusal}\n`); return 1; }
 
   // A programme that is over: off main in both repositories, and its planning

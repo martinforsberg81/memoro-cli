@@ -1,0 +1,56 @@
+/** Only a current reviewed repair draft can be opened to the ordinary planner. */
+import { randomUUID } from 'node:crypto';
+import { basename, join } from 'node:path';
+
+import { readTextOrNull } from './goals.js';
+import { workRoot } from './paths.js';
+import { changeProgrammeRecord } from './programme-record.js';
+import { isRepairAuthor } from './repair-authority.js';
+import { repairSnapshot } from './repair-manifest.js';
+import { currentRepairReview, REPAIR_REVIEW_FILE } from './repair-review.js';
+
+export const needsRepairReview = name => `repair programme ${name} needs review — mc repair --resume ${name}`;
+const refused = problem => ({ problems: [problem] });
+
+/** Null for an ordinary programme, a refusal or the current release and its fixed inputs otherwise. */
+export function repairReleaseState(dir, record) {
+  if (!record?.repair) return null;
+  const { release, stop_item: stop } = record.repair;
+  const name = basename(dir);
+  if (stop) return refused(`repair programme ${name} is at Martin (item ${stop})`);
+  if (!['ready', 'done'].includes(record.state)) return refused(`repair programme ${name} is ${record.state} — mc repair --resume ${name}`);
+  try {
+    const snapshot = repairSnapshot(dir);
+    if (release?.manifest.revision === snapshot.manifest.revision) return { release, snapshot };
+  } catch { /* A missing or unreadable input cannot be current. */ }
+  return refused(needsRepairReview(name));
+}
+
+export function releaseRepair(dir, env, { lock, alive, read = readTextOrNull } = {}) {
+  const name = basename(dir);
+  return changeProgrammeRecord(dir, record => {
+    if (!record.repair) return refused(`${name} is not a repair-owned programme`);
+    if (!isRepairAuthor(env, name, alive)) return refused('only the assigned repair session may release this repair order');
+    if (record.state !== 'draft' || record.repair.stop_item) return refused(repairReleaseState(dir, record)?.problems?.[0]
+      ?? `repair programme ${name} is already ${record.state}`);
+    let reading;
+    try { reading = currentRepairReview(dir, { read }); } catch { /* no current reading */ }
+    if (!reading || reading.findings.length) return refused(needsRepairReview(name));
+    return { ...record, state: 'ready', repair: { ...record.repair, release: { revision: randomUUID(), manifest: reading.snapshot.manifest } } };
+  }, { root: workRoot(env), lock, read }, 'repair-release');
+}
+
+/** A current ready release is left alone so resume can retry only source archival. */
+export function reopenRepair(dir, env, { lock, alive } = {}) {
+  const name = basename(dir);
+  return changeProgrammeRecord(dir, record => {
+    if (!record.repair) return refused(`${name} is not a repair-owned programme`);
+    if (!isRepairAuthor(env, name, alive)) return refused('only the assigned repair session may resume this repair order');
+    if (record.repair.stop_item || !['draft', 'ready'].includes(record.state)) return refused(repairReleaseState(dir, record)?.problems?.[0]
+      ?? `repair programme ${name} is ${record.state}`);
+    if (record.state === 'draft' || repairReleaseState(dir, record)?.release) return record;
+    return { ...record, state: 'draft' };
+  }, { root: workRoot(env), lock }, 'repair-reopen', {
+    beforeWrite: write => write(join(dir, REPAIR_REVIEW_FILE), '{}\n'),
+  });
+}
