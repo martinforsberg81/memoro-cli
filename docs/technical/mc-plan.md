@@ -389,3 +389,27 @@ and `an existing README is left as it is`.
 and launch evidence for descendant review, wrong programme, unknown identity,
 explicit refusal, aliases and compatible continuation.
 `tests/mc/archive-programme.test.js` covers archive refusals and ordering.
+
+
+## Acceptance preparation before build
+
+Programme review assesses each part's proposed acceptance procedure for an
+observable failure, exercise of the promised behaviour and named workspace,
+dependencies and usable inputs. It uses the existing read-only exports and
+permitted checks; missing evidence is a finding, not a pass. For unbuilt
+functionality it assesses the procedure and prerequisites, not a final result.
+The desk corrects findings in the order before release.
+
+The programme planning turn promotes directly only on evidence naming the
+current check, required capability in the intended checkout and usable named
+input. Unrelated main movement does not invalidate those premises. Missing
+evidence or a changed check or relevant premise leaves a draft for next-draft
+planning, even without a producer. A consumer requiring a producer stays draft
+in a dependent phase; an open phase, including after a dropped producer, is not
+evidence of output. Next-draft planning verifies the procedure and setup in the
+goal checkout before promotion. A sound check missing its input in an open phase
+uses the existing draft technical handoff; the desk returns it when the input is
+verifiably available. A wrong setup premise is reported by `mc goal defect` in
+draft; the desk verifies the change before returning it to planning. Changes to
+the programme promise go to the desk. This adds no runner admission service or
+separate review. The report and goal log carry the evidence.

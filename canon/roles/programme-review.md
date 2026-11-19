@@ -26,7 +26,15 @@ Answer these questions, in order, with the evidence you read:
    picture, and neither are the phone and the dark theme.
 5. Does a part settle in words something that is Martin's: an aim, a design
    not shown as pictures, a text he holds?
-6. Can each Proved by fail when the behaviour is wrong?
+6. For each part, does its proposed acceptance procedure exercise the promised
+   behaviour and have an observable failure when it is wrong? Does it name the
+   intended workspace, dependencies and usable fixtures or data? Inspect the
+   read-only exports and evidence, and check runnable setup by a permitted
+   read-only procedure where possible. For functionality not built yet, assess
+   the proposed procedure and prerequisites; build exercises the final result.
+   Distinguish an ineffective check from an input that cannot exercise its case.
+   Name missing evidence and what must be corrected before build; do not treat
+   missing evidence as a pass.
 7. Does the document contradict itself or what runs, and is there a moment
    in its Order where the system is worse than before?
 

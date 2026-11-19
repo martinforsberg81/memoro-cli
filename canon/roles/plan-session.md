@@ -16,9 +16,7 @@ A goal (`GOAL.json`, written with the `mc goal` verbs) is what the runner
 builds. It is a means toward the aim, not the aim itself; the plan
 decides its decomposition, phase and complete brief.
 
-Every fully planned goal moves from `draft` to `build` immediately in its
-assigned phase, including goals waiting for an earlier phase. `draft` means its
-brief is unfinished, never a queue for completed planning. Unresolved planning
+A goal moves from `draft` to `build` only after its acceptance procedure and setup are verified for the intended build. A consumer waiting for a producer remains draft in a dependent phase. Unresolved planning
 prerequisites mean the work is not build-ready: do not hand it to build with a
 ceremonial `LOG.md` hold. Investigate until relevant facts and remaining
 uncertainty are established; what is left is decided as
@@ -56,8 +54,7 @@ only. One plan session runs in a programme at a time.
 
 Complete that draft's planning: read the programme README first, its relevant
 design, technical contracts, goal and log, and the affected code.
-Resolve implementation questions yourself; finish the goal's parts, its stand on every rule area, documents and executable criteria through `mc goal`. Reconcile the README, phases and shedding (a section whose goals have landed is in `docs/technical/` and leaves the README). Move the completed goal to
-`build` immediately, including when it belongs in a later phase. Ask a
+Resolve implementation questions yourself; finish the goal's parts, its stand on every rule area, documents and executable criteria through `mc goal`. Reconcile the README, phases and shedding (a section whose goals have landed is in `docs/technical/` and leaves the README). Verify the current check, required capability in this goal checkout and usable named input before moving the goal to `build`. An opened phase alone is not evidence of a producer output, including when the producer was dropped. If a sound check lacks its named input in an open phase, record the blocking input in the existing draft technical handoff for the desk to return when verifiably available. If the setup premise itself is wrong, report it and evidence with `mc goal defect` while draft. A change to the programme promise goes to `mc martin`. Ask a
 remaining question through goal-bound `mc ask`, the one way to ask: jev, then a
 reader, answer it inside the call, and you continue on the answer (or on your
 recommendation when the call says unread). Amend the canonical rule and goal consistently.
@@ -92,8 +89,7 @@ no solution, design or decision of your own about what is delivered or how it
 looks, no proposal, and no extra items beyond what the verbs require. The builder
 settles the construction. Where goals exist from an earlier cut, a part unchanged
 since then keeps its goals; for a changed part a goal not yet in build is rewritten,
-and a goal already built gets a new goal for the difference. Move each goal to
-`build` in its phase as soon as it is complete.
+and a goal already built gets a new goal for the difference. Promote directly only when evidence identifies the current check, the required capability in the intended checkout and usable named input. Unrelated main movement does not invalidate those named premises. If evidence is missing or the check or a relevant premise changed, leave the goal draft for the existing next-draft turn, even without a producer. If a producer must land first, use the ordinary phase dependency and leave its consumer draft. Record the reason in the goal log; do not invent a runner admission gate.
 
 Where a part leaves open a choice of what is delivered or how it looks, which
 the document neither shows nor routes, or has a step that waits on Martin
