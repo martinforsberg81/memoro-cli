@@ -27,7 +27,7 @@ import { repoNameOf } from '../repos.js';
 import { knownRepositories } from '../work-area.js';
 import { setProgrammePriorities, validPriority } from '../programme-priority.js';
 import {
-  AREA_RE, RECORD_FILE, changePhases, cycleOf, newRecord, readRecord, recordPage, recordPageTemplate, recordView, setRecordState, writeRecord,
+  AREA_RE, RECORD_FILE, changePhases, createProgramme, cycleOf, newRecord, readRecord, recordPage, recordPageTemplate, recordView, setRecordState, writeRecord,
 } from '../programme-record.js';
 import { GOAL_FILE, HOLD_FILE, PLAN_ROLE, appendEntry, listDirsOf, logStamp, parseGoal, programsGoals, readHold, readTextOrNull } from '../goals.js';
 import { NAME_RE } from '../plan-schema.js';
@@ -323,10 +323,7 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
     const page = recordPage(template, { name, end: flags.end, horizon: flags.horizon, area: flags.area, purpose: flags.purpose, proposal: proposal?.archived ?? null });
     const record = newRecord({ horizon: flags.horizon, area: flags.area, end: flags.end.trim(), createdBy: writer.by, now, stated: true });
     mkdirSync(home, { recursive: true });
-    mkdirSync(dir);
-    for (const sub of ['goals', 'evidence']) mkdirSync(join(dir, sub), { recursive: true });
-    writeFileSync(join(dir, 'README.md'), page, { flag: 'wx' });
-    writeRecord(dir, record);
+    createProgramme(dir, page, record);
     stdout.write(`${name}: programme made at ${dir} — record state ${record.state}, phases stated, page README.md to fill in; mc goal new ${name}/<goal> makes its first goal\n`);
     if (proposal) {
       // Ordered is decided: the proposal goes to its area's archive under the line that says so.

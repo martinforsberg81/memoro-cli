@@ -33,6 +33,24 @@ A retired route answers with where the work went and exit 2, not an alias
 that silently performs the old operation. `mc status` points to the page and
 `mc goal show`; free-standing workarea entrances are retired too.
 
+## Internal repair drafting
+
+`src/mc/repair-draft.js` exports `runRepairDraft(argv)` for the next repair
+handoff. It is not a CLI route or a help entry. `mc repair` (including
+`--help` and source flags) is an unknown command, exit 2. No ordinary desk
+command calls the internal entry.
+
+The internal entry takes no arguments or one of `--proposal <path>`,
+`--feedback <file>` and `--error <digest-file> [--fingerprint <id>]`.
+Without a selection it examines waiting dated area proposals by filename
+then path, skipping unchanged non-actionable, ambiguous, stopped and
+already ordered sources. It can resume an existing repair draft. Explicit
+selection reports the disposition instead. A missing or unreadable source
+exits 1; malformed arguments, incident feedback without a task ID or an
+incident timestamp and build, or a digest that needs fingerprint selection
+exit 2 without ordering. The digest selection reports the available IDs.
+Sources, records and draft admission are in [mc-plan.md](mc-plan.md#internal-repair-drafts).
+
 ## Proposal counts
 
 `mc proposals` reports waiting proposal counts per area and the total. It uses

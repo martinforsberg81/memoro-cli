@@ -90,7 +90,7 @@ import { realLock } from '../runner-lock.js';
 import { mergesPath, parseQueue } from '../merge-queue.js';
 import { pidAlive, readCurrents } from '../status-collect.js';
 import { NAME_RE } from '../plan-schema.js';
-import { readRecord } from '../programme-record.js';
+import { readRecord, repairDraftRefusal } from '../programme-record.js';
 import { programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
 import { MERGE_HANDOFF_FILE } from '../session-role.js';
@@ -320,6 +320,8 @@ function newGoal(args, flags, ctx) {
   }
   if (!ctx.list(home).includes(programme)) { stderr.write(`mc: no programme ${programme} under ${home}\n`); return 1; }
   const record = readRecord(join(home, programme), { read: ctx.read });
+  const refusal = record.status === 'valid' && repairDraftRefusal(record.record, programme);
+  if (refusal) { stderr.write(`mc: ${refusal}\n`); return 1; }
   if (record.status === 'valid' && record.record.state === 'draft') {
     stderr.write(`mc: ${programme} is draft — mc programs show ${programme}\n`); return 1;
   }
@@ -1392,6 +1394,9 @@ function fromProject(args, ctx) {
   const { stdout, stderr, env, home, now, list, read, write, git, known } = ctx;
   if (args.length !== 1 || !isGoalRef(args[0])) { stderr.write('mc: from-project <programme>/<project>\n'); return 2; }
   const [programme, project] = args[0].split('/');
+  const record = readRecord(join(home, programme), { read });
+  const refusal = record.status === 'valid' && repairDraftRefusal(record.record, programme);
+  if (refusal) { stderr.write(`mc: ${refusal}\n`); return 1; }
   const answer = convertProject({ home, programme, project, now, tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, list, read, write, git, known });
   if (answer.refused) { stderr.write(`mc: ${args[0]} is not converted — ${answer.refused}\n`); return 1; }
   for (const goal of answer.made) {
