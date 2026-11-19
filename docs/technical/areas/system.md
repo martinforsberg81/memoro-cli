@@ -27,6 +27,10 @@ On main now:
 
 - Opening or resuming the desk supplies a fresh snapshot and tells the session to wait for Martin's instruction. The overview groups programmes under their open horizons and shows the rest separately.
 - The desk checks that the current order has been reviewed and its necessary investigations are complete before bringing it to Martin to set ready. The ordinary `state ready` command does not enforce either check.
+- Before build, programme review and planning check the acceptance procedure
+  and its setup ([acceptance preparation](../mc-plan.md#acceptance-preparation-before-build)).
+  During delivery, goal list and show report the evidenced outcome and who
+  acts next when available ([goal displays](../mc-goals.md#the-verbs)).
 - A waiting deploy reserves the next opening for a full run when a different commit is being measured. It can still join a measurement of its own commit.
 - The helper preserves anonymous app suggestions in intake before it acknowledges their receipt. Collection does not create a programme or goal.
 
