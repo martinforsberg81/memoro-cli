@@ -1546,7 +1546,7 @@ function showGoal(args, ctx) {
   if (evidence.lines.length) stdout.write(`\nEVIDENCE\n${evidence.lines.join('\n')}\n`);
 
   const log = parseLog(read(join(target.dir, LOG_FILE)) ?? '');
-  const outcome = continuingBuildOutcome({ ...goal, ...target, log }, ctx);
+  const outcome = buildOutcome({ ...goal, ...target, log }, ctx);
   if (outcome) stdout.write(`\nBUILD OUTCOME\n  ${outcome}\n`);
   stdout.write('\nLOG\n');
   if (log.length === 0) stdout.write('  no entries yet\n');
@@ -1704,7 +1704,7 @@ function goalLine(goal, ctx) {
   const { read } = ctx;
   const name = `${goal.programme}/${goal.goal}`;
   // A finished goal has no next action, whatever its last entry said.
-  const next = continuingBuildOutcome(goal, ctx) ?? (FINISHED.includes(goal.stage) ? '—' : (goal.log.at(-1)?.next ?? '—').replace(/\s*\n\s*/gu, ' '));
+  const next = buildOutcome(goal, ctx) ?? (FINISHED.includes(goal.stage) ? '—' : (goal.log.at(-1)?.next ?? '—').replace(/\s*\n\s*/gu, ' '));
   const status = waitsOnPerson(goal) ? `${stageWords(goal)}, waits on a person`
     : goal.stage === 'build' && noCriteria(goal) ? `${stageWords(goal)}, no criteria — not started`
     : stageWords(goal);
@@ -1713,8 +1713,20 @@ function goalLine(goal, ctx) {
   return `${name} · ${goal.repos.join(',')} · ${status}${held} · ${criteriaWords(goal)} · ${sessions(goal.log)} sessions · ${next}`;
 }
 
-/** Dispatch evidence is historical; it does not change an eligible build's owner. */
-function continuingBuildOutcome(goal, ctx) {
+/** The current stage owns the goal; historical dispatch evidence does not. */
+function buildOutcome(goal, ctx) {
+  if (readHold(goal.dir, ctx.read)) return null;
+  const last = goal.log.at(-1);
+  const transitions = goal.log.filter((entry, i, entries) => entry.stage && entry.stage !== entries[i - 1]?.stage);
+  const transition = transitions.at(-1);
+  if (goal.stage === 'review' && transition?.stage === 'review' && transition.role === 'build') {
+    return 'build handed to review · independent review';
+  }
+  if (goal.stage === 'build' && goal.status === 'Martin' && /^(?:no progress:|goal defect:)/u.test(last?.comment ?? '')) {
+    const reason = last.comment.replace(/\s*\n\s*/gu, ' ');
+    const retained = goal.prs.length ? 'existing branch and PR' : 'existing branch';
+    return `build stopped — ${reason} · technical desk · retained work: ${retained} · LOG.md`;
+  }
   if (goal.stage !== 'build' || goal.status !== 'ready' || readHold(goal.dir, ctx.read)) return null;
   const latest = buildDispatches({ root: workRoot(ctx.env), programme: goal.programme, goal: goal.goal, read: ctx.read, list: ctx.listFiles }).at(-1);
   if (!latest) return null;

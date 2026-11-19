@@ -125,6 +125,14 @@ test('goal outcome: a later unmatched announcement retains the eligible build co
     [`${logDir}/goal-mc-plain-20261101T200000Z.jsonl`]: '{"type":"thread.started","thread_id":"session-1"}\n',
   });
   const f = fixture({ files, env: { MC_WORK_ROOT: '/work' } });
+  const announcements = f.store[`${logDir}/runner.log`];
+  f.store[`${logDir}/runner.log`] = announcements.split('\n')[0] + '\n';
+  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
+    const before = f.out().length;
+    assert.equal(await run(args, f.deps), 0, f.err());
+    assert.match(f.out().slice(before), /build started · build remains eligible · Next: verify saved proposal/u);
+  }
+  f.store[`${logDir}/runner.log`] = announcements;
   for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
     const before = f.out().length;
     assert.equal(await run(args, f.deps), 0, f.err());
@@ -874,6 +882,34 @@ test('a commit after the mark makes the move refused', async () => {
     assert.equal(await run(['criterion', 'met', '2', '--evidence', 'again, at the new head'], f.deps), 0, f.err());
     assert.equal(await run(argv, f.deps), 0, f.err());
     assert.equal(stateOf(f), 'review · ready');
+  }
+});
+
+test('goal outcome: only a committed handoff names review and a technical stop retains its work', async () => {
+  const fields = { stage: 'build', prs: ['memoro-cli#31'] };
+  const files = v2Files(fullEvidence(), fields);
+  const accepted = fixture({ files, env: BUILD, git: worktreeGit({ heads: { ...TWO_HEADS } }) });
+  const refusedGit = worktreeGit({ heads: { ...TWO_HEADS }, published: { 'memoro-cli': TWO_HEADS['memoro-cli'] } });
+  const refused = fixture({ files, env: BUILD, git: refusedGit });
+  assert.equal(await run(MOVES_TO_REVIEW[1], accepted.deps), 0, accepted.err());
+  assert.equal(await run(MOVES_TO_REVIEW[1], refused.deps), 1);
+  for (const [f, handoff] of [[accepted, true], [refused, false]]) {
+    for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
+      const before = f.out().length;
+      assert.equal(await run(args, f.deps), 0, f.err());
+      const output = f.out().slice(before);
+      if (handoff) assert.match(output, /build handed to review · independent review/u);
+      else assert.doesNotMatch(output, /independent review/u);
+    }
+  }
+  const stopped = fixture({ files: v2Files({ [`${DIR}/LOG.md`]: '## 2026-11-01T20:00Z · codex model · build · Martin · by build\n\nComment: goal defect: criterion 1 — cannot run\n' }, { ...fields, status: 'Martin' }), git: worktreeGit({ heads: { ...TWO_HEADS } }) });
+  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
+    const before = stopped.out().length;
+    assert.equal(await run(args, stopped.deps), 0, stopped.err());
+    const output = stopped.out().slice(before);
+    assert.match(output, /build stopped — goal defect: criterion 1 — cannot run · technical desk · retained work: existing branch and PR · LOG\.md/u);
+    assert.equal((output.match(/technical desk/gu) ?? []).length, 1);
+    if (args[0] === 'show') assert.match(output, /WORKTREES[\s\S]*memoro-cli/u);
   }
 });
 
