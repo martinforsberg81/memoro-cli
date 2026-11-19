@@ -390,7 +390,6 @@ and launch evidence for descendant review, wrong programme, unknown identity,
 explicit refusal, aliases and compatible continuation.
 `tests/mc/archive-programme.test.js` covers archive refusals and ordering.
 
-
 ## Acceptance preparation before build
 
 Programme review assesses each part's proposed acceptance procedure for an
@@ -406,11 +405,20 @@ input. Unrelated main movement does not invalidate those premises. Missing
 evidence or a changed check or relevant premise leaves a draft for next-draft
 planning, even without a producer. A consumer requiring a producer stays draft
 in a dependent phase; an open phase, including after a dropped producer, is not
-evidence of output. Next-draft planning verifies the procedure and setup in the
-goal checkout before promotion. A sound check missing its input in an open phase
-is logged and left draft and ready; the runner's existing incomplete-session
-handoff sends it to the desk, which returns it when the input is verifiably
-available. A wrong setup premise is reported by `mc goal defect` in
+evidence of output. Planning verifies the procedure and setup against the
+checkout build will receive, accounting for the [unbuilt-branch
+refresh](mc-goals.md#the-verbs) on promotion and the first build. In the
+next-draft worktree, fetch first, fast-forward an unbuilt branch to the fetched
+base, and verify there. On a branch with its own commits, verify the branch
+the refresh will retain. Do not discard work or promote on unverified setup.
+If a named premise changes before promotion, reverify it; unrelated movement
+does not invalidate the evidence.
+
+A sound check missing its input in an open phase is logged and left draft and
+ready, with the blocking input and technical desk action in `mc goal log
+--next`. The existing incomplete-session handoff keeps that Next visible; the
+desk returns the draft when the input is verifiably available. A wrong setup
+premise is reported by `mc goal defect` in
 draft; the desk verifies the change before returning it to planning. Changes to
 the programme promise go to the desk. This adds no runner admission service or
 separate review. The report and goal log carry the evidence.

@@ -5782,13 +5782,27 @@ test('a hold written while a review worktree is read starts no session and write
 });
 
 test('an incomplete ordinary plan waits on Martin and holds later drafts without spinning', async () => {
-  const f = goalFixture({ a: { stage: 'draft' }, b: { stage: 'draft' } });
-  const runner = createRunner({ deps: f.deps });
-  assert.equal((await runner.pass()).ran, 1);
-  assert.equal(where(f, 'a'), 'draft · Martin');
-  assert.match(f.files[`${GOALS}/a/LOG.md`], /plan session ended without completing the draft/u);
-  assert.equal((await runner.pass()).ran, 0);
-  assert.equal(f.calls.sessions.length, 1);
+  const handoff = 'Missing produced.csv; technical desk verifies setup.';
+  const oldLog = '## 2026-08-28T10:00Z · claude · draft · ready · by plan\n\nNext: Check old.csv.\n';
+  for (const next of [null, handoff]) {
+    const f = goalFixture({ a: { stage: 'draft', log: oldLog }, b: { stage: 'draft' } });
+    const out = [];
+    const goalDeps = { ...f.deps, home: '/w/programs', stdout: { write: (text) => out.push(text) } };
+    if (next) f.answer = async (call) => {
+      assert.equal(await goalCommand(['log', '--next', next], { ...goalDeps, env: call.env }), 0);
+      return okSession()(call);
+    };
+    const runner = createRunner({ deps: f.deps });
+    assert.equal((await runner.pass()).ran, 1);
+    assert.equal(where(f, 'a'), 'draft · Martin');
+    assert.match(f.files[`${GOALS}/a/LOG.md`], /plan session ended without completing the draft/u);
+    assert.equal(await goalCommand(['list', 'prog'], goalDeps), 0);
+    const row = out.join('').split('\n').find((line) => line.startsWith('  prog/a ·'));
+    assert.ok(row?.includes('draft · Martin'), row);
+    assert.equal(row.split(' · ').at(-1), next ?? '—', 'show the current handoff, not older draft history');
+    assert.equal((await runner.pass()).ran, 0);
+    assert.equal(f.calls.sessions.length, 1);
+  }
 });
 
 test('planning rechecks programme eligibility after allocation before launching', async () => {

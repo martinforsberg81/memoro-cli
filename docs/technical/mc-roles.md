@@ -253,9 +253,10 @@ aim in `~/mc/programs/<programme>/README.md` (Martin, 2026-11-03). Its primary
 deliverable is the programme's planning: the README and design, the resolved
 prerequisite and policy decisions, the goal decomposition and phases, and
 complete goal briefs with contracts, exclusions, documents, success criteria and
-executable checks. Every complete brief moves from draft to build at once in its
-phase, including one waiting on an earlier phase; a brief with unresolved
-planning prerequisites stays draft (Martin, 2026-11-08). Within that it has, in
+executable checks. A complete brief moves from draft to build only with
+[verified acceptance setup](mc-plan.md#acceptance-preparation-before-build).
+A consumer awaiting a producer or a brief with unresolved planning
+prerequisites stays draft. Within that it has, in
 principle, full freedom to move the programme toward the aim, a goal's branch
 included: it may finish a goal's work itself when that is quicker than a new
 build session. That freedom is interactive. The runner may instead assign
