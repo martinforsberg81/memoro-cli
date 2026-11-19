@@ -50,7 +50,7 @@ export function buildDispatches({ root, programme, goal, read, list }) {
     const stem = `goal-${programme}-${goal}-${stamp}`;
     const collisions = announcements.filter((other) => `goal-${other.programme}-${other.goal}-${other.at.replace(/[-:]/gu, '')}` === stem);
     const stderr = String(read(join(dir, `${stem}.json.err`)) ?? '');
-    const refused = !trace && matching.length === 1 && matching[0].exit === '1' && collisions.length === 1 && item.line.includes(' · on credits (') && !hasToolStart(read(join(dir, `${stem}.jsonl`))) && /^mc: (?:codex|claude) API (?:is off \(mc run --billing (?:codex|claude) on\)|reserve unavailable \([^\n]*\))$/mu.test(stderr);
+    const refused = !trace && matching.length === 1 && matching[0].exit === '1' && (!matching[0].session || matching[0].session === '-') && collisions.length === 1 && item.line.includes(' · on credits (') && !hasToolStart(read(join(dir, `${stem}.jsonl`))) && /^mc: (?:codex|claude) API (?:is off \(mc run --billing (?:codex|claude) on\)|reserve unavailable \([^\n]*\))$/mu.test(stderr);
     return { at: item.at, trace, start: trace ? 'started' : refused ? 'refused' : 'unknown' };
   });
 }

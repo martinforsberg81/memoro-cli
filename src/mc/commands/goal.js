@@ -1722,7 +1722,7 @@ function buildOutcome(goal, ctx) {
   if (goal.stage === 'review' && transition?.stage === 'review' && transition.role === 'build') {
     return 'build handed to review · independent review';
   }
-  if (goal.stage === 'build' && goal.status === 'Martin' && /^(?:no progress:|goal defect:)/u.test(last?.comment ?? '')) {
+  if (goal.stage === 'build' && goal.status === 'Martin' && /^(?:no progress:|goal defect:|three sessions ended without a word)/u.test(last?.comment ?? '')) {
     const reason = last.comment.replace(/\s*\n\s*/gu, ' ');
     const retained = goal.prs.length ? 'existing branch and PR' : 'existing branch';
     return `build stopped — ${reason} · technical desk · retained work: ${retained} · LOG.md`;

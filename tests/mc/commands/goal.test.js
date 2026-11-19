@@ -174,6 +174,13 @@ test('goal outcome: the same exit distinguishes a credits preflight refusal from
   f.store[`${stem}.jsonl`] = '';
   f.store[`${stem}.json.err`] = 'mc: codex API is off (mc run --billing codex on)\n';
   f.store[`${logDir}/runs.tsv`] = 'ts\tname\tkind\tseconds\tsession\texit\n2026-11-01T20:00:10Z\tgoal:mc/plain\tbuild-goal\t10\t-\t1\n';
+  f.store[`${logDir}/runs.tsv`] = 'ts\tname\tkind\tseconds\tsession\texit\n2026-11-01T20:00:10Z\tgoal:mc/plain\tbuild-goal\t10\tsession-missing-trace\t1\n';
+  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
+    const before = f.out().length;
+    assert.equal(await run(args, f.deps), 0, f.err());
+    assert.match(f.out().slice(before), /build start unknown — no tool boundary recorded/u);
+  }
+  f.store[`${logDir}/runs.tsv`] = 'ts\tname\tkind\tseconds\tsession\texit\n2026-11-01T20:00:10Z\tgoal:mc/plain\tbuild-goal\t10\t-\t1\n';
   f.store[`${logDir}/runner.log`] += '2026-11-01T20:00:00Z goal:mc/plain: review starting (codex)\n';
   for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
     const before = f.out().length;
@@ -959,6 +966,12 @@ test('goal outcome: only a committed handoff names review and a technical stop r
     assert.match(output, /build stopped — goal defect: criterion 1 — cannot run · technical desk · retained work: existing branch and PR · LOG\.md/u);
     assert.equal((output.match(/technical desk/gu) ?? []).length, 1);
     if (args[0] === 'show') assert.match(output, /WORKTREES[\s\S]*memoro-cli/u);
+  }
+  stopped.store[`${DIR}/LOG.md`] = '## 2026-11-01T20:00Z · runner · build · Martin\n\nComment: three sessions ended without a word — see the logs under runner/log\n';
+  for (const args of [['list', 'mc'], ['show', 'mc/plain']]) {
+    const before = stopped.out().length;
+    assert.equal(await run(args, stopped.deps), 0, stopped.err());
+    assert.match(stopped.out().slice(before), /build stopped — three sessions ended without a word[^\n]*technical desk/u);
   }
 });
 
