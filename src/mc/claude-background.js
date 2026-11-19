@@ -14,6 +14,7 @@ import { pidAlive } from './status-collect.js';
 import { openGatewayGrant } from './billing-gateway-session.js';
 import { readBillingApi } from './billing.js';
 import { log } from './logger.js';
+import { directoryAccessRefusal } from './interactive-access.js';
 
 const WORKER = fileURLToPath(import.meta.url);
 const failure = reason => ({ ok: false, reason });
@@ -108,8 +109,15 @@ export async function startDetachedBackground(options, plan, name, { io = fs, fo
   if (plan.billing.billing === 'unavailable') return failure(`Claude billing unavailable: ${plan.billing.why}`);
   if (plan.billing.billing === 'credits' && readApi()?.claude === false) return failure('Claude API is off; no holder or session was started');
   const root = join(workRoot(options.env), 'runner', 'claude-background');
-  io.mkdirSync(root, { recursive: true, mode: 0o700 });
-  const directory = io.mkdtempSync(join(root, 'session-'));
+  let directory;
+  try {
+    io.mkdirSync(root, { recursive: true, mode: 0o700 });
+    directory = io.mkdtempSync(join(root, 'session-'));
+  } catch (error) {
+    const reason = directoryAccessRefusal(error, root);
+    if (!reason) throw error;
+    return failure(reason);
+  }
   io.chmodSync(directory, 0o700);
   const request = join(directory, 'request.json');
   const document = backgroundSettings(plan.args, plan.identity, options.env);

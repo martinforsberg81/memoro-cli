@@ -30,6 +30,19 @@ area, workRoot, mcHome, known repositories' shared Git directories and current
 worktree Git common directory. The Codex adapter renders these as `--add-dir`
 options before the prompt or resumed session ID.
 
+## Startup refusals
+
+If the host denies creation of the planning area, Martin desk or private
+Codex or Claude session directory, the entrance exits 1 and names the denied
+operation and the directory whose permissions to check. When a private
+directory's name has not been allocated, the diagnostic names its parent.
+A planning README template remains optional. Failure to create it still
+allows the planning session to open. Provider approvals and provider-reported
+sandbox setup errors keep their own messages.
+
+The [configured Codex client](mc-server.md#codex-client) also checks the
+forwarded socket before opening the terminal view.
+
 ## Evidence
 
 `tests/mc/interactive-workspace.test.js` covers both repository layouts, a real

@@ -423,6 +423,21 @@ describe('a planning area nothing could be checked out into', () => {
   const missing = (root) => [{ name: 'memoro', path: join(root, 'no-such-repo') }];
   const area = (root, programme) => join(root, 'plan', programme);
 
+  it('reports the denied directory and how to retry before building a checkout', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-plan-denied-'));
+    const stderr = sink();
+    try {
+      const path = area(root, 'example');
+      const result = ensurePlanArea('example', {
+        repos: missing(root), env: { MC_WORK_ROOT: root }, stdout: sink(), stderr,
+        create: () => { throw Object.assign(new Error('permission denied'), { code: 'EACCES', syscall: 'mkdir', path }); },
+      });
+      assert.equal(result.ok, false);
+      assert.equal(stderr.out.text, `mc: host denied creating ${path} — check permissions on ${join(root, 'plan')}, then retry\n`);
+      assert.equal(existsSync(path), false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('is taken away again, and says why', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-plan-empty-'));
     const stderr = sink();
