@@ -35,14 +35,14 @@ export function buildDispatches({ root, programme, goal, read, list }) {
   const rows = String(read(join(dir, 'runs.tsv')) ?? '').trim().split('\n').map((line) => line.split('\t'));
   const header = rows.shift() ?? [];
   const runs = rows.map((cells) => Object.fromEntries(header.map((key, i) => [key, cells[i]])))
-    .filter((row) => row.name === `goal:${programme}/${goal}` && row.kind === 'build-goal' && row.session && row.session !== '-' && Number.isFinite(Number(row.seconds)) && Number.isFinite(Date.parse(row.ts)));
+    .filter((row) => row.name === `goal:${programme}/${goal}` && row.kind === 'build-goal' && row.seconds !== '' && row.seconds !== '-' && Number.isFinite(Number(row.seconds)) && Number.isFinite(Date.parse(row.ts)));
   const files = (list?.(dir) ?? []).filter((name) => name.startsWith(`goal-${programme}-${goal}-`) && name.endsWith('.jsonl'));
   return announcements.filter((item) => item.programme === programme && item.goal === goal && item.kind === 'build').map((item) => {
     const at = Date.parse(item.at);
     // Runner durations are rounded and timestamps have second precision.
     const matching = runs.filter((row) => Math.abs(Date.parse(row.ts) - Number(row.seconds) * 1000 - at) <= 2000);
-    const matches = matching.flatMap((row) => files.filter((name) => toolStartIds(read(join(dir, name))).includes(row.session)).map((name) => ({ row, name })));
-    const trace = matches.length === 1 && announcements.filter((other) => other.programme === programme && other.goal === goal && other.kind === 'build' && Math.abs(Date.parse(matches[0].row.ts) - Number(matches[0].row.seconds) * 1000 - Date.parse(other.at)) <= 2000).length === 1 ? join(dir, matches[0].name) : null;
+    const matches = matching.filter((row) => row.session && row.session !== '-').flatMap((row) => files.filter((name) => toolStartIds(read(join(dir, name))).includes(row.session)).map((name) => ({ row, name })));
+    const trace = matching.length === 1 && matches.length === 1 && announcements.filter((other) => other.programme === programme && other.goal === goal && other.kind === 'build' && Math.abs(Date.parse(matches[0].row.ts) - Number(matches[0].row.seconds) * 1000 - Date.parse(other.at)) <= 2000).length === 1 ? join(dir, matches[0].name) : null;
     return { at: item.at, trace, start: trace ? 'started' : 'unknown' };
   });
 }
