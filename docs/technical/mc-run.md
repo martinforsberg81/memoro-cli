@@ -918,10 +918,15 @@ including across runner handover. Recheck the programme and the hold after admis
 before spawning. Use the selected goal's first repository worktree, role `plan`,
 kind `plan`, `MC_GOAL` and `MC_HEADLESS=1`; keep the normal routing, admission,
 provider refusals, offline holds, STOP and UPDATE behavior. Interactive planning
-checkouts are not runner work areas. The assignment is to finish the brief and
-reconcile the README and phases, then move that draft to build. An unresolved
-choice goes through goal-bound mc ask. A completed plan session leaving draft ready waits on Martin with an
-incomplete-session diagnostic, preventing an unchanged-work launch loop. A goal that is held when its session ends, of any kind, gets no status, stage or entry from the runner; after release it is taken up from the state its holder left. Provider refusals and offline endings
+checkouts are not runner work areas. The assignment is to finish the brief,
+reconcile the README and phases, and [verify the acceptance
+setup](mc-plan.md#acceptance-preparation-before-build) before moving the draft
+to build. An unresolved choice goes through goal-bound mc ask. A completed
+plan session leaving draft ready gets the [incomplete-session
+handoff](mc-goals.md#next-draft-planning), preventing an unchanged-work launch
+loop. A goal that is held when its session ends, of any kind, gets no status,
+stage or entry from the runner; after release it is taken up from the state
+its holder left. Provider refusals and offline endings
 retain normal retry behavior and are not evidence of planning failure.
 
 No draft means no plan session. Proposal arrival and daily proposal processing
@@ -968,8 +973,10 @@ settled by the session: it leaves the question at the desk with
 `mc martin propose --text <programme>/README.md --file <brief>` and ends.
 Only a question that is not such a choice is asked, with a goal-bound `mc ask` on the draft that
 needs it (one way to ask: jev, then a reader), and the other drafts go on. Drafts it
-leaves are not set to Martin: the next-draft sessions take them. Proposals are
-not processed.
+leaves are not set to Martin: the next-draft sessions take them. The role
+uses [current acceptance evidence](mc-plan.md#acceptance-preparation-before-build)
+to decide whether to promote directly or leave a draft. Proposals are not
+processed.
 
 **The cut.** After the session `finishTurn` reads the record again under the
 runner lock and reads the Part headings (`### Part <n> — …` inside

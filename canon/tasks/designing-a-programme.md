@@ -40,8 +40,9 @@ already established. Do not require the enduring direction to be declared over.
 4. Cut work into goals buildable start to finish by headless sessions. Investigate, measure and design before the cut, not as
    the goal's first task ([goal design](references/goal-design.md)).
 5. Order by prerequisites and shared files. A programme whose record states its phases runs independent phases side by side: state a prerequisite, shared files included, with `mc programs after`. Elsewhere independent goals share a phase and dependent goals go later. In both a prerequisite is a phase dependency, never a note.
-6. Move every complete goal to `build` in its assigned phase, including those waiting for earlier
-   phases. `draft` means an unfinished brief, never a parking queue.
+6. Move a complete goal to `build` only with its acceptance procedure and setup verified.
+   Keep a consumer needing a producer in draft in a dependent phase; use the plan role's
+   next-draft procedure when evidence is missing or a relevant premise has changed.
 7. Write and read back the README against [the document structure](references/programme-document.md)
    (repairs use their short page). A programme is written with Martin in a session, when he says it is ready the desk sets it ready, and the planner cuts goals from its README.
    Landed sections leave the README.

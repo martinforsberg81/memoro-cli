@@ -25,7 +25,7 @@ names is reviewed, what it does not name is not. [The parts](references/goal-des
 Work that is several pieces in order is several goals in phases. In a programme whose record states its phases a goal starts when every goal of each
 phase its own is stated to wait for is done or dropped (`mc programs after`); in every other programme, when every goal in a lower phase is. `mc goal phase
 <p>/<g> <n>` changes the order later; goals of one phase run side by side; a `draft` goal holds back the phases that wait for its phase. The cut into goals and
-phases is [designing a programme](designing-a-programme.md): a complete brief stands in `build` in its phase.
+phases is [designing a programme](designing-a-programme.md): a complete brief enters `build` only after its acceptance procedure and setup are verified.
 
 - **Readiness:** before creating a goal, including a `draft` skeleton, apply [goal design](references/goal-design.md): establish the problem,
   choose the solution, and define success criteria and exclusions. Missing investigation stays with the proposal. A goal that waits on others

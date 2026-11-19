@@ -3507,7 +3507,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
       refuseProvider(read, launch, picked.billing, settings.model);
-      const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
+      const entriesAfter = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner');
+      const spoke = entriesAfter.length > entriesBefore;
       // A goal held when its session ends belongs to its hold's owner (D2): no stage, status or entry is written here.
       const holdAtEnd = readHold(goal.dir, deps.read);
       if (result.handedOff) { say(`${name}: handed to the merger — lane released`); }
@@ -3516,7 +3517,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       else if (planning) {
         const now = stateNow(goal);
         if (!read.quota && !read.interrupted && now.stage === 'draft' && now.status === 'ready') {
-          goalState(goal, name, { status: 'Martin' }, { comment: 'the plan session ended without completing the draft — inspect LOG.md and the session log before continuing planning' });
+          const last = spoke ? entriesAfter.at(-1) : null;
+          goalState(goal, name, { status: 'Martin' }, {
+            comment: 'the plan session ended without completing the draft — inspect LOG.md and the session log before continuing planning',
+            next: last?.role === PLAN_ROLE && last.stage === 'draft' && last.status === 'ready' ? last.next : null,
+          });
         }
       }
       else if (mend && !read.quota && !read.interrupted) afterMend(goal, name, { stage: goal.stage, status: goal.status });

@@ -1393,7 +1393,9 @@ Each stage has one owner, and a goal passes each once:
 
 - `draft` — a plan session writes the goal, interactively or through the
   next-draft assignment below. The plan session moves it to `build`
-  when it is complete (*Completeness gate*). (Named `plan` until 2026-11-07.)
+  when it is complete (*Completeness gate*) and the [acceptance setup is
+  verified](mc-plan.md#acceptance-preparation-before-build).
+  (Named `plan` until 2026-11-07.)
 - `build` — the runner's build sessions, while it is `ready`; legacy `blocked` outside merge reconciles to Martin without a launch. Three sessions in a row without a commit or a criterion met, or five build sessions since it began building or was last set ready after a stop, stop it with `no progress:` and `Martin`; a build session that finds the goal wrong reports it with `mc goal defect`, also `Martin`.
 - `review` — one review session decides; one that dies is run again once, a second crash or dirty refusal waits directly on Martin. A review that finds the goal wrong reports it with `mc goal defect`.
 - `finish` — no longer entered. A goal found in it (`finish · ready`) is moved to `build` by the runner with a log entry; with REVIEW.md it gets a repair build.
@@ -1482,11 +1484,15 @@ and reserved-act rules. Interactive planning checkouts remain separate.
 
 Complete exactly the selected draft's parts as `mc goal show` names them, its
 stand on every rule area, its documents and executable success checks,
-reconcile the programme README and phases, and move it to build immediately
-when ready. Resolve a remaining policy
+reconcile the programme README and phases, and move it to build when its
+acceptance procedure and intended setup are verified ([mc-plan.md](mc-plan.md#acceptance-preparation-before-build)). Resolve a remaining policy
 choice through goal-bound `mc ask` under [mc-jev.md](mc-jev.md). Do not implement the draft or process the
 proposal backlog in the headless planning turn. A completed session leaving
-`draft · ready` waits on Martin with an incomplete-session diagnostic, unless the draft is held when the session ends: then nothing is set, and a held draft is offered to planning again after release; provider
+`draft · ready` waits on Martin with an incomplete-session diagnostic. The
+stop entry carries the current plan session's last draft-ready entry's Next,
+if supplied, so the blocked input and desk action remain visible in the list.
+If the draft is held when the session ends, nothing is set, and a held draft
+is offered to planning again after release; provider
 refusals/offline failures keep their existing retries. Broader programme design
 and proposal intake remain interactive. This restores neither the no-draft
 nor the daily-proposal turn: a programme is planned by that turn only when its
