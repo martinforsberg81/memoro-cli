@@ -1155,7 +1155,7 @@ test('a criterion rewritten after its mark: its record counts as none', async ()
   assert.doesNotMatch(f.err(), /criterion 2/u);
 });
 
-test('a review session\'s move back removes the records of the NOT OK ids criterion <n>, a preserve id and obligation <area>, and no others; a person\'s move back and a third rejection remove none', async () => {
+test('a review session\'s move back removes the records of the NOT OK ids criterion <n>, a preserve id and obligation <area>, and no others, including in later rounds', async () => {
   const ids = ['criterion 1', 'criterion 2', 'V1', 'obligation Documentation', 'change', 'out-of-scope', 'protection', 'bugs'];
   const text = verdictText({ ids, repos: ['memoro-cli', 'memoro'], notOk: { 'criterion 1': 'the check does not hold', V1: 'goals.js:40', bugs: 'goal.js:12' }, carried: ['criterion 2'] });
   const inReviewFiles = (extra = {}) => seededGoal({ [`${DIR}/GOAL.json`]: v2Goal({ stage: 'review', prs: ['memoro-cli#31'] }), [REVIEW_FILE]: text, ...fullEvidence(), ...extra });
@@ -1174,8 +1174,8 @@ test('a review session\'s move back removes the records of the NOT OK ids criter
   assert.deepEqual(Object.keys(evidenceOf(person)), ['criterion 1', 'criterion 2', 'V1', 'obligation Documentation'], 'a person\'s move back removes none');
 
   const third = await moveOut('build', inReviewFiles({ [`${DIR}/LOG.md`]: withLog(rejectedLog(2))[`${DIR}/LOG.md`] }));
-  assert.equal(stateOf(third), 'review · Martin', 'the third rejection moves nothing');
-  assert.deepEqual(Object.keys(evidenceOf(third)), ['criterion 1', 'criterion 2', 'V1', 'obligation Documentation'], 'and removes nothing');
+  assert.equal(stateOf(third), 'build · ready', 'the third rejection returns to repair');
+  assert.deepEqual(Object.keys(evidenceOf(third)), ['criterion 2', 'obligation Documentation'], 'later rounds also clear only the rejected evidence');
 });
 
 test('a person and the plan role move a goal to review as they did, with no record and no worktree; martin and decision too, and all are still refused with a criterion not met', async () => {
@@ -1544,20 +1544,30 @@ test('the first and second rejection move review to build, each leaving REVIEW.m
   }
 });
 
-test('the third rejection moves nothing: exit 0, the goal stays in review with status Martin and a comment saying it was rejected a third time, and nothing is queued', async () => {
+test('later rejections still dispatch repair and keep past verdicts', async () => {
   const text = verdictText({ ids: V2_IDS, notOk: { 'criterion 1': 'still red', bugs: 'goal.js:12' } });
-  const log = withLog(rejectedLog(2))[`${DIR}/LOG.md`];
-  const f = await moveOut('build', reviewFiles(text, { v2: true, log }));
-  assert.equal(f.code, 0, f.err());
-  assert.equal(stateOf(f), 'review · Martin');
-  assert.deepEqual(f.queued, []);
-  const last = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
-  assert.deepEqual([last.stage, last.status, last.role], ['review', 'Martin', 'review']);
-  assert.match(last.comment, /rejected a third time/u);
-  assert.match(last.comment, /criterion 1, bugs/u, 'the failed ids');
-  assert.equal(f.store[REVIEW_FILE], text);
-  assert.equal(f.store[`${DIR}/REVIEW-3.md`], text, 'the third round is kept too');
-  assert.equal(goalSession(parseGoal(f.store[`${DIR}/GOAL.json`])), null, 'the runner starts nothing on it');
+  const logPath = `${DIR}/LOG.md`;
+  const oldThird = `${DIR}/REVIEW-3.md`;
+  const previousVerdict = verdictText({ ids: V2_IDS, notOk: { bugs: 'earlier failure' } });
+  for (const { prior, extra, archived } of [
+    { prior: 2, extra: {}, archived: 3 },
+    { prior: 3, extra: {}, archived: 4 },
+    { prior: 2, extra: { [oldThird]: previousVerdict }, archived: 4 },
+  ]) {
+    const log = withLog(rejectedLog(prior))[logPath];
+    const f = await moveOut('build', reviewFiles(text, { v2: true, log, extra }));
+    assert.equal(f.code, 0, f.err());
+    assert.equal(stateOf(f), 'build · ready');
+    assert.deepEqual(f.queued, []);
+    const entries = parseLog(f.store[logPath]);
+    const last = entries.at(-1);
+    assert.deepEqual([last.stage, last.status, last.role], ['build', 'ready', 'review']);
+    assert.equal(f.store[REVIEW_FILE], text);
+    assert.equal(f.store[`${DIR}/REVIEW-${archived}.md`], text);
+    if (extra[oldThird]) assert.equal(f.store[oldThird], previousVerdict);
+    const goal = parseGoal(f.store[`${DIR}/GOAL.json`]);
+    assert.equal(goalSession({ ...goal, log: entries, verdict: f.store[REVIEW_FILE] }), 'repair');
+  }
 });
 
 test('a move to finish in the log from before, and rejections before the goal\'s latest move into draft, are not counted', async () => {

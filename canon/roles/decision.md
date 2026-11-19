@@ -16,7 +16,7 @@ independent review and merger handoffs unchanged; only the merger marks done.
 Reserved acts stay refused to this pass: they are briefed, never bypassed.
 What `mc ask` answered (jev or the reader) is already decided: the pass reads the
 ledger row, not the question again. What it keeps are a goal defect, the runner's
-mechanical stops (`no progress:`, a third rejection) and a held main-red repair.
+mechanical stops (such as `no progress:`) and a held main-red repair.
 
 Read the item's `prepared.md` first. Then read its live source with `mc martin
 item <id>`, the goal, its whole LOG.md, the current worktree state and the

@@ -354,14 +354,14 @@ test('isRepair: a build goal with REVIEW.md after a review\'s rejection or the r
   assert.equal(isRepair([entry(0, 'person', 'plan'), built(1), entry(2, 'runner', 'build')], true), false, 'a runner\'s return to build that is no recovery from finish');
 });
 
-test('goalSession: build · ready with REVIEW.md after a rejection is a repair; without a rejection, or moved to merge and back by a person, a build; a goal rejected a third time (review · Martin) has none', () => {
+test('goalSession: build · ready with REVIEW.md after a rejection is a repair; without a rejection, or moved to merge and back by a person, a build; a review goal with status Martin has none', () => {
   const log = [entry(0, 'person', 'plan'), built(1), rejected(2)];
   assert.equal(goalSession(staged('build', 'ready', log, { verdict: '...' })), 'repair');
   assert.equal(goalSession(staged('build', 'ready', log, { verdict: null })), 'build', 'REVIEW.md is gone');
   assert.equal(goalSession(staged('build', 'ready', [entry(0, 'person', 'plan')], { verdict: '...' })), 'build', 'no rejection');
   assert.equal(goalSession(staged('build', 'ready', [...log, entry(3, 'claude', 'merge', 'review'), entry(4, 'person', 'build')], { verdict: '...' })), 'build');
-  const third = [entry(0, 'person', 'plan'), built(1), rejected(2), built(3), rejected(4), built(5), entry(6, 'claude', 'review', 'review', 'Martin')];
-  assert.equal(goalSession(staged('review', 'Martin', third, { verdict: '...' })), null, 'rejected a third time: the desk\'s');
+  const held = [...log, built(3), entry(4, 'claude', 'review', 'review', 'Martin')];
+  assert.equal(goalSession(staged('review', 'Martin', held, { verdict: '...' })), null, 'a goal defect waits for the desk');
 });
 
 test('the merger\'s red, inStage and a review that died before', () => {
