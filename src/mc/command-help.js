@@ -683,6 +683,15 @@ export const COMMAND_USAGE = Object.freeze({
     "\nmc learning — update permanent area information. The terminal starts the same role as the runner, on the desk budget.\n",
     "Only that session uses area, record and publish; publish accepts repeated --lesson for a single area correction.\n",
   ].join(''),
+  repair: [
+    "usage — mc repair\n",
+    "        mc repair --proposal <path>\n",
+    "        mc repair --feedback <file>\n",
+    "        mc repair --error <digest-file> [--fingerprint <id>]\n",
+    "        mc repair --resume <programme>\n",
+    "\nmc repair — prepare a bounded repair for existing functionality.\n",
+    "Select a defect, review and release its order to planning, or record why it waits.\n",
+  ].join(''),
   manager: [
     "usage — mc manager --headless --prompt <text> [--minutes <min>] [--new] [--codex|--claude] [--model <model>]\n",
     "\n",
