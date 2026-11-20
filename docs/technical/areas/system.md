@@ -38,7 +38,9 @@ On main now:
   change held wording or create a repair order.
 - [`mc repair`](../mc-plan.md#repair-drafts) takes an evidenced defect through
   independent review to the ordinary planner, or records a scope stop at
-  the desk. The release binds the reviewed order and its evidence.
+  the desk. The release binds the reviewed order and its evidence. See the
+  [repair scope and dispositions](../mc-plan.md#repair-scope-stops-and-dispositions)
+  and the [terminal Repair contract](../mc-help.md#repair).
 - A waiting deploy reserves the next opening for a full run when a different commit is being measured. It can still join a measurement of its own commit.
 - The helper preserves anonymous app suggestions in intake before it acknowledges their receipt. Collection does not create a programme or goal.
 
