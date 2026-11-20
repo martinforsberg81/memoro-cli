@@ -552,6 +552,11 @@ identity, tracked paths and inspected main commits in the programme directory.
 It takes the tree from the archive merge commit or, when every file is kept,
 from the main commit inspected for that decision.
 The rename carries that receipt to the shelf; older shelves need not have one.
+When no planning directory is left (an older archive shelved it, or there was
+none) and every file under `docs/project/<programme>/` is kept, the receipt is
+written to `~/mc/archive/programs/<programme>/`, made if absent; so running
+`--archive` again on a programme shelved before receipts takes it off the page
+and `mc programs list` (Martin, 2026-11-20).
 A failure to land the repository change leaves the planning area intact so
 a later attempt can continue. A failed receipt fetch leaves that repository's
 membership unproven.

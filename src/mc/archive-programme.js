@@ -248,6 +248,21 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
     } else {
       say(`${tilde(areaPath)}/ removed${released.conversations.length ? `, with ${released.conversations.length} conversation(s)` : ''}`);
     }
+  } else if (inspections.length && beside) {
+    // No planning directory left: an older archive shelved it, or there never
+    // was one, while files code reads keep docs/project/<programme>/ on main.
+    // The receipt goes on the shelf, so the page stops listing the programme
+    // (Martin, 2026-11-20: archived programmes leave mc ui).
+    if (fenced(true)) return 1;
+    try {
+      const shelf = join(archivedProgramsHome(env), programme);
+      mkdirSync(shelf, { recursive: true });
+      writeArchiveReceipt(shelf, programme, inspections, gitOut);
+      say(`${tilde(shelf)}/ — the receipt of the retained files recorded`);
+    } catch (error) {
+      stderr.write(`mc: the archive receipt could not be written — ${error.message}. Run it again to carry on.\n`);
+      return 1;
+    }
   }
   say(`${programme} archived`);
   return 0;
