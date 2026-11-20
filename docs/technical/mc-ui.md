@@ -230,8 +230,10 @@ so the page and the desk agree on what waits, in what order and what was decided
 
 The default page draws HORIZONS below DESK and the warnings (`page-horizons.js`,
 `horizonsLines`). The roll-up counts open horizons, programmes under way, open goals
-and running sessions. Its programme and session totals include Other; its open-goal
-total includes only open horizons. A zero running total is omitted.
+and running sessions. A programme is under way when it is a draft or has an
+unfinished goal, a session, an open PR, or a goal under NEEDS ATTENTION. The
+programme and session totals include Other. The open-goal total includes
+only open horizons. A zero running total is omitted.
 
 Each open horizon has a heading in desk order (`position`, then set time, then slug),
 with its number and title in bold at the left and its facts aligned to the right
@@ -652,9 +654,10 @@ membership and read warnings,
 which sessions are in flight, MAINTENANCE facts without their ages (session
 items by identity), and MERGE and DEPLOY row facts. If the key changes while
 the top of the page is off-screen, the live reader prints the whole page so
-scrolling up finds the new state. An archive attention reason changing on
-its own refreshes off-screen rows even at the same line count. Clocks alone
-do not trigger that reset.
+scrolling up finds the new state. A changed PR count, including a PR without
+a goal, refreshes off-screen horizon facts even at the same line count.
+A change only to an archive attention reason also refreshes off-screen rows.
+Clocks alone do not trigger that reset.
 
 ## The live page
 
