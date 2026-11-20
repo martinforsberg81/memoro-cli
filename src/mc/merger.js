@@ -49,6 +49,7 @@ import {
 } from './merge-queue.js';
 import { answerDeployMend, deployMendPath } from './deploy-repair.js';
 import { answerMainMend, mainMendPath, readMainMends, removeFinishedWorktrees, requestMainRepair } from './main-repair.js';
+import { repairPrBinding } from './repair-delivery.js';
 import { removeRedDetail, writeRedDetail } from './merge-red.js';
 import { shouldWait } from './merge-step.js';
 import { realLock } from './runner-lock.js';
@@ -230,6 +231,7 @@ function sameCommit(a, b) {
  */
 export function queueMerge({
   root, repo, repoPath, pr, branch = null, holder = null, goal = null, sha = null,
+  repairRevision = null,
   now = new Date(), env = process.env,
   read = realRead, write = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
   lock = realLock, start = startMerger, mayEnqueue = () => true,
@@ -237,14 +239,16 @@ export function queueMerge({
   const stamp = now.toISOString().replace(/\.\d{3}Z$/u, 'Z');
   const job = {
     repo, repo_path: repoPath, pr: Number(pr), branch, holder, since: stamp, state: 'queued',
-    goal, sha,
+    goal, sha, ...(repairRevision ? { repair_revision: repairRevision } : {}),
   };
   const entries = lock(root, () => {
     if (!mayEnqueue(job)) throw new Error(`${repo} #${pr} is owned only by a dropped goal — delivery is abandoned`);
+    const repair = repairPrBinding({ goals: [], repo, pr, branch, goal, read, revision: repairRevision });
+    if (repair?.problem || (repair && repair.sha !== sha)) throw new Error(repair.problem ?? 'the repair merge handoff has a different head');
     const next = enqueue(parseQueue(read(mergesPath(root))), job);
     write(mergesPath(root), next);
     return next;
-  }, { name: 'merges' });
+  }, { name: 'merges', strict: Boolean(repairRevision) });
   const already = queuedFor(entries, repo, pr)?.state === 'landing';
   const merger = start({ root, env });
   return { place: placeOf(entries, repo, pr), merger, already };
@@ -452,13 +456,19 @@ export async function landJob(batch, {
 } = {}) {
   const t0 = now().getTime();
   const answers = [];
+  const repairProblem = (job, goals) => {
+    const binding = repairPrBinding({ goals, repo: job.repo, pr: job.pr, branch: job.branch,
+      goal: job.goal, revision: job.repair_revision ?? null, read });
+    return binding?.problem ?? (binding && binding.sha !== job.sha ? 'the repair merge handoff has a different head' : null);
+  };
   const allowedToMerge = async (job) => {
     let extra = false;
     try { extra = await mayMerge(job); } catch { extra = false; }
     if (!extra) return false;
-    if (!goalsOf) return true;
     let goals;
-    try { goals = goalsOf(); } catch { return false; }
+    try { goals = goalsOf?.() ?? []; } catch { return false; }
+    const problem = repairProblem(job, goals);
+    if (problem) return problem;
     const matching = (goals ?? []).filter((goal) =>
       (job.goal && goal.programme === job.goal.programme && goal.goal === job.goal.goal)
       || (goal.prs ?? []).some((pr) => pr.repo === job.repo && Number(pr.pr) === Number(job.pr)));
@@ -500,8 +510,9 @@ export async function landJob(batch, {
   // for everyone in it (2026-10-10 17:52, #13372 turned #13373 and #13374 red).
   for (const one of [...jobs]) {
     const admitted = await allowedToMerge(one);
-    if (!admitted) {
-      await answer(one, false, { ok: false, merged: false, stopped_at: 'dropped', reason: 'its goal was dropped; delivery is abandoned' });
+    if (admitted !== true) {
+      await answer(one, false, { ok: false, merged: false, stopped_at: admitted ? 'repair-release' : 'dropped',
+        reason: admitted || 'its goal was dropped; delivery is abandoned' });
       jobs.splice(jobs.indexOf(one), 1);
       continue;
     }
@@ -566,7 +577,11 @@ export async function landJob(batch, {
         ...(job.holder ? { holder: job.holder } : {}),
         onProgress: (message) => say(`${label}: ${message}`),
         signal: controller.signal,
-        beforeMerge: () => allowedToMerge(job),
+        beforeMerge: ({ pr, branch, head } = {}) => {
+          const current = jobs.find(item => item.pr === pr) ?? job;
+          return allowedToMerge({ ...current, ...(branch ? { branch } : {}), ...(current.repair_revision ? { sha: head } : {}) });
+        },
+        ...(job.repair_revision ? { expectedHead: job.sha } : {}),
       });
     } finally {
       stopWatch();
@@ -799,8 +814,14 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
   // the same goal concurrently, and both landings must survive in its log.
   if (!back) lock(root, () => {
     const goal = goalOfJob(job, goalsOf);
-    if (goal) tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued, offline });
-  }, { name: 'merges' });
+    const binding = repairPrBinding({ goals: goal ? [goal] : [], repo: job.repo, pr: job.pr, branch: job.branch,
+      goal, revision: job.repair_revision ?? null, read });
+    if (binding?.problem || (binding && binding.sha !== job.sha)) {
+      say(`${label}: its repair handoff is no longer eligible — the goal is unchanged`);
+    } else if (goal && report?.stopped_at !== 'repair-release') {
+      tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued, offline });
+    }
+  }, { name: 'merges', strict: Boolean(job.repair_revision) });
 
   // Ownership is recorded by mc publish before queueing, even if its session is still ending.
   if (read(mainMendPath(root, job.repo)) != null && (landed || (!back && !requeued && !offline))) {
@@ -970,7 +991,7 @@ export async function serve({
     };
     lock(root, () => {
       let entries = parseQueue(read(mergesPath(root)));
-      entries = (isLanded && report?.ok && report.merged) || moved || report?.stopped_at === 'dropped'
+      entries = (isLanded && report?.ok && report.merged) || moved || ['dropped', 'repair-release'].includes(report?.stopped_at)
         ? dequeue(entries, job)
         : back
         ? markQueued(entries, job)
@@ -1074,7 +1095,7 @@ export async function serve({
               category: String(report?.stopped_at || (offline ? 'offline' : 'unknown')).slice(0, 80),
               explanation: String(report?.reason || 'The round provided no explanation').slice(0, 1000),
             };
-            entries = (report?.ok && report.merged) || moved
+            entries = (report?.ok && report.merged) || moved || report?.stopped_at === 'repair-release'
               ? dequeue(entries, one)
               : back
               ? markQueued(entries, one)

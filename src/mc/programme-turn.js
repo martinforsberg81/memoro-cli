@@ -13,7 +13,8 @@ import { join, resolve } from 'node:path';
 import { deskItemId } from './desk-items.js';
 import { ARCHIVE_DIR, GOAL_FILE, GOALS_DIR, parseGoal } from './goals.js';
 import { NAME_RE } from './plan-schema.js';
-import { readRecord, repairDraftRefusal } from './programme-record.js';
+import { readRecord } from './programme-record.js';
+import { repairReleaseState } from './repair-release.js';
 
 export const TURN_SCHEMA = 'mc-programme-turn';
 export const TURN_VERSION = 1;
@@ -76,15 +77,39 @@ export function goalCount({ home, programme, list }) {
 
 /** The `### Part n —` headings of the programme document's `## Parts` entry (fenced examples do not count), as numbers. */
 export function documentParts(text) {
-  const lines = String(text ?? '').replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[^\n]*(?:\n|$)/gmu, '').split(/\r?\n/u);
-  const start = lines.indexOf('## Parts');
-  if (start < 0) return [];
-  let end = lines.findIndex((line, at) => at > start && /^## /u.test(line));
+  return partSections(text).map(([number]) => number);
+}
+
+export function partSections(text) {
+  return splitProgrammeParts(text).parts;
+}
+
+export function splitProgrammeParts(text) {
+  const lines = String(text ?? '').split(/\r?\n/u);
+  const headings = String(text ?? '').replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[^\n]*(?:\n|$)/gmu, fence => fence.replace(/[^\n]/gu, ' ')).split(/\r?\n/u);
+  const start = headings.indexOf('## Parts');
+  if (start < 0) return { parts: [], shared: lines.join('\n'), sharedContract: '' };
+  let end = headings.findIndex((line, at) => at > start && /^## /u.test(line));
   if (end < 0) end = lines.length;
-  return lines.slice(start + 1, end).flatMap((line) => {
+  const parts = headings.slice(start + 1, end).flatMap((line, i) => {
     const found = /^### Part ([1-9]\d*)\s+—\s+\S/u.exec(line);
-    return found ? [Number(found[1])] : [];
+    return found ? [{ number: Number(found[1]), start: start + 1 + i }] : [];
   });
+  const cutoff = parts[0]?.start ?? end;
+  const shared = [...lines.slice(0, cutoff), '', ...lines.slice(end)].join('\n');
+  // Read and Where things are can accumulate review reasoning and provenance
+  // without changing a goal contract. Named binding inputs still count.
+  let audit = false;
+  const sharedContract = lines.filter((_, i) => {
+    if (i >= cutoff && i < end) return false;
+    if (/^## /u.test(headings[i])) audit = /^## (?:Read|Where things are)\s*$/u.test(headings[i]);
+    return !audit;
+  }).join('\n').trimEnd();
+  return {
+    parts: parts.map((part, i) => [part.number, lines.slice(part.start, parts[i + 1]?.start ?? end).join('\n').trimEnd()]),
+    shared,
+    sharedContract,
+  };
 }
 
 /** The part numbers one document label names: `Part 1; Part 2`, `Parts 1, 2 and 4`. No range is read. */
@@ -101,7 +126,7 @@ export function partsNamed(label) {
  * `README.md` it names (mc-goals.md, "Part association"): a document whose path is that README.md, labelled with
  * explicit `Part n` references. A goal file that is missing, does not parse or does not validate is left out.
  */
-function goalParts({ home, programme, list, read }) {
+export function goalParts({ home, programme, list, read }) {
   const readme = resolve(join(home, programme, 'README.md'));
   const goals = join(home, programme, GOALS_DIR);
   const dirs = [...list(goals).filter((name) => !name.startsWith('.')).map((name) => [name, join(goals, name)]),
@@ -119,7 +144,7 @@ function goalParts({ home, programme, list, read }) {
       if (docPath !== readme) continue;
       for (const part of partsNamed(document.label)) named.add(part);
     }
-    found.push({ name, named });
+    found.push({ name, named, dir, goal: parsed });
   }
   return found;
 }
@@ -152,7 +177,7 @@ export function cutProblems({ home, programme, list, read }) {
 }
 
 /** A record the turn cuts from: valid and ready. */
-export const cuttable = (record) => record?.state === 'ready' && !record.repair;
+export const cuttable = (record, dir) => record?.state === 'ready' && (!record.repair || Boolean(dir && repairReleaseState(dir, record)?.release));
 
 /**
  * Whether `programme` is due a planning turn now: `{ due: true, record }`, or `{ due: false, reason, notice }`.
@@ -162,20 +187,25 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
   const record = readRecord(dir, { read });
   if (record.status === 'none') return { due: false, reason: 'no record', notice: null };
   if (record.status === 'invalid') return { due: false, reason: 'its record is invalid', notice: null };
-  const refusal = repairDraftRefusal(record.record, programme);
+  const repair = repairReleaseState(dir, record.record);
+  const refusal = repair?.problems?.[0];
   if (refusal) return { due: false, reason: refusal, notice: null };
   if (record.record.state !== 'ready') return { due: false, reason: `its record reads ${record.record.state}`, notice: null };
   let readme;
-  try { readme = read(join(dir, 'README.md')); } catch { readme = null; }
+  try { readme = repair ? repair.snapshot.text : read(join(dir, 'README.md')); } catch { readme = null; }
   if (readme == null) return { due: false, reason: 'it has no README.md', notice: null };
   const parts = documentParts(readme);
   if (!parts.length) return { due: false, reason: 'README.md names no part', notice: null };
-  const problems = cutProblems({ home, programme, list, read });
-  if (problems.length === 0) return { due: false, reason: 'its goals are already cut', notice: null };
-  const unnamed = goalsNamingNoPart({ home, programme, list, read });
-  if (unnamed.length) {
-    const named = unnamed.length > 3 ? `${unnamed.slice(0, 3).join(', ')} and ${unnamed.length - 3} more` : unnamed.join(', ');
-    return { due: false, reason: `its goal${unnamed.length === 1 ? '' : 's'} ${named} name${unnamed.length === 1 ? 's' : ''} no part of README.md`, notice: null };
+  if (repair) {
+    if (record.record.repair.reconciled?.revision === repair.release.revision) return { due: false, reason: 'its release is reconciled', notice: null };
+  } else {
+    const problems = cutProblems({ home, programme, list, read });
+    if (problems.length === 0) return { due: false, reason: 'its goals are already cut', notice: null };
+    const unnamed = goalsNamingNoPart({ home, programme, list, read });
+    if (unnamed.length) {
+      const named = unnamed.length > 3 ? `${unnamed.slice(0, 3).join(', ')} and ${unnamed.length - 3} more` : unnamed.join(', ');
+      return { due: false, reason: `its goal${unnamed.length === 1 ? '' : 's'} ${named} name${unnamed.length === 1 ? 's' : ''} no part of README.md`, notice: null };
+    }
   }
   if (items.some((item) => item.kind === TURN_ITEM_KIND && item.reference === turnReference(programme) && item.state !== 'closed')) {
     return { due: false, reason: 'a programme desk item is open', notice: null };
@@ -190,20 +220,25 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
       return { due: false, reason: 'its horizon is not open', notice: `${programme}: its horizon ${slug} ${found ? `reads ${found.state}` : 'is missing or unreadable'} — no planning turn is started while that lasts` };
     }
   }
-  return { due: true, record: record.record };
+  return { due: true, record: record.record, ...(repair ? { revision: repair.release.revision, snapshot: repair.snapshot } : {}) };
 }
 
 /**
  * How the turn ended: `{ kind: 'cut' }` when all parts are cut, `{ kind: 'incomplete', problems }` when parts remain,
  * or `{ kind: 'settled', problems }` when the programme state is no longer ready.
  */
-export function finishTurn({ programme, home, list, read, write, lock, root }) {
+export function finishTurn({ programme, home, list, read, write, lock, root, revision }) {
   try {
     const dir = join(home, programme);
     const record = readRecord(dir, { read });
     if (record.status !== 'valid') return { kind: 'settled', problems: ['record is invalid'] };
-    if (!cuttable(record.record)) {
-      return { kind: 'settled', problems: [repairDraftRefusal(record.record, programme) ?? `record reads ${record.record.state}`] };
+    if (!cuttable(record.record, dir)) {
+      return { kind: 'settled', problems: [repairReleaseState(dir, record.record)?.problems?.[0] ?? `record reads ${record.record.state}`] };
+    }
+    if (record.record.repair) {
+      if (record.record.repair.release.revision !== revision) return { kind: 'settled', problems: ['repair release changed during planning'] };
+      return record.record.repair.reconciled?.revision === revision ? { kind: 'cut' }
+        : { kind: 'incomplete', problems: ['the programme planner has not reconciled this release'] };
     }
     const problems = cutProblems({ home, programme, list, read });
     if (problems.length > 0) return { kind: 'incomplete', problems };

@@ -1,20 +1,31 @@
-/** Internal Part 2 entry. The CLI must not dispatch to it before release ships. */
+/** Select one defect and record its draft before attempting review or release. */
 import { existsSync, lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { FALLBACK_AREAS, keyProposalsDir } from './area-proposals.js';
-import { writeJsonAtomic } from './atomic-write.js';
+import { writeFileAtomic, writeJsonAtomic } from './atomic-write.js';
 import { scanArgs } from './commands/flags.js';
 import { archivedProgramsHome, programsHome, workRoot } from './paths.js';
-import { AREA_RE, createProgramme, linkRepairSource, newRecord, readRecord, recordedProgrammes } from './programme-record.js';
+import { AREA_RE, createProgramme, linkRepairSource, newRecord, readRecord, recordedProgrammes, validRepairScope } from './programme-record.js';
 import { NAME_RE } from './plan-schema.js';
 import { judgeRepair } from './repair-session.js';
-import { archivedProposal, archivedProposals, pendingProposals, readRepairCase, readRepairSource, repairCasePath, versionedArchive } from './repair-sources.js';
+import { archivedProposal, archivedProposals, pendingProposals, readRepairCase, readRepairSource, rememberRepairProposal, repairCasePath, versionedArchive } from './repair-sources.js';
 import { realLock } from './runner-lock.js';
 
-const ROUTE = { strictValues: ['--proposal', '--feedback', '--error', '--fingerprint'] };
+const selection = flags => ['proposal', 'feedback', 'error', 'resume'].filter(key => flags[key] !== null);
+export const REPAIR_ROUTE = {
+  strictValues: ['--proposal', '--feedback', '--error', '--fingerprint', '--resume'],
+  check({ flags, positional }) {
+    const selected = selection(flags);
+    if (positional.length || selected.length > 1 || (flags.fingerprint !== null && flags.error === null)
+      || selected.some(kind => !flags[kind]?.trim()) || flags.fingerprint === ''
+      || (flags.resume !== null && !NAME_RE.test(flags.resume))) return 'give one valid repair source or programme';
+    return null;
+  },
+};
+const EVIDENCE = 'evidence/repair-source.md';
 const REPOS = ['memoro', 'memoro-cli'];
-const oneLine = (value, max = 400) => typeof value === 'string' && value.trim() === value
+export const oneLine = (value, max = 400) => typeof value === 'string' && value.trim() === value
   && value.length > 0 && value.length <= max && !/[\r\n\p{Cc}]/u.test(value);
 const paragraph = value => value.replace(/^([#>])/u, '\\$1');
 const label = name => String(name).replace(/[\p{Cc}]/gu, '?');
@@ -43,12 +54,12 @@ function linkStrength(a, b) {
 
 function owningOrder(source, all, env) {
   const ordered = foundIn(source.outcome, /^ordered in(?: programme)? ([a-z0-9-]+)$/u);
-  if (ordered) return { ordered };
   const matches = [];
   let possible = false;
   for (const order of all) {
     const { record, dir } = order;
     if (record.repair) {
+      if (record.repair.disposition?.action === 'decline' && !record.repair.stop_item) continue;
       const strengths = record.repair.sources.map(known => linkStrength(source.ref, known));
       if (strengths.includes('certain')) matches.push(order);
       else if (!order.archived && record.state !== 'done' && strengths.includes('possible')) possible = true;
@@ -71,10 +82,18 @@ function owningOrder(source, all, env) {
   }
   if (matches.length > 1 || (!matches.length && possible)) return { possible: true };
   const [order] = matches;
-  if (!order) return {};
+  if (!order) return ordered ? { ordered } : {};
   if (order.record.repair?.stop_item && !order.archived) return { stopped: order };
-  if (order.record.repair && order.record.state === 'draft' && !order.archived) return { draft: order };
+  if (order.record.repair && !order.record.repair.desk && order.record.state === 'draft' && !order.archived) return { draft: order };
   return { ordered: order.name };
+}
+
+/** Read under the same strict lock as draft creation, on either entrance. */
+export function deskProposalOwner(path, env) {
+  const source = readRepairSource({ kind: 'proposal', given: path, env });
+  if (!source.ref) return null;
+  const owner = owningOrder(source, orders(env), env);
+  return owner.ordered || owner.draft?.name || owner.stopped?.name || (owner.possible ? { ambiguous: true } : null);
 }
 
 function writeCase(env, ref, state) {
@@ -148,7 +167,7 @@ function decisionFor(source, all, ctx) {
   const previous = readRepairCase(ctx.env, source.ref.key);
   const generated = previous.proposal && readRepairSource({ kind: 'proposal', given: previous.proposal, env: ctx.env });
   const status = archiveStatus(source.outcome);
-  if (status) return { status };
+  if (status || (previous.status === 'declined' && previous.source?.digest === source.ref.digest)) return { status: status ?? 'declined' };
   // A recorded source outcome wins over ownership of the defect at another evidence version.
   const archived = source.outcome ? null : archivedDisposition(source, ctx.env);
   if (archived) return { status: archived };
@@ -158,7 +177,12 @@ function decisionFor(source, all, ctx) {
   if (owner.stopped) return { status: 'stopped', name: owner.stopped.name, item: owner.stopped.record.repair.stop_item };
   if (owner.draft) {
     // Keep new references on the order, not inferred from mutable Markdown.
-    linkRepairSource(owner.draft.dir, owner.draft.record, source.ref);
+    // Another version at the same proposal path stays waiting. The draft is
+    // already based on a fixed version of that source.
+    if (!owner.draft.record.repair.sources.some(ref => ref.kind === 'proposal' && ref.key === source.ref.key)) {
+      rememberRepairProposal(source, ctx.env);
+      linkRepairSource(owner.draft.dir, owner.draft.record, source.ref);
+    }
     return { status: 'resume', name: owner.draft.name };
   }
   if (owner.possible) return { status: 'ambiguous' };
@@ -244,6 +268,7 @@ function draftPage(answer, refs, proposal) {
     '## Decided', '', 'Restore the intended behaviour without creating new functionality.', '',
     '## Not built', '', 'New functionality or user-visible design decisions outside this repair.', '',
     '## Read', '', paragraph(reason), '', '## Where things are', '');
+  lines.push(`Binding evidence: \`${EVIDENCE}\``, '');
   for (const path of new Set([...refs.map(ref => ref.path), proposal])) lines.push(`- \`${path}\``);
   return `${lines.join('\n')}\n`;
 }
@@ -261,6 +286,9 @@ function settle(source, answer, ctx) {
   if (answer.status === 'draft') {
     if (!answer.repositories?.includes(repo)) throw new Error('repair order omits the source repository');
     draftPage(answer, [source.ref], source.ref.path); // Validate the whole order before writing.
+    if (answer.scope !== undefined && !validRepairScope(answer.scope)) {
+      throw new Error('repair scope needs a title, a Swedish summary and at most one valid related desk brief');
+    }
   }
   const proposal = generatedProposal(source, repo, area, oneLine(answer.summary) ? answer.summary : 'Repair report', now, ctx.env);
   const primary = readRepairSource({ kind: 'proposal', given: proposal, env: ctx.env });
@@ -279,8 +307,13 @@ function settle(source, answer, ctx) {
   const home = programsHome(ctx.env);
   if (existsSync(join(archivedProgramsHome(ctx.env), answer.name))) throw new Error(`programme ${answer.name} already exists in the archive`);
   mkdirSync(home, { recursive: true });
-  createProgramme(join(home, answer.name), draftPage(answer, sources, proposal),
-    newRecord({ end: answer.end, createdBy: 'repair', now, stated: true, repair: { sources } }));
+  const dir = join(home, answer.name);
+  rememberRepairProposal(primary, ctx.env);
+  const repair = { sources, ...(answer.scope ? { pending_scope: answer.scope } : {}) };
+  createProgramme(dir, draftPage(answer, sources, proposal), newRecord({ end: answer.end, createdBy: 'repair', now, stated: true, repair }));
+  const evidence = ['# Repair source', '', paragraph(oneLine(answer.summary) ? answer.summary : 'Repair report'), '',
+    paragraph(answer.today), '', ...sources.map(ref => `- ${ref.kind} ${ref.key}: ${ref.digest}`), ''];
+  writeFileAtomic(join(dir, EVIDENCE), evidence.join('\n'));
   return { status: 'draft', name: answer.name };
 }
 
@@ -334,16 +367,21 @@ function message(result, path) {
 
 export async function runRepairDraft(argv, deps = {}) {
   const { env = process.env, cwd = process.cwd(), stdout = process.stdout, stderr = process.stderr,
-    lock = realLock, judge = judgeRepair, now = () => new Date() } = deps;
+    lock = realLock, judge = judgeRepair, now = () => new Date(), finish } = deps;
   const say = text => { stdout.write(`mc: ${text}\n`); return 0; };
   const fail = (text, code) => { stderr.write(`mc: ${text}\n`); return code; };
-  const { flags, error, positional } = scanArgs(argv, ROUTE);
-  const selected = ['proposal', 'feedback', 'error'].filter(key => flags[key] !== null);
-  if (error || positional.length || selected.length > 1 || (flags.fingerprint !== null && !flags.error)
-    || selected.some(kind => !flags[kind]?.trim()) || new Set(argv.filter((_, index) => index % 2 === 0)).size * 2 !== argv.length) {
-    return fail(`${error ? `${error} — ` : ''}use mc repair [--proposal <path> | --feedback <file> | --error <digest-file> [--fingerprint <id>]]`, 2);
+  const parsed = scanArgs(argv, REPAIR_ROUTE);
+  const { flags } = parsed;
+  const duplicate = new Set(argv.filter((_, index) => index % 2 === 0)).size * 2 !== argv.length;
+  const error = parsed.error || REPAIR_ROUTE.check(parsed) || (duplicate ? 'a source flag was repeated' : null);
+  if (error || (flags.resume !== null && !finish)) {
+    return fail(`${error ? `${error} — ` : ''}use mc repair [--proposal <path> | --feedback <file> | --error <digest-file> [--fingerprint <id>] | --resume <programme>]`, 2);
   }
-  const [kind] = selected;
+  const [kind] = selection(flags);
+  if (kind === 'resume') {
+    try { return await finish({ status: 'resume', name: flags.resume }); }
+    catch (error) { return fail(error.message, 1); }
+  }
   const requests = kind ? [{ kind, given: resolve(cwd, flags[kind]), fingerprint: flags.fingerprint, env }]
     : pendingProposals(env).map(({ path }) => ({ kind: 'proposal', given: path, env }));
   try {
@@ -354,7 +392,10 @@ export async function runRepairDraft(argv, deps = {}) {
       if (source.ids) return fail(`select a defect — mc repair --error ${label(request.given)} --fingerprint <id>\n${source.ids.map(id => `  ${id}`).join('\n')}`, 2);
       if (!source.ref) continue;
       const result = await draftOne(request, source, { env, lock, judge, now });
-      if (kind || ['resume', 'draft'].includes(result.status)) return say(message(result, source.ref.path));
+      if (kind || ['resume', 'draft'].includes(result.status)) {
+        say(message(result, source.ref.path));
+        return finish && ['resume', 'draft'].includes(result.status) ? await finish(result) : 0;
+      }
     }
     return say('no repair ready to order');
   } catch (e) {

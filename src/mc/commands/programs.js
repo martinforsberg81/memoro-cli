@@ -17,10 +17,11 @@
  * here exactly when it is on the page. `mc programs` alone prints the usage.
  */
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { areasHome } from '../area-proposals.js';
 import { programsHome, workRoot } from '../paths.js';
 import { wakeRunner } from '../run-control.js';
+import { deskProposalOwner } from '../repair-draft.js';
 import { readAreas } from '../areas.js';
 import { run as runGit } from '../git.js';
 import { repoNameOf } from '../repos.js';
@@ -40,6 +41,10 @@ import { commandUsage } from '../command-help.js';
 import { writeFileAtomic } from '../atomic-write.js';
 import { realLock } from '../runner-lock.js';
 import { programmeRepositories, programmeReviewCall } from '../programme-review.js';
+import { beginRepairReview, repairReviewCall } from '../repair-review.js';
+import { isDesk, releaseRepair, repairReleaseState } from '../repair-release.js';
+import { reconcileRepair, setDeskRepairState } from '../repair-reconcile.js';
+import { disposeRepair, REPAIR_DISPOSITIONS, stopRepair } from '../repair-stop.js';
 
 export function usage() {
   return commandUsage('programs');
@@ -58,6 +63,14 @@ export const ROUTES = {
   record: { strictValues: ['--end', '--horizon'], check: (scanned) => writeCheck('record', scanned) },
   state: { check: ({ positional }) => stateCheck(positional) },
   review: { check: ({ positional }) => programmeNameCheck('review', positional) },
+  release: { check: ({ positional }) => programmeNameCheck('release', positional) },
+  'repair-stop': { strictValues: ['--title', '--summary', '--item'], check: ({ positional, flags }) => programmeNameCheck('repair-stop', positional)
+    ?? (!flags.title?.trim() || !flags.summary?.trim() ? 'mc programs repair-stop needs --title and --summary' : null) },
+  disposition: { strictValues: ['--reason'], check: ({ positional, flags }) => positional.length === 2 && NAME_RE.test(positional[0])
+    && REPAIR_DISPOSITIONS.includes(positional[1]) && flags.reason?.trim() ? null
+    : 'use mc programs disposition <programme> decline|return|takeover --reason "<text>"' },
+  reconcile: { strictValues: ['--reason'], check: ({ positional, flags }) => programmeNameCheck('reconcile', positional)
+    ?? (!flags.reason?.trim() ? 'mc programs reconcile needs --reason "…"' : null) },
   after: { booleans: ['--none'], check: (scanned) => afterCheck(scanned) },
   show: { booleans: ['--json'], check: ({ positional }) => (
     positional.length !== 1 ? 'mc programs show needs one programme'
@@ -66,7 +79,7 @@ export const ROUTES = {
   '*': { booleans: ['--json'], check: ({ positional }) => `mc programs has no ${positional[0]}` },
 };
 
-const VERBS = ['list', 'priority', 'create', 'record', 'state', 'after', 'show', 'review'];
+const VERBS = ['list', 'priority', 'create', 'record', 'state', 'after', 'show', 'review', 'release', 'reconcile', 'repair-stop', 'disposition'];
 
 function stateCheck(positional) {
   if (positional.length !== 2) return 'mc programs state needs <programme> draft|ready';
@@ -165,12 +178,23 @@ export async function run(argv, deps = {}) {
   if (verb === 'create' || verb === 'record') return writeVerb(verb, scanned, { ...deps, env, stdout, stderr });
   if (verb === 'state') return stateVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'review') return reviewVerb(scanned, { ...deps, env, stdout, stderr });
+  if (verb === 'release') return releaseVerb(scanned, { ...deps, env, stdout, stderr });
+  if (verb === 'reconcile') return reconcileVerb(scanned, { ...deps, env, stdout, stderr });
+  if (verb === 'repair-stop') return stopVerb(scanned, { ...deps, env, stdout, stderr });
+  if (verb === 'disposition') return dispositionVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'after') return afterVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'show') return showVerb(scanned, { env, stdout, stderr });
 
   const read = deps.read || (() => readProgrammes({ env }));
   const home = programsHome(env);
-  const listing = programmesListing(read(), { record: (name) => recordView(readRecord(join(home, name))) });
+  const listing = programmesListing(read(), { record: (name) => {
+    const dir = join(home, name);
+    const result = readRecord(dir);
+    const view = recordView(result);
+    if (view?.repair && view.state === 'ready' && view.repair.disposition?.action !== 'decline'
+        && !repairReleaseState(dir, result.record)?.release) return { ...view, needs_review: true };
+    return view;
+  } });
   if (verb === 'priority') {
     try {
       const result = setProgrammePriorities(scanned.positional, Number(scanned.flags.set), {
@@ -214,8 +238,10 @@ export function programmesListing({ section, homes = {} }, { record = () => null
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /** The last cell of a line whose programme has a record. */
-function recordCell(record) {
+function recordCell(record, name) {
   if (record.problems) return 'record invalid';
+  if (record.repair && record.state === 'Martin') return `${name} · Martin`;
+  if (record.needs_review) return `${name} · ready (needs review)`;
   return `record ${record.state} · ${record.horizon ? `horizon ${record.horizon}` : 'no horizon'}`;
 }
 
@@ -231,7 +257,7 @@ function cells(item) {
     item.repos.join(',') || '—',
     item.goals ? `${plural(item.goals, 'goal')}${rollup ? ` · ${rollup}` : ''}` : 'no goal',
     meta ? `plan ${meta}` : 'no plan session',
-    ...(item.record ? [recordCell(item.record)] : []),
+    ...(item.record ? [recordCell(item.record, item.name)] : []),
   ];
 }
 
@@ -266,7 +292,6 @@ function proposalIn(given, { env }) {
   const parts = path.startsWith(home + sep) ? path.slice(home.length + 1).split(sep) : null;
   if (parts?.length !== 4 || parts[2] !== 'proposals') return { error: `--from-proposal ${given} is not a proposal: it must be a file directly in an area's ${areasHome(env)}/<repo>/<area>/proposals/` };
   const archived = join(dirname(path), 'archive', basename(path));
-  if (existsSync(archived)) return { error: `--from-proposal ${given}: ${archived} exists already — the proposal was decided once; nothing was made` };
   return { path, area: `${parts[0]}/${parts[1]}`, archived };
 }
 
@@ -292,7 +317,7 @@ function areaRefusal(area, { env, git = gitIn, known = () => knownRepositories(e
  * `create` and `record`: the caller is checked first; the whole request is validated before the first write.
  * Created only by a person or interactive Martin; create makes a draft.
  */
-function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, canon, now = new Date(), git, known }) {
+function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, canon, now = new Date(), git, known, lock = realLock }) {
   const writer = recordWriter(env);
   if (writer.refusal) { stderr.write(`mc: ${writer.refusal}\n`); return 2; }
   const [name] = positional;
@@ -307,34 +332,46 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
       stdout.write(`${name}: record written to ${join(dir, RECORD_FILE)} — state draft\n`);
       return 0;
     }
-    const exists = existsSync(dir) || (read ? read() : readProgrammes({ env })).section.programmes.some((group) => group.programme === name);
-    if (exists) return problem(`programme ${name} exists — mc programs record ${name} --end "…" gives a directory without a record its record, and mc programs show ${name} prints what it has`);
-    if (flags.area !== null) {
-      const refused = areaRefusal(flags.area, { env, git, known });
-      if (refused) return problem(refused);
-    }
-    let proposal = null;
-    if (flags['from-proposal'] !== null) {
-      proposal = proposalIn(flags['from-proposal'], { env });
-      if (proposal.error) return problem(proposal.error);
-    }
-    const template = recordPageTemplate({ ...(canon ? { canon } : {}), area: flags.area });
-    if (template === null) return problem(`could not read the programme page template (canon/tasks/references/${flags.area ? 'repair-page.md' : 'programme-document.md'}) — nothing was made`);
-    const page = recordPage(template, { name, end: flags.end, horizon: flags.horizon, area: flags.area, purpose: flags.purpose, proposal: proposal?.archived ?? null });
-    const record = newRecord({ horizon: flags.horizon, area: flags.area, end: flags.end.trim(), createdBy: writer.by, now, stated: true });
-    mkdirSync(home, { recursive: true });
-    createProgramme(dir, page, record);
-    stdout.write(`${name}: programme made at ${dir} — record state ${record.state}, phases stated, page README.md to fill in; mc goal new ${name}/<goal> makes its first goal\n`);
-    if (proposal) {
-      // Ordered is decided: the proposal goes to its area's archive under the line that says so.
-      try {
-        mkdirSync(dirname(proposal.archived), { recursive: true });
-        writeFileSync(proposal.archived, `Utfall: ordered in programme ${name}\n\n${readFileSync(proposal.path, 'utf8')}`, { flag: 'wx' });
-        unlinkSync(proposal.path);
-      } catch (error) { return problem(`${name} is made, but the proposal ${proposal.path} was not archived at ${proposal.archived}: ${error.message}`); }
-      stdout.write(`${name}: the proposal is archived at ${proposal.archived} (area ${proposal.area})\n`);
-    }
-    return 0;
+    const create = () => {
+      if (flags.area !== null) {
+        const refused = areaRefusal(flags.area, { env, git, known });
+        if (refused) return problem(refused);
+      }
+      let proposal = null;
+      if (flags['from-proposal'] !== null) {
+        proposal = proposalIn(flags['from-proposal'], { env });
+        if (proposal.error) {
+          const previous = deskProposalOwner(resolve(flags['from-proposal']), env);
+          if (typeof previous === 'string') { stdout.write(`source already ordered in ${previous}\n`); return 0; }
+          return problem(proposal.error);
+        }
+        const owner = deskProposalOwner(proposal.path, env);
+        if (typeof owner === 'string') { stdout.write(`source already ordered in ${owner}\n`); return 0; }
+        if (owner?.ambiguous) return problem('the proposal may belong to an existing repair order; nothing was made');
+        if (existsSync(proposal.archived)) return problem(`--from-proposal ${flags['from-proposal']}: ${proposal.archived} exists already — the proposal was decided once; nothing was made`);
+      }
+      const exists = existsSync(dir) || (read ? read() : readProgrammes({ env })).section.programmes.some((group) => group.programme === name);
+      if (exists) return problem(`programme ${name} exists — mc programs record ${name} --end "…" gives a directory without a record its record, and mc programs show ${name} prints what it has`);
+      const template = recordPageTemplate({ ...(canon ? { canon } : {}), area: flags.area });
+      if (template === null) return problem(`could not read the programme page template (canon/tasks/references/${flags.area ? 'repair-page.md' : 'programme-document.md'}) — nothing was made`);
+      const page = recordPage(template, { name, end: flags.end, horizon: flags.horizon, area: flags.area, purpose: flags.purpose, proposal: proposal?.archived ?? null });
+      const record = newRecord({ horizon: flags.horizon, area: flags.area, end: flags.end.trim(), createdBy: writer.by, now, stated: true });
+      mkdirSync(home, { recursive: true });
+      createProgramme(dir, page, record);
+      stdout.write(`${name}: programme made at ${dir} — record state ${record.state}, phases stated, page README.md to fill in; mc goal new ${name}/<goal> makes its first goal\n`);
+      if (proposal) {
+        // Ordered is decided: the proposal goes to its area's archive under the line that says so.
+        try {
+          mkdirSync(dirname(proposal.archived), { recursive: true });
+          writeFileSync(proposal.archived, `Utfall: ordered in programme ${name}\n\n${readFileSync(proposal.path, 'utf8')}`, { flag: 'wx' });
+          unlinkSync(proposal.path);
+        } catch (error) { return problem(`${name} is made, but the proposal ${proposal.path} was not archived at ${proposal.archived}: ${error.message}`); }
+        stdout.write(`${name}: the proposal is archived at ${proposal.archived} (area ${proposal.area})\n`);
+      }
+      return 0;
+    };
+    return flags['from-proposal'] === null ? create()
+      : lock(workRoot(env), create, { strict: true, name: 'desk-proposal-order' });
   } catch (error) {
     if (error.code === 'EEXIST' && verb === 'record') return problem(`${name} already has a record (${join(dir, RECORD_FILE)}) — mc programs show ${name} prints it; it is not replaced`);
     if (error.code === 'EEXIST') return problem(`programme ${name} exists — mc programs record ${name} --end "…" gives a directory without a record its record, and mc programs show ${name} prints what it has`);
@@ -356,7 +393,9 @@ function stateVerb({ positional }, { env, stdout, stderr, lock, now = new Date()
     return 1;
   }
   try {
-    const outcome = setRecordState(dir, targetState, { root: workRoot(env), ...(lock ? { lock } : {}) });
+    const outcome = readRecord(dir).record?.repair?.desk
+      ? setDeskRepairState(dir, targetState, env, { lock })
+      : setRecordState(dir, targetState, { root: workRoot(env), lock });
     if (!outcome.ok) {
       for (const problem of outcome.problems.length ? outcome.problems : [`${name} has no valid record — mc programs show ${name}`]) stderr.write(`mc: ${problem}\n`);
       return 1;
@@ -473,17 +512,72 @@ function reviewAuthor(env) {
   return Boolean(env.MC_ROLE) && normalizeSessionRole(env.MC_ROLE) === 'martin' && env.MC_HEADLESS !== '1';
 }
 
+function releaseVerb({ positional: [name] }, { env, stdout, stderr, lock, authorAlive }) {
+  try {
+    const result = releaseRepair(join(programsHome(env), name), env, { lock, alive: authorAlive });
+    if (!result.ok) {
+      stderr.write(`mc: ${result.problems[0] ?? `${name} is not a repair-owned programme`}\n`);
+      return 1;
+    }
+    stdout.write(`mc: repair programme ${name} is ready for planning\n`);
+    wakeRunner(workRoot(env));
+    return 0;
+  } catch (error) { stderr.write(`mc: repair release ${name}: ${error.message}\n`); return 1; }
+}
+
+function stopVerb({ positional: [name], flags }, { env, stdout, stderr, lock, authorAlive, now }) {
+  try {
+    const result = stopRepair(join(programsHome(env), name), env,
+      { title: flags.title, summary: flags.summary, item: flags.item }, { lock, alive: authorAlive, now: now?.() });
+    if (!result.ok) { stderr.write(`mc: ${result.problems[0] ?? `no valid record for ${name}`}\n`); return 1; }
+    stdout.write(`mc: repair programme ${name} is at Martin (item ${result.record.repair.stop_item})\n`);
+    return 0;
+  } catch (error) { stderr.write(`mc: could not stop ${name}: ${error.message}\n`); return 1; }
+}
+
+function dispositionVerb({ positional: [name, action], flags }, { env, stdout, stderr, lock, now, readPr, wake = () => wakeRunner(workRoot(env)) }) {
+  if (!isDesk(env)) { stderr.write('mc: only interactive Martin may dispose of a repair stop — mc martin opens the desk\n'); return 2; }
+  try {
+    const result = disposeRepair(join(programsHome(env), name), env,
+      { action, reason: flags.reason.trim() }, { lock, now: now?.(), readPr });
+    if (!result.ok) { stderr.write(`mc: ${result.problems[0] ?? `no valid record for ${name}`}\n`); return 1; }
+    const words = { decline: 'declined', return: 'returned to repair', takeover: 'taken over by Martin' };
+    stdout.write(`mc: ${name} — ${words[action]}\n`);
+    wake();
+    return 0;
+  } catch (error) { stderr.write(`mc: could not dispose of ${name}: ${error.message}\n`); return 1; }
+}
+
+function reconcileVerb({ positional: [programme], flags }, { env, stdout, stderr, lock }) {
+  try {
+    const result = reconcileRepair({ home: programsHome(env), programme, env, lock, reason: flags.reason });
+    if (!result.ok) {
+      stderr.write(`mc: ${result.problems[0] ?? `${programme} has no valid record`}\n`);
+      return 1;
+    }
+    stdout.write(`mc: ${programme} · release ${result.record.repair.reconciled.revision} reconciled\n`);
+    return 0;
+  } catch (error) { stderr.write(`mc: could not reconcile ${programme}: ${error.message}\n`); return 1; }
+}
+
 async function reviewVerb({ positional: [name] }, deps) {
   const { env, stdout, stderr } = deps;
   const target = { name, dir: join(programsHome(env), name) };
   const ctx = { env, stdout, stderr, read: readTextOrNull, write: writeFileAtomic, remove: unlinkSync,
     lock: deps.lock ?? realLock, now: deps.now ?? (() => new Date()), alive: deps.alive };
-  if (!reviewAuthor(env)) { stderr.write('mc: only Martin at the desk calls a programme reading — mc martin opens the desk\n'); return 2; }
-  const text = ctx.read(join(target.dir, 'README.md'));
-  if (text === null) { stderr.write(`mc: ${name} has no README.md to read\n`); return 2; }
-  const known = (deps.known ?? (() => knownRepositories(env)))().map((path) => ({ repo: repoNameOf(path), path }));
-  const found = programmeRepositories(text, known);
-  if (found.error) { stderr.write(`mc: ${found.error}\n`); return 2; }
-  try { return await programmeReviewCall({ target, ctx, text, repos: found.repos, deps: deps.review ?? {} }); }
+  const record = readRecord(target.dir, { read: ctx.read });
+  const repair = record.status === 'valid' && Boolean(record.record.repair && !record.record.repair.desk);
+  if (!repair && !reviewAuthor(env)) { stderr.write('mc: only Martin at the desk calls a programme reading — mc martin opens the desk\n'); return 2; }
+  try {
+    const reviewDeps = deps.review ?? {};
+    const attempt = repair ? beginRepairReview({ target, ctx, deps: reviewDeps }) : null;
+    const text = attempt ? attempt.snapshot.text : ctx.read(join(target.dir, 'README.md'));
+    if (text === null) { stderr.write(`mc: ${name} has no README.md to read\n`); return 2; }
+    const known = (deps.known ?? (() => knownRepositories(env)))().map((path) => ({ repo: repoNameOf(path), path }));
+    const found = programmeRepositories(text, known);
+    if (found.error) { stderr.write(`mc: ${found.error}\n`); return 2; }
+    return await (attempt ? repairReviewCall({ target, ctx, repos: found.repos, ...attempt, deps: reviewDeps })
+      : programmeReviewCall({ target, ctx, text, repos: found.repos, deps: reviewDeps }));
+  }
   catch (error) { stderr.write(`mc: programme-review ${name}: ${error.message}\n`); return 2; }
 }

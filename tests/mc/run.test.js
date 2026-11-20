@@ -12,6 +12,10 @@ import { DEPLOYED as DEPLOY_ROW, readDeploys, recordEnd, recordStart } from '../
 import { answerHeldDeployMend, publishDeployMend, readDeployMends, recordRepaired, requestDeployRepair } from '../../src/mc/deploy-repair.js';
 import { answerHeldMend, answerMainMend, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
+import { newRecord, readRecord, writeRecord } from '../../src/mc/programme-record.js';
+import { repairSnapshot } from '../../src/mc/repair-manifest.js';
+import { reconcileRepair } from '../../src/mc/repair-reconcile.js';
+import { REPAIR_HANDOFF } from '../../src/mc/repair-delivery.js';
 import { removeReadCheckouts, setUpReadCheckouts } from '../../src/mc/programme-turn.js';
 import { freeMemoryPercent } from '../../src/mc/dev-servers.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
@@ -7005,6 +7009,106 @@ const turnState = (f) => JSON.parse(f.files[TURN_STATE]);
 const draftPlans = (f) => planned(f).filter(Boolean);
 const noRunnableTurn = (runner) => runner.nextWork()?.name !== 'programme:prog';
 
+test('runner keeps a stale repair release out of planning, build and settlement; changed design needs a reconciled contract', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-runner-repair-release-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, 'programs');
+  const dir = join(home, 'prog');
+  const goalDir = join(dir, 'goals', 'restore');
+  const pagePath = join(dir, 'README.md');
+  const design = join(dir, 'designs', 'part-1', 'design.md');
+  const recordPath = join(dir, 'PROGRAMME.json');
+  const goalPath = join(goalDir, 'GOAL.json');
+  const logPath = join(goalDir, 'LOG.md');
+  const revision = 'b833c806-2932-46f3-81d6-ec21b75d8aad';
+  const nextRevision = '88c2e348-d3e4-4a85-8270-cdfad7c64b6b';
+  const oldDesign = 'Put row B before row A.';
+  const newDesign = 'Put row A before row B.';
+  const page = '# prog\n\nRepositories: memoro.\n\n## Parts\n\n### Part 1 — Restore order\n\n[Design](designs/part-1/design.md)\n';
+  mkdirSync(goalDir, { recursive: true });
+  mkdirSync(dirname(design), { recursive: true });
+  writeFileSync(pagePath, page);
+  writeFileSync(design, oldDesign);
+  const before = goalJson({ stage: 'build', status: 'ready', title: 'Restore order',
+    contract: [oldDesign], repos: ['memoro'], documents: [{ label: 'Part 1', path: pagePath }], prs: [] });
+  writeFileSync(goalPath, before);
+  const record = newRecord({ end: 'Order is restored.', createdBy: 'repair', repair: {
+    sources: [{ kind: 'proposal', path: '/evidence/proposal.md', key: 'a'.repeat(64), digest: 'b'.repeat(64) }],
+    release: { revision, manifest: repairSnapshot(dir).manifest },
+  } });
+  writeRecord(dir, { ...record, state: 'ready' });
+  let expectedContract = oldDesign;
+  const f = fixture({ root, capacity: capacityWith({ claude: 0.1 }), session: async call => {
+    if (call.env.MC_ROLE === 'plan') {
+      const result = reconcileRepair({ home, programme: 'prog', env: call.env, reason: 'Part 1 agrees with the build contract.' });
+      assert.equal(result.ok, true, result.problems?.join(', '));
+      f.files[recordPath] = readFileSync(recordPath, 'utf8');
+    } else {
+      assert.equal(call.env.MC_ROLE, 'build-session:goal');
+      assert.deepEqual(parseGoal(f.files[goalPath]).contract, [expectedContract]);
+      f.files[logPath] = goalLog('2026-08-29T10:00Z');
+    }
+    return okSession()(call);
+  } });
+  f.dirs.add(join(goalDir, 'memoro'));
+  servedCheckouts(f);
+  Object.assign(f.files, { [pagePath]: page, [recordPath]: readFileSync(recordPath, 'utf8'), [goalPath]: before, [logPath]: '' });
+  const runner = createRunner({ deps: f.deps });
+
+  writeFileSync(design, 'An unreviewed edit.');
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(f.calls.sessions.length, 0);
+  assert.equal(f.files[goalPath], before);
+
+  writeFileSync(design, oldDesign);
+  const planned = await runner.pass({ repo: 'memoro' });
+  assert.equal(planned.name, 'programme:prog', f.log.join('\n'));
+  assert.equal(readRecord(dir).record.repair.reconciled.revision, revision);
+  const built = await runner.pass({ repo: 'memoro' });
+  assert.equal(built.name, 'goal:prog/restore', f.log.join('\n'));
+  assert.equal(f.calls.sessions.at(-1).env.MC_REPAIR_REVISION, revision);
+
+  writeFileSync(design, newDesign);
+  const calls = f.calls.sessions.length;
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(f.calls.sessions.length, calls);
+  // An independent reading and release are exercised in programme-review.test.js.
+  // Supply that release here while keeping the real previous cut and runnable goal.
+  const issued = readRecord(dir).record;
+  issued.repair.release = { revision: nextRevision, manifest: repairSnapshot(dir).manifest };
+  f.files[recordPath] = JSON.stringify(issued);
+  writeFileSync(recordPath, f.files[recordPath]);
+  const planner = { ...f.deps.env, MC_WORK_ROOT: root, MC_ROLE: 'plan', MC_HEADLESS: '1', MC_PROGRAMME: 'prog', MC_REPAIR_REVISION: nextRevision };
+  const obsolete = reconcileRepair({ home, programme: 'prog', env: planner, reason: 'Compared the unchanged goal with the revised design.' });
+  assert.equal(obsolete.ok, false);
+  assert.match(obsolete.problems[0], /released part changed/u);
+  assert.equal(runner.nextWork()?.name, 'programme:prog', 'the old runnable goal cannot build under the new release');
+  const updated = withGoal(before, { contract: [newDesign] });
+  writeFileSync(goalPath, updated);
+  f.files[goalPath] = updated;
+  expectedContract = newDesign;
+  assert.equal((await runner.pass({ repo: 'memoro' })).name, 'programme:prog');
+  assert.equal((await runner.pass({ repo: 'memoro' })).name, 'goal:prog/restore');
+  assert.equal(f.calls.sessions.at(-1).env.MC_REPAIR_REVISION, nextRevision);
+
+  const merged = withGoal(updated, { stage: 'merge', status: 'ready', prs: ['memoro#31'] });
+  f.files[goalPath] = merged;
+  f.files[join(goalDir, REPAIR_HANDOFF)] = JSON.stringify({ revision: nextRevision, prs: [{ repo: 'memoro', pr: 31, sha: 'a'.repeat(40) }] });
+  const gh = f.deps.gh;
+  f.deps.gh = (cwd, args) => args[1] === 'view' && args[2] === '31' && args.includes('state')
+    ? { ok: true, stdout: JSON.stringify({ state: 'MERGED' }) } : gh(cwd, args);
+  let time = Date.parse('2026-08-29T11:00:00Z');
+  f.deps.now = () => new Date(time);
+  const recovery = createRunner({ deps: f.deps });
+  writeFileSync(design, 'A later unreviewed edit.');
+  recovery.nextWork();
+  assert.equal(f.files[goalPath], merged, 'a late GitHub result must not settle the obsolete delivery');
+  writeFileSync(design, newDesign);
+  time += 60 * 60_000;
+  recovery.nextWork();
+  assert.equal(parseGoal(f.files[goalPath]).stage, 'done');
+});
+
 const draftRecordText = () => `${JSON.stringify({ ...JSON.parse(plainText()), version: 2, state: 'draft' }, null, 2)}\n`;
 
 for (const kind of ['plan', 'build', 'review', 'mend']) {
@@ -7423,7 +7527,7 @@ function servedCheckouts(f, { dirty = [], unreachable = [], addFails = {} } = {}
   const base = f.deps.git;
   const repoOf = (path) => String(path).split('/').at(-1);
   f.deps.git = (cwd, args) => {
-    const inCheckout = /^\/w\/runner\/work\/(programme|archive)-turn-/u.test(String(cwd));
+    const inCheckout = ['programme', 'archive'].some(kind => String(cwd).startsWith(join(f.root, 'runner', 'work', `${kind}-turn-`)));
     if (inCheckout && args[0] === 'status') { f.calls.git.push([cwd, ...args]); return { ok: true, stdout: dirty.includes(repoOf(cwd)) ? ' M x' : '' }; }
     if (inCheckout && args[0] === 'merge-base') { f.calls.git.push([cwd, ...args]); return { ok: !unreachable.includes(repoOf(cwd)), stdout: '' }; }
     if (args[0] === 'worktree' && args[1] === 'add' && args.includes('--detach')) {

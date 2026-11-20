@@ -238,10 +238,11 @@ The in-process claim is taken in the same tick as the choice, before any
 await, so two lanes cannot choose the same goal before its current file exists.
 The phase rule and the stage transitions are in [mc-goals.md](mc-goals.md).
 
-Repair-owned drafts are held at selection and rechecked during goal admission,
-including goals that already read `build · ready`. Ordinary state values do
-not clear this hold. The programme planning turn also refuses repair-owned
-records. The runner does not launch the internal repair drafting entry.
+Repair-owned drafts, stops and stale releases are held at selection and
+rechecked during goal admission, including goals that already read
+`build · ready`. Ordinary state values do not clear the hold. The programme
+planning turn needs the current release; build also needs its reconciliation.
+The terminal starts `mc repair`. The runner takes over after release.
 
 ## Lanes
 
@@ -963,6 +964,32 @@ remain outside this trigger. See [next draft planning](mc-goals.md#next-draft-pl
 
 ## Programme planning turn
 
+A released repair order is planned on a fixed copy of the released inputs.
+The turn carries the release revision and is due until that revision is
+reconciled, even if every part already has goals. The programme planner
+creates goals only against that current release and records its comparison
+with `mc programs reconcile <programme> --reason <text>`. Changed unfinished
+work is updated by the goal verbs. The comparison includes each part's
+README section, shared delivery clauses and the released digests of its
+binding files. A binding file named outside the numbered parts is shared by
+all parts; a file named only inside a part affects that part. Read and
+Where things are remain available for reference and review notes. Replacing
+a release whose planner did not finish records the existing unfinished
+contracts that no completed cut accepted. Those contracts must be updated or
+retired before the new release can be reconciled. A changed contract must
+be back in draft or build without carried criterion marks. The planner may return a repair
+goal from review or merge to build while reconciling. An unfinished merge
+handoff must return to build even if the goal's contract still matches;
+the earlier handoff cannot be reused. Removed parts retire
+their unfinished work. Landed goals are kept as evidence and cannot cover a
+changed part by number alone. The runner checks both the programme manifest
+and the reconciled goal contract before delivery, and passes the revision to
+the session. A result from a superseded session does not advance the goal.
+Merge recovery and completion require the current repair handoff as well as
+the current manifest and goal contract; the runner never assigns a new
+revision to an old queue entry or uses an earlier merge decision to complete
+a goal under a later release.
+
 Martin, 2026-11-16: a programme whose record is `ready` is cut
 into its phases and goals from `README.md`, with nobody present.
 `programmeDue` (`programme-turn.js`) is model-free and reads at every pick. A turn is due when
@@ -1066,6 +1093,18 @@ it records retained trees in a versioned receipt in the programme directory.
 It checks the fence after receipt preparation and immediately before shelving.
 The receipt travels with the directory. See
 [archiving a programme](mc-plan.md#archiving-a-programme).
+
+For a repair order the current reconciled release also gates write-back and
+archival. The write-back names the release on its first line, `release:
+<revision>`. The runner retains an OK only for that revision and the same
+landed goals; an old OK cannot authorize archiving a newer release. The
+archive rechecks the release and the retained reading at its fence and
+checks the revision again when recording completion after moving the order.
+An interactive decline with landed work substitutes its own archive-only
+revision for delivery authority. Ordinary dropped-goal cleanup still runs;
+the archive waits until live directories have gone. Any retired goal with a
+confirmed landed PR is judged for what landed, not the remainder. Neither
+this revision nor its write-back authorizes planning, build or merge.
 
 Martin, 2026-11-15: a programme with a record is bounded. Once every goal is
 done or dropped, the runner checks that what the programme made true is written

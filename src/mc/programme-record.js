@@ -15,17 +15,59 @@ import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { writeFileAtomic } from './atomic-write.js';
 import { canonRoot } from './canon.js';
+import { RESERVED_ACTS } from './jev.js';
 import { NAME_RE } from './plan-schema.js';
 import { workRoot } from './paths.js';
 import { realLock } from './runner-lock.js';
+import { validRepairManifest } from './repair-manifest.js';
 
 export const RECORD_FILE = 'PROGRAMME.json';
 export const RECORD_SCHEMA = 'mc-programme';
 export const RECORD_VERSION = 2;
-export const RECORD_STATES = Object.freeze(['draft', 'ready', 'done']);
+export const RECORD_STATES = Object.freeze(['draft', 'ready', 'Martin', 'done']);
 export const RECORD_AUTHORS = Object.freeze(['person', 'martin', 'manager', 'repair']);
 const V1_KEYS = Object.freeze(['schema', 'version', 'horizon', 'area', 'end', 'state', 'created', 'created_by', 'phases']);
 const DIGEST = /^[a-f0-9]{64}$/u;
+const REVISION = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
+const partNumber = value => Number.isSafeInteger(value) && value >= 1;
+const itemId = value => typeof value === 'string' && /^[a-f0-9]{24}$/u.test(value);
+const present = value => typeof value === 'string' && Boolean(value.trim());
+const names = value => Array.isArray(value) && value.every(name => typeof name === 'string' && NAME_RE.test(name));
+
+function validStop(stop) {
+  return stop && itemId(stop.id) && present(stop.at) && present(stop.title) && present(stop.summary)
+    && names(stop.landed) && (stop.link === undefined || (itemId(stop.link.id) && ['text', 'reserved'].includes(stop.link.kind)));
+}
+
+export function validRepairScope(scope) {
+  const line = (value, max) => present(value) && value.trim() === value && value.length <= max && !/\p{Cc}/u.test(value);
+  const keys = (value, allowed) => value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).every(key => allowed.includes(key));
+  if (!keys(scope, ['title', 'summary', 'item', 'heldText', 'reserved']) || !line(scope.title, 160) || !line(scope.summary, 1400)) return false;
+  const { item, heldText, reserved } = scope;
+  return [item, heldText, reserved].filter(value => value !== undefined).length <= 1
+    && (item === undefined || itemId(item))
+    && (heldText === undefined || (keys(heldText, ['text', 'brief']) && line(heldText.text, 800) && present(heldText.brief)))
+    && (reserved === undefined || (keys(reserved, ['kind', 'effect', 'steps', 'wait', 'reversible'])
+      && RESERVED_ACTS.includes(reserved.kind) && [reserved.effect, reserved.steps, reserved.wait].every(value => line(value, 800))
+      && typeof reserved.reversible === 'boolean'));
+}
+
+function validDisposition(disposition, stop) {
+  return disposition && disposition.item === stop?.id && itemId(disposition.item)
+    && ['decline', 'return', 'takeover'].includes(disposition.action) && present(disposition.at) && present(disposition.reason)
+    && (disposition.action === 'decline'
+      ? typeof disposition.revision === 'string' && REVISION.test(disposition.revision) && names(disposition.landed)
+      : disposition.revision === undefined && disposition.landed === undefined);
+}
+
+function validReconciliation(found) {
+  return found && typeof found.revision === 'string' && REVISION.test(found.revision)
+    && typeof found.reason === 'string' && found.reason.trim()
+    && Array.isArray(found.parts) && found.parts.every(row => Array.isArray(row) && partNumber(row[0]) && DIGEST.test(row[1]))
+    && Array.isArray(found.goals) && found.goals.every(row => Array.isArray(row) && NAME_RE.test(row[0])
+      && DIGEST.test(row[1]) && Array.isArray(row[2]) && row[2].every(partNumber));
+}
 
 /** A source reference is data, not a path to be opened without revalidating it. */
 export function validRepairSource(source) {
@@ -40,11 +82,26 @@ export function validRepairSource(source) {
       || (Array.isArray(source[field]) && source[field].every(key => typeof key === 'string' && DIGEST.test(key))));
 }
 
+function validInterruptedCut(rows) {
+  return Array.isArray(rows) && rows.every(row => Array.isArray(row) && row.length === 2
+    && typeof row[0] === 'string' && NAME_RE.test(row[0]) && typeof row[1] === 'string' && DIGEST.test(row[1]))
+    && new Set(rows.map(([name]) => name)).size === rows.length;
+}
+
 function validRepair(repair) {
   return repair && typeof repair === 'object' && !Array.isArray(repair)
-    && Object.keys(repair).every(key => ['sources', 'stop_item'].includes(key))
+    && Object.keys(repair).every(key => ['sources', 'pending_scope', 'stop_item', 'release', 'reconciled', 'stop', 'disposition', 'desk', 'takeover_cut'].includes(key))
     && Array.isArray(repair.sources) && repair.sources.length > 0 && repair.sources.every(validRepairSource)
-    && (repair.stop_item === undefined || (typeof repair.stop_item === 'string' && /^[a-z0-9-]+$/u.test(repair.stop_item)));
+    && (repair.pending_scope === undefined || validRepairScope(repair.pending_scope))
+    && (repair.stop_item === undefined || (typeof repair.stop_item === 'string' && /^[a-z0-9-]+$/u.test(repair.stop_item)))
+    && (repair.stop === undefined || validStop(repair.stop))
+    && (repair.disposition === undefined || validDisposition(repair.disposition, repair.stop))
+    && (repair.desk === undefined || repair.desk === true)
+    && (repair.takeover_cut === undefined || (repair.desk === true && validInterruptedCut(repair.takeover_cut)))
+    && (repair.release === undefined || (repair.release && Object.keys(repair.release).every(key => ['revision', 'manifest', 'unreconciled'].includes(key))
+      && typeof repair.release.revision === 'string' && REVISION.test(repair.release.revision) && validRepairManifest(repair.release.manifest)
+      && (repair.release.unreconciled === undefined || validInterruptedCut(repair.release.unreconciled))))
+    && (repair.reconciled === undefined || validReconciliation(repair.reconciled));
 }
 
 /** The caller must already hold the strict programme lock. Do not release or change state here. */
@@ -56,9 +113,9 @@ export function linkRepairSource(dir, record, source) {
   writeFileAtomic(join(dir, RECORD_FILE), `${JSON.stringify(updated, null, 2)}\n`);
 }
 
-// Part 2 has no release authority. State alone must never open this record.
+// State alone must never open or reopen a repair-owned order.
 export function repairDraftRefusal(record, programme) {
-  return record?.repair ? `repair programme ${programme} is draft — its release is not available` : null;
+  return record?.repair ? `repair programme ${programme} is ${record.state} — mc repair --resume ${programme}` : null;
 }
 /**
  * The fields the removed signing wrote into version 2 records on disk: every one of them starts with `signed_` or
@@ -67,7 +124,7 @@ export function repairDraftRefusal(record, programme) {
  * rule rather than listed by name, so that no source names a field that is gone.
  */
 const REMOVED_KEY = /^(?:signed_|cut_)[a-z_]+$|^legacy$/u;
-const DISK_STATES = Object.freeze(['draft', 'ready', 'done', 'open', 'dropped']);
+const DISK_STATES = Object.freeze([...RECORD_STATES, 'open', 'dropped']);
 
 /** The one value of `area`: `<repo>/<id>`, an area a repository declares; the programme repairs that area's text and serves no horizon. */
 export const AREA_RE = /^[a-z0-9][a-z0-9-]{0,63}\/[a-z][a-z0-9-]*$/u;
@@ -160,8 +217,9 @@ export function validateRecord(value) {
     if (value.horizon !== null) problems.push('area: allowed only with horizon null — a programme serves a horizon or repairs an area, not both');
   }
   if (typeof value.end !== 'string' || !value.end.trim()) problems.push('end: a non-empty sentence saying when the programme is done');
+  const offered = value.repair ? RECORD_STATES : RECORD_STATES.filter(state => state !== 'Martin');
   const states = value.version === 1 ? ['open', 'done'] : DISK_STATES;
-  if (!states.includes(value.state)) problems.push(`state: one of ${RECORD_STATES.join(', ')}`);
+  if (!states.includes(value.state)) problems.push(`state: one of ${offered.join(', ')}`);
   if (!isInstant(value.created)) problems.push('created: an ISO instant in UTC to the second');
   if (!RECORD_AUTHORS.includes(value.created_by)) problems.push(`created_by: one of ${RECORD_AUTHORS.join(', ')}`);
   if (value.repair !== undefined || value.created_by === 'repair') {
@@ -169,6 +227,11 @@ export function validateRecord(value) {
       problems.push('repair: a repair-owned record without a horizon or area-text order, with at least one valid source reference');
     }
   }
+  if (value.state === 'Martin' && !value.repair?.stop_item) problems.push('state: Martin requires a repair stop');
+  if (value.repair?.pending_scope && (value.state !== 'draft' || value.repair.desk || value.repair.stop_item
+    || value.repair.disposition?.action === 'decline')) problems.push('repair scope can be pending only on a repair-owned draft');
+  if (value.repair?.stop && (value.state === 'Martin' ? value.repair.stop_item !== value.repair.stop.id
+    : value.repair.stop_item !== undefined || !value.repair.disposition)) problems.push('repair stop and programme state disagree');
   if (value.phases !== undefined) problems.push(...phasesProblems(value.phases));
   return problems;
 }
@@ -269,7 +332,7 @@ export function createProgramme(dir, page, record) {
  * `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
  */
 export function changePhases(dir, change, options = {}) {
-  return replaceRecord(dir, (record) => {
+  return changeProgrammeRecord(dir, (record) => {
     const phases = change(record.phases);
     return phases === undefined ? record : { ...record, phases };
   }, options, 'programme-phases');
@@ -282,14 +345,14 @@ export function changePhases(dir, change, options = {}) {
  * Returns `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
  */
 export function setRecordState(dir, state, options = {}) {
-  return replaceRecord(dir, (record) => {
-    const refusal = state !== 'draft' && repairDraftRefusal(record, basename(dir));
+  return changeProgrammeRecord(dir, (record) => {
+    const refusal = repairDraftRefusal(record, basename(dir));
     return refusal ? { problems: [refusal] } : { ...record, state };
   }, options, 'programme-state');
 }
 
 /** Fresh read, validation and atomic replacement share the runner's strict lock. Create stays create-only. */
-function replaceRecord(dir, change, { root = workRoot(), lock = realLock, read, write = writeFileAtomic }, name, { state, beforeWrite } = {}) {
+export function changeProgrammeRecord(dir, change, { root = workRoot(), lock = realLock, read, write = writeFileAtomic }, name, { state, beforeWrite } = {}) {
   return lock(root, () => {
     const found = readRecord(dir, read ? { read } : {});
     if (found.status !== 'valid') return { ok: false, status: found.status, problems: found.problems ?? [] };

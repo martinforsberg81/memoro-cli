@@ -36,9 +36,9 @@ On main now:
 - The [learning pass](../mc-martin.md#lessons-and-the-learning-pass) can
   publish an evidenced factual correction to one area page. It does not
   change held wording or create a repair order.
-- [Repair drafting](../mc-plan.md#internal-repair-drafts) exists as an
-  internal entry. Its drafts cannot be set ready by the ordinary state
-  command or enter planning or build; the repair release path has not landed.
+- [`mc repair`](../mc-plan.md#repair-drafts) takes an evidenced defect through
+  independent review to the ordinary planner, or records a scope stop at
+  the desk. The release binds the reviewed order and its evidence.
 - A waiting deploy reserves the next opening for a full run when a different commit is being measured. It can still join a measurement of its own commit.
 - The helper preserves anonymous app suggestions in intake before it acknowledges their receipt. Collection does not create a programme or goal.
 
@@ -61,7 +61,7 @@ On main now:
 - Sessions have one way to ask for advice, `mc ask`, not several (Martin, 2026-11-15; programme `reach`).
 - The only questions directed to Martin are those about a reformulation of an aim, and about strategy and design at that level (Martin, 2026-11-15; programme `mc`).
 - A programme with a record is bounded: it is done when its goals are done and its write-back reads OK, and the system then archives it (Martin, 2026-11-15; programme `horizon`).
-- The ordinary programme path uses `draft`, `ready` and `done`. A person or Martin's interactive session (`mc martin`) creates a draft record, and Martin sets the state with `mc programs state <programme> draft|ready` (Martin, 2026-11-16; programme `plain-programmes`). The dedicated repair path decided above still needs implementation.
+- The ordinary programme path uses `draft`, `ready` and `done`. A person or Martin's interactive session (`mc martin`) creates a draft record, and Martin sets the state with `mc programs state <programme> draft|ready` (Martin, 2026-11-16; programme `plain-programmes`).
 - A programme in draft starts no new plan, build, review or mend session; planning and build take nothing from a draft programme (Martin, 2026-11-16; programme `plain-programmes`).
 - `mc programs review` is advisory: Martin's interactive session calls it when he wants, it writes PROGRAMME-REVIEW.md beside the programme, and nothing reads the report (Martin, 2026-11-16; programme `plain-programmes`).
 - The planner cuts goals from README.md of a ready programme (Martin, 2026-11-16; programme `plain-programmes`).

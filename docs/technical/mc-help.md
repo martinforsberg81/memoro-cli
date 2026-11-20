@@ -33,15 +33,11 @@ A retired route answers with where the work went and exit 2, not an alias
 that silently performs the old operation. `mc status` points to the page and
 `mc goal show`; free-standing workarea entrances are retired too.
 
-## Internal repair drafting
+## Repair
 
-`src/mc/repair-draft.js` exports `runRepairDraft(argv)` for the next repair
-handoff. It is not a CLI route or a help entry. `mc repair` (including
-`--help` and source flags) is an unknown command, exit 2. No ordinary desk
-command calls the internal entry.
-
-The internal entry takes no arguments or one of `--proposal <path>`,
-`--feedback <file>` and `--error <digest-file> [--fingerprint <id>]`.
+`mc repair` starts from the terminal with no arguments or one of
+`--proposal <path>`, `--feedback <file>` and
+`--error <digest-file> [--fingerprint <id>]`.
 Without a selection it examines waiting dated area proposals by filename
 then path, skipping unchanged non-actionable, ambiguous, stopped and
 already ordered sources. It can resume an existing repair draft. Explicit
@@ -49,9 +45,23 @@ selection reports the disposition instead. A missing or unreadable source
 exits 1; malformed arguments, incident feedback without a task ID or an
 incident timestamp and build, or a digest that needs fingerprint selection
 exit 2 without ordering. The digest selection reports the available IDs.
-Sources, records and draft admission are in [mc-plan.md](mc-plan.md#internal-repair-drafts).
+Sources, records and draft admission are in [mc-plan.md](mc-plan.md#repair-drafts).
 
-Internal results are prefixed with `mc: `: `repair programme <programme> is
+`mc programs repair-stop <programme> --title <text> --summary <text>
+[--item <id>]` is for the live assigned repair author. Only interactive Martin
+can use `mc programs disposition <programme> decline|return|takeover --reason
+<text>`. An unauthorised disposition or malformed invocation exits 2 without
+writing. A valid call whose record or inputs prevent the transition exits 1.
+See [repair scope stops](mc-martin.md#repair-scope-stops).
+
+The selected order continues through independent review and bounded revision
+in the same invocation. Release prints `mc: repair programme <programme> is
+ready for planning`. `mc repair --resume <programme>` resumes a draft or
+opens a stale release for a fresh review. On a current release it retries
+source archival only. An interrupted or unsuccessful review leaves a draft
+and reports how to resume. A scope stop reports its desk item.
+
+Results are prefixed with `mc: `: `repair programme <programme> is
 draft — source <path>`, `resuming repair programme <programme>`, `source
 already ordered in <programme>`, or `repair programme <programme> is at
 Martin (item <id>)`. No-order results are `<source> — already fixed`,

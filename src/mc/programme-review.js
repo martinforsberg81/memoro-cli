@@ -25,7 +25,7 @@ import { profileArgs } from './portrait.js';
 import { instructionsFor, readCanonRole } from './roles.js';
 import { headlessArgs, readSessionOutput, TIMEOUT_EXIT, tsvHeader, tsvRow } from './run-plan.js';
 import { refusePlanOnRead } from './plan-refusal.js';
-import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
+import { scrubProviderApiKeysFromEnv, scrubRuntimeSecretsFromEnv } from './runtime-secrets.js';
 import { withoutSessionIdentity } from './session-role.js';
 import { pidAlive } from './status-collect.js';
 
@@ -48,7 +48,7 @@ export function authorOf(env, avoid) {
   return null;
 }
 
-export function readerWalk({ catalog, capacity, now, author, env = {}, choose = chooseCandidate, launch, billing, fallThrough = true }) {
+export function readerWalk({ catalog, capacity, now, author, env = {}, choose = chooseCandidate, launch, billing, fallThrough = true, independent = false }) {
   const priority = catalog.providerPriority ?? 'auto';
   const top = catalog.review[0] ?? null;
   const setAside = [];
@@ -64,6 +64,7 @@ export function readerWalk({ catalog, capacity, now, author, env = {}, choose = 
       if (!live.length) return { reason: 'no candidate is left' };
       const answer = choose({ cls: 'review', catalog: { ...catalog, review: live }, capacity, now, priority, first: live.includes(top) ? top : null, setAside: setAside.map(({ tool, model }) => ({ tool, model })) });
       if (!answer?.ok || !answer.candidate) return { reason: answer?.reason || 'no answer' };
+      if (independent && !live.some(one => one.tool === answer.candidate.tool && one.model === answer.candidate.model)) return { reason: 'the choice did not select an independent candidate' };
       if (gone.has(answer.candidate)) return { reason: `the choice answered ${answer.candidate.tool} ${answer.candidate.model}, which is already set aside` };
       const launched = launchOf(answer.candidate.tool);
       const route = launched?.ok ? billing(answer.candidate.tool, { env, now, route: { billing: answer.billing, why: answer.why } }) : { billing: 'unavailable', why: launchReason(answer.candidate) };
@@ -73,7 +74,7 @@ export function readerWalk({ catalog, capacity, now, author, env = {}, choose = 
     }
   };
   const others = author ? catalog.review.filter((one) => !(one.model === author.model && one.tool === author.tool)) : catalog.review;
-  const tiers = others.length && others.length < catalog.review.length ? [others, catalog.review] : [catalog.review];
+  const tiers = independent ? [others] : others.length && others.length < catalog.review.length ? [others, catalog.review] : [catalog.review];
   let result = { reason: 'no candidate is left' };
   for (const pool of tiers) {
     result = stage(pool);
@@ -172,7 +173,7 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
     walked = readerWalk({
       catalog: deps.catalog ?? readModels(env), capacity: deps.capacity ?? readCapacity({ root: runnerDir(env) }), now: now(), author, env,
       choose: deps.route ? ({ setAside }) => deps.route('review', { setAside }) : deps.choose, launch: deps.launch ?? resolveLaunch,
-      billing: deps.billingRoute ?? billingRouteNow, fallThrough: Boolean(policy.fallThrough),
+      billing: deps.billingRoute ?? billingRouteNow, fallThrough: Boolean(policy.fallThrough), independent: policy.independent,
     });
   } catch (error) { walked = { ok: false, reason: error.message || String(error), setAside: [] }; }
   for (const one of walked.setAside ?? []) stderr.write(`mc: ${kind} ${target.name}: ${one.tool}:${one.model} cannot read — ${one.reason}; trying the next reader\n`);
@@ -217,9 +218,11 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
   let summary = null;
   let verdict = null;
   let note = null;
+  let output = null;
   try {
     try { mkdirSync(checkout, { recursive: false }); made = true; identity = checkoutIdentity(checkout); } catch (error) { note = `the checkout could not be made: ${error.message}`; }
     if (made && !note) {
+      policy.prepare?.(checkout);
       const done = (deps.checkout ?? realCheckout)({ repos: policy.repos.map((one) => ({ repo: one.repo, path: one.path })), dir: checkout });
       if (!done?.ok) note = done?.reason || 'the checkout failed';
     }
@@ -234,13 +237,18 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
       if (at > 0) args.splice(at, 0, allowed.flag, checkout);
       const spawned = gatewayLaunch({ provider: requireCapability(launched.id, 'BILLING_PROVIDER'), model: candidate.model, bin: launched.spec.bin, args, billing: billing.billing });
       const childEnv = withoutSessionIdentity(env);
-      for (const key of ['MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'MC_SCRATCH', 'MC_PROGRAMME_REVIEW_TOKEN']) delete childEnv[key];
+      for (const key of ['MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'MC_SCRATCH', 'MC_PROGRAMME_REVIEW_TOKEN', 'MC_REPAIR_TOKEN']) delete childEnv[key];
       Object.assign(childEnv, { MC_ROLE: roleName, MC_HEADLESS: '1', ...policy.identity, MC_TOOL: candidate.tool, MC_MODEL: candidate.model, [policy.tokenEnv]: token });
-      try { result = await (deps.session ?? realSession)({ ...spawned, cwd: target.dir, env: scrubProviderApiKeysFromEnv(childEnv), timeoutMs: limitMs, group: true }); }
+      const safeEnv = (policy.isolatedOutput ? scrubRuntimeSecretsFromEnv : scrubProviderApiKeysFromEnv)(childEnv);
+      try { result = await (deps.session ?? realSession)({ ...spawned, cwd: policy.sessionDirectory?.(checkout) ?? target.dir, env: safeEnv, timeoutMs: limitMs, group: true }); }
       catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
+      if (policy.isolatedOutput && result.status === 0 && !result.timedOut) output = policy.isolatedOutput(checkout);
       summary = readSessionOutput({ toolId: launched.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, now: now(), model: candidate.model });
       refusePlanOnRead({ read: summary, launch: launched, model: candidate.model, billing: billing.billing, env, now: now(), say: (text) => stderr.write(`mc: ${kind} ${target.name}: ${text}\n`) });
     }
+  } catch (error) {
+    if (!policy.isolatedOutput) throw error;
+    note = error.message || String(error);
   } finally {
     if (made) {
       try { discard(checkout, identity); }
@@ -255,11 +263,21 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
   verdict = launch && (launch.verdict === 'ok' || launch.verdict === 'not-ok') ? launch.verdict : null;
   const invalidLaunch = policy.bound && (!launch || launch.binding !== target.name || launch.role !== roleName || launch.hash !== hash || launch.token_sha256 !== sha256(token) || launch.pid !== pid || launch.start !== started.toISOString());
   const changed = names.filter((file) => read(join(target.dir, file)) !== before[file]);
-  closeLaunch();
+  if (!policy.isolatedOutput) closeLaunch();
   let code;
   if (note) { stderr.write(`mc: ${kind} ${target.name}: no reading — ${note}\n`); code = invalidExit; }
   else if (changed.length) { note = `${changed.join(', ')} changed during the reading`; stderr.write(`mc: ${kind} ${target.name}: no reading stored — ${note}\n`); code = invalidExit; }
-  else if (policy.advisory) {
+  else if (policy.isolatedOutput) {
+    try {
+      note = invalidLaunch ? 'the reader launch is no longer current'
+        : result?.timedOut ? `the reading exceeded ${limitWords}`
+          : result?.status !== 0 ? `the reading failed (exit ${result?.status ?? 1})`
+            : policy.store({ output, candidate, at: now() });
+    } catch (error) { note = error.message || String(error); }
+    if (note) stderr.write(`mc: ${kind} ${target.name}: no reading stored — ${note}\n`);
+    else stdout.write(`mc: ${kind} ${target.name}: review written — ${join(target.dir, reviewFile)}\n`);
+    code = note ? invalidExit : 0;
+  } else if (policy.advisory) {
     const report = read(join(target.dir, reviewFile));
     const written = report !== null && (report !== earlierReport || (modified(join(target.dir, reviewFile)) ?? -Infinity) >= started.getTime());
     if (result?.timedOut) {
@@ -289,6 +307,9 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
       code = verdict === 'ok' ? 0 : 1;
     }
   }
+  if (policy.isolatedOutput) lock(lockRoot, () => {
+    if (readLaunch(target.dir, read, launchFile).launch?.token_sha256 === sha256(token)) closeLaunch();
+  }, { strict: true, name: `${kind}-unclaim` });
   if (summary) {
     const row = { ...summary, ts: now().toISOString(), name: policy.runName, kind, exit: result?.status ?? 1,
       seconds: Math.round((now().getTime() - started.getTime()) / 1000), pr: '-', note: note ?? (verdict ? verdictWord(verdict) : null),

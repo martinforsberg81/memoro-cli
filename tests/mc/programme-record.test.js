@@ -639,6 +639,21 @@ describe('internal repair order drafting', () => {
     } finally { a.done(); }
   });
 
+  it('uses one ownership check across desk and repair draft creation', async () => {
+    const a = area();
+    try {
+      const p = proposal(a, 'shared-owner', 'Valid input fails.');
+      const desk = { ...a.env, MC_ROLE: 'martin' };
+      const deskCreate = name => call(['create', name, '--end', 'Restore the valid form.', '--area', 'memoro-cli/operations', '--from-proposal', p], desk, AREA_DEPS);
+      assert.equal((await direct(a, 'proposal', p, order('repair-owns'))).code, 0);
+      const existing = await deskCreate('duplicate');
+      assert.equal(existing.code, 0, existing.err);
+      assert.match(existing.out, /source already ordered in repair-owns/u);
+      assert.deepEqual(readdirSync(a.home), ['repair-owns']);
+      assert.ok(existsSync(p));
+    } finally { a.done(); }
+  });
+
   it('converges explicit incident and fingerprint links across all routes and a moved or later digest', async () => {
     const a = area();
     try {
@@ -883,7 +898,7 @@ describe('internal repair order drafting', () => {
         stderr: { write: text => err.push(text) } };
       assert.equal(await goal(['new', 'internal-repair/restore', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Restore'], deps), 1);
       assert.equal(await plan(['internal-repair'], { ...deps, repos: [], ensure: unexpected }), 1);
-      assert.equal(err.filter(text => /repair programme internal-repair is draft/u.test(text)).length, 2);
+      assert.equal(err.filter(text => /repair programme internal-repair needs review/u.test(text)).length, 2);
       assert.deepEqual(readdirSync(join(dir, 'goals')), []);
       assert.equal((await call(['create', 'desk-repair', '--end', 'Update the text.', '--area', 'memoro-cli/operations', '--from-proposal', ordinary], desk, AREA_DEPS)).code, 0);
       assert.equal((await call(['state', 'desk-repair', 'ready'], desk)).code, 0);

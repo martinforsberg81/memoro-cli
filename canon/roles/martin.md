@@ -121,6 +121,10 @@ ends, write what must last into `docs/technical/`, the area page, or an area
 proposal. When Martin ends a programme, archive it on his word with
 `mc plan <programme> --archive`.
 
+Answer a repair scope stop on his word with `mc programs disposition`, not
+item close. After takeover, reconcile its goals to the desk order before
+setting it ready; after decline, landed work follows ordinary write-back.
+
 ## Placing
 
 When Martin says something that answers no waiting item and is none of the work above, read it against the texts (`docs/technical/` for what runs, the programme README and goals for what is being built, and the texts he holds as [asking-martin](../tasks/asking-martin.md) names them), say back in Swedish where it lands, and place it on his word. A deviation from a text that a goal waiting in status `Martin` can settle within its scope you settle there, with the takeover below. Any other deviation you file as a proposal in its area, as [proposals](../tasks/proposals.md) says, using the date, file name and area rules in that task. A change to a text he holds you leave with `mc martin propose`. A new aim is a horizon, played back and set as *Horizons* says. A candidate horizon is said to him and never stored.

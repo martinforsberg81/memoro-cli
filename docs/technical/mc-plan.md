@@ -64,7 +64,7 @@ and `legacy` remain readable on old records but are not written:
 | `horizon` | the slug of the horizon served, or `null` |
 | `area` | optional: `<repo>/<id>`, an area a repository declares; allowed only with `horizon` `null` |
 | `end` | one non-empty sentence saying when the programme is done |
-| `state` | `draft`, `ready` or `done` |
+| `state` | `draft`, `ready`, `done` or `Martin` with a repair scope stop |
 | `created` | an ISO instant in UTC to the second |
 | `created_by` | `person`, `martin`, `repair` or the historical `manager` |
 | `phases` | optional: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}` |
@@ -72,8 +72,10 @@ and `legacy` remain readable on old records but are not written:
 
 `draft` means not finished; planning and build take nothing from it (`mc goal new`
 is refused, the planning turn does not run, no session starts on its goals).
-`ready` means goals may be cut and built; `done` means archived.
-Every new record is draft.
+`ready` means goals may be cut and built subject to their admission rules;
+`done` means finished. Every new record is draft. For a taken-over repair,
+only interactive Martin can prepare its goals while it is draft; a declined
+repair with landed work reads ready for write-back only.
 
 Both the overview and `mc programs list` include current local programme
 directories, including recordless directories. They share the same rules
@@ -86,12 +88,14 @@ directory or live goal takes precedence over an earlier receipt. See
 Reading an older record normalizes it in memory: `open` reads as `ready`, `dropped`
 as `done`, and removed fields are ignored. It does not change disk bytes or state.
 Only an actual write upgrades a record to version 2.
+Older mc rejects new repair metadata as an invalid record rather than
+treating a stopped or disposed order as an ordinary ready record.
 
 The ordinary desk writer creates a programme only for a person or Martin's
 interactive session (`mc martin`); every headless role is refused (exit 2).
 Martin sets an ordinary order's state with `mc programs state <programme>
-draft|ready`. The unpublished [repair drafting entry](#internal-repair-drafts)
-uses the same validated writer but confers no state authority.
+draft|ready`. The [repair command](#repair-drafts) uses the same validated writer and its own
+reviewed release rule.
 
 A record cannot name both a horizon and an area. A repair programme (`--area`)
 orders a set of small adjustments to one area as one document, and the planner
@@ -169,7 +173,8 @@ not declare the area at its origin/main, or a valid open record already names it
 `--from-proposal <path>` names a file directly in an area's
 `~/mc/areas/<repo>/<area>/proposals/` (anything else, an archived one included,
 is refused with exit 1 before anything is made, and so is one whose name is taken
-in that area's `proposals/archive/`). The new `README.md` names its archived path
+in that area's `proposals/archive/`). A source already ordered returns the owning
+programme before making a new one. The new `README.md` names its archived path
 first under Where things are (`Ordered from the proposal \`<path>\`.`); after the
 programme is made the proposal is moved to `proposals/archive/` of its area with
 the first line `Utfall: ordered in programme <programme>`, and one that cannot be
@@ -196,8 +201,10 @@ write of the file (`programme-file`, [mc-hooks.md](mc-hooks.md)).
 
 `mc programs state <programme> draft|ready` is available only to interactive Martin:
 exactly `MC_ROLE=martin` and `MC_HEADLESS` not `1`. Every other caller exits 2
-before effects. It sets `draft` or `ready` without condition on the document,
-the directory or any reading. Setting `ready` also releases the holds the desk placed
+before effects. For ordinary desk orders it sets `draft` or `ready` without
+condition on the document, directory or any reading. For repair orders see
+[release](#repair-drafts) and [desk takeover](#repair-scope-stops-and-dispositions).
+Setting `ready` also releases the holds the desk placed
 (`by: martin`, not a creation hold) on the programme's unfinished goals, each with the log
 entry `mc goal release` writes and a line `<programme>/<goal> released (held since <at>: <reason>)`;
 setting the order ready is Martin's word that its work goes on. Any other hold is kept and named,
@@ -205,10 +212,12 @@ setting the order ready is Martin's word that its work goes on. Any other hold i
 `draft` releases nothing.
 
 `mc programs review <programme>` is an in-session call, not a runner lane or scheduled turn.
-It is advice: Martin's interactive session calls it when he wants, it writes its report
+For desk orders the reading is advice: Martin's interactive session calls it when he wants, it writes its report
 beside the programme as `PROGRAMME-REVIEW.md`, and no code reads the report: it gates
 nothing in mc, is bound to no version of the text and never goes stale.
-It records no verdict or currency. The desk keeps the order in draft while
+It records no verdict or currency. [Repair-owned drafts](#repair-drafts) use
+the same command with a fixed snapshot and a receipt required for release.
+The desk keeps the order in draft while
 working through each part's user outcome and design with Martin. The desk
 settles the technical solution, its supporting investigations and how to check
 the result, then reviews the current text. The desk fixes review findings on
@@ -236,7 +245,7 @@ short template in `repair-page.md`. The older recordless page is
 the no-record page only when no README exists. `mc programs show` prints the
 `area` line and `--json` the key.
 
-### Internal repair drafts
+### Repair drafts
 
 The draft is a full programme document with affected repositories, numbered
 parts, observable acceptance and original source pointers in Where things are.
@@ -248,7 +257,9 @@ proposal identity. Explicit source links and corroborating incident or
 fingerprint evidence join one order; a shared incident without that
 corroboration is not enough. An ordinary desk order can be found by its
 proposal archive outcome or its original README pointer if the move failed.
-Part 2 does not change the desk's ownership or archive operation.
+The desk and repair entrances check proposal ownership and write their orders
+under the same strict runner lock. An owned source returns the existing
+order; an ambiguous match leaves the proposal available.
 
 Feedback and collected errors reuse a corroborated proposal if one already
 exists; otherwise they get one in the appropriate area before drafting.
@@ -279,10 +290,98 @@ evidence in the strict programme lock; it does not hold the lock while the
 role reads. Changed evidence or concurrent order changes cannot be committed
 from a stale reading.
 
-Ordinary `state ready`, `mc plan` and `mc goal new` refuse repair-owned
-drafts (exit 1). A state spelling is not a release. Part 2 has no release
-operation; older runners see the optional repair field as invalid and hold
-its goals. Ordinary desk-created area repairs keep their existing route.
+Ordinary `state` is not a release or a resume of an order still owned by repair.
+`mc plan` and `mc goal new` refuse its draft and a stale ready order (exit 1).
+Ordinary desk-created area repairs keep their existing route.
+
+For a repair-owned draft, programme review requires the live entrance's
+programme-bound repair identity on both claim and receipt write. The reader
+must use a different tool/model pair. A new authorised attempt revokes the
+previous receipt before inspecting the order or looking for a reader. The
+reader sees a disposable snapshot of README and the programme-local files
+linked or named in backticks under `evidence/`, `design/` or `designs/`. An additional
+programme-local input can be named as `Binding design:` or `Binding evidence:`
+followed by its backticked path on the same line. Binding files must be regular
+files reached without symlinks; the snapshot is limited to 64 MiB total.
+Source provenance pointers to proposals or intake files are not binding inputs.
+An isolated, successful reader must write a fresh findings report (up to
+64 KiB) with numbered findings, their part, entry, evidence and narrowest fix,
+and a Not checked section. The wrapper compares the live inputs again before
+storing the report and its receipt with the manifest and report digests. An
+input change during the reading, failed reader, invalid report or superseded
+attempt stores no usable receipt. A report alone grants no authority. The
+ordinary desk reading remains advisory.
+
+The assigned repair author releases with `mc programs release <programme>`.
+It requires a receipt on the current manifest with no outstanding findings.
+Making a correction or recording a reasoned answer under Read changes the
+README: the new version must be read before release. The command commits a
+new revision and its manifest under the programme lock. It does not take an
+ordinary programme or trust a ready spelling without the current manifest.
+A stale ready record keeps that spelling on disk and says `ready (needs
+review)` in the terminal list. An authorised reopen changes it to draft and
+revokes the receipt without removing sources, goals or the previous cut. The entrance
+runs at most three independent readings per invocation. A revision edits
+the identified part lines and records the evidence for its answers under Read.
+A technical uncertainty retains the draft and its proposals for evidence.
+
+A draft binds a programme-local summary of the checked defect and source
+digests in addition to its order. Release records the ordered proposal
+versions in their area's archive. A failed archive move leaves the release
+in place with a resumable source operation. A private copy holds the exact
+proposal version until archival succeeds, so a retry can archive what was
+ordered while retaining any newer waiting evidence. Moving original intake
+or proposal pointers does not change the released manifest.
+
+Once reconciled, delivery writes are for that revision. A stale session keeps
+its local work but cannot register a PR, publish a handoff or move a goal
+forward under a new release. Goal review records the released revision and
+the authorized PR heads before queueing. A later release requires a new
+handoff even for a goal the planner keeps unchanged; see
+[merge admission](mc-merge.md#repair-owned-work).
+
+### Repair scope stops and dispositions
+
+The assigned author records a scope stop with `mc programs repair-stop
+<programme> --title <text> --summary <text> [--item <id>]`. The record moves
+to `Martin` under the programme lock and loses its review receipt. It keeps
+its source links and last reconciliation. The stop records the Swedish scope
+summary, the goals already done, and, when necessary, a link to an existing
+held-text or reserved-act item. The terminal
+[desk](mc-martin.md#repair-scope-stops) can recover the stop from the
+programme record even if the item write was interrupted. No part of delivery
+may use the stopped record, even if it already has a runnable goal or queued PR.
+
+The repair entrance persists a known scope stop with the draft, or when a
+revision reading identifies it, before publishing any related desk brief.
+While that decision is pending, review and release refuse. Resume completes
+the pending stop without another reading. A related brief that is malformed
+or no longer open cannot keep the scope stop from reaching the desk. The
+entrance reports the missing link and still records the stop for disposition.
+The move to Martin replaces the
+pending decision with the durable stop.
+
+Only interactive Martin records a disposition. `return` puts the order back
+in repair draft with the narrowing in the disposition and with sources and
+goals retained. It needs a new reading, release and reconciliation. `takeover`
+puts it back in desk draft: the desk may run ordinary advisory review and
+prepare the goal contracts using the goal verbs. Takeover records contracts
+left by an interrupted cut before the desk starts those edits. The desk's
+`mc programs state <programme> ready` validates coverage and reconciles the contracts
+with the new manifest in one write. Superseded work is not delivered; a reused
+goal must qualify against the new release and obtain a fresh merge handoff.
+This does not change the ready command for programmes without repair provenance.
+
+`decline` retires unfinished goals and records a declined source outcome for
+the evidenced version. It does not remove local worktrees in the disposition:
+ordinary dropped-goal cleanup proves that it may close PRs and remove trees.
+An in-flight merge prevents recording decline until its outcome is known.
+If a landed PR belongs to a retired goal, that goal stays retired but its
+landed work is included in the reading. A recorded decline interrupted by a
+retirement or source move must be retried with the same action and reason.
+With landed work the record is ready for write-back only, under the decline's
+own revision. Without landed work it is done without a write-back. Decline
+cannot open a planning or delivery turn.
 
 ## What the session is told
 

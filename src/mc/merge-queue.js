@@ -63,6 +63,7 @@ function normalise(entry) {
       ? { programme: entry.goal.programme, goal: entry.goal.goal, dir: entry.goal.dir }
       : null,
     sha: typeof entry.sha === 'string' && entry.sha ? entry.sha : null,
+    ...(typeof entry.repair_revision === 'string' && entry.repair_revision ? { repair_revision: entry.repair_revision } : {}),
     since: entry.since ?? null,
     state: JOB_STATES.includes(entry.state) ? entry.state : 'queued',
     started: entry.started ?? null,

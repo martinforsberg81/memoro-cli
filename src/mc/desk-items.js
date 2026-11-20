@@ -6,7 +6,8 @@ import { writeJsonAtomic } from './atomic-write.js';
 import { collectMartinQueue, currentQuestion } from './martin-collect.js';
 import { mainMendPath, readMainMends } from './main-repair.js';
 import { archiveDirIn, listDirsOf, parseGoal, parseLog, GOAL_FILE, LOG_FILE, waitsOnPerson } from './goals.js';
-import { mcHome, martinDir, programsHome, workRoot } from './paths.js';
+import { NAME_RE } from './plan-schema.js';
+import { archivedProgramsHome, mcHome, martinDir, programsHome, workRoot } from './paths.js';
 import { ledgerPath, rowAnswer } from './jev.js';
 import { realLock } from './runner-lock.js';
 import { cuttable, cutProblems, readTurnState, turnStatePath } from './programme-turn.js';
@@ -20,6 +21,37 @@ export function deskItemId(kind, reference, sourceAt) {
   return createHash('sha256').update(`${kind}\n${reference}\n${sourceAt}`).digest('hex').slice(0, 24);
 }
 export function itemStore(env = process.env) { return join(martinDir(env), 'items'); }
+export const REPAIR_STOP_KIND = 'repair-stop';
+export const repairStopReference = programme => `repair-stop:${programme}`;
+
+/** The programme record is authoritative: either write can be retried by sync. */
+function projectRepairStop({ programme, record, env, existing, write = writeJsonAtomic }) {
+  const stop = record?.repair?.stop;
+  if (!stop) return null;
+  const closed = record.repair.stop_item !== stop.id;
+  const prior = existing?.get(stop.id) ?? readDeskItem(stop.id, { env });
+  const item = {
+    schema: 'mc-desk-item', version: 1, id: stop.id, kind: REPAIR_STOP_KIND, reference: repairStopReference(programme),
+    source_at: stop.at, opened_at: stop.at, sort: 'scope', reversible: null, due_at: null,
+    title: stop.title, summary: stop.summary, landed: [...new Set([...stop.landed, ...(record.repair.disposition?.landed ?? [])])],
+    ...(stop.link ? { link: stop.link } : {}),
+    state: closed ? 'closed' : 'for-martin',
+    outcome: closed ? { by: 'martin', at: record.repair.disposition.at,
+      summary: record.repair.disposition.reason, disposition: record.repair.disposition.action } : null,
+  };
+  if (JSON.stringify(prior) !== JSON.stringify(item)) write(join(itemStore(env), item.id, 'item.json'), item);
+  existing?.set(item.id, item);
+  return item;
+}
+
+/** Caller holds the programme lock. */
+export function publishRepairStop(programme, record, env) {
+  return projectRepairStop({ programme, record, env });
+}
+
+export function repairStopBrief(item) {
+  return [item.summary, item.landed?.length ? `Redan landat: ${item.landed.join(', ')}.` : null].filter(Boolean).join('\n\n');
+}
 
 /**
  * Sync is idempotent. It runs in one hold of the strict runner lock, from the store marker's
@@ -44,6 +76,24 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
   for (const name of list(dir)) {
     if (name.startsWith('.')) continue;
     try { const item = JSON.parse(readText(join(dir, name, 'item.json'))); if (item?.id) existing.set(item.id, item); } catch { /* preserve unreadable items */ }
+  }
+  for (const programme of list(home).filter(name => NAME_RE.test(name))) {
+    const found = readRecord(join(home, programme), { read });
+    if (found.status === 'valid') projectRepairStop({ programme, record: found.record, env, existing, write });
+  }
+  // A declined repair can be shelved after the disposition but before its
+  // item write. Only the matching archived disposition can close that item.
+  for (const item of existing.values()) {
+    if (item.kind !== REPAIR_STOP_KIND || !open(item)) continue;
+    const programme = item.reference.slice('repair-stop:'.length);
+    if (!NAME_RE.test(programme) || exists(join(home, programme))) continue;
+    const archive = archivedProgramsHome(env);
+    for (const name of list(archive).filter(name => name === programme || (name.startsWith(`${programme}-`) && /^\d+$/u.test(name.slice(programme.length + 1))))) {
+      const found = readRecord(join(archive, name), { read });
+      if (found.record?.repair?.disposition?.item !== item.id) continue;
+      projectRepairStop({ programme, record: found.record, env, existing, write });
+      break;
+    }
   }
   const live = collect({ home, read });
   const issues = new Map((live.issues || []).map(issue => [issue.path, issue]));
@@ -176,6 +226,7 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
 
 /** Recover the original label from source history, without extending item.json. */
 export function deskItemQuestion(item, { env = process.env, home = programsHome(env), root = workRoot(env), read = readText } = {}) {
+  if (item.kind === REPAIR_STOP_KIND) return firstLine(item.title);
   if (item.kind === 'goal') {
     const [programme, goal] = item.reference.split('/');
     const log = parseLog(read(join(home, programme, 'goals', goal, LOG_FILE)) || '');

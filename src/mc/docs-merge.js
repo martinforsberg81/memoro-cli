@@ -74,7 +74,7 @@ export function prFiles(pr, { repoPath, gh = ghRunner(repoPath) } = {}) {
 }
 
 export async function runDocsMerge({
-  repoPath, pr, gh = ghRunner(repoPath), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onProgress = () => {}, now = () => new Date(), measure = measureDocs, root = mcHome(), git = runGitAsync,
+  repoPath, pr, gh = ghRunner(repoPath), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onProgress = () => {}, now = () => new Date(), measure = measureDocs, root = mcHome(), git = runGitAsync, beforeMerge = () => null,
 } = {}) {
   const started = now();
   const report = { repo: repoPath, pr: { number: pr }, mode: 'docs', ok: false, merged: false, stopped_at: null, reason: null, files: [], merge_commit: null, started_at: started.toISOString() };
@@ -96,6 +96,9 @@ export async function runDocsMerge({
   const script = firstScript(report.files);
   if (script) return finish('script', `#${pr} carries ${script} — a script is not a document; land it through the gate: mc merge <repo> ${pr}`);
   if (!report.files.length) return finish('empty', `#${pr} changes no files`);
+  const admission = { branch: report.branch, head };
+  const refused = beforeMerge(admission);
+  if (refused) return finish('repair-release', refused);
 
   // GitHub reports UNKNOWN for a few seconds after a push; merging then
   // fails for no real reason. Wait for a verdict first.
@@ -128,6 +131,8 @@ export async function runDocsMerge({
   // The tests take a minute, so the head is read again, as the check above reads it.
   const headAfterTests = view(gh, pr, 'headRefOid')?.headRefOid || null;
   if (headAfterTests !== head) return drifted(headAfterTests);
+  const stale = beforeMerge(admission);
+  if (stale) return finish('repair-release', stale);
 
   const merged = gh(['pr', 'merge', String(pr), '--squash', '--subject', `${info.title} (#${info.number})`, '--match-head-commit', head]);
   const after = view(gh, pr, 'state,mergeCommit');

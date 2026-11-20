@@ -1385,6 +1385,19 @@ of every merger reads `merger <pid> started — ~/memoro-cli at <sha>`. On
 session from its workarea and ran that branch's code, with batches and
 without lanes.
 
+## Repair-owned work
+
+A repair goal in merge needs a handoff for the current, reconciled programme
+release. Its handoff names the revision and the registered pull requests'
+authorized heads. Each queued job carries both the revision and its head.
+The merge command, documentation-only and admin routes apply this fence;
+admin does not waive it. A measured round checks it again immediately
+before the squash, using the actual head sent to the forge. If refreshing
+the branch changes that head, the round stops instead of squashing it
+under the earlier authorization. An obsolete job leaves the queue without changing the
+goal or waking mend. Completion reads the same fence under the programme
+lock; an already landed GitHub change is not undone.
+
 ## The async round, SIGTERM and where a red goes
 
 **Nothing the merger starts holds its event loop** (ruling 37). Every child

@@ -1,25 +1,44 @@
 /**
  * Programme review (src/mc/programme-review.js): `mc programs review` launches
  * one independent headless reading of the programme document at origin/main exports.
- * Advisory: writes PROGRAMME-REVIEW.md beside the programme, records no verdict or currency.
+ * Advisory for the desk; a repair release needs a receipt on fixed, current inputs.
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
 import * as claude from '../../src/adapters/claude-code.js';
+import { archiveDue, archiveOnOk, keepReading, parseWriteBack, readArchiveState } from '../../src/mc/archive-turn.js';
+import { writeFileAtomic, writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { run as ask } from '../../src/mc/commands/ask.js';
+import { run as goal } from '../../src/mc/commands/goal.js';
+import { run as martin } from '../../src/mc/commands/martin.js';
+import { run as merge } from '../../src/mc/commands/merge.js';
+import { run as repair } from '../../src/mc/commands/repair.js';
 import { run as programs } from '../../src/mc/commands/programs.js';
-import { newRecord, recordPageTemplate, writeRecord } from '../../src/mc/programme-record.js';
+import { goalReferences, listDirsOf, readTextOrNull, REVIEW_ROLE } from '../../src/mc/goals.js';
+import { itemStore, readDeskItem, syncDeskItems } from '../../src/mc/desk-items.js';
+import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
+import { landJob, queueMerge } from '../../src/mc/merger.js';
+import { runMergeRound } from '../../src/mc/repo-merge.js';
+import { newRecord, readRecord, RECORD_FILE, recordPageTemplate, writeRecord } from '../../src/mc/programme-record.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { applyObservation, normaliseCapacity } from '../../src/mc/model-capacity.js';
 import {
   PROGRAMME_REVIEW_FILE, PROGRAMME_REVIEW_LAUNCH, PROGRAMME_REVIEW_LIMIT_MS,
 } from '../../src/mc/programme-review.js';
 import { TIMEOUT_EXIT } from '../../src/mc/run-plan.js';
+import { withRepairAuthor } from '../../src/mc/repair-authority.js';
+import { currentRepairReview } from '../../src/mc/repair-review.js';
+import { reopenRepair, repairReleaseState } from '../../src/mc/repair-release.js';
+import { archivedProposal, readRepairSource, settleRepairSources } from '../../src/mc/repair-sources.js';
+import { repairGoalAdmission } from '../../src/mc/repair-reconcile.js';
+import { finishTurn, programmeDue } from '../../src/mc/programme-turn.js';
+import { realLock } from '../../src/mc/runner-lock.js';
+import { goalJson } from './_helpers/goal-file.js';
 
 const NOW = new Date('2026-11-15T10:00:00Z');
 const AFTER_START = NOW.getTime() + 60_000;
@@ -73,12 +92,13 @@ function programmeSetup(t) {
     }
     return { ok: true };
   } };
-  const call = async (argv = ['review', 'p'], { identity = env, extra = {}, lock = (_root, fn) => fn() } = {}) => {
+  const call = async (argv = ['review', 'p'], { identity = env, extra = {}, lock = (_root, fn) => fn(), command = {} } = {}) => {
     const stdout = sink(), stderr = sink();
-    const code = await programs(argv, { env: identity, stdout, stderr, known: () => known, lock, now: () => NOW, review: { ...deps, ...extra } });
+    const code = await programs(argv, { env: identity, stdout, stderr, known: () => known, lock, now: () => NOW, review: { ...deps, ...extra }, ...command });
     return { code, out: stdout.text(), err: stderr.text() };
   };
-  const files = () => Object.fromEntries(readdirSync(dir).map((file) => [file, readFileSync(join(dir, file), 'utf8')]));
+  const files = () => Object.fromEntries(readdirSync(dir, { withFileTypes: true }).filter(file => file.isFile())
+    .map(({ name }) => [name, readFileSync(join(dir, name), 'utf8')]));
   const reads = (before = () => {}) => async (spawned) => {
     await before(spawned);
     writeFileSync(join(dir, PROGRAMME_REVIEW_FILE), 'findings: 0\n\nNo findings.\n');
@@ -86,6 +106,829 @@ function programmeSetup(t) {
   };
   return { ...shared, dir, page, env, checkout, deps, call, reads, files,
     martin: { ...env, MC_ROLE: 'martin', MC_HEADLESS: undefined, MC_GOAL: undefined } };
+}
+
+const NO_FINDINGS = 'findings: 0\n\n## Not checked\nNone.\n';
+const ONE_FINDING = 'findings: 1\n\n### Finding 1 — Invalid proof\nPart: 1\nEntry: Proved by\nEvidence: The fixture does not fail.\nNarrowest fix: Use a fixture that exposes the defect.\n\n## Not checked\nNone.\n';
+
+function repairSetup(t) {
+  const f = programmeSetup(t);
+  const artifact = join(f.dir, 'designs', 'part-1', 'current.txt');
+  mkdirSync(join(f.dir, 'designs', 'part-1'), { recursive: true });
+  writeFileSync(artifact, 'original evidence');
+  writeFileSync(join(f.dir, 'README.md'), `${f.page}\n- [Evidence](designs/part-1/current.txt)\n- Source: \`/proposals/waiting.md\`\n`);
+  rmSync(join(f.dir, RECORD_FILE));
+  writeRecord(f.dir, newRecord({ end: 'The promised result runs.', createdBy: 'repair', now: NOW, repair: {
+    sources: [{ kind: 'proposal', path: '/proposals/waiting.md', key: 'a'.repeat(64), digest: 'b'.repeat(64) }],
+  } }));
+  const receipt = () => currentRepairReview(f.dir, { read: path => existsSync(path) ? readFileSync(path, 'utf8') : null });
+  const review = (identity, session, extra) => f.call(['review', 'p'], { identity, extra: { session, ...extra } });
+  const reader = ({ report = NO_FINDINGS, status = 0, during, evidence = 'original evidence' } = {}) => async spawned => {
+    assert.equal(spawned.env.MC_REPAIR_TOKEN, undefined);
+    assert.notEqual(spawned.cwd, f.dir);
+    assert.equal(readFileSync(join(f.checkout, 'order', 'designs', 'part-1', 'current.txt'), 'utf8'), evidence);
+    during?.();
+    assert.equal(readFileSync(join(f.checkout, 'order', 'designs', 'part-1', 'current.txt'), 'utf8'), evidence);
+    if (report !== null) writeFileSync(join(spawned.cwd, PROGRAMME_REVIEW_FILE), report);
+    return { ...DONE, status };
+  };
+  return { ...f, artifact, receipt, review, reader, asAuthor: fn => withRepairAuthor(f.baseEnv, 'p', fn) };
+}
+
+test('mc repair re-reviews a revision, releases it, and resumes source archival without a second review', async t => {
+  const f = baseSetup(t);
+  const home = join(f.root, 'programs');
+  const dir = join(home, 'restore');
+  const path = join(f.root, 'areas', 'memoro-cli', 'system', 'proposals', '2026-11-14-mc-restore.md');
+  const target = archivedProposal(path);
+  mkdirSync(join(path, '..'), { recursive: true });
+  writeFileSync(path, 'The command refuses its documented input.');
+  writeFileSync(join(target, '..'), 'Simulate an unavailable archive directory.');
+  const answer = {
+    status: 'draft', name: 'restore', title: 'Restore valid input', end: 'Valid input is accepted.',
+    reason: 'The command contract accepts the input.', today: 'src/mc.js at abc accepts a different form.',
+    summary: 'A command refuses valid input.', repository: 'memoro-cli', repositories: ['memoro-cli'],
+    parts: ['Restore command', 'Restore saved input', 'Restore alias'].map(name => ({
+      name, closes: 'Valid input fails.', solution: 'Restore documented parsing.',
+      design: 'Show the normal success line.', provedBy: 'Run a valid request.', notInPart: 'New input.',
+    })),
+  };
+  let readings = 0, revisions = 0, wakes = 0;
+  let orderSeen;
+  let interruptStop = false;
+  const run = async (argv, judge = () => assert.fail('already drafted'), session = () => assert.fail('already reviewed')) => {
+    const stdout = sink(), stderr = sink();
+    const code = await repair(argv, {
+      env: { MC_WORK_ROOT: f.root }, stdout, stderr, judge, now: () => NOW,
+      lock: (root, fn, options = {}) => {
+        if (interruptStop && options.name === 'repair-author') throw new Error('interrupted before publishing the scope stop');
+        return realLock(root, fn, options);
+      },
+      revise: ({ revision }) => {
+        revisions++;
+        assert.equal(revision.findings[0].Entry, 'Proved by');
+        return { status: 'revise', reading: 'The fixture now asserts the restored output.', edits: [{
+          part: 1, before: 'Proved by: Run a valid request.', after: 'Proved by: Assert the existing success line.',
+        }] };
+      },
+      wake: () => { wakes++; },
+      programmeReview: { known: () => ['/known/memoro-cli'], review: { ...f.deps, session } },
+    });
+    return { code, out: stdout.text(), err: stderr.text() };
+  };
+  const first = await run(['--proposal', path], () => answer, async spawned => {
+    readings++;
+    const order = join(spawned.cwd, '..', 'order');
+    orderSeen = readFileSync(join(order, 'README.md'), 'utf8');
+    assert.match(readFileSync(join(order, 'evidence', 'repair-source.md'), 'utf8'), /A command refuses valid input/u);
+    const report = readings === 1 ? ONE_FINDING : NO_FINDINGS;
+    writeFileSync(join(spawned.cwd, PROGRAMME_REVIEW_FILE), report);
+    return DONE;
+  });
+  assert.equal(first.code, 1, first.err);
+  assert.match(first.out, /restore is ready for planning/u);
+  assert.match(first.err, /could not archive repair sources.*--resume restore/u);
+  assert.match(orderSeen, /Proved by: Assert the existing success line[\s\S]*Repair review: The fixture now asserts/u);
+  assert.equal(readings, 2);
+  assert.equal(revisions, 1);
+  assert.equal(wakes, 1);
+  const record = () => readRecord(dir).record;
+  const released = record().repair.release.revision;
+  const due = programmeDue({ programme: 'restore', home, list: listDirsOf, read: readTextOrNull, state: { status: 'none' } });
+  assert.equal(due.revision, released);
+  assert.equal(record().state, 'ready');
+
+  rmSync(join(target, '..'));
+  writeFileSync(path, 'Different waiting evidence.');
+  const resumed = await run(['--resume', 'restore']);
+  assert.equal(resumed.code, 0, resumed.err);
+  assert.match(resumed.out, /restore is ready for planning/u);
+  assert.equal(record().repair.release.revision, released);
+  assert.equal(readFileSync(path, 'utf8'), 'Different waiting evidence.');
+  assert.match(readFileSync(target, 'utf8'), /Utfall: ordered in programme restore[\s\S]*The command refuses its documented input/u);
+  assert.equal((await run(['--proposal', path])).out, 'mc: source already ordered in restore\n');
+
+  writeFileSync(join(dir, 'README.md'), orderSeen.replace('Restore command', 'Restore documented command'));
+  assert.equal(repairReleaseState(dir, record()).release, undefined);
+  const stale = await run(['--resume', 'restore'], undefined, async spawned => {
+    assert.equal(record().state, 'draft');
+    assert.match(readFileSync(join(spawned.cwd, '..', 'order', 'README.md'), 'utf8'), /Restore documented command/u);
+    writeFileSync(join(spawned.cwd, PROGRAMME_REVIEW_FILE), NO_FINDINGS);
+    return DONE;
+  });
+  assert.equal(stale.code, 0, stale.err);
+  assert.notEqual(record().repair.release.revision, released);
+  assert.deepEqual(record().repair.sources.map(source => source.path), [path]);
+  assert.equal(readFileSync(path, 'utf8'), 'Different waiting evidence.');
+
+  const widePath = path.replace('restore.md', 'wide.md');
+  writeFileSync(widePath, 'Restoration would require an operator act.');
+  interruptStop = true;
+  const interrupted = await run(['--proposal', widePath], () => ({
+    ...answer, name: 'wide', scope: {
+      title: 'Produktionsåtkomst', summary: 'Reparationen behöver ett avgränsat beslut om produktionsåtkomst.',
+      reserved: { kind: 'credentials', effect: 'En behörighet behöver återställas.', steps: 'Återställ den befintliga behörigheten i konsolen.', wait: 'Därefter kan underlaget bedömas.', reversible: true },
+    },
+  }));
+  assert.equal(interrupted.code, 1, interrupted.err);
+  assert.match(interrupted.err, /interrupted before publishing/u);
+  const wide = join(home, 'wide');
+  const pending = readRecord(wide).record;
+  assert.equal(pending.state, 'draft');
+  assert.deepEqual(pending.repair.sources.map(source => source.path), [widePath]);
+  assert.equal(pending.repair.stop_item, undefined);
+  const direct = await withRepairAuthor(f.baseEnv, 'wide', async identity => {
+    const stdout = sink(), stderr = sink();
+    const options = { env: identity, stdout, stderr, known: () => ['/known/memoro-cli'],
+      review: { ...f.deps, session: () => assert.fail('pending scope cannot be reviewed') } };
+    const review = await programs(['review', 'wide'], options);
+    const release = await programs(['release', 'wide'], options);
+    return { review, release, err: stderr.text() };
+  });
+  interruptStop = false;
+  let resumedRead = false;
+  const stopped = await run(['--resume', 'wide'], undefined, async spawned => {
+    resumedRead = true;
+    writeFileSync(join(spawned.cwd, PROGRAMME_REVIEW_FILE), NO_FINDINGS);
+    return DONE;
+  });
+  assert.equal(stopped.code, 0, stopped.err);
+  const held = readRecord(wide).record;
+  assert.equal(held.state, 'Martin');
+  assert.equal(resumedRead, false, 'resume must publish the pending stop, not commission a review');
+  assert.notEqual(direct.review, 0);
+  assert.equal(direct.release, 1);
+  assert.match(direct.err, /pending scope stop/u);
+  assert.equal(held.repair.pending_scope, undefined);
+  assert.equal(held.repair.release, undefined);
+  assert.deepEqual(held.repair.sources, pending.repair.sources);
+  assert.match(stopped.out, /wide is at Martin/u);
+  assert.equal(held.repair.stop.link.kind, 'reserved');
+  assert.equal(readDeskItem(held.repair.stop.link.id, { env: { MC_WORK_ROOT: f.root } }).sort, 'reserved');
+  assert.equal(programmeDue({ programme: 'wide', home, list: listDirsOf, read: readTextOrNull, state: { status: 'none' } }).due, false);
+
+  const unusablePath = path.replace('restore.md', 'unusable-brief.md');
+  writeFileSync(unusablePath, 'The proposed restoration would change a held text.');
+  interruptStop = true;
+  const interruptedText = await run(['--proposal', unusablePath], () => ({
+    ...answer, name: 'unusable-brief', scope: {
+      title: 'Ändring av reglerna', summary: 'Återställningen kräver en ändring av en beslutad regel.',
+      heldText: { text: 'System decisions', brief: 'The related brief lacks its required headings.' },
+    },
+  }));
+  assert.equal(interruptedText.code, 1);
+  assert.match(interruptedText.err, /interrupted before publishing/u);
+  assert.equal(readRecord(join(home, 'unusable-brief')).record.state, 'draft');
+  interruptStop = false;
+  const recoveredText = await run(['--resume', 'unusable-brief']);
+  assert.equal(recoveredText.code, 0, recoveredText.err);
+  assert.match(recoveredText.err, /related desk brief was unavailable/u);
+  const scopeRecord = readRecord(join(home, 'unusable-brief')).record;
+  const scopeItem = readDeskItem(scopeRecord.repair.stop_item, { env: { MC_WORK_ROOT: f.root } });
+  assert.equal(scopeRecord.state, 'Martin');
+  assert.equal(scopeRecord.repair.release, undefined);
+  assert.equal(scopeItem.state, 'for-martin');
+  assert.equal(scopeItem.link, undefined);
+  const disposition = await programs(['disposition', 'unusable-brief', 'return', '--reason', 'Require a valid held-text brief.'], {
+    env: { MC_WORK_ROOT: f.root, MC_ROLE: 'martin' }, stdout: sink(), stderr: sink(), wake: () => {},
+  });
+  assert.equal(disposition, 0);
+  assert.equal(readRecord(join(home, 'unusable-brief')).record.state, 'draft');
+});
+
+test('repair review: only the live assigned author gets a receipt of fixed binding inputs from an independent reader', async t => {
+  const f = repairSetup(t);
+  await f.asAuthor(async author => {
+    for (const unrelated of [f.martin, { ...author, MC_REPAIR_TOKEN: 'b'.repeat(48) }, { ...author, MC_PROGRAMME: 'other' }]) {
+      const refused = await f.review(unrelated, () => assert.fail('unrelated session launched a reader'));
+      assert.equal(refused.code, 2);
+      assert.match(refused.err, /only the assigned repair session/u);
+      assert.equal(f.receipt(), null);
+    }
+    writeFileSync(join(f.dir, PROGRAMME_REVIEW_FILE), NO_FINDINGS);
+    assert.equal(f.receipt(), null, 'a report alone is not a reading');
+    const alone = await f.review(author, () => assert.fail('the author cannot be its own reader'), { catalog: catalogOf([OPUS]) });
+    assert.equal(alone.code, 2);
+    const result = await f.review(author, f.reader());
+    assert.equal(result.code, 0, result.err);
+    assert.deepEqual(f.receipt().receipt.reader, { tool: 'codex', model: 'gpt-6.2-sol' });
+    assert.deepEqual(f.receipt().receipt.manifest.inputs.map(([path]) => path), ['README.md', 'designs/part-1/current.txt']);
+    writeFileSync(f.artifact, 'edited after reading');
+    assert.equal(f.receipt(), null, 'the valid report and receipt no longer describe current evidence');
+  });
+});
+
+test('repair review: a reverted binding edit, failed reader, malformed or missing fresh output never grants a receipt', async t => {
+  const f = repairSetup(t);
+  await f.asAuthor(async author => {
+    for (const [reader, why] of [
+      [f.reader({ during: () => { writeFileSync(f.artifact, 'changed'); writeFileSync(f.artifact, 'original evidence'); } }), /binding programme input changed/u],
+      [f.reader({ status: 1 }), /reading failed \(exit 1\)/u],
+      [f.reader({ report: 'findings: 1\n\n## Not checked\nNone.\n' }), /fresh, valid findings report/u],
+      [f.reader({ report: null }), /fresh, valid findings report/u],
+    ]) {
+      const good = await f.review(author, f.reader());
+      assert.equal(good.code, 0, good.err);
+      assert.ok(f.receipt());
+      const rejected = await f.review(author, reader);
+      assert.equal(rejected.code, 2);
+      assert.match(rejected.err, why);
+      assert.equal(f.receipt(), null, 'failed follow-up revoked the preceding receipt');
+    }
+  });
+});
+
+test('repair release: only a current receipt with settled findings opens the order; reopening cannot reuse its release', async t => {
+  const f = repairSetup(t);
+  const ordinary = programmeSetup(t);
+  const ordinaryRelease = await ordinary.call(['release', 'p']);
+  assert.equal(ordinaryRelease.code, 1);
+  assert.match(ordinaryRelease.err, /not a repair-owned programme/u);
+  assert.equal(readRecord(ordinary.dir).record.state, 'draft');
+  const record = () => readRecord(f.dir).record;
+  const pagePath = join(f.dir, 'README.md');
+  const page = readFileSync(pagePath, 'utf8');
+
+  await f.asAuthor(async author => {
+    const release = identity => f.call(['release', 'p'], { identity: identity ?? author });
+    const needsReview = async () => {
+      const refused = await release();
+      assert.equal(refused.code, 1);
+      assert.equal(refused.err, 'mc: repair programme p needs review — mc repair --resume p\n');
+      assert.equal(record().state, 'draft');
+    };
+
+    writeFileSync(join(f.dir, PROGRAMME_REVIEW_FILE), NO_FINDINGS);
+    await needsReview();
+    const findings = await f.review(author, f.reader({ report: ONE_FINDING }));
+    assert.equal(findings.code, 0, findings.err);
+    assert.equal(f.receipt().findings[0].Entry, 'Proved by');
+    await needsReview();
+    const reviewed = await f.review(author, f.reader());
+    assert.equal(reviewed.code, 0, reviewed.err);
+    const unrelated = await release({ ...author, MC_REPAIR_TOKEN: 'b'.repeat(48) });
+    assert.equal(unrelated.code, 1);
+    assert.match(unrelated.err, /only the assigned repair session/u);
+
+    writeFileSync(pagePath, `${page}\nChanged after reading.\n`);
+    await needsReview();
+    writeFileSync(pagePath, page);
+    writeFileSync(f.artifact, 'changed after reading');
+    await needsReview();
+    writeFileSync(f.artifact, 'original evidence');
+    const first = await release();
+    assert.equal(first.code, 0, first.err);
+    assert.equal(first.out, 'mc: repair programme p is ready for planning\n');
+    const original = record();
+    assert.equal(repairReleaseState(f.dir, original).release.revision, original.repair.release.revision);
+    assert.equal(reopenRepair(f.dir, author).changed, false, 'current release is not replaced');
+
+    writeFileSync(f.artifact, 'changed after release');
+    assert.match(repairReleaseState(f.dir, record()).problems[0], /needs review/u);
+    assert.match((await f.call(['list'])).out, /p · ready \(needs review\)/u);
+    assert.equal(reopenRepair(f.dir, author).changed, true);
+    assert.deepEqual(record().repair.sources, original.repair.sources);
+    writeFileSync(f.artifact, 'original evidence');
+    await needsReview();
+    const reread = await f.review(author, f.reader());
+    assert.equal(reread.code, 0, reread.err);
+    assert.equal((await release()).code, 0);
+    assert.notEqual(record().repair.release.revision, original.repair.release.revision, 'a new release is a new handoff even for the same bytes');
+  });
+});
+
+for (const edit of ['binding design', 'shared End', 'interrupted cut', 'interrupted takeover']) {
+  test(`repair planning: changed ${edit} needs a new contract and reconciliation`, async t => {
+    const f = repairSetup(t);
+    const home = join(f.root, 'programs');
+    const pagePath = join(f.dir, 'README.md');
+    const page = readFileSync(pagePath, 'utf8');
+    const seams = { programme: 'p', home, list: listDirsOf, read: readTextOrNull, state: { status: 'none' } };
+    const record = () => readRecord(f.dir).record;
+    const readsDue = () => programmeDue(seams);
+    const admitted = revision => repairGoalAdmission(f.dir, 'restore', { revision });
+    const plan = () => ({ ...f.baseEnv, MC_HEADLESS: '1', MC_REPAIR_REVISION: record().repair.release.revision });
+    const runGoal = async (args, env = plan()) => {
+      const stdout = sink(), stderr = sink();
+      const code = await goal(args, { env, stdout, stderr, known: () => ['/known/memoro-cli'], git: () => ({ ok: true, stdout: '', stderr: '' }) });
+      return { code, err: stderr.text() };
+    };
+    const newArgs = name => ['new', `p/${name}`, '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Restore', '--structure', '1'];
+    const reconcile = () => f.call(['reconcile', 'p', '--reason', 'Compared Part 1 and its goal contract.'], { identity: plan() });
+    const sharedOrder = 'End rule: Put row B before row A.';
+    let order = page.replace(/### Part 1 — [^\n]+/u, '### Part 1 — Restore rows');
+    if (edit === 'shared End') order = order.replace('## End', `## End\n\n${sharedOrder}`);
+    writeFileSync(pagePath, order);
+    await f.asAuthor(async author => {
+      const reviewed = await f.review(author, f.reader());
+      assert.equal(reviewed.code, 0, reviewed.err);
+      const result = await f.call(['release', 'p'], { identity: author });
+      assert.equal(result.code, 0, result.err);
+    });
+    const first = record().repair.release.revision;
+    const sources = record().repair.sources;
+    const planner = plan();
+    assert.equal(readsDue().revision, first);
+    for (const args of [
+      newArgs('restore'), ['document', 'add', 'p/restore', '--label', 'Part 1', '--path', pagePath],
+      ['set', 'p/restore', 'goal', '--text', 'Restore settled row order.'],
+      ['set', 'p/restore', 'contract', '--text', 'Put row B before row A.'],
+      ['criterion', 'add', 'p/restore', '--criterion', 'The rows use the settled order.', '--check', 'mc gate'],
+      ['stage', 'p/restore', 'build'],
+    ]) {
+      const made = await runGoal(args);
+      assert.equal(made.code, 0, made.err);
+    }
+    assert.match(admitted().problems[0], /not reconciled/u);
+    if (edit.startsWith('interrupted')) {
+      assert.equal(record().repair.reconciled, undefined);
+      assert.match(admitted().problems[0], /not reconciled/u);
+    } else {
+      const firstReconciled = await reconcile();
+      assert.equal(firstReconciled.code, 0, firstReconciled.err);
+      assert.equal(finishTurn({ ...seams, revision: first }).kind, 'cut');
+      assert.equal(admitted().release.revision, first);
+    }
+
+    const changedContract = 'Put row A before row B.';
+    if (edit === 'binding design') writeFileSync(f.artifact, changedContract);
+    if (edit === 'shared End') order = order.replace(sharedOrder, `End rule: ${changedContract}`);
+    if (edit.startsWith('interrupted')) order = order.replace('Restore rows', 'Restore A before B');
+    if (edit !== 'binding design') writeFileSync(pagePath, order);
+    assert.equal(readsDue().due, false);
+    assert.match(readsDue().reason, /needs review/u);
+    assert.match(admitted().problems[0], /needs review/u);
+    const refused = await runGoal(newArgs('another'), planner);
+    assert.equal(refused.code, 1, refused.err);
+    assert.match(refused.err, /needs review/u);
+    assert.equal(existsSync(join(f.dir, 'goals', 'another')), false);
+    if (edit === 'interrupted takeover') {
+      await f.asAuthor(async author => {
+        const stopped = await f.call(['repair-stop', 'p', '--title', 'Ny ordning', '--summary', 'Återställningen behöver ett beslut.'], { identity: author });
+        assert.equal(stopped.code, 0, stopped.err);
+      });
+      const takeover = await f.call(['disposition', 'p', 'takeover', '--reason', 'Keep the settled order.'], { identity: f.martin });
+      assert.equal(takeover.code, 0, takeover.err);
+      const ready = () => f.call(['state', 'p', 'ready'], { identity: f.martin });
+      const obsolete = await ready();
+      assert.equal(obsolete.code, 1);
+      assert.match(obsolete.err, /earlier cut never reconciled/u);
+      assert.equal(record().state, 'draft');
+      const rewritten = await runGoal(['set', 'p/restore', 'contract', '--text', changedContract], f.martin);
+      assert.equal(rewritten.code, 0, rewritten.err);
+      const released = await ready();
+      assert.equal(released.code, 0, released.err);
+      assert.equal(record().repair.takeover_cut, undefined);
+      assert.equal(admitted().release.revision, record().repair.release.revision);
+      return;
+    }
+    const stdout = sink(), stderr = sink();
+    const goalPath = join(f.dir, 'goals', 'restore', 'GOAL.json');
+    const goalBeforeResume = readFileSync(goalPath, 'utf8');
+    assert.equal(JSON.parse(goalBeforeResume).stage, 'build');
+    const resumed = await repair(['--resume', 'p'], {
+      env: { MC_WORK_ROOT: f.root }, stdout, stderr, now: () => NOW, wake: () => {},
+      settle: details => assert.deepEqual(details.sources, sources),
+      programmeReview: {
+        known: () => ['/known/memoro-cli.git', '/known/memoro'],
+        review: { ...f.deps, session: f.reader({ ...(edit === 'binding design' ? { evidence: changedContract } : {}), during: () => assert.equal(record().state, 'draft') }) },
+      },
+    });
+    assert.equal(resumed, 0, stderr.text());
+    assert.match(stdout.text(), /repair programme p is ready for planning/u);
+    const second = record().repair.release.revision;
+    assert.deepEqual(record().repair.sources, sources);
+    assert.equal(readFileSync(goalPath, 'utf8'), goalBeforeResume);
+    assert.equal(readFileSync(pagePath, 'utf8'), order, 'resume does not rewrite the reviewed order');
+    assert.notEqual(first, second);
+    assert.equal(readsDue().revision, second, 'even though Part 1 already has a runnable goal');
+    assert.match(admitted().problems[0], /not reconciled/u);
+    const unchanged = await reconcile();
+    assert.equal(unchanged.code, 1);
+    assert.match(unchanged.err, edit === 'interrupted cut' ? /earlier cut never reconciled/u : /released part changed/u);
+    assert.match(admitted().problems[0], /not reconciled/u);
+    const obsolete = await runGoal(['set', 'p/restore', 'contract', '--text', 'Contract from an older turn.'], planner);
+    assert.equal(obsolete.code, 1);
+    assert.match(obsolete.err, /different repair release/u);
+    const update = await runGoal(['set', 'p/restore', 'contract', '--text', changedContract]);
+    assert.equal(update.code, 0, update.err);
+    const secondReconciled = await reconcile();
+    assert.equal(secondReconciled.code, 0, secondReconciled.err);
+    assert.equal(readsDue().due, false);
+    assert.equal(admitted(second).release.revision, second);
+    assert.match(admitted(first).problems[0], /different repair release/u);
+  });
+}
+
+test('repair delivery: a queued or in-flight PR cannot use a stale order or a later release', async t => {
+  const f = repairSetup(t);
+  const home = join(f.root, 'programs');
+  const page = join(f.dir, 'README.md');
+  const order = readFileSync(page, 'utf8').replace(/### Part 1 — [^\n]+/u, '### Part 1 — Restore rows');
+  writeFileSync(page, order);
+  const dir = join(f.dir, 'goals', 'restore');
+  const file = join(dir, 'GOAL.json');
+  const sha = '1'.repeat(40);
+  const criterion = { criterion: 'Rows in settled order', check: 'mc gate', met: true };
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(file, goalJson({ prs: ['memoro-cli#17'], success_criteria: [criterion], documents: [{ label: 'Part 1', path: page }] }));
+  const queue = options => queueMerge({ root: f.root, ...options, start: () => ({}) });
+  const goalsOf = () => goalReferences({ home });
+  const forge = () => ({ ok: true, status: 0, stdout: JSON.stringify({ state: 'OPEN', headRefOid: sha, headRefName: 'goal/restore' }) });
+  let goalWrites = 0;
+  const land = (job, mergeRound) => landJob(job, {
+    root: f.root, mergeRound, gh: forge, goalsOf, say: () => {}, record: () => {}, recordStart: () => {},
+    readRunningRound: () => null, readLeaseFn: () => null, readRunningDeploy: () => null,
+    dropFromPage: () => {}, setGoal: () => { goalWrites++; },
+  });
+  const base = 'a'.repeat(40);
+  const landed = '2'.repeat(40);
+  const round = ({ duringGate, duringSquash, refreshedHead } = {}) => {
+    let head = sha;
+    const squashes = [];
+    return {
+      squashes,
+      run: options => runMergeRound({
+        ...options, root: f.root, installs: () => [], mergeLog: join(f.root, 'merge-log.md'), sleep: async () => {},
+        git: args => ({ status: 0, stdout: args[0] === 'rev-parse' ? (squashes.length ? landed : base) : '' }),
+        gh: args => {
+          if (args[1] === 'merge') {
+            squashes.push(args);
+            duringSquash?.();
+            return { status: 0 };
+          }
+          assert.equal(args[1], 'view');
+          return { status: 0, stdout: JSON.stringify({ headRefOid: head, mergeCommit: { oid: landed } }) };
+        },
+        gate: async () => {
+          duringGate?.();
+          return {
+            ok: true, pr: { number: 17, head: 'goal/restore', head_sha: sha, base: 'main' }, base: { commit: base },
+            selection: { files: 1 }, candidate: { red: [], totals: { tests: 1, fail: 0 } },
+            ...(refreshedHead ? { derived: { commit: 'b'.repeat(40) } } : {}),
+          };
+        },
+        refresh: async () => {
+          assert.ok(refreshedHead, 'only the regenerated candidate requires branch refresh');
+          head = refreshedHead;
+          return { ok: true, sha: head };
+        },
+      }),
+    };
+  };
+  await f.asAuthor(async author => {
+    const release = async () => {
+      assert.equal((await f.review(author, f.reader())).code, 0);
+      assert.equal((await f.call(['release', 'p'], { identity: author })).code, 0);
+      return readRecord(f.dir).record.repair.release.revision;
+    };
+    const identity = (revision, extra) => ({ ...f.baseEnv, MC_HEADLESS: '1', MC_REPAIR_REVISION: revision, ...extra });
+    const reconcile = revision => f.call(['reconcile', 'p', '--reason', 'Compared Part 1 and the goal contract.'], { identity: identity(revision) });
+    const call = async (args, env) => {
+      const stdout = sink(), stderr = sink();
+      const code = await goal(args, {
+        env, stdout, stderr, known: () => ['/known/memoro-cli'], gh: (_cwd, args) => forge(args), queue,
+        git: () => ({ ok: true, stdout: '', stderr: '' }),
+      });
+      return { code, err: stderr.text() };
+    };
+    const intoMerge = async revision => {
+      // The ordinary goal build/review evidence is fixture input; execute the actual merge handoff verb.
+      const current = JSON.parse(readFileSync(file, 'utf8'));
+      writeFileSync(file, goalJson({ ...current, stage: 'review', success_criteria: [criterion] }));
+      writeFileSync(join(dir, 'REVIEW.md'), `head: memoro-cli ${sha}\ncriterion 1: OK\n`);
+      const result = await call(['stage', 'p/restore', 'merge'], identity(revision, {
+        MC_GOAL: 'p/restore', MC_ROLE: REVIEW_ROLE, MC_REVIEW_HEAD: sha,
+      }));
+      assert.equal(result.code, 0, result.err);
+      return parseQueue(readFileSync(mergesPath(f.root), 'utf8'))[0];
+    };
+    const stale = () => writeFileSync(page, order.replace(/### Part 1 — [^\n]+/u, '### Part 1 — Restore panels'));
+    const first = await release();
+    const before = await reconcile(first);
+    assert.equal(before.code, 0, before.err);
+    const old = await intoMerge(first);
+    assert.equal(old.repair_revision, first);
+    assert.equal(old.sha, sha);
+    const staleRound = round({ duringGate: stale });
+    const [inFlight] = await land(old, staleRound.run);
+    assert.equal(inFlight.landed, false);
+    assert.equal(inFlight.report.stopped_at, 'repair-release');
+    assert.match(inFlight.report.reason, /needs review/u);
+    assert.deepEqual(staleRound.squashes, []);
+    const neverRound = () => assert.fail('an obsolete job cannot start its round');
+    const [queued] = await land(old, neverRound);
+    assert.equal(queued.report.stopped_at, 'repair-release');
+    assert.match(queued.report.reason, /needs review/u);
+    assert.throws(() => queue({ ...old, repoPath: old.repo_path, repairRevision: first }), /needs review/u);
+    const throughMerge = async (flags, measure) => {
+      const stdout = sink(), stderr = sink();
+      const code = await merge(['memoro-cli', '17', ...flags], {
+        env: f.baseEnv, root: f.root, goalsOf, stdout, stderr, resolveRepoPath: () => '/known/memoro-cli',
+        prFiles: () => ['src/rows.js'], startMerger: () => assert.fail('obsolete delivery cannot start the merger'),
+        gh: args => {
+          assert.equal(args[1], 'view', 'stale repair cannot squash through a command route');
+          return { ...forge(), stdout: JSON.stringify({ number: 17, title: 'Restore', baseRefName: 'main',
+            state: 'OPEN', mergeable: 'MERGEABLE', headRefOid: sha, headRefName: 'goal/restore',
+            files: [{ path: 'docs/technical/rows.md' }] }) };
+        },
+        measure,
+      });
+      return { code, said: stdout.text() + stderr.text() };
+    };
+    for (const flags of [[], ['--admin'], ['--docs']]) {
+      const { code, said } = await throughMerge(flags, () => assert.fail('obsolete documentation delivery cannot start measurement'));
+      assert.equal(code, 1);
+      assert.match(said, /needs review/u);
+    }
+
+    assert.equal(reopenRepair(f.dir, author).changed, true);
+    const next = await release();
+    assert.notEqual(next, first);
+    const planner = identity(next);
+    for (const args of [
+      ['stage', 'p/restore', 'build'],
+      ['set', 'p/restore', 'contract', '--text', 'Restore the panels to their settled order.'],
+      ['criterion', 'unmet', 'p/restore', '1'],
+    ]) {
+      const result = await call(args, planner);
+      assert.equal(result.code, 0, result.err);
+    }
+    const after = await reconcile(next);
+    assert.equal(after.code, 0, after.err);
+    const current = await intoMerge(next);
+    assert.equal(current.repair_revision, next);
+    const obsolete = await call(['stage', 'p/restore', 'merge'], identity(first, {
+      MC_GOAL: 'p/restore', MC_ROLE: REVIEW_ROLE, MC_REVIEW_HEAD: sha,
+    }));
+    assert.equal(obsolete.code, 1);
+    assert.match(obsolete.err, /different repair release/u);
+    const [oldAfterRelease] = await land(old, neverRound);
+    assert.equal(oldAfterRelease.report.stopped_at, 'repair-release');
+    assert.match(oldAfterRelease.report.reason, /different repair release/u);
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).stage, 'merge', 'the newer handoff remains in merge');
+    const revised = readFileSync(page, 'utf8');
+    let measured = false;
+    const docs = await throughMerge(['--docs'], () => {
+      measured = true;
+      writeFileSync(page, `${revised}\nChanged during the documentation round.\n`);
+      return { ok: true };
+    });
+    assert.equal(measured, true);
+    assert.equal(docs.code, 1);
+    assert.match(docs.said, /needs review/u);
+    writeFileSync(page, revised);
+    const landing = round({ duringSquash: () => writeFileSync(page, `${revised}\nChanged while GitHub took the merge.\n`) });
+    const [landedBeforeReadBack] = await land(current, landing.run);
+    assert.equal(landedBeforeReadBack.landed, true, 'the merge that already landed is not undone');
+    assert.deepEqual(landing.squashes, [['pr', 'merge', '17', '--squash', '--match-head-commit', sha]]);
+    assert.equal(goalWrites, 0, 'no obsolete answer may change the goal, including a completed squash');
+
+    writeFileSync(page, revised);
+    const freshened = round({ refreshedHead: 'f'.repeat(40) });
+    const [wrongHead] = await land(current, freshened.run);
+    assert.equal(wrongHead.landed, false);
+    assert.equal(wrongHead.report.stopped_at, 'pushed');
+    assert.match(wrongHead.report.reason, /no longer at the authorized repair head/u);
+    assert.deepEqual(freshened.squashes, [], 'the refreshed SHA is not the one authorised to squash');
+  });
+});
+
+test('repair archival: stale inputs and an old write-back cannot complete a newer release', async t => {
+  const f = repairSetup(t);
+  const home = join(f.root, 'programs');
+  const pagePath = join(f.dir, 'README.md');
+  const landed = join(f.dir, 'goals', '.archive', 'restore');
+  mkdirSync(landed, { recursive: true });
+  writeFileSync(join(landed, 'GOAL.json'), goalJson({ stage: 'done', repos: ['memoro-cli'], documents: [{ label: 'Part 1', path: pagePath }] }));
+  const seams = { root: f.root, home, programme: 'p', list: listDirsOf, read: readTextOrNull, writeJson: writeJsonAtomic, lock: realLock };
+  const due = () => archiveDue({ ...seams, state: readArchiveState(seams) });
+  const keep = revision => keepReading({ ...seams, revision, goals: ['restore'], at: NOW.toISOString() });
+  const archived = join(f.root, 'archive', 'p');
+  mkdirSync(join(f.root, 'archive'));
+  let moves = 0;
+  const archive = () => archiveOnOk({ ...seams, restrictedDir: join(f.root, 'restricted'), proposalsTarget: () => assert.fail('no legacy proposals'),
+    write: writeFileAtomic, remove: path => rmSync(path), exists: existsSync,
+    archive: async ({ fence, onShelved }) => {
+      assert.equal(fence(), null);
+      moves++;
+      renameSync(f.dir, archived);
+      onShelved(archived);
+      return 0;
+    },
+  });
+  await f.asAuthor(async author => {
+    const release = async () => {
+      const reviewed = await f.review(author, f.reader());
+      assert.equal(reviewed.code, 0, reviewed.err);
+      const result = await f.call(['release', 'p'], { identity: author });
+      assert.equal(result.code, 0, result.err);
+      const revision = readRecord(f.dir).record.repair.release.revision;
+      const identity = { ...f.baseEnv, MC_HEADLESS: '1', MC_REPAIR_REVISION: revision };
+      const reconciled = await f.call(['reconcile', 'p', '--reason', 'Part 1 still describes the landed restoration.'], { identity });
+      assert.equal(reconciled.code, 0, reconciled.err);
+      return revision;
+    };
+
+    const first = await release();
+    assert.equal(due().mode, 'read');
+    keep(first);
+    assert.equal(due().mode, 'archive');
+    writeFileSync(pagePath, readFileSync(pagePath, 'utf8').replace(/^## Read$/mu, '## Read\n\nAdditional reading.'));
+    assert.equal(due().due, false);
+    assert.match(due().reason, /needs review/u);
+    assert.equal((await archive()).stale, true);
+    assert.equal(moves, 0);
+    assert.throws(() => keep(first), /needs review/u);
+    assert.equal(reopenRepair(f.dir, author).changed, true);
+    const second = await release();
+    assert.equal(due().mode, 'read', 'the kept OK is for the first release, not the second');
+    assert.equal((await archive()).stale, true);
+    assert.equal(moves, 0);
+    assert.throws(() => keep(first), /different repair release/u);
+    const result = parseWriteBack(`release: ${first}\nrestore: OK — none — No behaviour changed.\nverdict: OK\n`, { goals: ['restore'], checkouts: {}, revision: second });
+    assert.deepEqual(result.problems, ['the write-back belongs to a different repair release']);
+    keep(second);
+    const archiveResult = await archive();
+    assert.equal(archiveResult.ok, true, archiveResult.reason);
+    assert.equal(moves, 1);
+    assert.equal(readRecord(archived).record.state, 'done');
+  });
+});
+
+for (const [action, confirmation, lateLanding] of [
+  ['decline', 'declined', false], ['decline', 'declined', true],
+  ['return', 'returned to repair', false], ['takeover', 'taken over by Martin', false],
+]) {
+  test(`repair stop: desk sync and ${action} after a part landed${lateLanding ? ' with a late merged PR' : ''}`, async t => {
+    const f = repairSetup(t);
+    const home = join(f.root, 'programs');
+    const page = join(f.dir, 'README.md');
+    const firstPage = readFileSync(page, 'utf8').replace('## Order',
+      '### Part 2 — Restore another row\n\nSolution: Restore the settled row order.\n\n## Order');
+    writeFileSync(page, firstPage);
+    const landed = join(f.dir, 'goals', '.archive', 'landed');
+    const remaining = join(f.dir, 'goals', 'remaining');
+    const proposal = join(f.root, 'areas', 'memoro-cli', 'system', 'proposals', '2026-11-19-mc-restore.md');
+    for (const dir of [landed, remaining, join(proposal, '..')]) mkdirSync(dir, { recursive: true });
+    writeFileSync(proposal, '# Rows in the wrong order\n');
+    const ref = readRepairSource({ kind: 'proposal', given: proposal, env: f.baseEnv }).ref;
+    const original = readRecord(f.dir).record;
+    writeJsonAtomic(join(f.dir, RECORD_FILE), { ...original, repair: { sources: [ref] } });
+    writeFileSync(join(landed, 'GOAL.json'), goalJson({ stage: 'done', documents: [{ label: 'Part 1', path: page }] }));
+    const remainingText = goalJson({ stage: 'build', documents: [{ label: 'Part 2', path: page }], prs: ['memoro-cli#17'] });
+    writeFileSync(join(remaining, 'GOAL.json'), remainingText);
+
+    const record = () => readRecord(f.dir).record;
+    const seams = { root: f.root, home, programme: 'p', list: listDirsOf, read: readTextOrNull, writeJson: writeJsonAtomic, lock: realLock };
+    const plan = () => programmeDue({ ...seams, state: { status: 'none' } });
+    const due = () => archiveDue({ ...seams, state: readArchiveState(seams) });
+    const admit = revision => repairGoalAdmission(f.dir, 'remaining', { revision });
+    const desk = async args => {
+      const stdout = sink(), stderr = sink();
+      const code = await martin(args, { env: f.martin, stdout, stderr, now: () => NOW });
+      return { code, out: stdout.text(), err: stderr.text() };
+    };
+    const reason = 'Behåll den redan rättade raden.';
+    const disposition = ['disposition', 'p', action, '--reason', reason];
+    const summary = 'Två rader visas i fel ordning. Beställningen föreslår en ny gruppordning och går utanför reparationsmandatet. Återstående arbete är stoppat.';
+    await f.asAuthor(async author => {
+      const read = await f.review(author, f.reader());
+      assert.equal(read.code, 0, read.err);
+      assert.equal((await f.call(['release', 'p'], { identity: author })).code, 0);
+      const prior = record().repair.release.revision;
+      const planner = { ...f.baseEnv, MC_HEADLESS: '1', MC_REPAIR_REVISION: prior };
+      const reconciled = await f.call(['reconcile', 'p', '--reason', 'Reviewed both parts.'], { identity: planner });
+      assert.equal(reconciled.code, 0, reconciled.err);
+      assert.equal(admit(prior).release.revision, prior);
+      if (lateLanding) realLock(f.root, () => settleRepairSources({ env: f.baseEnv, sources: [ref], programme: 'p', action: 'order' }), { strict: true });
+      writeFileSync(page, firstPage.replace('Restore the settled row order.', 'Choose a new grouping.'));
+      assert.equal(reopenRepair(f.dir, author).ok, true);
+      const stop = ['repair-stop', 'p', '--title', 'ny gruppordning', '--summary', summary];
+      let textItem;
+      if (action === 'return') {
+        const brief = join(f.root, 'brief.md');
+        writeFileSync(brief, '## Vad den säger\n\nOrdningen är fast.\n\n## Vad som föreslås\n\nEn annan gruppordning.\n\n## Vad som hittades\n\nTvå rader visas fel.\n');
+        const proposed = await desk(['propose', '--text', 'Den fasta gruppordningen', '--file', brief]);
+        assert.equal(proposed.code, 0, proposed.err);
+        textItem = proposed.out.match(/\b[a-f0-9]{24}\b/u)?.[0];
+        assert.ok(textItem);
+        stop.push('--item', textItem);
+      }
+      const unrelated = await f.call(stop, { identity: { ...author, MC_REPAIR_TOKEN: 'b'.repeat(48) } });
+      assert.equal(unrelated.code, 1);
+      assert.equal(record().state, 'draft');
+      const held = await f.call(stop, { identity: author, lock: realLock });
+      assert.equal(held.code, 0, held.err);
+      const id = record().repair.stop_item;
+      assert.equal(held.out, `mc: repair programme p is at Martin (item ${id})\n`);
+      assert.match((await f.call(['list'])).out, /p · Martin/u);
+      assert.equal(plan().due, false);
+      assert.match(admit(prior).problems[0], /at Martin/u);
+      assert.equal(due().due, false);
+
+      rmSync(join(itemStore(f.baseEnv), id), { recursive: true });
+      syncDeskItems({ env: f.baseEnv });
+      syncDeskItems({ env: f.baseEnv });
+      const open = readDeskItem(id, { env: f.baseEnv });
+      assert.equal(open?.state, 'for-martin');
+      assert.deepEqual(open.landed, ['landed']);
+      const opening = (await desk(['brief'])).out;
+      const section = opening.indexOf('## Reparationsbeställningar som väntar på dig');
+      assert.ok(section > opening.indexOf('## Your acts') && section < opening.indexOf('## Not ready'));
+      assert.ok(opening.includes(`p — ny gruppordning (item ${id})`) && opening.includes(summary));
+      assert.doesNotMatch(opening, /Stuck after the decision pass/u);
+      if (textItem) {
+        assert.ok(opening.includes(`Textändring: item ${textItem}`));
+        assert.equal(opening.split('Ordningen är fast.').length, 2, 'linked brief appears once in its established section');
+      }
+      const item = JSON.parse((await desk(['item', id])).out);
+      assert.match(item.brief, /Redan landat: landed/u);
+      const close = await desk(['item', id, 'close', '--by', 'martin', '--summary', 'Close outside the programme.']);
+      assert.equal(close.code, 2);
+      assert.match(close.err, /mc programs disposition p/u);
+      assert.deepEqual(readDeskItem(id, { env: f.baseEnv }), open);
+      assert.equal(plan().due, false);
+      assert.equal((await f.call(disposition, { identity: { ...f.martin, MC_HEADLESS: '1' } })).code, 2);
+      assert.equal((await f.call(disposition, { identity: {} })).code, 2);
+      assert.equal(record().state, 'Martin');
+
+      const result = await f.call(disposition, { lock: realLock, identity: f.martin,
+        command: { readPr: () => lateLanding ? 'MERGED' : 'OPEN', wake: () => {} } });
+      assert.equal(result.code, 0, result.err);
+      assert.equal(result.out, `mc: p — ${confirmation}\n`);
+      syncDeskItems({ env: f.baseEnv });
+      const closed = readDeskItem(id, { env: f.baseEnv });
+      assert.equal(closed.state, 'closed');
+      assert.equal(closed.outcome.disposition, action);
+      assert.equal(closed.outcome.summary, reason);
+      assert.doesNotMatch((await desk(['brief'])).out, /Reparationsbeställningar som väntar på dig/u);
+      assert.deepEqual(record().repair.sources, [ref]);
+      assert.equal(plan().due, false);
+      assert.ok(admit(prior).problems);
+      assert.ok(existsSync(join(landed, 'GOAL.json')));
+      if (action === 'decline') {
+        assert.equal(existsSync(proposal), false);
+        if (lateLanding) assert.match(readFileSync(archivedProposal(proposal), 'utf8'), /^Utfall: ordered in programme p/u);
+        assert.match(readRepairSource({ kind: 'proposal', given: proposal, env: f.baseEnv }).outcome, /^declined — p:/u);
+        assert.match(readFileSync(join(remaining, 'GOAL.json'), 'utf8'), /"stage": "dropped"/u);
+        assert.equal(due().due, false, 'ordinary goal cleanup has not archived the dropped goal yet');
+        renameSync(remaining, join(f.dir, 'goals', '.archive', 'remaining'));
+        const picked = due();
+        assert.equal(picked.mode, 'read');
+        assert.deepEqual(picked.goals, lateLanding ? ['landed', 'remaining'] : ['landed']);
+        assert.deepEqual(picked.dropped, lateLanding ? [] : ['remaining']);
+        assert.deepEqual(picked.partiallyLanded, lateLanding ? ['remaining'] : undefined);
+        assert.throws(() => keepReading({ ...seams, revision: prior, goals: ['landed'], at: NOW.toISOString() }), /different repair disposition/u);
+        const destination = join(f.root, 'archive', 'programs', 'p');
+        mkdirSync(join(destination, '..'), { recursive: true });
+        const archive = () => archiveOnOk({ ...seams, restrictedDir: join(f.root, 'restricted'), proposalsTarget: () => assert.fail('no legacy proposal'),
+          write: writeFileAtomic, remove: path => rmSync(path), exists: existsSync,
+          archive: async ({ fence, onShelved }) => {
+            assert.equal(fence(), null);
+            renameSync(f.dir, destination);
+            onShelved(destination);
+            return 0;
+          },
+        });
+        assert.equal((await archive()).stale, true, 'decline alone does not authorize archival');
+        keepReading({ ...seams, revision: picked.revision, goals: picked.goals, at: NOW.toISOString() });
+        assert.equal(due().mode, 'archive');
+        const archived = await archive();
+        assert.equal(archived.ok, true, archived.reason);
+        assert.equal(readRecord(destination).record.state, 'done');
+        // Recover the projection even when the disposition has already moved with the order.
+        writeJsonAtomic(join(itemStore(f.baseEnv), id, 'item.json'), open);
+        syncDeskItems({ env: f.baseEnv });
+        assert.deepEqual(readDeskItem(id, { env: f.baseEnv }), closed);
+      } else {
+        assert.equal(record().state, 'draft');
+        assert.equal(readFileSync(join(remaining, 'GOAL.json'), 'utf8'), remainingText);
+        assert.equal(existsSync(proposal), true);
+        if (action === 'return') {
+          assert.equal(record().repair.desk, undefined);
+          const release = await f.call(['release', 'p'], { identity: author });
+          assert.match(release.err, /needs review/u);
+        } else {
+          assert.equal(record().repair.desk, true);
+          const ready = () => f.call(['state', 'p', 'ready'], { identity: f.martin });
+          const premature = await ready();
+          assert.match(premature.err, /released part changed/u);
+          assert.equal(record().state, 'draft');
+          const attemptedRepair = await f.review(author, () => assert.fail('desk takeover read by old author'));
+          assert.equal(attemptedRepair.code, 2);
+          const out = sink(), err = sink();
+          assert.equal(await goal(['set', 'p/remaining', 'contract', '--text', 'The desk approved the revised grouping.'],
+            { env: f.martin, stdout: out, stderr: err }), 0, err.text());
+          const authorised = await ready();
+          assert.equal(authorised.code, 0, authorised.err);
+          assert.equal(plan().due, false, 'the desk has already reconciled the cut');
+          assert.match(admit(prior).problems[0], /different repair release/u);
+          assert.equal(admit().release.revision, record().repair.release.revision);
+        }
+      }
+    });
+  });
 }
 
 test('programme review: real command launches its own identity on named origin/main exports, and writes review file', async (t) => {

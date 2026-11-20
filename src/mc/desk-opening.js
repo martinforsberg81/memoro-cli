@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { martinDir, mcHome, programsHome } from './paths.js';
-import { itemDirectory, itemStore, listDeskItems } from './desk-items.js';
+import { itemDirectory, itemStore, listDeskItems, REPAIR_STOP_KIND } from './desk-items.js';
 import { costSum, deskCeiling, deskRunsPath, readDeskText } from './desk-budget.js';
 import { ledgerPath, rowAnswer } from './jev.js';
 import { FINISHED, goalReferences, programmeOrder, programsGoals } from './goals.js';
@@ -146,7 +146,7 @@ export function openingActs({ items, env = process.env, home = programsHome(env)
 
 /** A for-martin item of any other sort is the runner's own stop, which is not Martin's: it is stuck. */
 export function openingStuck(items) {
-  return forMartinItems(items).filter((item) => !isTextSort(item.sort) && item.sort !== 'reserved').map((item) => ({
+  return forMartinItems(items).filter((item) => !isTextSort(item.sort) && item.sort !== 'reserved' && item.kind !== REPAIR_STOP_KIND).map((item) => ({
     id: item.id, reference: item.reference, sort: item.sort ?? null, prepare_failures: item.prepare_failures?.length ?? 0, decision_failures: item.decision_failures?.length ?? 0,
   })).sort((a, b) => a.reference.localeCompare(b.reference) || a.id.localeCompare(b.id));
 }
@@ -239,9 +239,11 @@ export function buildOpening({ env = process.env, home = programsHome(env), now 
   const goals = () => all;
   const stuck = openingStuck(items);
   const horizonData = horizonsOpening({ env, since, now });
+  const repairStops = items.filter(item => item.kind === REPAIR_STOP_KIND && item.state === 'for-martin');
   return {
     generated_at: now.toISOString(), last_opened: last, since,
     texts: openingTexts({ items, env, home, goals }), acts: openingActs({ items, env, home, goals }),
+    ...(repairStops.length ? { repair_stops: repairStops } : {}),
     decided: openingDecided({ items, since, now, ledger: ledgerRows({ env, read }) }),
     not_ready: openingNotReady({ items, stuck, now }),
     cost: costReading({ env, now, read }),

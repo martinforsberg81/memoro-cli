@@ -42,7 +42,7 @@ function getEvidence(request, snapshots, git) {
   return null;
 }
 
-export async function judgeRepair({ source, orders, env }, deps = {}) {
+export async function judgeRepair({ source, orders, revision, env }, deps = {}) {
   const role = (deps.role ?? readCanonRole)(ROLE);
   const tool = (deps.launch ?? resolveLaunch)('claude');
   if (!role?.overlay || !tool?.ok) throw new Error('repair session is not available');
@@ -62,7 +62,7 @@ export async function judgeRepair({ source, orders, env }, deps = {}) {
   const areaKeys = declaredAreaKeys(areas);
   const child = scrubRuntimeSecretsFromEnv(withoutSessionIdentity(env));
   for (const name of ['MC_REPO', 'MC_WORKAREA', 'MC_SCRATCH', 'MC_SESSION_STARTED', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR',
-    'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_PROGRAMME_REVIEW_TOKEN', 'MC_LEARNING_RUN']) delete child[name];
+    'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_PROGRAMME_REVIEW_TOKEN', 'MC_REPAIR_TOKEN', 'MC_LEARNING_RUN']) delete child[name];
   Object.assign(child, { MC_ROLE: ROLE, MC_HEADLESS: '1', MC_TOOL: tool.id, MC_MODEL: role.model, MC_REPAIR_RUN: randomUUID() });
 
   const args = headlessArgs({
@@ -80,10 +80,14 @@ export async function judgeRepair({ source, orders, env }, deps = {}) {
   for (let round = 1; round <= MAX_TURNS; round++) {
     const timeoutMs = TIMEOUT_MS - (Date.now() - started);
     if (timeoutMs <= 0) throw new Error('repair session did not finish within five minutes');
-    const repository = source.repo ?? source.associated?.repo;
-    const prompt = JSON.stringify({ source: { kind: source.ref.kind, repository, evidence: source.text,
-      ...(source.associated ? { relatedProposal: source.associated.text } : {}) },
-      openOrders: orders, revisions, areas: areaKeys, evidence, repositoryRead: round < MAX_TURNS ? MAX_READS : 0 });
+    const repository = source?.repo ?? source?.associated?.repo;
+    const assignment = revision ? { revision } : {
+      source: { kind: source.ref.kind, repository, evidence: source.text,
+        ...(source.associated ? { relatedProposal: source.associated.text } : {}) },
+      openOrders: orders,
+    };
+    const prompt = JSON.stringify({ ...assignment, revisions, areas: areaKeys, evidence,
+      repositoryRead: round < MAX_TURNS ? MAX_READS : 0 });
     const result = await (deps.session ?? runTool)(launch.bin, launch.args, {
       cwd: tmpdir(), env: child, timeoutMs, group: true, input: userMessageLine(prompt),
     });
