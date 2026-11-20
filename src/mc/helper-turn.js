@@ -58,6 +58,7 @@ import { areaKeysOnDisk, declaredAreaKeys, listAllProposals, placementWords } fr
 import { AREAS_PATH, checkAreas } from './areas.js';
 import { programsHome } from './paths.js';
 import { profileArgs } from './portrait.js';
+import { catalogSuggestion } from './intake-catalog.js';
 import { gitDirOf } from './repos.js';
 import { instructionsFor, readCanonRole } from './roles.js';
 import { headlessArgs, intakeQueue, INTAKE_PER_ROUND, readSessionOutput, sessionFinished, TIMEOUT_EXIT } from './run-plan.js';
@@ -159,7 +160,7 @@ export function helperPrompt({
     out.push('| programme / goal | stage · status | title | next |', '|---|---|---|---|');
     for (const g of goals) out.push(`| ${g.programme} / ${g.goal} | ${g.stage ? `${g.stage} · ${g.status}` : '?'} | ${clip(g.title || '—')} | ${clip(g.next || '—')} |`);
   }
-  out.push('', '----- PROJECT LOG (closed projects) -----', projectLog || '_none read_');
+  out.push('', '----- PROJECT LOG (closed projects) -----', projectLog ? projectLogTail(projectLog) : '_none read_');
   out.push('', '----- PROPOSALS ALREADY WAITING -----');
   if (!proposals.length) out.push('_none_');
   else {
@@ -175,6 +176,37 @@ export function helperPrompt({
   }
   return out.join('\n');
 }
+
+/**
+ * The newest rows of the project log, within `maxBytes`. The log is
+ * append-only and grows without end; inlined whole it passed the kernel's
+ * 128 KiB limit on one argument, and every intake turn died at spawn with
+ * E2BIG (2026-11-18 to 2026-11-20). The newest closures are the ones a fresh
+ * report can repeat, so the tail is kept, cut at a line, and the turn is told
+ * where the rest is.
+ */
+export const PROJECT_LOG_TAIL_BYTES = 48 * 1024;
+export function projectLogTail(text, maxBytes = PROJECT_LOG_TAIL_BYTES) {
+  const full = String(text || '');
+  if (Buffer.byteLength(full, 'utf8') <= maxBytes) return full;
+  const kept = [];
+  let bytes = 0;
+  const lines = full.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const size = Buffer.byteLength(lines[i], 'utf8') + 1;
+    if (bytes + size > maxBytes) break;
+    kept.unshift(lines[i]);
+    bytes += size;
+  }
+  return [`_older rows omitted; the whole log is \`${PROJECT_LOG}\` on origin/main_`, '', ...kept].join('\n');
+}
+
+/**
+ * The largest prompt a turn is started with. A positional argument longer
+ * than the kernel's per-argument limit (128 KiB) fails the spawn with E2BIG;
+ * this leaves room for the other arguments beside it.
+ */
+export const PROMPT_LIMIT_BYTES = 120 * 1024;
 
 /** What the routing table says for a programme whose README gives no line. */
 export const NO_DESCRIPTION = '(no description)';
@@ -204,8 +236,9 @@ export function programmeRoutes(env = process.env, { read = (path) => readFileSy
 
 // The names come from the before/after listing in `runHelperTurn`, and a name without a system is said and left alone, because guessing it is the parse that was removed.
 /** What the turn produced, in the one line a runner log and a person share. */
-export function describeTurn({ wrote = [], waiting = [], providerPriority = 'auto', tool = null, routeWhy = null }) {
+export function describeTurn({ catalogued = null, wrote = [], waiting = [], providerPriority = 'auto', tool = null, routeWhy = null }) {
   const route = providerPriority === 'auto' || !tool ? '' : ` · ${tool} (${providerPriority} priority${tool !== providerPriority ? `, fallback: ${routeWhy || 'other provider selected'}` : ''})`;
+  if (catalogued) return `kept as it is in ${catalogued.area}, catalogued by jev`;
   if (!wrote.length) return `no proposal — nothing in the file warranted one (${waiting.length} still waiting)${route}`;
   // Where it went, when the listing said: the area by its key.
   const placed = wrote.filter((p) => p && typeof p === 'object' && typeof p.area === 'string');
@@ -334,6 +367,10 @@ export async function runHelperTurn({
     projectLog: ground.projectLog, goals: ground.goals,
     proposals: waitingBefore.map((p) => ({ area: p.area, file: p.file })), repo, now,
   });
+  const promptBytes = Buffer.byteLength(prompt, 'utf8');
+  if (promptBytes > PROMPT_LIMIT_BYTES) {
+    return { ok: false, reason: 'prompt-too-large', note: `the intake prompt is ${Math.round(promptBytes / 1024)} KiB; a turn starts with at most ${PROMPT_LIMIT_BYTES / 1024} KiB` };
+  }
   const instructions = instructionsFor(launch.id, role.overlay);
   const args = headlessArgs({
     // `stream: false`: a helper turn is one short answer on its own
@@ -447,7 +484,10 @@ export async function drainIntake({
     const started = now().getTime();
     let turn;
     try {
-      turn = await (deps.turn || runHelperTurn)({ env, now: now(), file, model, tool });
+      // An app suggestion is catalogued by jev and kept as it is (intake-catalog.js); every other file has a model turn.
+      turn = file.startsWith('suggestion-')
+        ? await (deps.catalog || catalogSuggestion)({ env, now: now(), file })
+        : await (deps.turn || runHelperTurn)({ env, now: now(), file, model, tool });
     } catch (error) {
       // The one path that would otherwise skip the archive below. A turn that
       // threw did not judge the file, but the file has had its turn.
