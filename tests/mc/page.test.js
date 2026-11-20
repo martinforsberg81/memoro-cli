@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -39,6 +39,7 @@ import { goalJson } from './_helpers/goal-file.js';
 import { buildOpening, costReading } from '../../src/mc/desk-opening.js';
 import { deskRunsPath, readDeskText } from '../../src/mc/desk-budget.js';
 import { deskItemId, itemDirectory, writeDeskItem } from '../../src/mc/desk-items.js';
+import { recordArchiveFailure } from '../../src/mc/archive-turn.js';
 import { deskKey, deskLines, readPageDesk } from '../../src/mc/page-desk.js';
 import { ledgerPath } from '../../src/mc/jev.js';
 import { holderPath, lockPath } from '../../src/mc/runner-lock.js';
@@ -2283,6 +2284,164 @@ describe('collectPage', () => {
     return { root, env, horizon, record, collect };
   }
 
+  it('removes a done record in place but keeps it while a physical goal exists', async (t) => {
+    const fx = horizonsFixture({ plan: ['finished'] });
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    fx.horizon('first', 'open', 1);
+    fx.record('finished', 'first');
+    const file = join(programsHome(fx.env), 'finished', 'PROGRAMME.json');
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), state: 'done' }));
+    let page = await fx.collect();
+    assert.deepEqual(page.horizons.open[0].programmes, []);
+    assert.ok(!page.programmes.programmes.some((group) => group.programme === 'finished'));
+    assert.deepEqual(maintenanceItems(page).filter((item) => item.key === 'pr:memoro#9000').map((item) => item.key), ['pr:memoro#9000']);
+    mkdirSync(join(programsHome(fx.env), 'finished', 'goals', 'still-live'), { recursive: true });
+    page = await fx.collect();
+    assert.deepEqual(page.horizons.open[0].programmes, ['finished']);
+    assert.ok(page.programmes.programmes.some((group) => group.programme === 'finished'));
+  });
+
+  it('keeps a recordless local programme visible without repository membership', async (t) => {
+    const fx = horizonsFixture();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    mkdirSync(join(programsHome(fx.env), 'recordless'), { recursive: true });
+    const page = await fx.collect();
+    assert.deepEqual(page.programmes.programmes.map((group) => group.programme), ['mc', 'recordless']);
+    assert.deepEqual(page.horizons.none, ['mc', 'recordless']);
+  });
+
+  it('reports a session without programme membership as a stray rather than a card', async (t) => {
+    const fx = horizonsFixture();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    writeFileSync(join(fx.root, 'runner', 'foreground', `${process.pid}.json`), JSON.stringify({
+      verb: 'plan', area: 'programs/vanished', tool: 'codex', model: 'sol', pid: process.pid, started: '2026-08-29T11:00:00Z',
+    }));
+    const page = await fx.collect();
+    assert.ok(!page.programmes.programmes.some((g) => g.programme === 'vanished'));
+    assert.ok(!page.horizons.none.includes('vanished'));
+    assert.equal(maintenanceItems(page).filter((item) => item.text.includes('session with no programme') && item.text.includes('plan')).length, 1);
+  });
+
+  it('shows an archive turn and its competing attention sources until completion', async (t) => {
+    const fx = horizonsFixture();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    fx.horizon('first', 'open', 1);
+    fx.record('finished', 'first');
+    const dir = join(programsHome(fx.env), 'finished');
+    const record = join(dir, 'PROGRAMME.json');
+    writeFileSync(record, JSON.stringify({ ...JSON.parse(readFileSync(record, 'utf8')), state: 'ready' }));
+    const archived = join(dir, 'goals', '.archive', 'work');
+    mkdirSync(archived, { recursive: true });
+    writeFileSync(join(archived, 'GOAL.json'), goalJson({ stage: 'done' }));
+    const stateFile = join(fx.root, 'runner', 'archive-turn', 'finished.json');
+    mkdirSync(dirname(stateFile), { recursive: true });
+    const state = { schema: 'mc-archive-turn', version: 1, programme: 'finished', failures: [], items: [], reading: null, destination: null };
+    const save = () => writeFileSync(stateFile, JSON.stringify(state));
+    const check = async (expected, reason) => {
+      const page = await fx.collect();
+      assert.deepEqual(page.horizons.open[0].programmes, ['finished']);
+      const group = page.programmes.programmes.find((g) => g.programme === 'finished');
+      assert.deepEqual(group.archive, expected);
+      const lines = renderPageLines(page, { columns: 160, now: NOW, overview: true });
+      assert.equal(horizonFigures(page)[0].programmes, 1);
+      assert.ok(lines.some((line) => line.includes('1 programme')), lines.join('\n'));
+      const frame = programmeEntriesOf(lines).get('finished');
+      assert.ok(frame.heading.includes(expected.status === 'pending' ? 'archive pending' : 'archive needs attention'));
+      if (reason) assert.ok(frame.body.some((line) => line.includes(reason)), lines.join('\n'));
+    };
+    // Closed and foreign items do not mask the due turn.
+    const foreignAt = '2026-10-01T00:00:00Z';
+    for (const [reference, stateName] of [['archive:other', 'for-martin'], ['archive:finished', 'closed']]) {
+      writeDeskItem({ schema: 'mc-desk-item', version: 1, id: deskItemId('archive', reference, foreignAt), kind: 'archive', reference, source_at: foreignAt, opened_at: foreignAt, state: stateName, sort: 'text', reversible: null, due_at: null, outcome: null }, { env: fx.env });
+    }
+    await check({ status: 'pending' });
+    state.failures.push({ at: '2026-11-01T00:00:00Z', reason: 'first failure' }); save();
+    await check({ status: 'attention', reason: 'first failure' }, 'first failure');
+    // The runner is retrying while the earlier failure and a new desk item coexist.
+    const current = join(fx.root, 'runner', 'current-memoro-cli.json');
+    writeFileSync(current, JSON.stringify({ name: 'archive:finished', kind: 'plan', repo: 'memoro-cli', tool: 'codex', model: 'sol', started: '2026-08-29T11:40:00Z', pid: process.pid }));
+    assert.ok((await fx.collect()).runner.sessions.some((session) => session.name === 'archive:finished'));
+    const source = '2026-11-02T00:00:00Z';
+    const write = (path, text) => {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, text);
+    };
+    const { item } = recordArchiveFailure({
+      kind: 'not-ok', at: source, lines: ['work: NOT OK — missing write-back'],
+      programme: 'finished', root: fx.root, env: fx.env, itemDirectory, write,
+      read: (path) => readFileSync(path, 'utf8'),
+      writeJson: (path, value) => write(path, JSON.stringify(value)),
+      lock: (_root, update) => update(),
+    });
+    assert.equal(item.state, 'prepared');
+    await check({ status: 'attention', reason: 'see the desk' }, 'see the desk');
+    writeFileSync(join(itemDirectory(item, fx.env), 'prepared.md'), 'repair write-back\n');
+    await check({ status: 'attention', reason: 'repair write-back' }, 'repair write-back');
+    // Reserved items and a retry keep their own reason ahead of recorded failures.
+    item.state = 'for-martin';
+    item.sort = 'reserved'; writeDeskItem(item, { env: fx.env });
+    writeFileSync(join(itemDirectory(item, fx.env), 'brief.md'), '# Repair the record\n');
+    await check({ status: 'attention', reason: 'see the desk' }, 'see the desk');
+    writeFileSync(join(itemDirectory(item, fx.env), 'brief.md'), 'verdict: NOT OK\n');
+    await check({ status: 'attention', reason: 'see the desk' }, 'see the desk');
+    writeFileSync(join(itemDirectory(item, fx.env), 'brief.md'), 'Fix the archive record\n');
+    await check({ status: 'attention', reason: 'Fix the archive record' }, 'Fix the archive record');
+    const live = join(dir, 'goals', 'new-work');
+    mkdirSync(live, { recursive: true });
+    let page = await fx.collect();
+    assert.equal(page.programmes.programmes.find((g) => g.programme === 'finished').archive, null);
+    rmSync(live, { recursive: true });
+    // A pending previous destination belongs to the old archive, not its successor.
+    state.destination = join(fx.root, 'archive', 'programs', 'finished'); save();
+    await check({ status: 'attention', reason: 'previous archive repair' }, 'previous archive repair');
+    state.destination = null; save();
+    item.state = 'closed'; writeDeskItem(item, { env: fx.env });
+    state.items.push({ id: item.id, opened_at: source }); save();
+    await check({ status: 'pending' });
+    rmSync(current);
+    writeFileSync(stateFile, '{ invalid');
+    const unreadable = await fx.collect();
+    assert.match(unreadable.programmes.programmes.find((g) => g.programme === 'finished').archive.reason, /is unreadable/u);
+    save();
+    rmSync(archived, { recursive: true });
+    page = await fx.collect();
+    assert.equal(page.programmes.programmes.find((g) => g.programme === 'finished').archive, null, 'ready without an archived done goal is ordinary work');
+    writeFileSync(record, JSON.stringify({ ...JSON.parse(readFileSync(record, 'utf8')), state: 'done' }));
+    const completed = await fx.collect();
+    assert.deepEqual(completed.horizons.open[0].programmes, []);
+    assert.ok(!completed.programmes.programmes.some((g) => g.programme === 'finished'));
+    assert.equal(horizonFigures(completed)[0].programmes, 0);
+    assert.ok(renderPageLines(completed, { columns: 160, now: NOW, overview: true }).some((line) => line.includes('No programmes')));
+  });
+
+  it('keeps the final-record repair on the desk after the programme moves', async (t) => {
+    const fx = horizonsFixture({ plan: ['finished'] });
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    fx.horizon('first', 'open', 1);
+    fx.record('finished', 'first');
+    const dir = join(programsHome(fx.env), 'finished');
+    const destination = join(fx.root, 'archive', 'programs', 'finished');
+    mkdirSync(dirname(destination), { recursive: true });
+    renameSync(dir, destination);
+    writeFileSync(join(fx.root, 'runner', 'foreground', `${process.pid}.json`), JSON.stringify({
+      verb: 'plan', area: 'programs/finished', tool: 'codex', model: 'sol', pid: process.pid, started: '2026-08-29T11:00:00Z',
+    }));
+    const stateFile = join(fx.root, 'runner', 'archive-turn', 'finished.json');
+    mkdirSync(dirname(stateFile), { recursive: true });
+    writeFileSync(stateFile, JSON.stringify({ schema: 'mc-archive-turn', version: 1, programme: 'finished', failures: [], items: [], reading: null, destination }));
+    const at = '2026-11-02T00:00:00Z';
+    const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('archive', 'archive:finished', at), kind: 'archive', reference: 'archive:finished', source_at: at, opened_at: at, state: 'for-martin', sort: 'reserved', reversible: null, due_at: null, outcome: null };
+    writeDeskItem(item, { env: fx.env });
+    const page = await fx.collect();
+    assert.deepEqual(page.horizons.open[0].programmes, []);
+    assert.ok(!page.programmes.programmes.some((g) => g.programme === 'finished'));
+    assert.deepEqual(page.desk.acts.filter((entry) => entry.id === item.id).map((entry) => entry.reference), ['archive:finished']);
+    assert.deepEqual(maintenanceItems(page).filter((entry) => entry.key === 'pr:memoro#9000').map((entry) => entry.key), ['pr:memoro#9000']);
+    assert.equal(maintenanceItems(page).filter((entry) => entry.text.includes('session with no programme') && entry.text.includes('plan')).length, 1);
+    assert.equal(horizonFigures(page)[0].programmes, 0);
+    assert.ok(renderPageLines(page, { columns: 160, now: NOW, overview: true }).some((line) => line.includes('No programmes')));
+  });
+
   it('collects a draft with no goals into JSON and draws draft at 160 and 80 columns', async (t) => {
     const fx = horizonsFixture();
     t.after(() => rmSync(fx.root, { recursive: true, force: true }));
@@ -2368,13 +2527,12 @@ describe('collectPage', () => {
     const groups = data.programmes.programmes;
     const by = Object.fromEntries(groups.map((group) => [group.programme, group]));
 
-    // Goal numbers are the goals'; programmes follow, in name order, one each, plan-PR-only programme included.
+    // Goal numbers are the goals'; programmes follow in name order. A PR alone is not membership.
     assert.deepEqual(groups.map((group) => group.programme), [...groups.map((group) => group.programme)].sort());
     assert.deepEqual(groups.map((group) => group.number), groups.map((_, i) => data.programmes.count + 1 + i));
     assert.deepEqual(data.programmes.programmes.flatMap((group) => group.goals).map((goal) => goal.number), [1], 'the goals keep 1..N');
-    assert.ok(by['plan-only'], 'a programme only a plan pull request names is a group');
-    assert.equal(by['plan-only'].prs.length, 1);
-    assert.equal(by['plan-only'].number > data.programmes.count, true);
+    assert.equal(by['plan-only'], undefined);
+    assert.equal(maintenanceItems(data).filter((item) => item.key === 'pr:memoro#9000').length, 1);
 
     assert.deepEqual(Object.fromEntries(groups.map((group) => [group.programme, [group.horizon, group.horizon_state]])), {
       mc: [null, null],
@@ -2386,7 +2544,6 @@ describe('collectPage', () => {
       'p-reached': ['done-one', 'reached'],
       'p-second': ['second', 'open'],
       'p-unheld': ['ghost', 'not held'],
-      'plan-only': [null, null],
     });
     assert.equal(by['p-invalid'].record_invalid, true);
 
@@ -2394,7 +2551,7 @@ describe('collectPage', () => {
     assert.deepEqual(data.horizons.open.map((item) => [item.slug, item.position, item.programmes]), [
       ['first', 1, ['p-first']], ['second', 2, ['p-second']],
     ]);
-    assert.deepEqual(data.horizons.none, ['mc', 'p-broken', 'p-dropped', 'p-invalid', 'p-none', 'p-reached', 'p-unheld', 'plan-only']);
+    assert.deepEqual(data.horizons.none, ['mc', 'p-broken', 'p-dropped', 'p-invalid', 'p-none', 'p-reached', 'p-unheld']);
     assert.deepEqual(data.horizons.unreadable, ['broken']);
     assert.equal(data.horizons.error, null);
   });

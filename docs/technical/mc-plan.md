@@ -413,16 +413,25 @@ anything the planning area's release forecast would keep, and any entry under
 `~/mc/restricted/<programme>/` without a README.md. It checks before changing
 anything.
 
-In each repository that holds `docs/project/<programme>/`, it removes that
-directory and adds a `closed` row for the programme in `project_log.md`, in a
-docs-only pull request. An existing archive PR is reused. Only after those
+In each repository that holds `docs/project/<programme>/`, archive retains
+files that code or tests still read. It removes the other files and adds a
+`closed` row for the programme in `project_log.md` in a docs-only pull
+request. If all files are kept, there is nothing to remove and no row or PR
+is created. An existing archive PR is reused. Only after those
 PRs land are the planning worktrees released. In layout 2
 `~/mc/restricted/<programme>/` is then removed, each entry's README.md first
 copied to the programme's `evidence/<entry>/RESTRICTED-README.md`
 ([mc-layout.md § Data outside the repositories](mc-layout.md#data-outside-the-repositories)),
 and the programme's directory is moved whole to `~/mc/archive/programs/<programme>/` (a dated
-name if needed); its remaining documents are not deleted. A network failure
-leaves the planning area intact so a later attempt can continue.
+name if needed); its remaining documents are not deleted. Before the move the shared
+writer records a versioned receipt of retained repository trees, their repository
+identity, tracked paths and inspected main commits in the programme directory.
+It takes the tree from the archive merge commit or, when every file is kept,
+from the main commit inspected for that decision.
+The rename carries that receipt to the shelf; older shelves need not have one.
+A failure to land the repository change leaves the planning area intact so
+a later attempt can continue. A failed receipt fetch leaves that repository's
+membership unproven.
 
 `--archive` refuses session-selection flags and requires an explicit name.
 No-record programmes are not automatically archived or migrated. The manual

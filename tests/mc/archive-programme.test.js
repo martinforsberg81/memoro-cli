@@ -22,6 +22,8 @@ import {
 import { formatRow, logRows } from '../../src/mc/archive-plan.js';
 import { run } from '../../src/mc/commands/plan.js';
 import { renderGoal } from '../../src/mc/goals.js';
+import { shelvedMembership } from '../../src/mc/archive-receipt.js';
+import { collectPage, readProgrammes } from '../../src/mc/page-collect.js';
 
 function git(cwd, args) {
   const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
@@ -121,7 +123,9 @@ function stubs({ merged = true, mergedBy = {}, area = null, dry = { kept: [], he
         calls.merges.push(options.pr);
         calls.mergeRepos.push(options.repoPath);
         const landed = options.repoPath in mergedBy ? mergedBy[options.repoPath] : merged;
-        return landed ? { merged: true, merged_into: 'main' } : { merged: false, stopped_at: 'checks', reason: 'checks failed' };
+        return landed
+          ? { merged: true, merged_into: 'main', merge_commit: git(options.repoPath, ['rev-parse', 'origin/main']).stdout.trim() }
+          : { merged: false, stopped_at: 'checks', reason: 'checks failed' };
       },
       release: (name, { dryRun }) => {
         calls.release.push(dryRun);
@@ -407,6 +411,13 @@ describe('archiveProgramme with the runner\'s fence', () => {
     return { fx, area };
   }
 
+  function land(repo, message) {
+    for (const command of [['add', '-A'], ['commit', '-q', '-m', message], ['push', '-q', 'origin', 'HEAD:main']]) {
+      const result = git(repo, command);
+      assert.ok(result.ok, result.stderr);
+    }
+  }
+
   it('with a fence that says nothing the archive runs as the person\'s does, never clears restricted data, and tells where the directory went', async () => {
     const { fx, area } = layout2();
     const { deps, calls } = stubs();
@@ -419,6 +430,114 @@ describe('archiveProgramme with the runner\'s fence', () => {
     assert.ok(existsSync(join(moved, 'rulings.md')));
     assert.deepEqual(asked, [1, 1, 2], 'asked after the docs PR, before the release (the dry run only so far) and before the shelving (after it)');
     assert.deepEqual(calls.release, [true, false]);
+  });
+
+  it('only a matching shelved receipt removes retained repository membership', async (t) => {
+    const { fx, area } = layout2();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    const { deps, calls } = stubs();
+    const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area });
+    const readGit = (cwd, argv) => { const r = git(cwd, argv); return r.ok ? r.stdout.trimEnd() : null; };
+    const listed = () => readProgrammes({ env: fx.env, repos: fx.repos }).section.programmes.map((p) => p.programme);
+    const overview = async () => {
+      const page = await collectPage({ env: fx.env, repos: fx.repos, offline: true, checkout: null,
+        claudeSettings: () => null, exec: async () => ({ ok: false, stdout: '' }),
+        run: () => ({ status: 1, stdout: '' }), git: () => null,
+        cache: { loadPrs: () => ({ prs: [], fetched: null, age_seconds: 0 }), savePrs: () => {} } });
+      return { members: page.programmes.programmes.map((p) => p.programme), other: page.horizons.none };
+    };
+    const check = async (members) => {
+      assert.deepEqual(listed(), members);
+      assert.deepEqual(await overview(), { members, other: members });
+    };
+    await check(['gone']);
+    assert.equal(await archiveProgramme('gone', a), 0, a.stderr.out.text);
+    const receipt = join(fx.root, 'work', 'archive', 'programs', 'gone', '.archive-receipt.json');
+    const saved = readFileSync(receipt, 'utf8');
+    assert.equal(shelvedMembership('gone', fx.repos[0], { env: fx.env, git: readGit }), true);
+    await check([]);
+    const mismatch = JSON.parse(saved);
+    mismatch.entries[0].path = 'docs/project/other';
+    writeFileSync(receipt, JSON.stringify(mismatch));
+    await check(['gone']);
+    rmSync(receipt);
+    await check(['gone']);
+    writeFileSync(receipt, saved);
+    mkdirSync(area, { recursive: true });
+    await check(['gone']); // A recordless successor takes precedence.
+    rmSync(area, { recursive: true });
+    const tree = join(fx.repo, 'docs', 'project', 'gone');
+    const tracked = join(tree, 'README.md');
+    const contents = readFileSync(tracked, 'utf8');
+    rmSync(tree, { recursive: true });
+    writeFileSync(tree, 'temporary file at the programme path\n');
+    land(fx.repo, 'replace directory with file');
+    const removed = git(fx.repo, ['rm', '--', 'docs/project/gone']);
+    assert.ok(removed.ok, removed.stderr);
+    mkdirSync(tree);
+    writeFileSync(tracked, contents);
+    land(fx.repo, 'restore directory after file');
+    await check(['gone']);
+
+    // The successor's only file is still read by code, so its archive has no PR.
+    mkdirSync(join(fx.repo, 'tests'));
+    writeFileSync(join(fx.repo, 'tests', 'x.test.js'), "readFileSync('docs/project/gone/README.md', 'utf8');\n");
+    land(fx.repo, 'read retained programme file from code');
+    mkdirSync(area);
+    assert.equal(await archiveProgramme('gone', a), 0, a.stdout.out.text + a.stderr.out.text);
+    assert.deepEqual(calls.merges, [42]);
+    await check([]);
+    rmSync(tree, { recursive: true });
+    land(fx.repo, 'delete membership');
+    mkdirSync(tree);
+    writeFileSync(tracked, contents);
+    land(fx.repo, 'restore directory after deletion');
+    await check(['gone']); // Deletion and reintroduction break path identity.
+  });
+
+  it('keeps a repository successor introduced after the archive merge visible', async (t) => {
+    const { fx, area } = layout2();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    const { deps } = stubs();
+    deps.docsMerge = async () => {
+      const tree = join(fx.repo, 'docs', 'project', 'gone');
+      rmSync(tree, { recursive: true });
+      land(fx.repo, 'archive the original directory');
+      const merge = git(fx.repo, ['rev-parse', 'origin/main']);
+      assert.ok(merge.ok, merge.stderr);
+      mkdirSync(tree);
+      writeFileSync(join(tree, 'README.md'), '# programme\n');
+      land(fx.repo, 'introduce the successor before the receipt fetch');
+      return { merged: true, merged_into: 'main', merge_commit: merge.stdout.trim() };
+    };
+    const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area });
+    assert.equal(await archiveProgramme('gone', a), 0, a.stderr.out.text);
+    assert.equal(existsSync(area), false);
+    const listed = readProgrammes({ env: fx.env, repos: fx.repos }).section.programmes.map((p) => p.programme);
+    assert.deepEqual(listed, ['gone']);
+  });
+
+  it('stops the local archive when a goal arrives during the receipt fetch', async (t) => {
+    const { fx, area } = layout2();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    const { deps, calls } = stubs();
+    const live = join(area, 'goals', 'new-work');
+    let fetches = 0;
+    deps.git = (cwd, command) => {
+      if (cwd === fx.repo && command[0] === 'fetch' && ++fetches === 2) {
+        mkdirSync(live, { recursive: true });
+      }
+      return git(cwd, command);
+    };
+    const a = args(fx, deps, {
+      areaName: 'programs/gone', areaPath: area,
+      fence: () => existsSync(live) ? 'a goal appeared in the programme' : null,
+    });
+    assert.equal(await archiveProgramme('gone', a), 1, a.stderr.out.text);
+    assert.match(a.stderr.out.text, /a goal appeared in the programme/u);
+    assert.ok(existsSync(live));
+    assert.deepEqual(calls.release, [true], 'the live goal stopped the actual release');
+    assert.equal(existsSync(join(fx.root, 'work', 'archive', 'programs', 'gone')), false);
   });
 
   it('a fence that fires after the docs PR landed stops before any release: the planning session, the directory and restricted data are as they were, and the landed PR stays', async () => {
@@ -448,6 +567,13 @@ describe('archiveProgramme with the runner\'s fence', () => {
     const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area, fence: () => (++asks === 3 ? 'a goal is live' : null) });
     assert.equal(await archiveProgramme('gone', a), 1);
     assert.ok(existsSync(area), 'the directory did not move');
+    assert.deepEqual(readProgrammes({ env: fx.env, repos: fx.repos }).section.programmes.map((p) => p.programme), ['gone']);
+    const page = await collectPage({ env: fx.env, repos: fx.repos, offline: true, checkout: null,
+      claudeSettings: () => null, exec: async () => ({ ok: false, stdout: '' }),
+      run: () => ({ status: 1, stdout: '' }), git: () => null,
+      cache: { loadPrs: () => ({ prs: [], fetched: null, age_seconds: 0 }), savePrs: () => {} } });
+    assert.deepEqual(page.programmes.programmes.map((p) => p.programme), ['gone']);
+    assert.deepEqual(page.horizons.none, ['gone']);
     assert.ok(existsSync(join(entry, 'README.md')), 'restricted data was not cleared');
     assert.equal(existsSync(join(fx.root, 'work', 'archive', 'programs', 'gone')), false);
     assert.deepEqual(calls.release, [true, false], 'release is the planning session\'s, already asked for before the last fence');

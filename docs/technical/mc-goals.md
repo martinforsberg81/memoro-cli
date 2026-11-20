@@ -626,7 +626,8 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   other refusal the runner gets is
   written once into the goal's LOG.md, as a runner entry, and not again at
   every pass; the page shows it under NEEDS ATTENTION (`archive_refused`).
-  A programme is never archived by the runner.
+  The runner's separate [programme archive turn](mc-run.md#programme-archive-turn)
+  handles eligible programmes after their goals have finished.
 - **A goal's branch is made when the goal can start.** A goal in a later phase
   got its branch at `new`, before the phases ahead of it landed. Before the
   runner starts its first build session (no build entry in its log yet), and

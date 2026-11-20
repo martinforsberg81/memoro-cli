@@ -1,3 +1,4 @@
+import { shelvedMembership } from './archive-receipt.js';
 import { suggestionReading } from './helper-suggestions.js';
 /**
  * The page — the sections `mc` prints, gathered from files the runner, the
@@ -58,7 +59,10 @@ import { attemptInFlight } from './deploy-check.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
 import { readDeployProgress } from './deploy-progress.js';
 import { criteriaCount } from './criteria.js';
-import { readRecord, recordedProgrammes } from './programme-record.js';
+import { readRecord } from './programme-record.js';
+import { archiveDue, archiveReference, failuresSinceItem, liveGoals, readArchiveState } from './archive-turn.js';
+import { itemDirectory, listDeskItems } from './desk-items.js';
+import { briefLineOf } from './page-desk.js';
 import { horizonsDir, readHorizons } from './desk-horizons.js';
 import { readProgrammePriority } from './programme-priority.js';
 import { FINISHED, SEQUENTIAL, goalName, goalSession, mergeAnswered, phaseOpen, phaseOrder, phaseStanding, programsGoals, readHold, readTextOrNull, sessions as goalSessions, stageEntryIndex, waitsOnPerson } from './goals.js';
@@ -1550,6 +1554,52 @@ export function horizonsSection({ programmes, found = () => ({ status: 'none' })
   };
 }
 
+/** Read the runner's archive verdict without changing its state or retrying it. */
+export function archiveStatus({ programme, home, root, items, env }) {
+  const list = (dir) => { try { return readdirSync(dir); } catch { return []; } };
+  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw error; } };
+  const state = readArchiveState({ root, programme, read });
+  const live = liveGoals({ home, programme, list }).length > 0;
+  const item = items.find((entry) => entry.kind === 'archive' && entry.reference === archiveReference(programme) && entry.state !== 'closed');
+  const due = archiveDue({ programme, home, root, list, read, items, state });
+  // A destination belongs to a previous incarnation, not the current directory.
+  const previous = state.status === 'valid' && state.state.destination && existsSync(join(home, programme));
+  if (previous) return { status: 'attention', reason: 'previous archive repair' };
+  if (item && !live) {
+    const dir = itemDirectory(item, env);
+    let text = null;
+    try { text = read(join(dir, 'brief.md')); if (text === null) text = read(join(dir, 'prepared.md')); } catch { /* the desk remains the source */ }
+    const first = text?.split(/\r?\n/u).find((line) => line.trim())?.trim() || '';
+    const line = briefLineOf(text);
+    const reason = !line || first.startsWith('#') || /^(?:verdict|reading)\s*:/iu.test(line) ? 'see the desk' : line;
+    return { status: 'attention', reason };
+  }
+  if (due.notice) return { status: 'attention', reason: due.notice };
+  if (!live && due.due && state.status === 'valid') {
+    const failure = failuresSinceItem(state.state).sort((a, b) => a.at.localeCompare(b.at)).at(-1);
+    if (failure) return { status: 'attention', reason: failure.reason };
+  }
+  return due.due && (due.mode === 'read' || due.mode === 'archive') ? { status: 'pending' } : null;
+}
+
+/** A completed local programme is not revived by its sessions, PRs or retained tree. */
+function archiveCompleted({ programme, home, repositoryMembership = false }) {
+  const list = (dir) => { try { return readdirSync(dir); } catch { return []; } };
+  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw error; } };
+  if (liveGoals({ home, programme, list }).length) return false;
+  const dir = join(home, programme);
+  const record = readRecord(dir, { read });
+  if (record.status === 'valid' && record.record.state === 'done') return true;
+  // A current directory is a successor, including one without a record.
+  if (existsSync(dir)) return false;
+  return !repositoryMembership;
+}
+
+// A recordless programme directory is still current membership.
+function localProgrammes(home) {
+  try { return readdirSync(home, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name); } catch { return []; }
+}
+
 /**
  * PROGRAMMES alone, from the sources `collectPage` reads it from — the goals,
  * the open plan sessions and the tree's own programmes (`listProgrammes`) — and through the same `programmesSection`, so
@@ -1572,7 +1622,9 @@ export function readProgrammes({
   // programme with no goal has about where it lives.
   const homes = {};
   for (const repo of present) {
-    for (const name of programmes(repo)) (homes[name] ||= []).push(repo.name);
+    for (const name of programmes(repo)) {
+      if (!shelvedMembership(name, repo, { env, git: runGit })) (homes[name] ||= []).push(repo.name);
+    }
   }
   const order = orderReader(env);
   const section = programmesSection({
@@ -1580,10 +1632,13 @@ export function readProgrammes({
     planningSessions: sessions.planning_sessions,
     runnerSessions: runnerSection({ currents, now, alive }).sessions,
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive, order }),
-    programmes: [...Object.keys(homes), ...recordedProgrammes(programsHome(env))],
+    programmes: [...Object.keys(homes), ...localProgrammes(programsHome(env))],
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
     order,
   });
+  section.programmes = section.programmes.filter((group) => !archiveCompleted({ programme: group.programme, home: programsHome(env), repositoryMembership: !!homes[group.programme]?.length }));
+  section.dormant = section.programmes.filter((group) => group.dormant).length;
+  section.active = section.programmes.length - section.dormant;
   return { section, homes };
 }
 
@@ -1753,6 +1808,10 @@ export async function collectPage({
   });
   const records = recordReader(env);
   const order = records.order;
+  const repositoryNames = new Set();
+  for (const repo of present) for (const name of listProgrammes(repo)) {
+    if (!shelvedMembership(name, repo, { env, git: runGit })) repositoryNames.add(name);
+  }
   const programmes = programmesSection({
     planning: sessions.planning,
     planningSessions: sessions.planning_sessions,
@@ -1760,7 +1819,7 @@ export async function collectPage({
     runnerSessions: runner.sessions,
     sessionStrays: sessions.strays,
     goalRows: goalsOf({ goals, currents, alive, order, deskItem: goal => readGoalDeskItem(goal, { env }) }),
-    programmes: [...present.flatMap((repo) => listProgrammes(repo)), ...recordedProgrammes(programsHome(env))],
+    programmes: [...repositoryNames, ...localProgrammes(programsHome(env))],
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
     order,
     strays: readStrays(root, { git }),
@@ -1773,6 +1832,19 @@ export async function collectPage({
     prs: prs.prs, worktrees, root, merges: mergesNow, fetched: prs.fetched, ageSeconds: prs.age_seconds, now,
   });
   attachPrs({ programmes, runner, pulls });
+  const archiveItems = listDeskItems({ env });
+  for (const group of programmes.programmes) {
+    group.archive = archiveStatus({ programme: group.programme, home: programsHome(env), root, items: archiveItems, env });
+  }
+  programmes.programmes = programmes.programmes.filter((group) => !archiveCompleted({
+    programme: group.programme, home: programsHome(env), repositoryMembership: repositoryNames.has(group.programme),
+  }));
+  // A PR attached before completion filtering now belongs to the existing
+  // outside-goal rows, not to an invisible programme frame.
+  const visible = new Set(programmes.programmes.map((group) => group.programme));
+  for (const pr of pulls.items) if (pr.programme && !visible.has(pr.programme)) pr.programme = null;
+  programmes.dormant = programmes.programmes.filter((group) => group.dormant).length;
+  programmes.active = programmes.programmes.length - programmes.dormant;
   const horizons = horizonsSection({ programmes, found: records.found, env });
 
   let providerPriority = 'auto';

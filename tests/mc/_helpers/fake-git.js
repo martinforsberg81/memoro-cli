@@ -588,7 +588,8 @@ export class FakeGit {
       const colon = rev.indexOf(':');
       if (colon > 0) {
         const tree = this.resolveRev(repo, state, `${rev.slice(0, colon)}^{tree}`);
-        const blob = tree && repo.trees.get(tree)?.get(rev.slice(colon + 1));
+        const path = rev.slice(colon + 1);
+        const blob = tree && repo.trees.get(tree)?.get(path);
         if (!blob) this.die(`fatal: path '${rev.slice(colon + 1)}' does not exist in '${rev.slice(0, colon)}'`);
         out.push(blob);
         continue;
@@ -770,7 +771,7 @@ export class FakeGit {
   }
 
   cmd_rev_list({ dir, gitDir, argv }) {
-    const flags = parse(argv, { 'max-count': 1, n: 1 }, ['count', 'left-right', 'first-parent', 'reverse', 'no-merges', 'cherry-pick', 'right-only']);
+    const flags = parse(argv, { 'max-count': 1, n: 1 }, ['count', 'left-right', 'first-parent', 'reverse', 'no-merges', 'cherry-pick', 'right-only', 'ancestry-path']);
     const { repo, worktree } = this.repoAt(dir, gitDir);
     const state = worktree ? repo.worktrees.get(worktree) : null;
     const [range] = flags.rest;
@@ -793,6 +794,7 @@ export class FakeGit {
       const [l, r] = range.split('..').map(list);
       const exclude = this.ancestors(repo, l);
       shas = this.ordered(repo, r).filter((sha) => !exclude.has(sha));
+      if (flags['ancestry-path']) shas = shas.filter((sha) => this.ancestors(repo, sha).has(l));
     } else shas = this.ordered(repo, list(range ?? 'HEAD'));
     if (flags['max-count'] ?? flags.n) shas = shas.slice(0, Number(flags['max-count'] ?? flags.n));
     if (flags.count) return `${shas.length}\n`;
@@ -1365,7 +1367,12 @@ export class FakeGit {
         }
       }
       return [...dirs].sort()
-        .map((p) => (flags['name-only'] ? `${p}${nul}` : `040000 tree ${createHash('sha1').update(`tree ${sha} ${p}`).digest('hex')}\t${p}${nul}`)).join('');
+        .map((path) => {
+          if (flags['name-only']) return `${path}${nul}`;
+          const entries = [...tree].filter(([name]) => name.startsWith(`${path}/`))
+            .map(([name, blob]) => [name.slice(path.length + 1), blob]);
+          return `040000 tree ${this.treeOf(repo, entries)}\t${path}${nul}`;
+        }).join('');
     }
     return [...tree.entries()].filter(([path]) => !paths.length || paths.some((p) => path === p || path.startsWith(`${p.replace(/\/$/u, '')}/`))).sort()
       .map(([path, blob]) => (flags['name-only'] ? `${path}${nul}` : `100644 blob ${blob}\t${path}${nul}`)).join('');
