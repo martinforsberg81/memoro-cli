@@ -5,7 +5,7 @@ import { GOAL_FILE, GOALS_DIR, listDirsOf, parseGoal, readTextOrNull } from './g
 import { workRoot } from './paths.js';
 import { changeProgrammeRecord, readRecord } from './programme-record.js';
 import { splitProgrammeParts } from './programme-turn.js';
-import { interruptedRepairCut, readRepairCut, repairGoalContract } from './repair-cut.js';
+import { readRepairCut, repairGoalContract } from './repair-cut.js';
 import { repairArtifactNames, repairDigest, repairSnapshot } from './repair-manifest.js';
 import { deskRepairDraft, isDesk, repairReleaseState } from './repair-release.js';
 
@@ -42,12 +42,11 @@ export function setDeskRepairState(dir, target, env, { list = listDirsOf, read =
       return refused('set the taken-over order to draft before changing its release');
     }
     const snapshot = repairSnapshot(dir);
-    const interrupted = interruptedRepairCut(dir, record.repair, { list, read });
-    if (interrupted.problems) return interrupted;
-    const release = { revision: randomUUID(), manifest: snapshot.manifest, ...interrupted };
+    const { takeover_cut: unreconciled, ...repair } = record.repair;
+    const release = { revision: randomUUID(), manifest: snapshot.manifest, ...(unreconciled ? { unreconciled } : {}) };
     const current = { release, snapshot };
-    return reconciledRecord({ record: { ...record, state: 'ready', repair: { ...record.repair, release } },
-      current, dir, reason: record.repair.disposition.reason, list, read });
+    return reconciledRecord({ record: { ...record, state: 'ready', repair: { ...repair, release } },
+      current, dir, reason: repair.disposition.reason, list, read });
   }, { root: workRoot(env), lock, read }, 'repair-desk-state');
 }
 

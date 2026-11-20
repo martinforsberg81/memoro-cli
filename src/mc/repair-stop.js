@@ -8,6 +8,7 @@ import { mergesPath, queueEntries } from './merge-queue.js';
 import { programsHome, workRoot } from './paths.js';
 import { changeProgrammeRecord, readRecord } from './programme-record.js';
 import { goalParts } from './programme-turn.js';
+import { interruptedRepairCut } from './repair-cut.js';
 import { isRepairAuthor } from './repair-authority.js';
 import { isDesk } from './repair-release.js';
 import { REPAIR_REVIEW_FILE } from './repair-review.js';
@@ -129,7 +130,14 @@ export function disposeRepair(dir, env, { action, reason }, { lock = realLock, n
     if (prior) return matching(prior) ? record : refused(`a disposition is already recorded for item ${id}`);
     const { stop_item: _stopped, ...repair } = record.repair;
     const disposition = { item: id, action, reason, at: now.toISOString() };
-    if (action !== 'decline') return { ...record, state: 'draft', repair: { ...repair, disposition, ...(action === 'takeover' ? { desk: true } : {}) } };
+    if (action === 'return') return { ...record, state: 'draft', repair: { ...repair, disposition } };
+    if (action === 'takeover') {
+      const interrupted = interruptedRepairCut(dir, repair, { read });
+      if (interrupted.problems) return interrupted;
+      const written = { ...repair, disposition, desk: true };
+      if (interrupted.unreconciled) written.takeover_cut = interrupted.unreconciled;
+      return { ...record, state: 'draft', repair: written };
+    }
     if (unfinishedFacts(readGoals(dir, read)) !== unfinishedFacts(rows)) return refused('goals changed while reading landed work; retry disposition');
     if (mergerInFlight(root, programme, rows, read)) return refused(inFlight);
     return { ...record, repair: { ...record.repair, disposition: { ...disposition, revision: randomUUID(), landed } } };

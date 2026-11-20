@@ -397,7 +397,7 @@ test('repair release: only a current receipt with settled findings opens the ord
   });
 });
 
-for (const edit of ['binding design', 'shared End', 'interrupted cut']) {
+for (const edit of ['binding design', 'shared End', 'interrupted cut', 'interrupted takeover']) {
   test(`repair planning: changed ${edit} needs a new contract and reconciliation`, async t => {
     const f = repairSetup(t);
     const home = join(f.root, 'programs');
@@ -440,7 +440,7 @@ for (const edit of ['binding design', 'shared End', 'interrupted cut']) {
       assert.equal(made.code, 0, made.err);
     }
     assert.match(admitted().problems[0], /not reconciled/u);
-    if (edit === 'interrupted cut') {
+    if (edit.startsWith('interrupted')) {
       assert.equal(record().repair.reconciled, undefined);
       assert.match(admitted().problems[0], /not reconciled/u);
     } else {
@@ -453,7 +453,7 @@ for (const edit of ['binding design', 'shared End', 'interrupted cut']) {
     const changedContract = 'Put row A before row B.';
     if (edit === 'binding design') writeFileSync(f.artifact, changedContract);
     if (edit === 'shared End') order = order.replace(sharedOrder, `End rule: ${changedContract}`);
-    if (edit === 'interrupted cut') order = order.replace('Restore rows', 'Restore A before B');
+    if (edit.startsWith('interrupted')) order = order.replace('Restore rows', 'Restore A before B');
     if (edit !== 'binding design') writeFileSync(pagePath, order);
     assert.equal(readsDue().due, false);
     assert.match(readsDue().reason, /needs review/u);
@@ -462,6 +462,26 @@ for (const edit of ['binding design', 'shared End', 'interrupted cut']) {
     assert.equal(refused.code, 1, refused.err);
     assert.match(refused.err, /needs review/u);
     assert.equal(existsSync(join(f.dir, 'goals', 'another')), false);
+    if (edit === 'interrupted takeover') {
+      await f.asAuthor(async author => {
+        const stopped = await f.call(['repair-stop', 'p', '--title', 'Ny ordning', '--summary', 'Återställningen behöver ett beslut.'], { identity: author });
+        assert.equal(stopped.code, 0, stopped.err);
+      });
+      const takeover = await f.call(['disposition', 'p', 'takeover', '--reason', 'Keep the settled order.'], { identity: f.martin });
+      assert.equal(takeover.code, 0, takeover.err);
+      const ready = () => f.call(['state', 'p', 'ready'], { identity: f.martin });
+      const obsolete = await ready();
+      assert.equal(obsolete.code, 1);
+      assert.match(obsolete.err, /earlier cut never reconciled/u);
+      assert.equal(record().state, 'draft');
+      const rewritten = await runGoal(['set', 'p/restore', 'contract', '--text', changedContract], f.martin);
+      assert.equal(rewritten.code, 0, rewritten.err);
+      const released = await ready();
+      assert.equal(released.code, 0, released.err);
+      assert.equal(record().repair.takeover_cut, undefined);
+      assert.equal(admitted().release.revision, record().repair.release.revision);
+      return;
+    }
     const stdout = sink(), stderr = sink();
     const goalPath = join(f.dir, 'goals', 'restore', 'GOAL.json');
     const goalBeforeResume = readFileSync(goalPath, 'utf8');

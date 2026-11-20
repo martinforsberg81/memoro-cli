@@ -90,13 +90,14 @@ function validInterruptedCut(rows) {
 
 function validRepair(repair) {
   return repair && typeof repair === 'object' && !Array.isArray(repair)
-    && Object.keys(repair).every(key => ['sources', 'pending_scope', 'stop_item', 'release', 'reconciled', 'stop', 'disposition', 'desk'].includes(key))
+    && Object.keys(repair).every(key => ['sources', 'pending_scope', 'stop_item', 'release', 'reconciled', 'stop', 'disposition', 'desk', 'takeover_cut'].includes(key))
     && Array.isArray(repair.sources) && repair.sources.length > 0 && repair.sources.every(validRepairSource)
     && (repair.pending_scope === undefined || validRepairScope(repair.pending_scope))
     && (repair.stop_item === undefined || (typeof repair.stop_item === 'string' && /^[a-z0-9-]+$/u.test(repair.stop_item)))
     && (repair.stop === undefined || validStop(repair.stop))
     && (repair.disposition === undefined || validDisposition(repair.disposition, repair.stop))
     && (repair.desk === undefined || repair.desk === true)
+    && (repair.takeover_cut === undefined || (repair.desk === true && validInterruptedCut(repair.takeover_cut)))
     && (repair.release === undefined || (repair.release && Object.keys(repair.release).every(key => ['revision', 'manifest', 'unreconciled'].includes(key))
       && typeof repair.release.revision === 'string' && REVISION.test(repair.release.revision) && validRepairManifest(repair.release.manifest)
       && (repair.release.unreconciled === undefined || validInterruptedCut(repair.release.unreconciled))))

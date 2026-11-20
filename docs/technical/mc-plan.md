@@ -365,8 +365,9 @@ Only interactive Martin records a disposition. `return` puts the order back
 in repair draft with the narrowing in the disposition and with sources and
 goals retained. It needs a new reading, release and reconciliation. `takeover`
 puts it back in desk draft: the desk may run ordinary advisory review and
-prepare the goal contracts using the goal verbs. The desk's `mc programs
-state <programme> ready` validates the coverage and reconciles the contracts
+prepare the goal contracts using the goal verbs. Takeover records contracts
+left by an interrupted cut before the desk starts those edits. The desk's
+`mc programs state <programme> ready` validates coverage and reconciles the contracts
 with the new manifest in one write. Superseded work is not delivered; a reused
 goal must qualify against the new release and obtain a fresh merge handoff.
 This does not change the ready command for programmes without repair provenance.
