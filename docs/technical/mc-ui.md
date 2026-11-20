@@ -644,11 +644,14 @@ criteria and running mark, and inline details such as explicit hold reasons,
 log detail, blocker question and attached PR state. It tracks session identity,
 advisor and check-ins, and the desk's waiting ids, not-ready, failed and stuck
 counts and decided figures, not ages or cost. It also tracks programme
-headings and horizon references, horizon labels, membership and read warnings,
+headings, archive status and attention reason, horizon references, labels,
+membership and read warnings,
 which sessions are in flight, MAINTENANCE facts without their ages (session
 items by identity), and MERGE and DEPLOY row facts. If the key changes while
 the top of the page is off-screen, the live reader prints the whole page so
-scrolling up finds the new state. Clocks alone do not trigger that reset.
+scrolling up finds the new state. An archive attention reason changing on
+its own refreshes off-screen rows even at the same line count. Clocks alone
+do not trigger that reset.
 
 ## The live page
 

@@ -75,6 +75,14 @@ is refused, the planning turn does not run, no session starts on its goals).
 `ready` means goals may be cut and built; `done` means archived.
 Every new record is draft.
 
+Both the overview and `mc programs list` include current local programme
+directories, including recordless directories. They share the same rules
+for omitting finished entries: a done record leaves both views when no live
+goal remains, and a retained repository tree alone stops counting as
+membership only with a validated receipt on the shelf. A current local
+directory or live goal takes precedence over an earlier receipt. See
+[the overview](mc-ui.md#the-overview) for what the receipt proves.
+
 Reading an older record normalizes it in memory: `open` reads as `ready`, `dropped`
 as `done`, and removed fields are ignored. It does not change disk bytes or state.
 Only an actual write upgrades a record to version 2.
