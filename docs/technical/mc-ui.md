@@ -267,7 +267,10 @@ names>], error }`, `error` being the reason the store could not be listed, else
 null. Each programme in `programmes.programmes` gains `number`, `horizon` (the
 slug its valid record names, else null) and `horizon_state` (`open`, `reached`,
 `dropped`, `not held` for a slug without a readable horizon record, or null),
-and `record_state` (a valid record's state, otherwise null).
+and `record_state` (a valid record's state, otherwise null). The `archive` field
+is `null` for ordinary work, `{ status: "pending" }` for a due read or archive
+turn without attention, or `{ status: "attention", reason }` with the reason
+shown on the card.
 Red in a programme means that someone must act: status `Martin` or `blocked`, a
 malformed goal, a refused archive, a failed merge. A goal that gets no session although
 nothing is wrong with it is paused, and a pause is grey: in a draft programme, and on a held
@@ -860,8 +863,9 @@ still at the prompt with the cursor after it, backspace taking it back, `q`
 leaving with exit 0, no alternate screen buffer (`\x1b[?1049` never written),
 and `stty -g` identical before and after. What it does not do is press return
 on that `1`, because that exercised the interactive menu rather than the refresh loop.
-Today a number shows the goal it numbers, or opens the programme; `front-door.test.js`
-checks that routing without opening a coding tool.
+`front-door.test.js` checks that goal numbers open goal details and that former
+programme selectors are rejected. The programme trees are already visible
+in the overview.
 
 ## The modules and tests
 
