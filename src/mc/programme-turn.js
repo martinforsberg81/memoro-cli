@@ -88,16 +88,27 @@ export function splitProgrammeParts(text) {
   const lines = String(text ?? '').split(/\r?\n/u);
   const headings = String(text ?? '').replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[^\n]*(?:\n|$)/gmu, fence => fence.replace(/[^\n]/gu, ' ')).split(/\r?\n/u);
   const start = headings.indexOf('## Parts');
-  if (start < 0) return { parts: [], shared: lines.join('\n') };
+  if (start < 0) return { parts: [], shared: lines.join('\n'), sharedContract: '' };
   let end = headings.findIndex((line, at) => at > start && /^## /u.test(line));
   if (end < 0) end = lines.length;
   const parts = headings.slice(start + 1, end).flatMap((line, i) => {
     const found = /^### Part ([1-9]\d*)\s+—\s+\S/u.exec(line);
     return found ? [{ number: Number(found[1]), start: start + 1 + i }] : [];
   });
+  const cutoff = parts[0]?.start ?? end;
+  const shared = [...lines.slice(0, cutoff), '', ...lines.slice(end)].join('\n');
+  // Read and Where things are can accumulate review reasoning and provenance
+  // without changing a goal contract. Named binding inputs still count.
+  let audit = false;
+  const sharedContract = lines.filter((_, i) => {
+    if (i >= cutoff && i < end) return false;
+    if (/^## /u.test(headings[i])) audit = /^## (?:Read|Where things are)\s*$/u.test(headings[i]);
+    return !audit;
+  }).join('\n').trimEnd();
   return {
     parts: parts.map((part, i) => [part.number, lines.slice(part.start, parts[i + 1]?.start ?? end).join('\n').trimEnd()]),
-    shared: [...lines.slice(0, parts[0]?.start ?? end), '', ...lines.slice(end)].join('\n'),
+    shared,
+    sharedContract,
   };
 }
 

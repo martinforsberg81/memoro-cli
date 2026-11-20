@@ -355,7 +355,10 @@ may use the stopped record, even if it already has a runnable goal or queued PR.
 The repair entrance persists a known scope stop with the draft, or when a
 revision reading identifies it, before publishing any related desk brief.
 While that decision is pending, review and release refuse. Resume completes
-the pending stop without another reading; the move to Martin replaces the
+the pending stop without another reading. A related brief that is malformed
+or no longer open cannot keep the scope stop from reaching the desk. The
+entrance reports the missing link and still records the stop for disposition.
+The move to Martin replaces the
 pending decision with the durable stop.
 
 Only interactive Martin records a disposition. `return` puts the order back

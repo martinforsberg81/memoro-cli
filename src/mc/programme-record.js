@@ -82,6 +82,12 @@ export function validRepairSource(source) {
       || (Array.isArray(source[field]) && source[field].every(key => typeof key === 'string' && DIGEST.test(key))));
 }
 
+function validInterruptedCut(rows) {
+  return Array.isArray(rows) && rows.every(row => Array.isArray(row) && row.length === 2
+    && typeof row[0] === 'string' && NAME_RE.test(row[0]) && typeof row[1] === 'string' && DIGEST.test(row[1]))
+    && new Set(rows.map(([name]) => name)).size === rows.length;
+}
+
 function validRepair(repair) {
   return repair && typeof repair === 'object' && !Array.isArray(repair)
     && Object.keys(repair).every(key => ['sources', 'pending_scope', 'stop_item', 'release', 'reconciled', 'stop', 'disposition', 'desk'].includes(key))
@@ -91,8 +97,9 @@ function validRepair(repair) {
     && (repair.stop === undefined || validStop(repair.stop))
     && (repair.disposition === undefined || validDisposition(repair.disposition, repair.stop))
     && (repair.desk === undefined || repair.desk === true)
-    && (repair.release === undefined || (repair.release && Object.keys(repair.release).every(key => ['revision', 'manifest'].includes(key))
-      && typeof repair.release.revision === 'string' && REVISION.test(repair.release.revision) && validRepairManifest(repair.release.manifest)))
+    && (repair.release === undefined || (repair.release && Object.keys(repair.release).every(key => ['revision', 'manifest', 'unreconciled'].includes(key))
+      && typeof repair.release.revision === 'string' && REVISION.test(repair.release.revision) && validRepairManifest(repair.release.manifest)
+      && (repair.release.unreconciled === undefined || validInterruptedCut(repair.release.unreconciled))))
     && (repair.reconciled === undefined || validReconciliation(repair.reconciled));
 }
 

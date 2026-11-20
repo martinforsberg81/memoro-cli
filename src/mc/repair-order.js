@@ -64,7 +64,7 @@ function repairAct(env, act, { lock, now }) {
   const id = deskItemId('repair-act', reference, repairDigest(brief));
   return lock(workRoot(env), () => {
     const existing = readDeskItem(id, { env });
-    if (existing?.state === 'closed') throw new Error('the related reserved act already has a decision; reconsider the order');
+    if (existing?.state === 'closed') return null;
     if (!existing) {
       const at = now().toISOString();
       const item = { schema: 'mc-desk-item', version: 1, id, kind: 'repair-act', reference,
@@ -77,17 +77,19 @@ function repairAct(env, act, { lock, now }) {
   }, { strict: true, name: 'repair-reserved-act' });
 }
 
-function scopeStop(dir, env, scope, { lock, now, say }) {
+function scopeStop(dir, env, scope, { lock, now, say, stderr }) {
   const { title, summary, heldText, reserved, item } = scope;
   let link = item;
   if (heldText) {
     const proposed = proposeText({ env, text: heldText.text, brief: heldText.brief, now: now(), lock });
-    if (proposed.error) throw new Error(proposed.error);
-    link = proposed.item.id;
+    link = proposed.item?.id;
   }
   if (reserved) link = repairAct(env, reserved, { lock, now });
-  const result = stopRepair(dir, env, { title, summary, item: link }, { lock, now: now() });
+  const result = stopRepair(dir, env, { title, summary, item: link }, { lock, now: now(), allowUnavailableLink: true });
   if (!result.ok) throw new Error(result.problems[0]);
+  if ((item || heldText || reserved) && !result.record.repair.stop.link) {
+    stderr.write('mc: the related desk brief was unavailable; the repair scope stop still needs disposition\n');
+  }
   say(`repair programme ${env.MC_PROGRAMME} is at Martin (item ${result.record.repair.stop_item})`);
   return 0;
 }
@@ -129,7 +131,7 @@ export async function finishRepair({ name }, deps = {}) {
       say(`repair programme ${name} is ready for planning`);
       return 0;
     }
-    if (opened.record.repair.pending_scope) return scopeStop(dir, lease, opened.record.repair.pending_scope, { lock, now, say });
+    if (opened.record.repair.pending_scope) return scopeStop(dir, lease, opened.record.repair.pending_scope, { lock, now, say, stderr });
     for (let round = 0; round < MAX_READINGS; round++) {
       const code = await programs(['review', name], { env: lease, stdout, stderr, lock, now, ...deps.programmeReview });
       if (code !== 0) throw new Error(needsRepairReview(name));
@@ -163,7 +165,7 @@ export async function finishRepair({ name }, deps = {}) {
           return { ...live, repair: { ...live.repair, pending_scope: scope } };
         }, { root, lock }, 'repair-scope-pending');
         if (!pending.ok) throw new Error(pending.problems[0]);
-        return scopeStop(dir, lease, pending.record.repair.pending_scope, { lock, now, say });
+        return scopeStop(dir, lease, pending.record.repair.pending_scope, { lock, now, say, stderr });
       }
       if (answer?.status !== 'revise') throw new Error('the repair session returned no revision');
       const next = revisedPage(current.snapshot.text, answer);

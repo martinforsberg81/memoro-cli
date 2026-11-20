@@ -46,7 +46,7 @@ function project(result, { dir, env, lock, read }) {
   return result;
 }
 
-export function stopRepair(dir, env, { title, summary, item }, { now = new Date(), read = readTextOrNull, alive, lock = realLock } = {}) {
+export function stopRepair(dir, env, { title, summary, item }, { now = new Date(), read = readTextOrNull, alive, lock = realLock, allowUnavailableLink = false } = {}) {
   const programme = basename(dir);
   if (!text(title, 160) || !text(summary, 1400)) return refused('a scope stop needs a title and a Swedish summary (one paragraph)');
   const options = { root: workRoot(env), lock, read };
@@ -59,8 +59,8 @@ export function stopRepair(dir, env, { title, summary, item }, { now = new Date(
     let link;
     if (item) {
       const held = readDeskItem(item, { env });
-      if (held?.state !== 'for-martin' || !['text', 'reserved'].includes(held.sort)) return refused('link an open text or reserved-act item from the desk');
-      link = { id: held.id, kind: held.sort };
+      if (held?.state === 'for-martin' && ['text', 'reserved'].includes(held.sort)) link = { id: held.id, kind: held.sort };
+      else if (!allowUnavailableLink) return refused('link an open text or reserved-act item from the desk');
     }
     // Persist any previous disposition's projection before replacing the stop.
     publishRepairStop(programme, record, env);

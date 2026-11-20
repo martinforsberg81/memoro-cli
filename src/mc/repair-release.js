@@ -5,6 +5,7 @@ import { basename, join } from 'node:path';
 import { readTextOrNull } from './goals.js';
 import { workRoot } from './paths.js';
 import { changeProgrammeRecord } from './programme-record.js';
+import { interruptedRepairCut } from './repair-cut.js';
 import { isRepairAuthor } from './repair-authority.js';
 import { repairSnapshot } from './repair-manifest.js';
 import { currentRepairReview, REPAIR_REVIEW_FILE } from './repair-review.js';
@@ -40,7 +41,10 @@ export function releaseRepair(dir, env, { lock, alive, read = readTextOrNull } =
     let reading;
     try { reading = currentRepairReview(dir, { read }); } catch { /* no current reading */ }
     if (!reading || reading.findings.length) return refused(needsRepairReview(name));
-    return { ...record, state: 'ready', repair: { ...record.repair, release: { revision: randomUUID(), manifest: reading.snapshot.manifest } } };
+    const interrupted = interruptedRepairCut(dir, record.repair, { read });
+    if (interrupted.problems) return interrupted;
+    const release = { revision: randomUUID(), manifest: reading.snapshot.manifest, ...interrupted };
+    return { ...record, state: 'ready', repair: { ...record.repair, release } };
   }, { root: workRoot(env), lock, read }, 'repair-release');
 }
 

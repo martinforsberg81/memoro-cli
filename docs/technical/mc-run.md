@@ -948,10 +948,14 @@ reconciled, even if every part already has goals. The programme planner
 creates goals only against that current release and records its comparison
 with `mc programs reconcile <programme> --reason <text>`. Changed unfinished
 work is updated by the goal verbs. The comparison includes each part's
-README section and the released digests of its binding files. A binding
-file named outside the numbered parts is shared by all parts; a file named
-only inside a part affects that part. A changed contract must be back in draft
-or build without carried criterion marks. The planner may return a repair
+README section, shared delivery clauses and the released digests of its
+binding files. A binding file named outside the numbered parts is shared by
+all parts; a file named only inside a part affects that part. Read and
+Where things are remain available for reference and review notes. Replacing
+a release whose planner did not finish records the existing unfinished
+contracts that no completed cut accepted. Those contracts must be updated or
+retired before the new release can be reconciled. A changed contract must
+be back in draft or build without carried criterion marks. The planner may return a repair
 goal from review or merge to build while reconciling. An unfinished merge
 handoff must return to build even if the goal's contract still matches;
 the earlier handoff cannot be reused. Removed parts retire
