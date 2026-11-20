@@ -17,7 +17,7 @@ import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
 import { areaProposalsArchiveDir, areaProposalsDir, listAllProposals } from '../../src/mc/area-proposals.js';
 import { collectProposalCounts, listingText as proposalsListing } from '../../src/mc/commands/proposals.js';
 import {
-  describeTurn, drainIntake, helperGround, helperPrompt, programmeRoutes, repoOfFile, runHelperTurn,
+  PROMPT_LIMIT_BYTES, describeTurn, drainIntake, helperGround, helperPrompt, programmeRoutes, repoOfFile, runHelperTurn,
 } from '../../src/mc/helper-turn.js';
 import { expandRoleIncludes, sharedRoleText } from '../../src/mc/roles.js';
 import { getAdapter } from '../../src/adapters/index.js';
@@ -314,6 +314,15 @@ describe('what the turn is told', () => {
     });
     assert.match(prompt, /\| mc \/ mc-helper \| build · ready \| The helper \| Step 2 — the proposal turn \|/u);
     assert.match(prompt, /PROJECT LOG \(closed projects\)[\s\S]*main-red-fix/u);
+  });
+
+  it('keeps the newest project-log rows and stays under the spawn limit when the log is large', () => {
+    const rows = Array.from({ length: 4000 }, (_, i) => `| 2026-11-${String(i).padStart(4, '0')} | prog | project-${i} | delivered | ${'x'.repeat(80)} |`);
+    const prompt = helperPrompt({ file: FILE, goals: GOALS, projectLog: rows.join('\n'), now: NOW });
+    assert.ok(Buffer.byteLength(prompt, 'utf8') <= PROMPT_LIMIT_BYTES, `prompt is ${Buffer.byteLength(prompt, 'utf8')} bytes`);
+    assert.match(prompt, /project-3999 \|/u);
+    assert.ok(!prompt.includes('| project-0 |'), 'the oldest row is left out');
+    assert.match(prompt, /older rows omitted; the whole log is `docs\/project\/project_log\.md` on origin\/main/u);
   });
 
   it('says a source is absent rather than leaving a section that reads as empty', () => {

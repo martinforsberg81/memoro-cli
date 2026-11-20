@@ -294,8 +294,12 @@ ask; the desk (`mc martin`) is where Martin is asked.
 
 **The file is named; the ground is given.** The prompt carries the filename and
 then what the turn judges it against — every unfinished goal under `~/mc/programs/`, with its stage, status and
-last Next, the historical repository log,
-and the proposals already waiting. Its cwd is the intake directory and the
+last Next, the newest 48 KiB of the historical repository log (cut at a row,
+with a line saying older rows are on origin/main), and the proposals already
+waiting. A prompt over 120 KiB is not started: it answers `prompt-too-large`,
+because a positional argument over the kernel's 128 KiB limit fails the spawn
+with E2BIG — which is how every intake turn failed from 2026-11-18 to
+2026-11-20, when the whole log was inlined. Its cwd is the intake directory and the
 repositories are elsewhere on the disk: a turn that cannot reach them cannot
 accidentally write in them either, which is cheaper than trusting it not to. The
 file itself is the one exception, and it has to be.
@@ -544,6 +548,8 @@ making a human in a terminal into the queue. The helper has to earn it first.
 
 `collectHelper` for memoro also collects `suggest_improvement` through the ledgered token-only `GET /api/admin/suggestions`. This is the suggestion exception in memoro's production-data-access standard; it grants no access to account content. It runs on the existing runner collection cadence and on `mc helper --collect`. The retired user_feedback form is unrelated.
 
-Each exact kind/text pair becomes one `intake/suggestion-<sha256>.md`, retaining every original id, kind, text, build and UTC day. Existing copies are found in the inbox and the intake archive, so retries do not requeue an already judged file. Atomic write, file/directory sync and exact read-back precede `POST /api/admin/suggestions/receipt`, which names only that batch's copied ids. A receipt is a transfer acknowledgement, not a new approval request (Martin, 2026-11-16 and 2026-11-18). An unavailable list, invalid row, failed copy or unconfirmed receipt is visible in collection notes and the User feedback maintenance row; unrelated error collection continues. Next collection retries unacknowledged ids. No new programme or goal is created by collection. The intake role routes the original report to its area and preserves provenance.
+Each exact kind/text pair becomes one `intake/suggestion-<sha256>.md`, retaining every original id, kind, text, build and UTC day. Existing copies are found in the inbox and the intake archive, so retries do not requeue an already judged file. Atomic write, file/directory sync and exact read-back precede `POST /api/admin/suggestions/receipt`, which names only that batch's copied ids. A receipt is a transfer acknowledgement, not a new approval request (Martin, 2026-11-16 and 2026-11-18). An unavailable list, invalid row, failed copy or unconfirmed receipt is visible in collection notes and the User feedback maintenance row; unrelated error collection continues. Next collection retries unacknowledged ids. No new programme or goal is created by collection.
+
+**A suggestion is catalogued by jev and kept as it is** (Martin, 2026-11-20: "Katalogiseringen ska göras av jev. Billigt anrop." and "Mc ska inte skriva någon förslagsfil från suggestion; vi sparar suggestion såsom den är tills vi bestämt om det ska göras något med den."). The drain gives a `suggestion-*.md` file no model turn: `catalogSuggestion` (`src/mc/intake-catalog.js`) asks jev one `choice` question, which of memoro's area pages (the distinct `page`s of memoro's `.mc/areas.json` on origin/main, each described by its areas' names and coverage) the suggestion concerns. At p ≥ 0.6 the file is copied unchanged to `~/mc/areas/memoro/<slug>/suggestions/`; below it, or when jev, its key or the area declaration cannot be read, it goes to the fallback area `memoro/delivery`. One JSON line in that folder's `catalog.jsonl` records when, the area, why (jev's choice, probability and model, or the reason for the fallback) and the original ids. No proposal is written. The inbox's copy is archived as every intake file is, and stays the id ledger collection searches. The runner's line reads `kept as it is in <area>, catalogued by jev`. Error digests and files a person drops in keep the model turn.
 
 The local status in `helper/suggestions/status.json` describes the last collection and pending receipts, not a live server backlog count. A successful empty list is zero; a failed read is an error, never proof that no feedback exists. At most three batches of 200 are fetched per collection (the app admits 500 waiting rows).
