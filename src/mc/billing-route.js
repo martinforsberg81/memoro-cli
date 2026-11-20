@@ -7,6 +7,22 @@ import { providerAt, readCapacity } from './model-capacity.js';
 import { runnerDir } from './paths.js';
 
 const WRAPPER = fileURLToPath(new URL('./billing-gateway-session.js', import.meta.url));
+// Used only by a runner-owned wrapper and reserved before it starts the tool.
+export const RESERVE_UNAVAILABLE_EXIT = 86;
+export const RESERVE_DISABLED_EXIT = 87;
+export const RESERVE_RETRY_MS = 60_000;
+
+export function gatewayRefusal(launch, result) {
+  if (!launch?.reserve || result?.timedOut || result?.stalled || result?.handedOff) return null;
+  if (result.admissionWait) return { provider: launch.reserve, wait: result.admissionWait };
+  if (result.status === RESERVE_UNAVAILABLE_EXIT) return { provider: launch.reserve, unavailable: true };
+  if (result.status === RESERVE_DISABLED_EXIT) return { provider: launch.reserve, unavailable: false };
+  return null;
+}
+
+export const disabledReserve = provider => `${provider} API off — waiting for an eligible route`;
+export const heldReserve = (provider, until) => `${provider} API reserve unavailable before launch — eligible again after ${until}`;
+
 const after = (value, now) => Number.isFinite(Date.parse(value || '')) && Date.parse(value) > now.getTime();
 
 /**
@@ -56,8 +72,12 @@ export function billingStatus({ capacity, state, api, now = new Date() } = {}) {
 }
 
 /** Replace a tool launch only when its provider's plan is spent. */
-export function gatewayLaunch({ provider, model, bin, args, billing, sessionDirectory = null } = {}) {
+export function gatewayLaunch({ provider, model, bin, args, billing, sessionDirectory = null, runnerAdmission = false } = {}) {
   if (billing !== 'credits') return { bin, args };
   if (!provider || !bin || !Array.isArray(args)) throw new Error('API launch needs provider and tool');
-  return { bin: process.execPath, args: [WRAPPER, ...(sessionDirectory ? ['--session-directory', sessionDirectory] : []), provider, model || '*', bin, ...args] };
+  return {
+    bin: process.execPath, args: [WRAPPER, ...(runnerAdmission ? ['--runner-admission'] : []),
+      ...(sessionDirectory ? ['--session-directory', sessionDirectory] : []), provider, model || '*', bin, ...args],
+    ...(runnerAdmission ? { reserve: provider } : {}),
+  };
 }

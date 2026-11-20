@@ -128,7 +128,7 @@ import { collectClaudeCapacity } from './claude-capacity.js';
 import { applyCollectedCapacity, applyRefusal, CAPACITY_POLL_MS, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
 import { readModels } from './model-config.js';
-import { billingRoute, billingRouteNow, gatewayLaunch } from './billing-route.js';
+import { billingRoute, billingRouteNow, disabledReserve, gatewayLaunch, gatewayRefusal, heldReserve, RESERVE_RETRY_MS } from './billing-route.js';
 import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { attachRepoDepsAsync } from './shared-deps.js';
@@ -900,15 +900,57 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     say(`${name}: the API server cannot be reached — no session starts until ${untilText(until)} (n=${n}, ${wait / 1000} s)`);
   }
 
+  // A refusal belongs to the reserve alone. A usable subscription of the
+  // same provider still participates in the next ordinary selection.
+  const reserveHolds = new Map();
+  const apiOff = provider => deps.billing?.readApi?.()?.[provider] === false;
+  function waitForReserve(tool) {
+    const provider = declared(tool, 'BILLING_PROVIDER');
+    const until = reserveHolds.get(provider);
+    if (!until || until <= deps.now().getTime() || apiOff(provider)) return null;
+    const retry_at = new Date(until).toISOString();
+    return { reason: heldReserve(provider, retry_at), retry_at };
+  }
+  function blockedReserve(provider) {
+    if (!provider) return null;
+    if (apiOff(provider)) return disabledReserve(provider);
+    const until = reserveHolds.get(provider);
+    return until > deps.now().getTime() ? heldReserve(provider, new Date(until).toISOString()) : null;
+  }
+  function reserveDenied(refusal) {
+    if (refusal.wait) return refusal.wait;
+    if (!refusal.unavailable || apiOff(refusal.provider)) return disabledReserve(refusal.provider);
+    const until = deps.now().getTime() + RESERVE_RETRY_MS;
+    reserveHolds.set(refusal.provider, until);
+    return heldReserve(refusal.provider, new Date(until).toISOString());
+  }
+  const reserveAdmission = { blocked: blockedReserve, denied: reserveDenied };
+  function runnerSession(tool, options) {
+    const wait = blockedReserve(tool.reserve);
+    if (wait) return Promise.resolve({ status: 1, stdout: '', stderr: '', admissionWait: wait });
+    return deps.session({ bin: tool.bin, args: tool.args, ...options });
+  }
+  function recordReserveWait(refusal, { name, kind, settings, result, t0 }) {
+    const reason = reserveDenied(refusal);
+    say(`${name}: ${reason}`);
+    logRun({ ts: stamp(), name, kind, exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000),
+      pr: '-', note: reason, model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: 'credits' });
+    return `skipped:no-capacity (${reason})`;
+  }
+  function noCapacity(name, why) {
+    say(`${name}: ${why} — skip`);
+    return `skipped:no-capacity (${why})`;
+  }
+
   /** The candidate a work class runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read. */
   function routeClass(cls, { avoid = null, catalog = null } = {}) {
     try {
       const saved = deps.catalog();
-      const chosen = chooseCandidate({ cls, catalog: catalog ?? saved, capacity: capacity.read(), now: deps.now(), avoid, priority: saved.providerPriority ?? 'auto', launchable: (tool) => Boolean(deps.launch(tool)?.ok) });
+      const chosen = chooseCandidate({ cls, catalog: catalog ?? saved, capacity: capacity.read(), now: deps.now(), avoid, priority: saved.providerPriority ?? 'auto', launchable: (tool) => Boolean(deps.launch(tool)?.ok), waitForReserve });
       // A class sent to the API reserve waits instead when that provider's API is off.
-      const tool = chosen?.candidate?.tool;
-      if (chosen?.billing === 'credits' && tool && deps.billing?.readApi?.()?.[tool] === false) {
-        return { ok: false, transient: true, class: cls, reason: `${chosen.why}; ${tool} API off`, retry_at: null };
+      const provider = declared(chosen?.candidate?.tool, 'BILLING_PROVIDER');
+      if (chosen?.billing === 'credits' && provider && apiOff(provider)) {
+        return { ok: false, transient: true, class: cls, reason: `${chosen.why}; ${disabledReserve(provider)}`, retry_at: null };
       }
       return chosen;
     } catch (error) {
@@ -1400,7 +1442,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   async function runDeskPreparation() {
     if (offlineHeld() || stopRequested() || updateRequested()) return;
     try { return await drainDeskPreparation({ env: deps.env, now: deps.now, deps: {
-      ...(deps.deskPrepare || {}), route: routeClass, logRun, say, quotaPause,
+      ...(deps.deskPrepare || {}), route: routeClass, logRun, say, quotaPause, reserveAdmission,
       budget: options => deskBudget({ ...options, read: deps.read }),
       stop: () => stopRequested() || updateRequested(),
     } }); } catch (error) { say(`desk-prepare: waiting — ${error?.message || error}`); }
@@ -1419,7 +1461,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     try {
       reconcileAreaLearning({ env: deps.env, now: deps.now(), repos, gh: deps.gh, queue: deps.deskLearning?.queue, say });
       const out = await runLearningPass({ env: deps.env, now: deps.now, deps: {
-        ...(deps.deskLearning || {}), repos, route: routeClass, logRun, say,
+        ...(deps.deskLearning || {}), repos, route: routeClass, logRun, say, reserveAdmission,
         budget: options => deskBudget({ ...options, read: deps.read }),
       } });
       if (out.started) {
@@ -1512,10 +1554,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   const claimRepos = new Map();
   /** The billing of a launch: the route's when it sent the class to the API reserve, otherwise the plan's until a window is full or the plan has refused. */
   async function billingFor(launch, route, model = null) {
-    return route?.billing === 'credits' ? { billing: 'credits', why: route.why } : billingRoute({
-      provider: providerOf(launch), model,
-      capacity: capacity.read(), state: deps.billing?.readState?.(), api: deps.billing?.readApi?.(), now: deps.now(),
+    const provider = providerOf(launch);
+    const picked = route?.billing === 'credits' ? { billing: 'credits', why: route.why } : billingRoute({
+      provider, model, capacity: capacity.read(), state: deps.billing?.readState?.(), api: deps.billing?.readApi?.(), now: deps.now(),
     });
+    const hold = picked.billing === 'credits' ? blockedReserve(provider) : null;
+    return hold ? { billing: 'unavailable', why: hold } : picked;
   }
 
   /**
@@ -1760,7 +1804,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const role = deps.role('decision');
     if (!role?.overlay) return 'skipped:role-missing';
     const route = routeClass('decision');
-    if (!route.ok) return 'skipped:no-capacity';
+    if (!route.ok) return noCapacity(name, route.reason);
     const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) return 'skipped:tool-missing';
@@ -1770,7 +1814,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const currentPath = paths.currentFor(repoName, lane);
     try {
       const picked = await billingFor(launch, route, settings.model);
-      if (picked.billing === 'unavailable') return 'skipped:no-capacity';
+      if (picked.billing === 'unavailable') return noCapacity(name, picked.why);
       admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
       if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
       if (offlineHeld()) return 'skipped:offline';
@@ -1806,9 +1850,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       writeJson(currentPath, current);
       say(`${name}: decision starting (${settings.tool} ${settings.model})`);
       const t0 = deps.now().getTime();
-      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing, runnerAdmission: true });
       try {
-        const pending = deps.session({ bin: tool.bin, args: tool.args, cwd, logPath: `${out}.jsonl`,
+        const pending = runnerSession(tool, { cwd, logPath: `${out}.jsonl`,
           onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
           ...watchFor(launch, settings, { prompt, name, checkInText: () => `Continue decision item ${name}. End closed or for-martin; preserve goal evidence and handoffs.`, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           env: { MC_HEADLESS: '1', MC_ROLE: 'decision', MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch,
@@ -1818,6 +1862,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
       writeSessionLogs(out, result);
+      const refusal = gatewayRefusal(tool, result);
+      if (refusal) {
+        return recordReserveWait(refusal, { name, kind: 'decision', settings, result, t0 });
+      }
       const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
@@ -1919,7 +1967,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const currentPath = paths.currentFor(repoName, lane);
     try {
       const picked = await billingFor(launch, route, settings.model);
-      if (picked.billing === 'unavailable') { say(`${name}: Anthropic credits unavailable (${picked.why}) — skip`); return 'skipped:no-capacity'; }
+      if (picked.billing === 'unavailable') { return noCapacity(name, picked.why); }
       admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
       if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
       if (offlineHeld()) { say(`${name}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
@@ -1956,9 +2004,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       writeJson(currentPath, current);
       say(`${name}: plan starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · plan list: ${route.basis} (${route.why})`);
       const t0 = deps.now().getTime();
-      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing, runnerAdmission: true });
       try {
-        const pending = deps.session({ bin: tool.bin, args: tool.args, cwd: dir, logPath: `${out}.jsonl`,
+        const pending = runnerSession(tool, { cwd: dir, logPath: `${out}.jsonl`,
           onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
           ...watchFor(launch, settings, { prompt, name, checkInText: programmePlanCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). No MC_GOAL: this session is the programme's, not a goal's.
@@ -1968,6 +2016,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
       writeSessionLogs(out, result);
+      const refusal = gatewayRefusal(tool, result);
+      if (refusal) {
+        return recordReserveWait(refusal, { name, kind: 'plan', settings, result, t0 });
+      }
       const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
@@ -2123,7 +2175,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const readRepos = [];
     try {
       const picked = await billingFor(launch, route, settings.model);
-      if (picked.billing === 'unavailable') { say(`${name}: Anthropic credits unavailable (${picked.why}) — skip`); return 'skipped:no-capacity'; }
+      if (picked.billing === 'unavailable') { return noCapacity(name, picked.why); }
       admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
       if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
       if (offlineHeld()) { say(`${name}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
@@ -2175,9 +2227,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       writeJson(currentPath, current);
       say(`${name}: archive reading starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · large list: ${route.basis} (${route.why})`);
       const t0 = deps.now().getTime();
-      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing, runnerAdmission: true });
       try {
-        const pending = deps.session({ bin: tool.bin, args: tool.args, cwd: dir, logPath: `${out}.jsonl`,
+        const pending = runnerSession(tool, { cwd: dir, logPath: `${out}.jsonl`,
           onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
           ...watchFor(launch, settings, { prompt, name, checkInText: archiveCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). No MC_GOAL: this session is the programme's, not a goal's.
@@ -2187,6 +2239,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
       writeSessionLogs(out, result);
+      const refusal = gatewayRefusal(tool, result);
+      if (refusal) {
+        return recordReserveWait(refusal, { name, kind: 'plan', settings, result, t0 });
+      }
       const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
@@ -2304,7 +2360,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const currentPath = paths.currentFor(repoName, lane);
     try {
       const picked = await billingFor(launch, route, settings.model);
-      if (picked.billing === 'unavailable') { say(`${turnLabel}: Anthropic credits unavailable (${picked.why}) — skip`); return 'skipped:no-capacity'; }
+      if (picked.billing === 'unavailable') { return noCapacity(turnLabel, picked.why); }
       admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
       if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
       if (offlineHeld()) { say(`${turnLabel}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
@@ -2333,8 +2389,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const backlog = proposalBacklog({ areas: join(root, AREAS_HOME), list: deps.list, modified: deps.modified ?? (() => 0) });
       prompt = curationPrompt({ paths: worktrees.paths, branches: worktrees.branches, pages: areaPages({ repos: declaring.repos, checkouts: worktrees.paths }), backlog, moved: turn.moved });
       cwd = curationWorktreesDir(root, stampText);
-      // The turn has started: the cadence runs from now, and the bases stay what the last success read.
-      writeJson(curationStatePath(root), curationState({ started: stamp(), bases: before?.bases ?? {} }));
+      // Only this attempt's provisional cadence belongs to this launch.
+      const curationPath = curationStatePath(root);
+      let priorCuration, startedCuration;
+      lock(root, () => {
+        priorCuration = deps.read(curationPath);
+        writeJson(curationPath, curationState({ started: stamp(), bases: before?.bases ?? {} }));
+        startedCuration = deps.read(curationPath);
+      }, { strict: true, name: 'curation-admission' });
       const rechecked = await admission.recheck?.();
       if (rechecked && !rechecked.admitted) return 'skipped:disk';
       if (stopRequested()) return 'stop';
@@ -2355,9 +2417,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       writeJson(currentPath, current);
       say(`${turnLabel}: curation turn starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · large list: ${route.basis} (${route.why})`);
       const t0 = deps.now().getTime();
-      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing, runnerAdmission: true });
       try {
-        const pending = deps.session({ bin: tool.bin, args: tool.args, cwd, logPath: `${out}.jsonl`,
+        const pending = runnerSession(tool, { cwd, logPath: `${out}.jsonl`,
           onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
           ...watchFor(launch, settings, { prompt, name, checkInText: managerCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). The manager role is what the publish guard reads.
@@ -2367,6 +2429,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
       writeSessionLogs(out, result);
+      const refusal = gatewayRefusal(tool, result);
+      if (refusal) {
+        const skipped = recordReserveWait(refusal, { name: turnLabel, kind: 'manager', settings, result, t0 });
+        lock(root, () => {
+          const path = curationStatePath(root);
+          if (deps.read(path) !== startedCuration) return;
+          if (priorCuration === null) remove(path); else deps.write(path, priorCuration);
+        }, { strict: true, name: 'curation-admission' });
+        return skipped;
+      }
       const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
@@ -2464,13 +2536,18 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } finally { claims.delete(name); claimRepos.delete(name); }
   }
 
+  function returnMendToQueue(entry) {
+    entry.state = 'queued';
+    delete entry.owner;
+    delete entry.session_log;
+  }
   async function runMainMend(item, { lane }) {
     const { name, repo: repoName, branch } = item;
     const repo = repos.find((repo) => repo.name === repoName);
     const role = deps.role(MEND_ROLE);
     if (!role?.overlay) return 'skipped:role-missing';
     const route = routeClass('mend');
-    if (!route.ok) return 'skipped:no-capacity';
+    if (!route.ok) return noCapacity(name, route.reason);
     const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) return 'skipped:tool-missing';
@@ -2478,12 +2555,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (slot !== 'ok') return slot === 'stop' ? 'stop' : 'skipped:update';
     let admission;
     const currentPath = paths.currentFor(repoName, lane);
-    let scratch; let marker; let out; let claimed = false; let result;
+    let scratch; let marker; let out; let claimed = false; let result; let reserveRefusal;
     const ids = new Set(item.mainMend.map((entry) => entry.id));
     const state = mendState(repoName);
     try {
       const picked = await billingFor(launch, route, settings.model);
-      if (picked.billing === 'unavailable') return 'skipped:no-capacity';
+      if (picked.billing === 'unavailable') return noCapacity(name, picked.why);
       admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
       if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
       if (offlineHeld()) return 'skipped:offline';
@@ -2524,8 +2601,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       writeJson(currentPath, current);
       say(`${name}: main-red mend starting (${settings.tool} ${settings.model})`);
       const t0 = deps.now().getTime();
-      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
-      const pending = deps.session({ bin: tool.bin, args: tool.args, cwd: worktree, logPath: `${out}.jsonl`,
+      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing, runnerAdmission: true });
+      const pending = runnerSession(tool, { cwd: worktree, logPath: `${out}.jsonl`,
         onSpawn: (childPid) => { current.session_pid = childPid; writeJson(currentPath, current); },
         ...watchFor(launch, settings, { prompt, name, checkInText: () => 'Continue the main-red mend in this worktree. No goal or LOG.md. Publish with mc publish after the named fresh gate and whole-selection acceptance.' }),
         env: { MC_HEADLESS: '1', MC_ROLE: MEND_ROLE, MC_REPO: repoName, MC_WORKAREA: worktree, MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch },
@@ -2533,6 +2610,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       admission.release?.();
       result = await pending;
       writeSessionLogs(out, result);
+      reserveRefusal = gatewayRefusal(tool, result);
+      if (reserveRefusal) {
+        return recordReserveWait(reserveRefusal, { name, kind: 'mend', settings, result, t0 });
+      }
       const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
       noteWindows({ name, launch }, result.stdout);
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
@@ -2544,7 +2625,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       try {
         // mc publish and the merger may already have advanced these rows. Never overwrite them.
         if (claimed) updateMainMends(state, (entries) => {
-          for (const entry of entries) if (ids.has(entry.id) && entry.state === 'running' && entry.session_log === `${out}.jsonl`) failMainMend(entry, `session ended without a published PR (exit ${result?.status ?? 'unknown'}); inspect ${entry.session_log}`);
+          for (const entry of entries) {
+            if (!ids.has(entry.id) || entry.state !== 'running' || entry.owner !== name || entry.session_log !== `${out}.jsonl`) continue;
+            if (reserveRefusal) returnMendToQueue(entry);
+            else failMainMend(entry, `session ended without a published PR (exit ${result?.status ?? 'unknown'}); inspect ${entry.session_log}`);
+          }
         });
       } finally {
         remove(currentPath);
@@ -2608,7 +2693,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const role = deps.role(MEND_ROLE);
     if (!role?.overlay) return 'skipped:role-missing';
     const route = routeClass('mend');
-    if (!route.ok) return 'skipped:no-capacity';
+    if (!route.ok) return noCapacity(name, route.reason);
     const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) return 'skipped:tool-missing';
@@ -2616,11 +2701,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (slot !== 'ok') return slot === 'stop' ? 'stop' : 'skipped:update';
     let admission;
     const currentPath = paths.currentFor(repoName, lane);
-    let scratch; let marker; let out; let claimed = false; let result;
+    let scratch; let marker; let out; let claimed = false; let result; let reserveRefusal;
     const state = deployMendState();
     try {
       const picked = await billingFor(launch, route, settings.model);
-      if (picked.billing === 'unavailable') return 'skipped:no-capacity';
+      if (picked.billing === 'unavailable') return noCapacity(name, picked.why);
       admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
       if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
       if (offlineHeld()) return 'skipped:offline';
@@ -2664,8 +2749,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       writeJson(currentPath, current);
       say(`${name}: deploy-mend starting (${settings.tool} ${settings.model})`);
       const t0 = deps.now().getTime();
-      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
-      const pending = deps.session({ bin: tool.bin, args: tool.args, cwd, logPath: `${out}.jsonl`,
+      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing, runnerAdmission: true });
+      const pending = runnerSession(tool, { cwd, logPath: `${out}.jsonl`,
         onSpawn: (childPid) => { current.session_pid = childPid; writeJson(currentPath, current); },
         ...watchFor(launch, settings, { prompt, name, checkInText: () => 'Continue the deploy-mend in these worktrees. No goal or LOG.md. Publish with mc publish, or end with mc repo mend deploy <id> repaired.' }),
         env: { MC_HEADLESS: '1', MC_ROLE: MEND_ROLE, MC_REPO: repoName, MC_DEPLOY_MEND: request.id, MC_WORKAREA: cwd, MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch },
@@ -2673,6 +2758,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       admission.release?.();
       result = await pending;
       writeSessionLogs(out, result);
+      reserveRefusal = gatewayRefusal(tool, result);
+      if (reserveRefusal) {
+        return recordReserveWait(reserveRefusal, { name, kind: 'mend', settings, result, t0 });
+      }
       const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
       noteWindows({ name, launch }, result.stdout);
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
@@ -2685,8 +2774,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         // mc publish, the merger and the session's own `repaired` may already have advanced the row. Never overwrite them.
         if (claimed) updateDeployMends(state, (all) => {
           const entry = all.find((found) => found.id === request.id);
-          if (entry?.state !== 'running' || entry.session_log !== `${out}.jsonl`) return;
+          if (entry?.state !== 'running' || entry.owner !== name || entry.session_log !== `${out}.jsonl`) return;
           if ((entry.prs || []).length) entry.state = 'published';
+          else if (reserveRefusal) returnMendToQueue(entry);
           else failDeployMend(entry, `session ended without a published PR or repaired (exit ${result?.status ?? 'unknown'}); inspect ${entry.session_log}`);
         });
       } finally {
@@ -3299,8 +3389,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const picked = await billingFor(launch, route, settings.model);
     if (picked.billing === 'unavailable') {
       dropSlot();
-      say(`${name}: Anthropic credits unavailable (${picked.why}) — skip`);
-      return 'skipped:no-capacity';
+      return noCapacity(name, picked.why);
     }
     const admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
     if (!admission.admitted) {
@@ -3412,12 +3501,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         say(`${name}: no scratch directory (${scratch}): ${error.message} — starting without MC_SCRATCH`);
       }
       let result;
+      let reserveRefusal;
       try {
-        if (mend && goal.status === 'blocked') {
-          if (heldBy(goal)) return 'skipped:held';
-          goalState(goal, name, {}, { comment: 'starting blocked recovery' });
-        }
-        const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+        const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing, runnerAdmission: true });
         const rechecked = await admission.recheck?.();
         if (rechecked && !rechecked.admitted) {
           say(rechecked.line);
@@ -3444,9 +3530,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         // A session whose `mc goal stage merge` ends it: a review, and a mend in merge.
         const canHandoff = (review || mend) && scratchEnv.MC_SCRATCH;
         if (canHandoff) remove(handoffPath);
-        const pendingSession = deps.session({
-          bin: tool.bin,
-          args: tool.args,
+        const pendingSession = runnerSession(tool, {
           cwd,
           logPath: `${out}.jsonl`,
           onSpawn: (childPid) => { current.session_pid = childPid; writeJson(currentPath, current); },
@@ -3474,6 +3558,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         });
         admission.release?.();
         result = await pendingSession;
+        reserveRefusal = gatewayRefusal(tool, result);
       } finally {
         remove(currentPath);
         if (scratchEnv.MC_SCRATCH) {
@@ -3486,6 +3571,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // recorded as cleanup and changes nothing about the session, the goal or the provider.
       await reclaimSessionExports(scratchEnv.MC_SCRATCH, name);
       noteWindows({ name, launch }, result.stdout);
+      if (reserveRefusal) {
+        return recordReserveWait(reserveRefusal, { name, kind: runsKind({ kind, variant: goalVariant(kind) }), settings, result, t0 });
+      }
       const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
       if (result.handedOff) read.note = 'success,queued';
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });

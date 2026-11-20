@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { createBillingGateway } from '../../src/mc/billing-gateway.js';
+import { gatewayLaunch, gatewayRefusal, RESERVE_DISABLED_EXIT, RESERVE_UNAVAILABLE_EXIT } from '../../src/mc/billing-route.js';
 import { gatewayToolConfig, runGatewaySession } from '../../src/mc/billing-gateway-session.js';
 
 test('tool settings carry only a bounded gateway grant, never a provider key', () => {
@@ -102,6 +103,35 @@ test('API off: the key is never opened and the tool never starts', async () => {
   assert.equal(result, 1);
   assert.equal(opened, false);
   assert.equal(spawned, false);
+});
+
+test('only a runner-owned wrapper reports admission refusal and child exit collisions are ordinary failures', async () => {
+  const input = { provider: 'claude', model: 'opus', bin: '/fake/tool', args: [] };
+  const tool = gatewayLaunch({ ...input, billing: 'credits', runnerAdmission: true });
+  assert.equal(tool.args[1], '--runner-admission');
+  for (const [disabled, status] of [[true, RESERVE_DISABLED_EXIT], [false, RESERVE_UNAVAILABLE_EXIT]]) {
+    let keyed = false;
+    const code = await runGatewaySession({ ...input, runnerAdmission: true,
+      readApi: () => ({ claude: !disabled }), readKey: async () => { keyed = true; return { reason: 'vault-locked' }; },
+      spawnTool: () => assert.fail('admission refusal starts no tool'),
+    });
+    assert.equal(code, status);
+    assert.equal(keyed, !disabled);
+    assert.deepEqual(gatewayRefusal(tool, { status: code }), { provider: 'claude', unavailable: !disabled });
+    assert.equal(gatewayRefusal(gatewayLaunch({ ...input, billing: 'plan', runnerAdmission: true }), { status: code }), null);
+    assert.equal(gatewayRefusal(gatewayLaunch({ ...input, billing: 'credits' }), { status: code }), null);
+
+    const collision = await runGatewaySession({ ...input, runnerAdmission: true, terminal: false,
+      openGrant: async () => ({ ok: true, base: 'http://127.0.0.1:1', grant: 'test', close: async () => {} }),
+      spawnTool: () => {
+        const child = new EventEmitter();
+        queueMicrotask(() => child.emit('close', status, null));
+        return child;
+      },
+    });
+    assert.equal(collision, 1);
+    assert.equal(gatewayRefusal(tool, { status: collision }), null);
+  }
 });
 
 test('off a terminal the tool gets pipes of its own, not this process\'s stdout', async () => {
