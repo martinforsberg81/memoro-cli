@@ -736,8 +736,10 @@ and gives it to Martin (`decision_failures`); one per item. (6) `repeat` is read
 from existing records.
 
 **Area learning.** A person runs `mc learning` or the runner starts a scheduled
-turn. Both use `canon/roles/learning.md` with `MC_ROLE=learning` and
-`MC_HEADLESS=1`. This role makes no programme or goal and does not repeat the
+turn. When no lesson is eligible, the terminal command prints
+`mc: no area information to update` and exits successfully without launching
+the role. Both launch paths use `canon/roles/learning.md` with
+`MC_ROLE=learning` and `MC_HEADLESS=1`. This role makes no programme or goal and does not repeat the
 manager's curation. It reads evidence and decisions and records dispositions:
 `mc learning record <name> --accurate <source>`, `--missing <reason>`,
 `--proposal <path>`, or `--held <id>`. The last two require an existing area

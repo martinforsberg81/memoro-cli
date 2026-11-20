@@ -261,6 +261,12 @@ The desk and repair entrances check proposal ownership and write their orders
 under the same strict runner lock. An owned source returns the existing
 order; an ambiguous match leaves the proposal available.
 
+Input files over 128 KiB are unreadable to repair. `mc repair --error`
+accepts only dated collector digests in intake or a dated intake archive
+directory. It selects rows from the repository's fingerprint table
+(`Error fingerprints` for memoro or `mc itself — this machine` for memoro-cli).
+The analysis summary and new-error list are outside that table.
+
 Feedback and collected errors reuse a corroborated proposal if one already
 exists; otherwise they get one in the appropriate area before drafting.
 Feedback uses the original task ID or a labelled
@@ -321,8 +327,10 @@ ordinary programme or trust a ready spelling without the current manifest.
 A stale ready record keeps that spelling on disk and says `ready (needs
 review)` in the terminal list. An authorised reopen changes it to draft and
 revokes the receipt without removing sources, goals or the previous cut. The entrance
-runs at most three independent readings per invocation. A revision edits
-the identified part lines and records the evidence for its answers under Read.
+runs at most three independent readings per invocation. Each revision can
+replace up to 16 exact lines in numbered parts. The editable fields are
+Closes, Solution, Design, Proved by and Not in this part. The entrance
+records the evidence for the revision's answers under Read.
 A technical uncertainty retains the draft and its proposals for evidence.
 
 A draft binds a programme-local summary of the checked defect and source
@@ -341,6 +349,10 @@ handoff even for a goal the planner keeps unchanged; see
 [merge admission](mc-merge.md#repair-owned-work).
 
 ### Repair scope stops and dispositions
+
+Repair can release a restoration of settled behaviour. An order that needs
+a new user-visible design decision or a change to a text Martin holds must
+stop at the desk before release.
 
 The assigned author records a scope stop with `mc programs repair-stop
 <programme> --title <text> --summary <text> [--item <id>]`. The record moves
