@@ -14,7 +14,7 @@ function artifactNames(page) {
   for (const match of page.matchAll(/`([^`\r\n]+)`|!?\[[^\]\r\n]*\]\(<?([^)>\r\n]+)>?\)/gu)) {
     const raw = match[1] ?? match[2].split('#', 1)[0];
     const path = raw.replace(/^\.\//u, '');
-    if (/^(?:evidence|design)\//u.test(path)) names.add(path);
+    if (/^(?:evidence|designs?)\//u.test(path)) names.add(path);
   }
   for (const match of page.matchAll(/^Binding (?:design|evidence): `([^`\r\n]+)`\s*$/gmu)) {
     names.add(match[1].replace(/^\.\//u, ''));

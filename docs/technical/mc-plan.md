@@ -94,8 +94,8 @@ treating a stopped or disposed order as an ordinary ready record.
 The ordinary desk writer creates a programme only for a person or Martin's
 interactive session (`mc martin`); every headless role is refused (exit 2).
 Martin sets an ordinary order's state with `mc programs state <programme>
-draft|ready`. The unpublished [repair drafting entry](#internal-repair-drafts)
-uses the same validated writer but confers no state authority.
+draft|ready`. The [repair command](#repair-drafts) uses the same validated writer and its own
+reviewed release rule.
 
 A record cannot name both a horizon and an area. A repair programme (`--area`)
 orders a set of small adjustments to one area as one document, and the planner
@@ -173,7 +173,8 @@ not declare the area at its origin/main, or a valid open record already names it
 `--from-proposal <path>` names a file directly in an area's
 `~/mc/areas/<repo>/<area>/proposals/` (anything else, an archived one included,
 is refused with exit 1 before anything is made, and so is one whose name is taken
-in that area's `proposals/archive/`). The new `README.md` names its archived path
+in that area's `proposals/archive/`). A source already ordered returns the owning
+programme before making a new one. The new `README.md` names its archived path
 first under Where things are (`Ordered from the proposal \`<path>\`.`); after the
 programme is made the proposal is moved to `proposals/archive/` of its area with
 the first line `Utfall: ordered in programme <programme>`, and one that cannot be
@@ -240,7 +241,7 @@ short template in `repair-page.md`. The older recordless page is
 the no-record page only when no README exists. `mc programs show` prints the
 `area` line and `--json` the key.
 
-### Internal repair drafts
+### Repair drafts
 
 The draft is a full programme document with affected repositories, numbered
 parts, observable acceptance and original source pointers in Where things are.
@@ -252,7 +253,9 @@ proposal identity. Explicit source links and corroborating incident or
 fingerprint evidence join one order; a shared incident without that
 corroboration is not enough. An ordinary desk order can be found by its
 proposal archive outcome or its original README pointer if the move failed.
-Part 2 does not change the desk's ownership or archive operation.
+The desk and repair entrances check proposal ownership and write their orders
+under the same strict runner lock. An owned source returns the existing
+order; an ambiguous match leaves the proposal available.
 
 Feedback and collected errors reuse a corroborated proposal if one already
 exists; otherwise they get one in the appropriate area before drafting.
@@ -292,7 +295,7 @@ programme-bound repair identity on both claim and receipt write. The reader
 must use a different tool/model pair. A new authorised attempt revokes the
 previous receipt before inspecting the order or looking for a reader. The
 reader sees a disposable snapshot of README and the programme-local files
-linked or named in backticks under `evidence/` or `design/`. An additional
+linked or named in backticks under `evidence/`, `design/` or `designs/`. An additional
 programme-local input can be named as `Binding design:` or `Binding evidence:`
 followed by its backticked path on the same line. Binding files must be regular
 files reached without symlinks; the snapshot is limited to 64 MiB total.
@@ -313,7 +316,18 @@ new revision and its manifest under the programme lock. It does not take an
 ordinary programme or trust a ready spelling without the current manifest.
 A stale ready record keeps that spelling on disk and says `ready (needs
 review)` in the terminal list. An authorised reopen changes it to draft and
-revokes the receipt without removing sources, goals or the previous cut.
+revokes the receipt without removing sources, goals or the previous cut. The entrance
+runs at most three independent readings per invocation. A revision edits
+the identified part lines and records the evidence for its answers under Read.
+A technical uncertainty retains the draft and its proposals for evidence.
+
+A draft binds a programme-local summary of the checked defect and source
+digests in addition to its order. Release records the ordered proposal
+versions in their area's archive. A failed archive move leaves the release
+in place with a resumable source operation. A private copy holds the exact
+proposal version until archival succeeds, so a retry can archive what was
+ordered while retaining any newer waiting evidence. Moving original intake
+or proposal pointers does not change the released manifest.
 
 Once reconciled, delivery writes are for that revision. A stale session keeps
 its local work but cannot register a PR, publish a handoff or move a goal

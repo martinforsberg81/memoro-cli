@@ -639,6 +639,21 @@ describe('internal repair order drafting', () => {
     } finally { a.done(); }
   });
 
+  it('uses one ownership check across desk and repair draft creation', async () => {
+    const a = area();
+    try {
+      const p = proposal(a, 'shared-owner', 'Valid input fails.');
+      const desk = { ...a.env, MC_ROLE: 'martin' };
+      const deskCreate = name => call(['create', name, '--end', 'Restore the valid form.', '--area', 'memoro-cli/operations', '--from-proposal', p], desk, AREA_DEPS);
+      assert.equal((await direct(a, 'proposal', p, order('repair-owns'))).code, 0);
+      const existing = await deskCreate('duplicate');
+      assert.equal(existing.code, 0, existing.err);
+      assert.match(existing.out, /source already ordered in repair-owns/u);
+      assert.deepEqual(readdirSync(a.home), ['repair-owns']);
+      assert.ok(existsSync(p));
+    } finally { a.done(); }
+  });
+
   it('converges explicit incident and fingerprint links across all routes and a moved or later digest', async () => {
     const a = area();
     try {

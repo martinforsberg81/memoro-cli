@@ -394,7 +394,10 @@ The terminal desk opening and `mc martin brief` show
 **Not ready**, only when a repair scope stop is open. Each row names the
 programme, the scope excursion, the item id and the Swedish brief, including
 work already landed. A linked text change or reserved act is named by item id;
-its brief remains in its own section. The live overview adds no section.
+its brief remains in its own section. Repair records a proposed held-text
+change through the existing text brief and a reserved act through the act
+brief. The act is performed only on the person's word. The live overview adds
+no section.
 
 `mc martin item <id>` reads the scope brief and its eventual disposition.
 Ordinary sync projects a missing item from the programme and keeps it open

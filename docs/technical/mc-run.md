@@ -242,7 +242,7 @@ Repair-owned drafts, stops and stale releases are held at selection and
 rechecked during goal admission, including goals that already read
 `build · ready`. Ordinary state values do not clear the hold. The programme
 planning turn needs the current release; build also needs its reconciliation.
-The runner does not launch the internal repair drafting entry.
+The terminal starts `mc repair`. The runner takes over after release.
 
 ## Lanes
 

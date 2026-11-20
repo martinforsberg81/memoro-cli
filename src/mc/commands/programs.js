@@ -17,10 +17,11 @@
  * here exactly when it is on the page. `mc programs` alone prints the usage.
  */
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { areasHome } from '../area-proposals.js';
 import { programsHome, workRoot } from '../paths.js';
 import { wakeRunner } from '../run-control.js';
+import { deskProposalOwner } from '../repair-draft.js';
 import { readAreas } from '../areas.js';
 import { run as runGit } from '../git.js';
 import { repoNameOf } from '../repos.js';
@@ -291,7 +292,6 @@ function proposalIn(given, { env }) {
   const parts = path.startsWith(home + sep) ? path.slice(home.length + 1).split(sep) : null;
   if (parts?.length !== 4 || parts[2] !== 'proposals') return { error: `--from-proposal ${given} is not a proposal: it must be a file directly in an area's ${areasHome(env)}/<repo>/<area>/proposals/` };
   const archived = join(dirname(path), 'archive', basename(path));
-  if (existsSync(archived)) return { error: `--from-proposal ${given}: ${archived} exists already — the proposal was decided once; nothing was made` };
   return { path, area: `${parts[0]}/${parts[1]}`, archived };
 }
 
@@ -317,7 +317,7 @@ function areaRefusal(area, { env, git = gitIn, known = () => knownRepositories(e
  * `create` and `record`: the caller is checked first; the whole request is validated before the first write.
  * Created only by a person or interactive Martin; create makes a draft.
  */
-function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, canon, now = new Date(), git, known }) {
+function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, canon, now = new Date(), git, known, lock = realLock }) {
   const writer = recordWriter(env);
   if (writer.refusal) { stderr.write(`mc: ${writer.refusal}\n`); return 2; }
   const [name] = positional;
@@ -332,34 +332,46 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
       stdout.write(`${name}: record written to ${join(dir, RECORD_FILE)} — state draft\n`);
       return 0;
     }
-    const exists = existsSync(dir) || (read ? read() : readProgrammes({ env })).section.programmes.some((group) => group.programme === name);
-    if (exists) return problem(`programme ${name} exists — mc programs record ${name} --end "…" gives a directory without a record its record, and mc programs show ${name} prints what it has`);
-    if (flags.area !== null) {
-      const refused = areaRefusal(flags.area, { env, git, known });
-      if (refused) return problem(refused);
-    }
-    let proposal = null;
-    if (flags['from-proposal'] !== null) {
-      proposal = proposalIn(flags['from-proposal'], { env });
-      if (proposal.error) return problem(proposal.error);
-    }
-    const template = recordPageTemplate({ ...(canon ? { canon } : {}), area: flags.area });
-    if (template === null) return problem(`could not read the programme page template (canon/tasks/references/${flags.area ? 'repair-page.md' : 'programme-document.md'}) — nothing was made`);
-    const page = recordPage(template, { name, end: flags.end, horizon: flags.horizon, area: flags.area, purpose: flags.purpose, proposal: proposal?.archived ?? null });
-    const record = newRecord({ horizon: flags.horizon, area: flags.area, end: flags.end.trim(), createdBy: writer.by, now, stated: true });
-    mkdirSync(home, { recursive: true });
-    createProgramme(dir, page, record);
-    stdout.write(`${name}: programme made at ${dir} — record state ${record.state}, phases stated, page README.md to fill in; mc goal new ${name}/<goal> makes its first goal\n`);
-    if (proposal) {
-      // Ordered is decided: the proposal goes to its area's archive under the line that says so.
-      try {
-        mkdirSync(dirname(proposal.archived), { recursive: true });
-        writeFileSync(proposal.archived, `Utfall: ordered in programme ${name}\n\n${readFileSync(proposal.path, 'utf8')}`, { flag: 'wx' });
-        unlinkSync(proposal.path);
-      } catch (error) { return problem(`${name} is made, but the proposal ${proposal.path} was not archived at ${proposal.archived}: ${error.message}`); }
-      stdout.write(`${name}: the proposal is archived at ${proposal.archived} (area ${proposal.area})\n`);
-    }
-    return 0;
+    const create = () => {
+      if (flags.area !== null) {
+        const refused = areaRefusal(flags.area, { env, git, known });
+        if (refused) return problem(refused);
+      }
+      let proposal = null;
+      if (flags['from-proposal'] !== null) {
+        proposal = proposalIn(flags['from-proposal'], { env });
+        if (proposal.error) {
+          const previous = deskProposalOwner(resolve(flags['from-proposal']), env);
+          if (typeof previous === 'string') { stdout.write(`source already ordered in ${previous}\n`); return 0; }
+          return problem(proposal.error);
+        }
+        const owner = deskProposalOwner(proposal.path, env);
+        if (typeof owner === 'string') { stdout.write(`source already ordered in ${owner}\n`); return 0; }
+        if (owner?.ambiguous) return problem('the proposal may belong to an existing repair order; nothing was made');
+        if (existsSync(proposal.archived)) return problem(`--from-proposal ${flags['from-proposal']}: ${proposal.archived} exists already — the proposal was decided once; nothing was made`);
+      }
+      const exists = existsSync(dir) || (read ? read() : readProgrammes({ env })).section.programmes.some((group) => group.programme === name);
+      if (exists) return problem(`programme ${name} exists — mc programs record ${name} --end "…" gives a directory without a record its record, and mc programs show ${name} prints what it has`);
+      const template = recordPageTemplate({ ...(canon ? { canon } : {}), area: flags.area });
+      if (template === null) return problem(`could not read the programme page template (canon/tasks/references/${flags.area ? 'repair-page.md' : 'programme-document.md'}) — nothing was made`);
+      const page = recordPage(template, { name, end: flags.end, horizon: flags.horizon, area: flags.area, purpose: flags.purpose, proposal: proposal?.archived ?? null });
+      const record = newRecord({ horizon: flags.horizon, area: flags.area, end: flags.end.trim(), createdBy: writer.by, now, stated: true });
+      mkdirSync(home, { recursive: true });
+      createProgramme(dir, page, record);
+      stdout.write(`${name}: programme made at ${dir} — record state ${record.state}, phases stated, page README.md to fill in; mc goal new ${name}/<goal> makes its first goal\n`);
+      if (proposal) {
+        // Ordered is decided: the proposal goes to its area's archive under the line that says so.
+        try {
+          mkdirSync(dirname(proposal.archived), { recursive: true });
+          writeFileSync(proposal.archived, `Utfall: ordered in programme ${name}\n\n${readFileSync(proposal.path, 'utf8')}`, { flag: 'wx' });
+          unlinkSync(proposal.path);
+        } catch (error) { return problem(`${name} is made, but the proposal ${proposal.path} was not archived at ${proposal.archived}: ${error.message}`); }
+        stdout.write(`${name}: the proposal is archived at ${proposal.archived} (area ${proposal.area})\n`);
+      }
+      return 0;
+    };
+    return flags['from-proposal'] === null ? create()
+      : lock(workRoot(env), create, { strict: true, name: 'desk-proposal-order' });
   } catch (error) {
     if (error.code === 'EEXIST' && verb === 'record') return problem(`${name} already has a record (${join(dir, RECORD_FILE)}) — mc programs show ${name} prints it; it is not replaced`);
     if (error.code === 'EEXIST') return problem(`programme ${name} exists — mc programs record ${name} --end "…" gives a directory without a record its record, and mc programs show ${name} prints what it has`);

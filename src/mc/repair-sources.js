@@ -7,7 +7,7 @@ import { areaKeysOnDisk, areasHome, FALLBACK_AREAS, keyProposalsDir, listAllProp
 import { digestDirs } from './helper-collect.js';
 import { workRoot } from './paths.js';
 import { AREA_RE } from './programme-record.js';
-import { writeJsonAtomic } from './atomic-write.js';
+import { writeFileAtomic, writeJsonAtomic } from './atomic-write.js';
 
 export const sha256 = text => createHash('sha256').update(text).digest('hex');
 const keyOf = (kind, ...identity) => sha256(JSON.stringify([kind, ...identity]));
@@ -37,6 +37,24 @@ export const repairCasePath = (env, key) => join(workRoot(env), 'runner', 'repai
 export function readRepairCase(env, key) {
   try { return JSON.parse(readFileSync(repairCasePath(env, key), 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+}
+
+const proposalCopy = (env, ref) => join(workRoot(env), 'runner', 'repair-draft', 'sources', ref.key, ref.digest);
+
+/** Keep the exact proposal version privately until its archive write succeeds. */
+export function rememberRepairProposal({ ref, proposal, text }, env) {
+  if (ref?.kind !== 'proposal' || proposal?.isArchived || sha256(text) !== ref.digest) return;
+  writeFileAtomic(proposalCopy(env, ref), text);
+}
+
+function fixedRepairProposal(ref, env) {
+  try {
+    const text = read(proposalCopy(env, ref));
+    return sha256(text) === ref.digest ? { text } : null;
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
 }
 
 function regular(path) {
@@ -91,8 +109,8 @@ export function settleRepairSources({ env, sources, programme, action, reason })
       const current = source.ref?.key === ref.key && source.ref?.digest === ref.digest && (!waiting || waiting.isFile());
       const prior = current ? source : proposalArchives(live, env, ref.digest)
         .map(path => readRepairSource({ kind: 'proposal', given: path, env }))
-        .find(found => found.ref?.key === ref.key && found.ref?.digest === ref.digest);
-      if (prior?.outcome === outcome && prior.proposal.isArchived) archive = prior.proposal.path;
+        .find(found => found.ref?.key === ref.key && found.ref?.digest === ref.digest) ?? fixedRepairProposal(ref, env);
+      if (prior?.outcome === outcome && prior.proposal?.isArchived) archive = prior.proposal.path;
       else if (prior) {
         const target = archivedProposal(live);
         mkdirSync(dirname(target), { recursive: true });
@@ -122,6 +140,9 @@ export function settleRepairSources({ env, sources, programme, action, reason })
       writeJsonAtomic(repairCasePath(env, ref.key), { ...previous, ...(archive ? { archive } : {}),
         source: ref, status: declining ? 'declined' : 'ordered', programme, ...(declining ? { reason } : {}) });
       if (archive && current && waiting && readRepairSource({ kind: 'proposal', given: live, env }).ref?.digest === ref.digest) unlinkSync(live);
+      if (archive) {
+        try { unlinkSync(proposalCopy(env, ref)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
     } else {
       writeJsonAtomic(repairCasePath(env, ref.key), { ...previous, source: ref, programme,
         status: declining ? 'declined' : 'ordered', ...(declining ? { reason } : {}) });

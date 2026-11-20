@@ -17,6 +17,7 @@ import { run as ask } from '../../src/mc/commands/ask.js';
 import { run as goal } from '../../src/mc/commands/goal.js';
 import { run as martin } from '../../src/mc/commands/martin.js';
 import { run as merge } from '../../src/mc/commands/merge.js';
+import { run as repair } from '../../src/mc/commands/repair.js';
 import { run as programs } from '../../src/mc/commands/programs.js';
 import { goalReferences, listDirsOf, readTextOrNull, REVIEW_ROLE } from '../../src/mc/goals.js';
 import { itemStore, readDeskItem, syncDeskItems } from '../../src/mc/desk-items.js';
@@ -111,10 +112,10 @@ const ONE_FINDING = 'findings: 1\n\n### Finding 1 — Invalid proof\nPart: 1\nEn
 
 function repairSetup(t) {
   const f = programmeSetup(t);
-  const artifact = join(f.dir, 'evidence', 'current.txt');
-  mkdirSync(join(f.dir, 'evidence'));
+  const artifact = join(f.dir, 'designs', 'part-1', 'current.txt');
+  mkdirSync(join(f.dir, 'designs', 'part-1'), { recursive: true });
   writeFileSync(artifact, 'original evidence');
-  writeFileSync(join(f.dir, 'README.md'), `${f.page}\n- [Evidence](evidence/current.txt)\n- Source: \`/proposals/waiting.md\`\n`);
+  writeFileSync(join(f.dir, 'README.md'), `${f.page}\n- [Evidence](designs/part-1/current.txt)\n- Source: \`/proposals/waiting.md\`\n`);
   rmSync(join(f.dir, RECORD_FILE));
   writeRecord(f.dir, newRecord({ end: 'The promised result runs.', createdBy: 'repair', now: NOW, repair: {
     sources: [{ kind: 'proposal', path: '/proposals/waiting.md', key: 'a'.repeat(64), digest: 'b'.repeat(64) }],
@@ -124,14 +125,113 @@ function repairSetup(t) {
   const reader = ({ report = NO_FINDINGS, status = 0, during } = {}) => async spawned => {
     assert.equal(spawned.env.MC_REPAIR_TOKEN, undefined);
     assert.notEqual(spawned.cwd, f.dir);
-    assert.equal(readFileSync(join(f.checkout, 'order', 'evidence', 'current.txt'), 'utf8'), 'original evidence');
+    assert.equal(readFileSync(join(f.checkout, 'order', 'designs', 'part-1', 'current.txt'), 'utf8'), 'original evidence');
     during?.();
-    assert.equal(readFileSync(join(f.checkout, 'order', 'evidence', 'current.txt'), 'utf8'), 'original evidence');
+    assert.equal(readFileSync(join(f.checkout, 'order', 'designs', 'part-1', 'current.txt'), 'utf8'), 'original evidence');
     if (report !== null) writeFileSync(join(spawned.cwd, PROGRAMME_REVIEW_FILE), report);
     return { ...DONE, status };
   };
   return { ...f, artifact, receipt, review, reader, asAuthor: fn => withRepairAuthor(f.baseEnv, 'p', fn) };
 }
+
+test('mc repair re-reviews a revision, releases it, and resumes source archival without a second review', async t => {
+  const f = baseSetup(t);
+  const home = join(f.root, 'programs');
+  const dir = join(home, 'restore');
+  const path = join(f.root, 'areas', 'memoro-cli', 'system', 'proposals', '2026-11-14-mc-restore.md');
+  const target = archivedProposal(path);
+  mkdirSync(join(path, '..'), { recursive: true });
+  writeFileSync(path, 'The command refuses its documented input.');
+  writeFileSync(join(target, '..'), 'Simulate an unavailable archive directory.');
+  const answer = {
+    status: 'draft', name: 'restore', title: 'Restore valid input', end: 'Valid input is accepted.',
+    reason: 'The command contract accepts the input.', today: 'src/mc.js at abc accepts a different form.',
+    summary: 'A command refuses valid input.', repository: 'memoro-cli', repositories: ['memoro-cli'],
+    parts: ['Restore command', 'Restore saved input', 'Restore alias'].map(name => ({
+      name, closes: 'Valid input fails.', solution: 'Restore documented parsing.',
+      design: 'Show the normal success line.', provedBy: 'Run a valid request.', notInPart: 'New input.',
+    })),
+  };
+  let readings = 0, revisions = 0, wakes = 0;
+  let orderSeen;
+  const run = async (argv, judge = () => assert.fail('already drafted'), session = () => assert.fail('already reviewed')) => {
+    const stdout = sink(), stderr = sink();
+    const code = await repair(argv, {
+      env: { MC_WORK_ROOT: f.root }, stdout, stderr, judge, now: () => NOW,
+      revise: ({ revision }) => {
+        revisions++;
+        assert.equal(revision.findings[0].Entry, 'Proved by');
+        return { status: 'revise', reading: 'The fixture now asserts the restored output.', edits: [{
+          part: 1, before: 'Proved by: Run a valid request.', after: 'Proved by: Assert the existing success line.',
+        }] };
+      },
+      wake: () => { wakes++; },
+      programmeReview: { known: () => ['/known/memoro-cli'], review: { ...f.deps, session } },
+    });
+    return { code, out: stdout.text(), err: stderr.text() };
+  };
+  const first = await run(['--proposal', path], () => answer, async spawned => {
+    readings++;
+    const order = join(spawned.cwd, '..', 'order');
+    orderSeen = readFileSync(join(order, 'README.md'), 'utf8');
+    assert.match(readFileSync(join(order, 'evidence', 'repair-source.md'), 'utf8'), /A command refuses valid input/u);
+    const report = readings === 1 ? ONE_FINDING : NO_FINDINGS;
+    writeFileSync(join(spawned.cwd, PROGRAMME_REVIEW_FILE), report);
+    return DONE;
+  });
+  assert.equal(first.code, 1, first.err);
+  assert.match(first.out, /restore is ready for planning/u);
+  assert.match(first.err, /could not archive repair sources.*--resume restore/u);
+  assert.match(orderSeen, /Proved by: Assert the existing success line[\s\S]*Repair review: The fixture now asserts/u);
+  assert.equal(readings, 2);
+  assert.equal(revisions, 1);
+  assert.equal(wakes, 1);
+  const record = () => readRecord(dir).record;
+  const released = record().repair.release.revision;
+  const due = programmeDue({ programme: 'restore', home, list: listDirsOf, read: readTextOrNull, state: { status: 'none' } });
+  assert.equal(due.revision, released);
+  assert.equal(record().state, 'ready');
+
+  rmSync(join(target, '..'));
+  writeFileSync(path, 'Different waiting evidence.');
+  const resumed = await run(['--resume', 'restore']);
+  assert.equal(resumed.code, 0, resumed.err);
+  assert.match(resumed.out, /restore is ready for planning/u);
+  assert.equal(record().repair.release.revision, released);
+  assert.equal(readFileSync(path, 'utf8'), 'Different waiting evidence.');
+  assert.match(readFileSync(target, 'utf8'), /Utfall: ordered in programme restore[\s\S]*The command refuses its documented input/u);
+  assert.equal((await run(['--proposal', path])).out, 'mc: source already ordered in restore\n');
+
+  writeFileSync(join(dir, 'README.md'), orderSeen.replace('Restore command', 'Restore documented command'));
+  assert.equal(repairReleaseState(dir, record()).release, undefined);
+  const stale = await run(['--resume', 'restore'], undefined, async spawned => {
+    assert.equal(record().state, 'draft');
+    assert.match(readFileSync(join(spawned.cwd, '..', 'order', 'README.md'), 'utf8'), /Restore documented command/u);
+    writeFileSync(join(spawned.cwd, PROGRAMME_REVIEW_FILE), NO_FINDINGS);
+    return DONE;
+  });
+  assert.equal(stale.code, 0, stale.err);
+  assert.notEqual(record().repair.release.revision, released);
+  assert.deepEqual(record().repair.sources.map(source => source.path), [path]);
+  assert.equal(readFileSync(path, 'utf8'), 'Different waiting evidence.');
+
+  const widePath = path.replace('restore.md', 'wide.md');
+  writeFileSync(widePath, 'Restoration would require an operator act.');
+  const stopped = await run(['--proposal', widePath], () => ({
+    ...answer, name: 'wide', scope: {
+      title: 'Produktionsåtkomst', summary: 'Reparationen behöver ett avgränsat beslut om produktionsåtkomst.',
+      reserved: { kind: 'credentials', effect: 'En behörighet behöver återställas.', steps: 'Återställ den befintliga behörigheten i konsolen.', wait: 'Därefter kan underlaget bedömas.', reversible: true },
+    },
+  }));
+  assert.equal(stopped.code, 0, stopped.err);
+  const held = readRecord(join(home, 'wide')).record;
+  assert.equal(held.state, 'Martin');
+  assert.match(stopped.out, /wide is at Martin/u);
+  assert.equal(held.repair.stop.link.kind, 'reserved');
+  assert.equal(readDeskItem(held.repair.stop.link.id, { env: { MC_WORK_ROOT: f.root } }).sort, 'reserved');
+  assert.equal(programmeDue({ programme: 'wide', home, list: listDirsOf, read: readTextOrNull, state: { status: 'none' } }).due, false);
+
+});
 
 test('repair review: only the live assigned author gets a receipt of fixed binding inputs from an independent reader', async t => {
   const f = repairSetup(t);
@@ -149,7 +249,7 @@ test('repair review: only the live assigned author gets a receipt of fixed bindi
     const result = await f.review(author, f.reader());
     assert.equal(result.code, 0, result.err);
     assert.deepEqual(f.receipt().receipt.reader, { tool: 'codex', model: 'gpt-6.2-sol' });
-    assert.deepEqual(f.receipt().receipt.manifest.inputs.map(([path]) => path), ['README.md', 'evidence/current.txt']);
+    assert.deepEqual(f.receipt().receipt.manifest.inputs.map(([path]) => path), ['README.md', 'designs/part-1/current.txt']);
     writeFileSync(f.artifact, 'edited after reading');
     assert.equal(f.receipt(), null, 'the valid report and receipt no longer describe current evidence');
   });
