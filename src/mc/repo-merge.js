@@ -324,6 +324,7 @@ export async function runMergeRound({
           pin = ready.sha || null;
         }
       }
+      if (expectedHead && pin !== expectedHead) return finish('pushed', `#${number} is no longer at the authorized repair head — not merged`);
       // The squash takes the head it was measured at and no other. A push that
       // lands during the round is a commit nobody measured, and `gh pr merge`
       // without a pin would squash it all the same.
@@ -340,7 +341,10 @@ export async function runMergeRound({
         say(`#${number} has no measured head to pin the squash to — merging without --match-head-commit`);
       }
       let allowed = false;
-      try { allowed = await beforeMerge({ repo: repoPath, pr: number, branch: batch ? (verdict.prs || []).find(item => item.number === number)?.head : verdict.pr.head }); } catch { allowed = false; }
+      try {
+        const branch = batch ? (verdict.prs || []).find(item => item.number === number)?.head : verdict.pr.head;
+        allowed = await beforeMerge({ repo: repoPath, pr: number, branch, head: pin });
+      } catch { allowed = false; }
       if (allowed !== true) return typeof allowed === 'string'
         ? finish('repair-release', allowed)
         : finish('dropped', `#${number} belongs only to a dropped goal; delivery is abandoned`);

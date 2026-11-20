@@ -4,8 +4,8 @@ import { basename, join } from 'node:path';
 import { GOAL_FILE, GOALS_DIR, listDirsOf, parseGoal, readTextOrNull, renderGoal } from './goals.js';
 import { workRoot } from './paths.js';
 import { changeProgrammeRecord, readRecord } from './programme-record.js';
-import { goalParts, partSections } from './programme-turn.js';
-import { repairDigest, repairSnapshot } from './repair-manifest.js';
+import { goalParts, splitProgrammeParts } from './programme-turn.js';
+import { repairArtifactNames, repairDigest, repairSnapshot } from './repair-manifest.js';
 import { deskRepairDraft, isDesk, repairReleaseState } from './repair-release.js';
 
 const refused = problem => ({ problems: [problem] });
@@ -54,12 +54,23 @@ export function setDeskRepairState(dir, target, env, { list = listDirsOf, read =
   }, { root: workRoot(env), lock, read }, 'repair-desk-state');
 }
 
+function partContracts({ text, manifest }) {
+  const { parts, shared } = splitProgrammeParts(text);
+  const common = new Set(repairArtifactNames(shared));
+  const artifacts = manifest.inputs.slice(1);
+  return parts.map(([number, section]) => {
+    const local = new Set(repairArtifactNames(section));
+    const inputs = artifacts.filter(([path]) => common.has(path) || local.has(path));
+    return [number, repairDigest(JSON.stringify([section, inputs]))];
+  });
+}
+
 function reconciledRecord({ record, current, dir, home, programme, reason, list, read }) {
   const revision = current.release.revision;
   const prior = record.repair.reconciled;
   if (prior?.revision === revision) return record;
   if (typeof reason !== 'string' || !reason.trim()) return refused('reconciliation needs the comparison against the released parts');
-  const parts = partSections(current.snapshot.text).map(([number, text]) => [number, repairDigest(text)]);
+  const parts = partContracts(current.snapshot);
   const nextParts = new Map(parts);
   if (!parts.length || parts.length !== nextParts.size) return refused('the released order must have uniquely numbered parts');
   const previousParts = new Map(prior?.parts);

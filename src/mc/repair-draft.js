@@ -6,7 +6,7 @@ import { FALLBACK_AREAS, keyProposalsDir } from './area-proposals.js';
 import { writeFileAtomic, writeJsonAtomic } from './atomic-write.js';
 import { scanArgs } from './commands/flags.js';
 import { archivedProgramsHome, programsHome, workRoot } from './paths.js';
-import { AREA_RE, createProgramme, linkRepairSource, newRecord, readRecord, recordedProgrammes } from './programme-record.js';
+import { AREA_RE, createProgramme, linkRepairSource, newRecord, readRecord, recordedProgrammes, validRepairScope } from './programme-record.js';
 import { NAME_RE } from './plan-schema.js';
 import { judgeRepair } from './repair-session.js';
 import { archivedProposal, archivedProposals, pendingProposals, readRepairCase, readRepairSource, rememberRepairProposal, repairCasePath, versionedArchive } from './repair-sources.js';
@@ -286,8 +286,8 @@ function settle(source, answer, ctx) {
   if (answer.status === 'draft') {
     if (!answer.repositories?.includes(repo)) throw new Error('repair order omits the source repository');
     draftPage(answer, [source.ref], source.ref.path); // Validate the whole order before writing.
-    if (answer.scope && (!oneLine(answer.scope.title, 160) || !oneLine(answer.scope.summary, 1400))) {
-      throw new Error('repair scope needs a title and a Swedish summary');
+    if (answer.scope !== undefined && !validRepairScope(answer.scope)) {
+      throw new Error('repair scope needs a title, a Swedish summary and at most one valid related desk brief');
     }
   }
   const proposal = generatedProposal(source, repo, area, oneLine(answer.summary) ? answer.summary : 'Repair report', now, ctx.env);
@@ -309,12 +309,12 @@ function settle(source, answer, ctx) {
   mkdirSync(home, { recursive: true });
   const dir = join(home, answer.name);
   rememberRepairProposal(primary, ctx.env);
-  createProgramme(dir, draftPage(answer, sources, proposal),
-    newRecord({ end: answer.end, createdBy: 'repair', now, stated: true, repair: { sources } }));
+  const repair = { sources, ...(answer.scope ? { pending_scope: answer.scope } : {}) };
+  createProgramme(dir, draftPage(answer, sources, proposal), newRecord({ end: answer.end, createdBy: 'repair', now, stated: true, repair }));
   const evidence = ['# Repair source', '', paragraph(oneLine(answer.summary) ? answer.summary : 'Repair report'), '',
     paragraph(answer.today), '', ...sources.map(ref => `- ${ref.kind} ${ref.key}: ${ref.digest}`), ''];
   writeFileAtomic(join(dir, EVIDENCE), evidence.join('\n'));
-  return { status: 'draft', name: answer.name, scope: answer.scope };
+  return { status: 'draft', name: answer.name };
 }
 
 const orderReading = all => all.filter(order => !order.archived && order.record.state !== 'done')

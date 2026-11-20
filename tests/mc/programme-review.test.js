@@ -1,7 +1,7 @@
 /**
  * Programme review (src/mc/programme-review.js): `mc programs review` launches
  * one independent headless reading of the programme document at origin/main exports.
- * Advisory: writes PROGRAMME-REVIEW.md beside the programme, records no verdict or currency.
+ * Advisory for the desk; a repair release needs a receipt on fixed, current inputs.
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -23,6 +23,7 @@ import { goalReferences, listDirsOf, readTextOrNull, REVIEW_ROLE } from '../../s
 import { itemStore, readDeskItem, syncDeskItems } from '../../src/mc/desk-items.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { landJob, queueMerge } from '../../src/mc/merger.js';
+import { runMergeRound } from '../../src/mc/repo-merge.js';
 import { newRecord, readRecord, RECORD_FILE, recordPageTemplate, writeRecord } from '../../src/mc/programme-record.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { applyObservation, normaliseCapacity } from '../../src/mc/model-capacity.js';
@@ -122,12 +123,12 @@ function repairSetup(t) {
   } }));
   const receipt = () => currentRepairReview(f.dir, { read: path => existsSync(path) ? readFileSync(path, 'utf8') : null });
   const review = (identity, session, extra) => f.call(['review', 'p'], { identity, extra: { session, ...extra } });
-  const reader = ({ report = NO_FINDINGS, status = 0, during } = {}) => async spawned => {
+  const reader = ({ report = NO_FINDINGS, status = 0, during, evidence = 'original evidence' } = {}) => async spawned => {
     assert.equal(spawned.env.MC_REPAIR_TOKEN, undefined);
     assert.notEqual(spawned.cwd, f.dir);
-    assert.equal(readFileSync(join(f.checkout, 'order', 'designs', 'part-1', 'current.txt'), 'utf8'), 'original evidence');
+    assert.equal(readFileSync(join(f.checkout, 'order', 'designs', 'part-1', 'current.txt'), 'utf8'), evidence);
     during?.();
-    assert.equal(readFileSync(join(f.checkout, 'order', 'designs', 'part-1', 'current.txt'), 'utf8'), 'original evidence');
+    assert.equal(readFileSync(join(f.checkout, 'order', 'designs', 'part-1', 'current.txt'), 'utf8'), evidence);
     if (report !== null) writeFileSync(join(spawned.cwd, PROGRAMME_REVIEW_FILE), report);
     return { ...DONE, status };
   };
@@ -154,10 +155,15 @@ test('mc repair re-reviews a revision, releases it, and resumes source archival 
   };
   let readings = 0, revisions = 0, wakes = 0;
   let orderSeen;
+  let interruptStop = false;
   const run = async (argv, judge = () => assert.fail('already drafted'), session = () => assert.fail('already reviewed')) => {
     const stdout = sink(), stderr = sink();
     const code = await repair(argv, {
       env: { MC_WORK_ROOT: f.root }, stdout, stderr, judge, now: () => NOW,
+      lock: (root, fn, options = {}) => {
+        if (interruptStop && options.name === 'repair-author') throw new Error('interrupted before publishing the scope stop');
+        return realLock(root, fn, options);
+      },
       revise: ({ revision }) => {
         revisions++;
         assert.equal(revision.findings[0].Entry, 'Proved by');
@@ -217,15 +223,45 @@ test('mc repair re-reviews a revision, releases it, and resumes source archival 
 
   const widePath = path.replace('restore.md', 'wide.md');
   writeFileSync(widePath, 'Restoration would require an operator act.');
-  const stopped = await run(['--proposal', widePath], () => ({
+  interruptStop = true;
+  const interrupted = await run(['--proposal', widePath], () => ({
     ...answer, name: 'wide', scope: {
       title: 'Produktionsåtkomst', summary: 'Reparationen behöver ett avgränsat beslut om produktionsåtkomst.',
       reserved: { kind: 'credentials', effect: 'En behörighet behöver återställas.', steps: 'Återställ den befintliga behörigheten i konsolen.', wait: 'Därefter kan underlaget bedömas.', reversible: true },
     },
   }));
+  assert.equal(interrupted.code, 1, interrupted.err);
+  assert.match(interrupted.err, /interrupted before publishing/u);
+  const wide = join(home, 'wide');
+  const pending = readRecord(wide).record;
+  assert.equal(pending.state, 'draft');
+  assert.deepEqual(pending.repair.sources.map(source => source.path), [widePath]);
+  assert.equal(pending.repair.stop_item, undefined);
+  const direct = await withRepairAuthor(f.baseEnv, 'wide', async identity => {
+    const stdout = sink(), stderr = sink();
+    const options = { env: identity, stdout, stderr, known: () => ['/known/memoro-cli'],
+      review: { ...f.deps, session: () => assert.fail('pending scope cannot be reviewed') } };
+    const review = await programs(['review', 'wide'], options);
+    const release = await programs(['release', 'wide'], options);
+    return { review, release, err: stderr.text() };
+  });
+  interruptStop = false;
+  let resumedRead = false;
+  const stopped = await run(['--resume', 'wide'], undefined, async spawned => {
+    resumedRead = true;
+    writeFileSync(join(spawned.cwd, PROGRAMME_REVIEW_FILE), NO_FINDINGS);
+    return DONE;
+  });
   assert.equal(stopped.code, 0, stopped.err);
-  const held = readRecord(join(home, 'wide')).record;
+  const held = readRecord(wide).record;
   assert.equal(held.state, 'Martin');
+  assert.equal(resumedRead, false, 'resume must publish the pending stop, not commission a review');
+  assert.notEqual(direct.review, 0);
+  assert.equal(direct.release, 1);
+  assert.match(direct.err, /pending scope stop/u);
+  assert.equal(held.repair.pending_scope, undefined);
+  assert.equal(held.repair.release, undefined);
+  assert.deepEqual(held.repair.sources, pending.repair.sources);
   assert.match(stopped.out, /wide is at Martin/u);
   assert.equal(held.repair.stop.link.kind, 'reserved');
   assert.equal(readDeskItem(held.repair.stop.link.id, { env: { MC_WORK_ROOT: f.root } }).sort, 'reserved');
@@ -334,7 +370,7 @@ test('repair release: only a current receipt with settled findings opens the ord
   });
 });
 
-test('repair planning: stale ready blocks new and runnable goals; a changed part needs a new contract and reconciliation', async t => {
+test('repair planning: stale ready blocks new and runnable goals; changed binding design needs a new contract and reconciliation', async t => {
   const f = repairSetup(t);
   const home = join(f.root, 'programs');
   const pagePath = join(f.dir, 'README.md');
@@ -352,8 +388,8 @@ test('repair planning: stale ready blocks new and runnable goals; a changed part
   const newArgs = name => ['new', `p/${name}`, '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Restore', '--structure', '1'];
   const reconcile = () => f.call(['reconcile', 'p', '--reason', 'Compared Part 1 and its goal contract.'], { identity: plan() });
   await f.asAuthor(async author => {
-    const release = async () => {
-      const reviewed = await f.review(author, f.reader());
+    const release = async evidence => {
+      const reviewed = await f.review(author, f.reader({ evidence }));
       assert.equal(reviewed.code, 0, reviewed.err);
       const result = await f.call(['release', 'p'], { identity: author });
       assert.equal(result.code, 0, result.err);
@@ -363,7 +399,8 @@ test('repair planning: stale ready blocks new and runnable goals; a changed part
     const first = await release();
     const planner = plan();
     assert.equal(readsDue().revision, first);
-    for (const args of [newArgs('restore'), ['document', 'add', 'p/restore', '--label', 'Part 1', '--path', pagePath]]) {
+    for (const args of [newArgs('restore'), ['document', 'add', 'p/restore', '--label', 'Part 1', '--path', pagePath],
+      ['set', 'p/restore', 'contract', '--text', 'Put row B before row A.']]) {
       const made = await runGoal(args);
       assert.equal(made.code, 0, made.err);
     }
@@ -373,7 +410,9 @@ test('repair planning: stale ready blocks new and runnable goals; a changed part
     assert.equal(finishTurn({ ...seams, revision: first }).kind, 'cut');
     assert.equal(admitted().release.revision, first);
 
-    writeFileSync(pagePath, readFileSync(pagePath, 'utf8').replace('Part 1 — Restore rows', 'Part 1 — Restore panels'));
+    const order = readFileSync(pagePath, 'utf8');
+    const changedDesign = 'Put row A before row B.';
+    writeFileSync(f.artifact, changedDesign);
     assert.equal(readsDue().due, false);
     assert.match(readsDue().reason, /needs review/u);
     assert.match(admitted().problems[0], /needs review/u);
@@ -382,17 +421,19 @@ test('repair planning: stale ready blocks new and runnable goals; a changed part
     assert.match(refused.err, /needs review/u);
     assert.equal(existsSync(join(f.dir, 'goals', 'another')), false);
     assert.equal(reopenRepair(f.dir, author).changed, true);
-    const second = await release();
+    const second = await release(changedDesign);
+    assert.equal(readFileSync(pagePath, 'utf8'), order, 'only the binding file changed');
     assert.notEqual(first, second);
     assert.equal(readsDue().revision, second, 'even though Part 1 already has a goal');
     assert.match(admitted().problems[0], /not reconciled/u);
     const unchanged = await reconcile();
     assert.equal(unchanged.code, 1);
     assert.match(unchanged.err, /released part changed/u);
+    assert.match(admitted().problems[0], /not reconciled/u);
     const obsolete = await runGoal(['set', 'p/restore', 'contract', '--text', 'Contract from an older turn.'], planner);
     assert.equal(obsolete.code, 1);
     assert.match(obsolete.err, /different repair release/u);
-    const update = await runGoal(['set', 'p/restore', 'contract', '--text', 'Restore the panels to their settled order.']);
+    const update = await runGoal(['set', 'p/restore', 'contract', '--text', changedDesign]);
     assert.equal(update.code, 0, update.err);
     const secondReconciled = await reconcile();
     assert.equal(secondReconciled.code, 0, secondReconciled.err);
@@ -423,6 +464,41 @@ test('repair delivery: a queued or in-flight PR cannot use a stale order or a la
     readRunningRound: () => null, readLeaseFn: () => null, readRunningDeploy: () => null,
     dropFromPage: () => {}, setGoal: () => { goalWrites++; },
   });
+  const base = 'a'.repeat(40);
+  const landed = '2'.repeat(40);
+  const round = ({ duringGate, duringSquash, refreshedHead } = {}) => {
+    let head = sha;
+    const squashes = [];
+    return {
+      squashes,
+      run: options => runMergeRound({
+        ...options, root: f.root, installs: () => [], mergeLog: join(f.root, 'merge-log.md'), sleep: async () => {},
+        git: args => ({ status: 0, stdout: args[0] === 'rev-parse' ? (squashes.length ? landed : base) : '' }),
+        gh: args => {
+          if (args[1] === 'merge') {
+            squashes.push(args);
+            duringSquash?.();
+            return { status: 0 };
+          }
+          assert.equal(args[1], 'view');
+          return { status: 0, stdout: JSON.stringify({ headRefOid: head, mergeCommit: { oid: landed } }) };
+        },
+        gate: async () => {
+          duringGate?.();
+          return {
+            ok: true, pr: { number: 17, head: 'goal/restore', head_sha: sha, base: 'main' }, base: { commit: base },
+            selection: { files: 1 }, candidate: { red: [], totals: { tests: 1, fail: 0 } },
+            ...(refreshedHead ? { derived: { commit: 'b'.repeat(40) } } : {}),
+          };
+        },
+        refresh: async () => {
+          assert.ok(refreshedHead, 'only the regenerated candidate requires branch refresh');
+          head = refreshedHead;
+          return { ok: true, sha: head };
+        },
+      }),
+    };
+  };
   await f.asAuthor(async author => {
     const release = async () => {
       assert.equal((await f.review(author, f.reader())).code, 0);
@@ -457,15 +533,12 @@ test('repair delivery: a queued or in-flight PR cannot use a stale order or a la
     const old = await intoMerge(first);
     assert.equal(old.repair_revision, first);
     assert.equal(old.sha, sha);
-    const [inFlight] = await land(old, async options => {
-      assert.equal(options.expectedHead, sha);
-      assert.equal(await options.beforeMerge(), true);
-      stale();
-      const reason = await options.beforeMerge();
-      assert.match(reason, /needs review/u);
-      return { ok: false, merged: false, stopped_at: 'repair-release', reason };
-    });
+    const staleRound = round({ duringGate: stale });
+    const [inFlight] = await land(old, staleRound.run);
     assert.equal(inFlight.landed, false);
+    assert.equal(inFlight.report.stopped_at, 'repair-release');
+    assert.match(inFlight.report.reason, /needs review/u);
+    assert.deepEqual(staleRound.squashes, []);
     const neverRound = () => assert.fail('an obsolete job cannot start its round');
     const [queued] = await land(old, neverRound);
     assert.equal(queued.report.stopped_at, 'repair-release');
@@ -528,13 +601,19 @@ test('repair delivery: a queued or in-flight PR cannot use a stale order or a la
     assert.equal(docs.code, 1);
     assert.match(docs.said, /needs review/u);
     writeFileSync(page, revised);
-    const [landedBeforeReadBack] = await land(current, async options => {
-      assert.equal(await options.beforeMerge(), true);
-      writeFileSync(page, `${readFileSync(page, 'utf8')}\nChanged while GitHub took the merge.\n`);
-      return { ok: true, merged: true, merge_commit: '2'.repeat(40) };
-    });
+    const landing = round({ duringSquash: () => writeFileSync(page, `${revised}\nChanged while GitHub took the merge.\n`) });
+    const [landedBeforeReadBack] = await land(current, landing.run);
     assert.equal(landedBeforeReadBack.landed, true, 'the merge that already landed is not undone');
+    assert.deepEqual(landing.squashes, [['pr', 'merge', '17', '--squash', '--match-head-commit', sha]]);
     assert.equal(goalWrites, 0, 'no obsolete answer may change the goal, including a completed squash');
+
+    writeFileSync(page, revised);
+    const freshened = round({ refreshedHead: 'f'.repeat(40) });
+    const [wrongHead] = await land(current, freshened.run);
+    assert.equal(wrongHead.landed, false);
+    assert.equal(wrongHead.report.stopped_at, 'pushed');
+    assert.match(wrongHead.report.reason, /no longer at the authorized repair head/u);
+    assert.deepEqual(freshened.squashes, [], 'the refreshed SHA is not the one authorised to squash');
   });
 });
 

@@ -98,12 +98,17 @@ its check, and each worktree's state.
   on a goal with no criterion, and the merger does not land a goal with one
   unmet.
 - **Programme readers.** `mc programs review <programme>` commissions an
-  advisory document reading; only Martin's interactive session calls it, and
-  nothing reads its report. Its reader writes only PROGRAMME-REVIEW.md; it cannot mutate goals.
+  advisory document reading for interactive Martin. The assigned repair
+  author may instead commission a reading of a repair-owned draft's fixed
+  inputs; only a valid, current review receipt with no unresolved findings
+  authorises repair release. The reader writes only PROGRAMME-REVIEW.md
+  at the path supplied by the call and cannot mutate goals.
 - **Programme state.** `new` refuses draft records (exit 1), naming
   `mc programs show <programme>`. Headless creation without a record refuses
   (exit 1): a goal there is made at the desk. Both happen before fetch/write.
-  A programme Martin has set ready enables goal new.
+  An ordinary programme Martin has set ready enables goal new. For repair,
+  the planner may create goals while reconciling the current release, or
+  interactive Martin may create them in a taken-over draft.
 
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
   fast|medium|large --title "…" ` makes one, always in draft: GOAL.json and

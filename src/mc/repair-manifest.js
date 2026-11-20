@@ -9,7 +9,7 @@ const MAX_BYTES = 64 * 1024 * 1024;
 const localPath = path => typeof path === 'string' && !isAbsolute(path) && !/[\p{Cc}\\]/u.test(path)
   && path.split('/').every(part => part && part !== '.' && part !== '..' && !part.startsWith('.'));
 
-function artifactNames(page) {
+export function repairArtifactNames(page) {
   const names = new Set();
   for (const match of page.matchAll(/`([^`\r\n]+)`|!?\[[^\]\r\n]*\]\(<?([^)>\r\n]+)>?\)/gu)) {
     const raw = match[1] ?? match[2].split('#', 1)[0];
@@ -55,7 +55,7 @@ export function validRepairManifest(manifest) {
 export function repairSnapshot(dir) {
   const page = readInput(dir, 'README.md', MAX_BYTES);
   const text = page.bytes.toString('utf8');
-  const paths = artifactNames(text).filter(path => path !== page.path);
+  const paths = repairArtifactNames(text).filter(path => path !== page.path);
   let left = MAX_BYTES - page.bytes.length;
   const files = [page, ...paths.map(path => {
     const file = readInput(dir, path, left);

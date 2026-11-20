@@ -201,8 +201,10 @@ write of the file (`programme-file`, [mc-hooks.md](mc-hooks.md)).
 
 `mc programs state <programme> draft|ready` is available only to interactive Martin:
 exactly `MC_ROLE=martin` and `MC_HEADLESS` not `1`. Every other caller exits 2
-before effects. It sets `draft` or `ready` without condition on the document,
-the directory or any reading. Setting `ready` also releases the holds the desk placed
+before effects. For ordinary desk orders it sets `draft` or `ready` without
+condition on the document, directory or any reading. For repair orders see
+[release](#repair-drafts) and [desk takeover](#repair-scope-stops-and-dispositions).
+Setting `ready` also releases the holds the desk placed
 (`by: martin`, not a creation hold) on the programme's unfinished goals, each with the log
 entry `mc goal release` writes and a line `<programme>/<goal> released (held since <at>: <reason>)`;
 setting the order ready is Martin's word that its work goes on. Any other hold is kept and named,
@@ -210,10 +212,12 @@ setting the order ready is Martin's word that its work goes on. Any other hold i
 `draft` releases nothing.
 
 `mc programs review <programme>` is an in-session call, not a runner lane or scheduled turn.
-It is advice: Martin's interactive session calls it when he wants, it writes its report
+For desk orders the reading is advice: Martin's interactive session calls it when he wants, it writes its report
 beside the programme as `PROGRAMME-REVIEW.md`, and no code reads the report: it gates
 nothing in mc, is bound to no version of the text and never goes stale.
-It records no verdict or currency. The desk keeps the order in draft while
+It records no verdict or currency. [Repair-owned drafts](#repair-drafts) use
+the same command with a fixed snapshot and a receipt required for release.
+The desk keeps the order in draft while
 working through each part's user outcome and design with Martin. The desk
 settles the technical solution, its supporting investigations and how to check
 the result, then reviews the current text. The desk fixes review findings on
@@ -347,6 +351,12 @@ held-text or reserved-act item. The terminal
 [desk](mc-martin.md#repair-scope-stops) can recover the stop from the
 programme record even if the item write was interrupted. No part of delivery
 may use the stopped record, even if it already has a runnable goal or queued PR.
+
+The repair entrance persists a known scope stop with the draft, or when a
+revision reading identifies it, before publishing any related desk brief.
+While that decision is pending, review and release refuse. Resume completes
+the pending stop without another reading; the move to Martin replaces the
+pending decision with the durable stop.
 
 Only interactive Martin records a disposition. `return` puts the order back
 in repair draft with the narrowing in the disposition and with sources and

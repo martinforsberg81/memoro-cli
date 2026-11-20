@@ -8,7 +8,6 @@ import { mergesPath, queueEntries } from './merge-queue.js';
 import { programsHome, workRoot } from './paths.js';
 import { changeProgrammeRecord, readRecord } from './programme-record.js';
 import { goalParts } from './programme-turn.js';
-import { repairSnapshot, sameRepairSnapshot } from './repair-manifest.js';
 import { isRepairAuthor } from './repair-authority.js';
 import { isDesk } from './repair-release.js';
 import { REPAIR_REVIEW_FILE } from './repair-review.js';
@@ -47,7 +46,7 @@ function project(result, { dir, env, lock, read }) {
   return result;
 }
 
-export function stopRepair(dir, env, { title, summary, item }, { now = new Date(), read = readTextOrNull, alive, lock = realLock, snapshot } = {}) {
+export function stopRepair(dir, env, { title, summary, item }, { now = new Date(), read = readTextOrNull, alive, lock = realLock } = {}) {
   const programme = basename(dir);
   if (!text(title, 160) || !text(summary, 1400)) return refused('a scope stop needs a title and a Swedish summary (one paragraph)');
   const options = { root: workRoot(env), lock, read };
@@ -57,7 +56,6 @@ export function stopRepair(dir, env, { title, summary, item }, { now = new Date(
     }
     if (record.state === 'Martin' && record.repair.stop) return record;
     if (!['draft', 'ready'].includes(record.state)) return refused(`${programme} is not a live repair order`);
-    if (snapshot && !sameRepairSnapshot(snapshot, repairSnapshot(dir))) return refused('the repair order changed during scope assessment');
     let link;
     if (item) {
       const held = readDeskItem(item, { env });
@@ -69,7 +67,7 @@ export function stopRepair(dir, env, { title, summary, item }, { now = new Date(
     const at = now.toISOString();
     const id = deskItemId(REPAIR_STOP_KIND, repairStopReference(programme), at + randomBytes(8).toString('hex'));
     const landed = readGoals(dir, read, { strict: false }).filter(row => row.goal.stage === 'done').map(row => row.name);
-    const { disposition: _disposed, ...repair } = record.repair;
+    const { disposition: _disposed, pending_scope: _pending, ...repair } = record.repair;
     return { ...record, state: 'Martin', repair: { ...repair, stop_item: id,
       stop: { id, at, title: title.trim(), summary: summary.trim(), landed, ...(link ? { link } : {}) } } };
   }, options, 'repair-stop', { beforeWrite: clearReview(dir) });

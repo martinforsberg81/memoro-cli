@@ -36,6 +36,7 @@ export function releaseRepair(dir, env, { lock, alive, read = readTextOrNull } =
     if (record.repair.desk || !isRepairAuthor(env, name, alive)) return refused('only the assigned repair session may release this repair order');
     if (record.state !== 'draft' || record.repair.stop_item) return refused(repairReleaseState(dir, record)?.problems?.[0]
       ?? `repair programme ${name} is already ${record.state}`);
+    if (record.repair.pending_scope) return refused(`repair programme ${name} has a pending scope stop — mc repair --resume ${name}`);
     let reading;
     try { reading = currentRepairReview(dir, { read }); } catch { /* no current reading */ }
     if (!reading || reading.findings.length) return refused(needsRepairReview(name));

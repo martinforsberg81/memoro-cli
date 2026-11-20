@@ -5,10 +5,9 @@ import { writeFileAtomic } from './atomic-write.js';
 import { run as reviewProgramme } from './commands/programs.js';
 import { deskItemId, itemDirectory, readDeskItem, writeDeskItem } from './desk-items.js';
 import { proposeText } from './desk-texts.js';
-import { RESERVED_ACTS } from './jev.js';
 import { readTextOrNull } from './goals.js';
 import { archivedProgramsHome, programsHome, workRoot } from './paths.js';
-import { readRecord } from './programme-record.js';
+import { changeProgrammeRecord, readRecord, validRepairScope } from './programme-record.js';
 import { isRepairAuthor, withRepairAuthor } from './repair-authority.js';
 import { oneLine } from './repair-draft.js';
 import { repairDigest, repairSnapshot, sameRepairSnapshot } from './repair-manifest.js';
@@ -53,9 +52,7 @@ function revisedPage(text, { edits, reading }) {
 }
 
 function repairAct(env, act, { lock, now }) {
-  const { kind, effect, steps, wait, reversible } = act;
-  if (!RESERVED_ACTS.includes(kind) || ![effect, steps, wait].every(value => oneLine(value, 800))
-      || typeof reversible !== 'boolean') throw new Error('a reserved act needs its category, effect, exact steps, dependency and reversibility');
+  const { effect, steps, wait, reversible } = act;
   const brief = [
     '## Vad det gäller', effect, '',
     '## Alternativ och konsekvenser', '- run: Utför stegen enligt nedan.', '- wait: Låt beställningen vänta.', '',
@@ -80,10 +77,8 @@ function repairAct(env, act, { lock, now }) {
   }, { strict: true, name: 'repair-reserved-act' });
 }
 
-function scopeStop(dir, env, scope, { lock, now, say, snapshot }) {
+function scopeStop(dir, env, scope, { lock, now, say }) {
   const { title, summary, heldText, reserved, item } = scope;
-  if (!oneLine(title, 160) || !oneLine(summary, 1400)) throw new Error('repair scope needs a title and a Swedish summary');
-  if ([heldText, reserved, item].filter(Boolean).length > 1) throw new Error('give one related desk brief');
   let link = item;
   if (heldText) {
     const proposed = proposeText({ env, text: heldText.text, brief: heldText.brief, now: now(), lock });
@@ -91,13 +86,13 @@ function scopeStop(dir, env, scope, { lock, now, say, snapshot }) {
     link = proposed.item.id;
   }
   if (reserved) link = repairAct(env, reserved, { lock, now });
-  const result = stopRepair(dir, env, { title, summary, item: link }, { lock, now: now(), snapshot });
+  const result = stopRepair(dir, env, { title, summary, item: link }, { lock, now: now() });
   if (!result.ok) throw new Error(result.problems[0]);
   say(`repair programme ${env.MC_PROGRAMME} is at Martin (item ${result.record.repair.stop_item})`);
   return 0;
 }
 
-export async function finishRepair({ name, scope }, deps = {}) {
+export async function finishRepair({ name }, deps = {}) {
   const { env = process.env, stdout = process.stdout, stderr = process.stderr, lock = realLock,
     now = () => new Date(), revise = judgeRepair, programs = reviewProgramme, wake = wakeRunner,
     settle = settleRepairSources } = deps;
@@ -134,7 +129,7 @@ export async function finishRepair({ name, scope }, deps = {}) {
       say(`repair programme ${name} is ready for planning`);
       return 0;
     }
-    if (scope) return scopeStop(dir, lease, scope, { lock, now, say });
+    if (opened.record.repair.pending_scope) return scopeStop(dir, lease, opened.record.repair.pending_scope, { lock, now, say });
     for (let round = 0; round < MAX_READINGS; round++) {
       const code = await programs(['review', name], { env: lease, stdout, stderr, lock, now, ...deps.programmeReview });
       if (code !== 0) throw new Error(needsRepairReview(name));
@@ -157,7 +152,19 @@ export async function finishRepair({ name, scope }, deps = {}) {
         say(`repair programme ${name} — insufficient evidence: ${answer.reason}`);
         return 0;
       }
-      if (answer?.status === 'scope') return scopeStop(dir, lease, answer, { lock, now, say, snapshot: current.snapshot });
+      if (answer?.status === 'scope') {
+        const { status: _status, ...scope } = answer;
+        if (!validRepairScope(scope)) throw new Error('repair scope needs a title, a Swedish summary and at most one valid related desk brief');
+        const pending = changeProgrammeRecord(dir, live => {
+          if (!isRepairAuthor(lease, name) || live.state !== 'draft' || !live.repair || live.repair.desk
+              || live.repair.pending_scope || !sameRepairSnapshot(current.snapshot, repairSnapshot(dir))) {
+            return { problems: [needsRepairReview(name)] };
+          }
+          return { ...live, repair: { ...live.repair, pending_scope: scope } };
+        }, { root, lock }, 'repair-scope-pending');
+        if (!pending.ok) throw new Error(pending.problems[0]);
+        return scopeStop(dir, lease, pending.record.repair.pending_scope, { lock, now, say });
+      }
       if (answer?.status !== 'revise') throw new Error('the repair session returned no revision');
       const next = revisedPage(current.snapshot.text, answer);
       locked(() => {

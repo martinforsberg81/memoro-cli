@@ -15,6 +15,7 @@ import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { writeFileAtomic } from './atomic-write.js';
 import { canonRoot } from './canon.js';
+import { RESERVED_ACTS } from './jev.js';
 import { NAME_RE } from './plan-schema.js';
 import { workRoot } from './paths.js';
 import { realLock } from './runner-lock.js';
@@ -36,6 +37,20 @@ const names = value => Array.isArray(value) && value.every(name => typeof name =
 function validStop(stop) {
   return stop && itemId(stop.id) && present(stop.at) && present(stop.title) && present(stop.summary)
     && names(stop.landed) && (stop.link === undefined || (itemId(stop.link.id) && ['text', 'reserved'].includes(stop.link.kind)));
+}
+
+export function validRepairScope(scope) {
+  const line = (value, max) => present(value) && value.trim() === value && value.length <= max && !/\p{Cc}/u.test(value);
+  const keys = (value, allowed) => value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).every(key => allowed.includes(key));
+  if (!keys(scope, ['title', 'summary', 'item', 'heldText', 'reserved']) || !line(scope.title, 160) || !line(scope.summary, 1400)) return false;
+  const { item, heldText, reserved } = scope;
+  return [item, heldText, reserved].filter(value => value !== undefined).length <= 1
+    && (item === undefined || itemId(item))
+    && (heldText === undefined || (keys(heldText, ['text', 'brief']) && line(heldText.text, 800) && present(heldText.brief)))
+    && (reserved === undefined || (keys(reserved, ['kind', 'effect', 'steps', 'wait', 'reversible'])
+      && RESERVED_ACTS.includes(reserved.kind) && [reserved.effect, reserved.steps, reserved.wait].every(value => line(value, 800))
+      && typeof reserved.reversible === 'boolean'));
 }
 
 function validDisposition(disposition, stop) {
@@ -69,8 +84,9 @@ export function validRepairSource(source) {
 
 function validRepair(repair) {
   return repair && typeof repair === 'object' && !Array.isArray(repair)
-    && Object.keys(repair).every(key => ['sources', 'stop_item', 'release', 'reconciled', 'stop', 'disposition', 'desk'].includes(key))
+    && Object.keys(repair).every(key => ['sources', 'pending_scope', 'stop_item', 'release', 'reconciled', 'stop', 'disposition', 'desk'].includes(key))
     && Array.isArray(repair.sources) && repair.sources.length > 0 && repair.sources.every(validRepairSource)
+    && (repair.pending_scope === undefined || validRepairScope(repair.pending_scope))
     && (repair.stop_item === undefined || (typeof repair.stop_item === 'string' && /^[a-z0-9-]+$/u.test(repair.stop_item)))
     && (repair.stop === undefined || validStop(repair.stop))
     && (repair.disposition === undefined || validDisposition(repair.disposition, repair.stop))
@@ -204,6 +220,8 @@ export function validateRecord(value) {
     }
   }
   if (value.state === 'Martin' && !value.repair?.stop_item) problems.push('state: Martin requires a repair stop');
+  if (value.repair?.pending_scope && (value.state !== 'draft' || value.repair.desk || value.repair.stop_item
+    || value.repair.disposition?.action === 'decline')) problems.push('repair scope can be pending only on a repair-owned draft');
   if (value.repair?.stop && (value.state === 'Martin' ? value.repair.stop_item !== value.repair.stop.id
     : value.repair.stop_item !== undefined || !value.repair.disposition)) problems.push('repair stop and programme state disagree');
   if (value.phases !== undefined) problems.push(...phasesProblems(value.phases));

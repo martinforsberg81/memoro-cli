@@ -577,9 +577,9 @@ export async function landJob(batch, {
         ...(job.holder ? { holder: job.holder } : {}),
         onProgress: (message) => say(`${label}: ${message}`),
         signal: controller.signal,
-        beforeMerge: ({ pr, branch } = {}) => {
+        beforeMerge: ({ pr, branch, head } = {}) => {
           const current = jobs.find(item => item.pr === pr) ?? job;
-          return allowedToMerge(branch ? { ...current, branch } : current);
+          return allowedToMerge({ ...current, ...(branch ? { branch } : {}), ...(current.repair_revision ? { sha: head } : {}) });
         },
         ...(job.repair_revision ? { expectedHead: job.sha } : {}),
       });

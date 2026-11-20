@@ -1392,7 +1392,9 @@ release. Its handoff names the revision and the registered pull requests'
 authorized heads. Each queued job carries both the revision and its head.
 The merge command, documentation-only and admin routes apply this fence;
 admin does not waive it. A measured round checks it again immediately
-before the squash. An obsolete job leaves the queue without changing the
+before the squash, using the actual head sent to the forge. If refreshing
+the branch changes that head, the round stops instead of squashing it
+under the earlier authorization. An obsolete job leaves the queue without changing the
 goal or waking mend. Completion reads the same fence under the programme
 lock; an already landed GitHub change is not undone.
 
