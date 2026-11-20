@@ -480,7 +480,6 @@ describe('archiveProgramme with the runner\'s fence', () => {
     await check(['gone']);
 
     // The successor's only file is still read by code, so its archive has no PR.
-    mkdirSync(join(fx.repo, 'tests'));
     writeFileSync(join(fx.repo, 'tests', 'x.test.js'), "readFileSync('docs/project/gone/README.md', 'utf8');\n");
     land(fx.repo, 'read retained programme file from code');
     mkdirSync(area);
@@ -515,6 +514,27 @@ describe('archiveProgramme with the runner\'s fence', () => {
     assert.equal(existsSync(area), false);
     const listed = readProgrammes({ env: fx.env, repos: fx.repos }).section.programmes.map((p) => p.programme);
     assert.deepEqual(listed, ['gone']);
+  });
+
+  it('a programme already shelved, whose every file code reads, gets its receipt on the shelf and leaves the list', async (t) => {
+    const programme = 'gone';
+    const fx = fixture();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    mkdirSync(join(fx.repo, 'tests'), { recursive: true });
+    writeFileSync(join(fx.repo, 'tests', 'y.test.js'), "readFileSync('docs/project/gone/README.md', 'utf8');\n");
+    land(fx.repo, 'code reads the whole programme directory');
+    const shelf = join(fx.root, 'work', 'archive', 'programs', programme);
+    mkdirSync(shelf, { recursive: true });
+    writeFileSync(join(shelf, 'README.md'), '# shelved before receipts\n');
+    const { deps, calls } = stubs();
+    const listed = () => readProgrammes({ env: fx.env, repos: fx.repos }).section.programmes.map((p) => p.programme);
+    assert.deepEqual(listed(), [programme]);
+    const a = args(fx, deps, { areaName: `programs/${programme}`, areaPath: join(fx.root, 'work', 'programs', programme) });
+    assert.equal(await archiveProgramme(programme, a), 0, a.stderr.out.text);
+    assert.deepEqual(calls.prs, [], 'nothing to remove opens no pull request');
+    assert.equal(readFileSync(join(shelf, 'README.md'), 'utf8'), '# shelved before receipts\n');
+    assert.ok(existsSync(join(shelf, '.archive-receipt.json')));
+    assert.deepEqual(listed(), []);
   });
 
   it('stops the local archive when a goal arrives during the receipt fetch', async (t) => {
