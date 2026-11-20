@@ -714,7 +714,7 @@ test('repair archival: stale inputs and an old write-back cannot complete a newe
     assert.equal(due().mode, 'read');
     keep(first);
     assert.equal(due().mode, 'archive');
-    writeFileSync(pagePath, `${readFileSync(pagePath, 'utf8')}\nAdditional reading.\n`);
+    writeFileSync(pagePath, readFileSync(pagePath, 'utf8').replace(/^## Read$/mu, '## Read\n\nAdditional reading.'));
     assert.equal(due().due, false);
     assert.match(due().reason, /needs review/u);
     assert.equal((await archive()).stale, true);
