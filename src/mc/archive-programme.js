@@ -19,9 +19,9 @@
  * `fence` is the runner's guard on the local half and is passed by nobody
  * else. It is asked after each docs PR has landed and again immediately before
  * the planning session is released and before the directory moves; a reason
- * it returns (a live goal, restricted data that appeared) stops the archive
- * there with nothing local released, deleted or moved — the landed docs PR
- * stays, and a later pass finds the programme as it was. With a fence the
+ * it returns (a live goal, restricted data that appeared) stops the next
+ * local step. The landed docs PR stays and the programme directory remains
+ * in place for a later pass. With a fence the
  * restricted data is never cleared: deleting it stays a person's act. The
  * person's call passes none and runs as it always did. `onShelved(destination)`
  * is told where the directory went (its `-2` or `-3` suffix included) the
@@ -29,11 +29,10 @@
  *
  * Two halves, in this order, and everything checked before either starts:
  *
- * 1. **main** — in every repository whose `docs/project/` holds the
- *    programme, the directory is removed and `project_log.md` gets one row
- *    for the programme itself (project `-`, outcome `closed`), in a
- *    docs-only PR landed through `mc merge --docs`, as the runner's archive
- *    PR is.
+ * 1. **main** — in each repository that holds the programme, files under
+ *    `docs/project/<programme>/` that code still reads are retained. If any
+ *    other files are removed, `project_log.md` gets a `closed` row in the
+ *    same docs-only PR, landed through `mc merge --docs`.
  * 2. **the planning session** — the planning directory released the way
  *    `releaseWorkArea` releases any area: each worktree handed back, its
  *    branch deleted, the conversations and the directory gone with them. In
@@ -73,9 +72,6 @@ function tilde(path, home = homedir()) {
 
 /** Every programme-archive branch starts with this — never `mc-archive-`, which the runner waits on. */
 export const PROGRAMME_ARCHIVE_PREFIX = 'mc-programme-archive-';
-
-/** `archiveOnMain`'s answer when every file left is one code reads: nothing to land, main is done. */
-const KEPT_ONLY = Symbol('kept-only');
 
 /** The project cell of a programme's own row: it is no project. */
 export const PROGRAMME_ROW_PROJECT = '-';
@@ -152,10 +148,11 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
   };
 
   /** True, with the reason said, when the fence stops the local half. */
-  const fenced = () => {
+  const fenced = (beforeMove = false) => {
     const reason = fence ? fence() : null;
     if (!reason) return false;
-    stderr.write(`mc: ${programme} is not archived any further — ${reason}; nothing local was released, deleted or moved.\n`);
+    const result = beforeMove ? 'the programme directory was not moved' : 'nothing local was released, deleted or moved';
+    stderr.write(`mc: ${programme} is not archived any further — ${reason}; ${result}.\n`);
     return true;
   };
 
@@ -169,13 +166,14 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
     .filter((goal) => goal.programme === programme && !FINISHED.includes(goal.stage));
   const homes = present.filter((repo) => listProgrammes(repo, { git: gitOut }).includes(programme));
   const areaExists = existsSync(areaPath);
+  const beside = isProgrammeArea(areaName, env);
   const forecast = areaExists ? deps.release(areaName, { env, dryRun: true }) : null;
   const restrictedDir = restrictedProgrammeDir(programme, env);
   const restricted = restrictedEntries(restrictedDir);
 
   const verdict = archiveVerdict({
     programme, goals, homes, areaExists, forecast, area: tilde(areaPath),
-    restricted, restrictedDir: tilde(restrictedDir), beside: isProgrammeArea(areaName, env),
+    restricted, restrictedDir: tilde(restrictedDir), beside,
   });
   if (!verdict.ok) {
     stderr.write(`mc: ${programme} is not archived — nothing was touched:\n`);
@@ -183,10 +181,16 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
     return 1;
   }
 
+  const inspections = [];
   for (const repo of homes) {
-    const pr = openPr(repo) || await archiveOnMain(repo, programme, { deps, gitOut, say, now });
-    if (!pr) return 1;
-    if (pr === KEPT_ONLY) continue;
+    const pending = openPr(repo);
+    const step = pending ? { pr: pending } : await archiveOnMain(repo, programme, { deps, gitOut, say, now });
+    if (!step) return 1;
+    if (!step.pr) {
+      if (step.keptAt) inspections.push({ ...repo, commit: step.keptAt });
+      continue;
+    }
+    const { pr } = step;
     const report = await deps.docsMerge({
       repoPath: repo.path,
       pr: Number(pr),
@@ -197,17 +201,19 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
       stderr.write(`mc: ${repo.name} #${pr} did not merge — ${report?.reason || 'the docs merge said nothing'}; the planning session is kept. Run it again to carry on.\n`);
       return 1;
     }
-    say(`${repo.name}: merged #${pr} — docs/project/${programme}/ is off main`);
+    if (report.merge_commit) inspections.push({ ...repo, commit: report.merge_commit });
+    say(`${repo.name}: merged #${pr} — repository archive landed`);
     if (fenced()) return 1;
   }
 
   if (areaExists) {
+    // Fetch the results of the repository step before the last local checks.
+    const inspected = beside ? inspections.filter((repo) => deps.git(repo.path, ['fetch', '-q', 'origin']).ok) : [];
     if (fenced()) return 1;
     const released = deps.release(areaName, { env, dryRun: false });
     for (const item of released.removed) say(`${item.path} — ${item.what} removed${item.branch ? ` (${item.branch})` : ''}`);
     // In layout 2 the directory is the programme's: release leaves it, and
     // what release keeps is the only thing left to refuse.
-    const beside = isProgrammeArea(areaName, env);
     if (released.kept.length || (!beside && (released.held_by.length || existsSync(areaPath)))) {
       stderr.write(`mc: ${tilde(areaPath)}/ is still there\n`);
       for (const item of released.kept) stderr.write(`mc:   kept ${item.repo}${item.branch ? ` (${item.branch})` : ''} — ${item.why}\n`);
@@ -217,8 +223,7 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
     if (beside) {
       // Its restricted evidence goes before the directory moves, so a failed
       // move is run again from programs/ with nothing restricted left. The
-      // runner's call never clears it: its fence has just said there is none.
-      if (fenced()) return 1;
+      // runner's call never clears it and checks again before the rename.
       if (!fence) {
         try {
           for (const line of clearRestricted(restricted, restrictedDir, areaPath)) say(line);
@@ -231,8 +236,8 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
       // projects and documents with it — for archive/programs/ (ruling 57).
       let moved;
       try {
-        const inspected = present.filter((repo) => deps.git(repo.path, ['fetch', '-q', 'origin']).ok);
         writeArchiveReceipt(areaPath, programme, inspected, gitOut);
+        if (fenced(true)) return 1;
         moved = shelveProgramme(areaPath, programme, env);
         onShelved?.(moved);
       } catch (error) {
@@ -305,7 +310,7 @@ export function shelveProgramme(areaPath, programme, env = process.env) {
   return to;
 }
 
-/** The PR that removes `docs/project/<programme>/` in one repository, or null. */
+/** The archive PR, the inspected commit when only retained files remain, or null on failure. */
 async function archiveOnMain(repo, programme, { deps, gitOut, say, now }) {
   const stamp = now().toISOString();
   const branch = `${PROGRAMME_ARCHIVE_PREFIX}${programme}-${stamp.replace(/[-:]/gu, '').slice(0, 15)}`;
@@ -318,7 +323,8 @@ async function archiveOnMain(repo, programme, { deps, gitOut, say, now }) {
   }
   try {
     const dir = join('docs', 'project', programme);
-    const pointer = gitOut(worktree, ['log', '-1', '--format=%h', 'origin/main', '--', dir]);
+    const cutFrom = gitOut(worktree, ['rev-parse', 'HEAD']);
+    const pointer = gitOut(worktree, ['log', '-1', '--format=%h', 'HEAD', '--', dir]);
     // A file under the programme that code or a test reads stays where it
     // is; the rest goes. Nothing left to remove is nothing archived.
     const read = (path) => { try { return readFileSync(join(worktree, path), 'utf8'); } catch { return ''; } };
@@ -328,11 +334,10 @@ async function archiveOnMain(repo, programme, { deps, gitOut, say, now }) {
       // Nothing left that may go: main is as archived as it can be (an
       // earlier run landed the rest), and the planning session goes next.
       say(`${repo.name}: every file left under ${dir} is read by code outside docs/ — nothing more to take off main`);
-      return KEPT_ONLY;
+      return { keptAt: cutFrom };
     }
     const lines = (out) => String(out || '').split('\n').filter(Boolean);
     const before = lines(gitOut(worktree, ['ls-files', '--', dir]));
-    const cutFrom = gitOut(worktree, ['rev-parse', 'HEAD']);
     const rm = remove ? ['rm', '-q', '--', ...remove] : ['rm', '-r', '-q', '--', dir];
     if (!deps.git(worktree, rm).ok) {
       say(`${repo.name}: git rm ${dir} failed — nothing archived`);
@@ -378,7 +383,7 @@ async function archiveOnMain(repo, programme, { deps, gitOut, say, now }) {
       return null;
     }
     say(`${repo.name}: opened ${slug ? `https://github.com/${slug}/pull/${pr}` : `#${pr}`}`);
-    return pr;
+    return { pr };
   } finally {
     deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
     deps.git(repo.path, ['branch', '-D', branch]);

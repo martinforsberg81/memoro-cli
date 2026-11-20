@@ -589,9 +589,7 @@ export class FakeGit {
       if (colon > 0) {
         const tree = this.resolveRev(repo, state, `${rev.slice(0, colon)}^{tree}`);
         const path = rev.slice(colon + 1);
-        const entries = tree && repo.trees.get(tree);
-        const children = entries && [...entries].filter(([name]) => name.startsWith(`${path}/`));
-        const blob = entries?.get(path) || (children?.length ? sha1(`subtree\0${children.map(([name, id]) => `${name.slice(path.length + 1)}\0${id}`).sort().join('\n')}`) : null);
+        const blob = tree && repo.trees.get(tree)?.get(path);
         if (!blob) this.die(`fatal: path '${rev.slice(colon + 1)}' does not exist in '${rev.slice(0, colon)}'`);
         out.push(blob);
         continue;
@@ -1369,7 +1367,12 @@ export class FakeGit {
         }
       }
       return [...dirs].sort()
-        .map((p) => (flags['name-only'] ? `${p}${nul}` : `040000 tree ${createHash('sha1').update(`tree ${sha} ${p}`).digest('hex')}\t${p}${nul}`)).join('');
+        .map((path) => {
+          if (flags['name-only']) return `${path}${nul}`;
+          const entries = [...tree].filter(([name]) => name.startsWith(`${path}/`))
+            .map(([name, blob]) => [name.slice(path.length + 1), blob]);
+          return `040000 tree ${this.treeOf(repo, entries)}\t${path}${nul}`;
+        }).join('');
     }
     return [...tree.entries()].filter(([path]) => !paths.length || paths.some((p) => path === p || path.startsWith(`${p.replace(/\/$/u, '')}/`))).sort()
       .map(([path, blob]) => (flags['name-only'] ? `${path}${nul}` : `100644 blob ${blob}\t${path}${nul}`)).join('');

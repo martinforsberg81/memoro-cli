@@ -6,22 +6,30 @@ import { archivedProgramsHome } from './paths.js';
 
 const FILE = '.archive-receipt.json';
 const SCHEMA = 'mc-programme-archive-receipt';
-const oid = (value) => /^[0-9a-f]{40,64}$/u.test(value || '');
+const oid = (value) => typeof value === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(value);
 
-/** Inspect origin/main after the repository step; failures simply leave no proof. */
-export function writeArchiveReceipt(dir, programme, repos, git) {
+function treeAt(git, repo, commit, path) {
+  const row = git(repo.path, ['ls-tree', '-d', '--full-tree', commit, '--', path]);
+  const [entry, name] = row?.split('\t') ?? [];
+  const tree = entry?.match(/^040000 tree ([0-9a-f]+)$/u)?.[1];
+  return name === path && oid(tree) ? tree : null;
+}
+
+/** Inspect the pinned main revisions from the repository step. */
+export function writeArchiveReceipt(dir, programme, inspections, git) {
   const path = `docs/project/${programme}`;
   const entries = [];
-  for (const repo of repos) {
-    const commit = git(repo.path, ['rev-parse', 'origin/main']);
-    const tree = git(repo.path, ['rev-parse', `origin/main:${path}`]);
+  for (const repo of inspections) {
+    const { commit } = repo;
+    if (!oid(commit)) continue;
+    const tree = treeAt(git, repo, commit, path);
     const identity = git(repo.path, ['remote', 'get-url', 'origin']);
-    if (oid(commit) && oid(tree) && identity) entries.push({ repository: repo.name, identity, path, commit, tree });
+    if (tree && identity) entries.push({ repository: repo.name, identity, path, commit, tree });
   }
   writeFileSync(join(dir, FILE), `${JSON.stringify({ schema: SCHEMA, version: 1, programme, entries }, null, 2)}\n`);
 }
 
-/** A shelf proves only this exact repository tree, with no intervening deletion. */
+/** A shelf proves only this exact repository tree, with a directory throughout its ancestry. */
 export function shelvedMembership(programme, repo, { env, git }) {
   let names;
   try { names = readdirSync(archivedProgramsHome(env)); } catch { return false; }
@@ -35,11 +43,11 @@ export function shelvedMembership(programme, repo, { env, git }) {
       if (!entry || entry.repository !== repo.name || !identity || entry.identity !== identity || entry.path !== path || !oid(entry.commit) || !oid(entry.tree)) continue;
       const main = git(repo.path, ['rev-parse', 'origin/main']);
       if (!oid(main) || git(repo.path, ['merge-base', '--is-ancestor', entry.commit, main]) === null) continue;
-      if (git(repo.path, ['rev-parse', `${entry.commit}:${path}`]) !== entry.tree || git(repo.path, ['rev-parse', `${main}:${path}`]) !== entry.tree) continue;
+      if (treeAt(git, repo, entry.commit, path) !== entry.tree || treeAt(git, repo, main, path) !== entry.tree) continue;
       const history = git(repo.path, ['rev-list', '--ancestry-path', `${entry.commit}..${main}`]);
       if (history === null) continue;
       const commits = history ? history.split('\n') : [];
-      if (commits.every((commit) => oid(git(repo.path, ['rev-parse', `${commit}:${path}`])))) return true;
+      if (commits.every((commit) => oid(commit) && treeAt(git, repo, commit, path))) return true;
     }
   }
   return false;

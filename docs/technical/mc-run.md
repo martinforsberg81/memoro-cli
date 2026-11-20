@@ -1039,8 +1039,9 @@ once in `runner.log`, the desk sync reports it and the item stays open.
 ## Programme archive turn
 
 The runner and manual archive use the same writer: after the repository step,
-it records retained trees in a versioned receipt in the programme directory before
-the fenced move. The receipt travels with the directory; see
+it records retained trees in a versioned receipt in the programme directory.
+It checks the fence after receipt preparation and immediately before shelving.
+The receipt travels with the directory. See
 [archiving a programme](mc-plan.md#archiving-a-programme).
 
 Martin, 2026-11-15: a programme with a record is bounded. Once every goal is
@@ -1124,9 +1125,9 @@ keeps one (no new reading, no session), the runner:
 3. calls `archiveProgramme` with the runner's own git, gh, docs merge and release
    and a `fence`, the same function `mc plan <p> --archive` calls. The fence
    re-reads `goals/` and `~/mc/restricted/<p>/` after each docs PR merge, before
-   release and before shelving; a live goal or a restricted entry that has
-   appeared stops the archive with nothing local released, deleted or moved
-   (a landed docs PR stays). With a fence, `clearRestricted` is never called;
+   release and before shelving. A live goal or a restricted entry that has
+   appeared stops the next local step and leaves the programme directory in
+   place. A landed docs PR stays. With a fence, `clearRestricted` is never called;
 4. records the destination it returns in the state file at once, then sets the
    record there to `done` (`setRecordState`) and clears the state.
 

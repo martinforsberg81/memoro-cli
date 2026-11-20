@@ -39,6 +39,7 @@ import { goalJson } from './_helpers/goal-file.js';
 import { buildOpening, costReading } from '../../src/mc/desk-opening.js';
 import { deskRunsPath, readDeskText } from '../../src/mc/desk-budget.js';
 import { deskItemId, itemDirectory, writeDeskItem } from '../../src/mc/desk-items.js';
+import { recordArchiveFailure } from '../../src/mc/archive-turn.js';
 import { deskKey, deskLines, readPageDesk } from '../../src/mc/page-desk.js';
 import { ledgerPath } from '../../src/mc/jev.js';
 import { holderPath, lockPath } from '../../src/mc/runner-lock.js';
@@ -2361,11 +2362,23 @@ describe('collectPage', () => {
     writeFileSync(current, JSON.stringify({ name: 'archive:finished', kind: 'plan', repo: 'memoro-cli', tool: 'codex', model: 'sol', started: '2026-08-29T11:40:00Z', pid: process.pid }));
     assert.ok((await fx.collect()).runner.sessions.some((session) => session.name === 'archive:finished'));
     const source = '2026-11-02T00:00:00Z';
-    const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('archive', 'archive:finished', source), kind: 'archive', reference: 'archive:finished', source_at: source, opened_at: source, state: 'for-martin', sort: 'text', reversible: null, due_at: null, outcome: null };
-    writeDeskItem(item, { env: fx.env });
+    const write = (path, text) => {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, text);
+    };
+    const { item } = recordArchiveFailure({
+      kind: 'not-ok', at: source, lines: ['work: NOT OK — missing write-back'],
+      programme: 'finished', root: fx.root, env: fx.env, itemDirectory, write,
+      read: (path) => readFileSync(path, 'utf8'),
+      writeJson: (path, value) => write(path, JSON.stringify(value)),
+      lock: (_root, update) => update(),
+    });
+    assert.equal(item.state, 'prepared');
+    await check({ status: 'attention', reason: 'see the desk' }, 'see the desk');
     writeFileSync(join(itemDirectory(item, fx.env), 'prepared.md'), 'repair write-back\n');
     await check({ status: 'attention', reason: 'repair write-back' }, 'repair write-back');
     // Reserved items and a retry keep their own reason ahead of recorded failures.
+    item.state = 'for-martin';
     item.sort = 'reserved'; writeDeskItem(item, { env: fx.env });
     writeFileSync(join(itemDirectory(item, fx.env), 'brief.md'), '# Repair the record\n');
     await check({ status: 'attention', reason: 'see the desk' }, 'see the desk');

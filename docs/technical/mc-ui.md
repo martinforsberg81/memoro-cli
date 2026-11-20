@@ -87,17 +87,22 @@ nonzero priority and finished-in-tree count, and `record invalid` when applicabl
 After the goal count, `archive pending` is grey for a due read or archive turn;
 `archive needs attention` is red and adds its reason to NEEDS ATTENTION. The
 collector reads the runner's archive state, physical live goals and open archive
-desk items without changing them. A current notice or failure is shown verbatim;
-an item uses its first brief line (or prepared text), falling back to `see the
-desk` for a missing line, heading or reading verdict. An old destination holding
-a successor is identified as a previous archive repair, not the successor's fault.
+desk items. With no live goal, an applicable open item takes precedence over
+the current runner notice. Otherwise, if no notice applies and the turn is
+still due with no live goal, the latest recorded failure since the last item
+stays visible through retries. Attention clears when its source no longer
+applies, and a due read or archive then shows as pending. Notices and failures
+are shown verbatim. An item uses its first brief line (or prepared text),
+falling back to `see the desk` for a missing line, heading or reading verdict.
+An earlier archive destination holding a successor's turn shows as a previous
+archive repair.
 
 A done record with no live goal leaves the page. A local directory or live goal
 otherwise takes precedence over an earlier archive. Repository membership is
 removed only when the shared shelved-receipt reader validates the repository,
-path, main ancestry, retained tree and uninterrupted path identity; absent,
-unreadable or mismatched proof leaves it visible. Residual sessions and PRs are
-reported in Strays rather than restoring a completed card. Open archive items
+path, main ancestry, retained tree and directory presence along that ancestry.
+Absent, unreadable or mismatched proof leaves the membership visible. Residual
+sessions and PRs are reported in Strays. Open archive items
 remain on the desk after the move.
 Held, blocked and malformed goals and sessions are drawn in their programme.
 Programme headings and tree text, including goal titles, metadata, holds and
