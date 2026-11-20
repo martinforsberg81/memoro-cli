@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { GOAL_FILE, LOG_FILE, parseGoal, parseLog, renderGoalText, waitsOnPerson } from './goals.js';
+import { GOAL_FILE, LOG_FILE, entryHeadings, parseGoal, parseLog, renderGoalText, waitsOnPerson } from './goals.js';
 import { deployMendPath, deployMendReading } from './deploy-repair.js';
 import { mainMendReading } from './main-repair.js';
 import { deskEntries } from './take-back-run.js';
@@ -51,7 +51,7 @@ export function collectMartinQueue({ selector = { kind: 'all' }, home = programs
     const logText = read(logPath);
     if (logText === null) issues.push({ path: logPath, error: 'missing or unreadable LOG.md' });
     const log = parseLog(logText ?? '');
-    const malformedEntries = (String(logText ?? '').match(/^## /gmu) || []).length - log.length;
+    const malformedEntries = entryHeadings(logText) - log.length;
     if (malformedEntries > 0) issues.push({ path: logPath, error: `${malformedEntries} malformed log entr${malformedEntries === 1 ? 'y' : 'ies'} could not be parsed` });
     const question = currentQuestion(log, parsed.status);
     const README = join(home, programme, 'README.md');

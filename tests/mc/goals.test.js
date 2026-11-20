@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { BUILD_SESSION, buildSessionCount, noProgressEntry, noProgressStreak, NO_PROGRESS_SESSION, NOT_COUNTED, PROGRESS_AGAIN } from '../../src/mc/goals.js';
-import { appendEntry, backward, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, isRepair, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextDraft, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, rejections, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
+import { appendEntry, backward, entryHeadings, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, isRepair, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextDraft, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, rejections, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
 import * as criteria from '../../src/mc/criteria.js';
 import { goalField, goalJson, goalJsonV2, goalMinimalV2, withGoal } from './_helpers/goal-file.js';
 import { addPr, goalOfRecord, readHold } from '../../src/mc/goals.js';
@@ -160,6 +160,31 @@ test('parseLog reads each heading, and each labelled line up to the next label o
     done: 'the reader\nand its tests, over two paragraphs', comment: 'none yet', next: 'the verbs',
   });
   assert.deepEqual(log[2], { at: '2026-11-01T22:00Z', tool: 'runner', model: null, stage: 'build', status: 'ready', role: null, done: null, comment: 'no session ran', next: null });
+});
+
+test('parseLog reads a markdown heading inside an entry as part of its field; only a dated heading begins an entry', () => {
+  const text = [
+    '## 2026-11-19T22:20Z · codex gpt-6.2-sol · review · ready · by build',
+    '',
+    'Done: repaired',
+    'Comment: first',
+    '',
+    '## Criterion 1',
+    '',
+    'measured',
+    'Next: review',
+    '',
+    '## 2026-11-19T22:20Z · runner · review · Martin',
+    '',
+    'Comment: stopped',
+    '## 2026-11-19T22:21Z broken',
+  ].join('\n');
+  const log = parseLog(text);
+  assert.equal(log.length, 2);
+  assert.equal(log[0].comment, 'first\n\n## Criterion 1\n\nmeasured', 'the section stays in the comment');
+  assert.equal(log[0].next, 'review');
+  assert.equal(entryHeadings(text), 3, 'a dated line that does not match the form is still counted');
+  assert.equal(entryHeadings(text) - log.length, 1, 'and reads as one malformed entry');
 });
 
 test('parseLog reads an entry written before stages with its old status and no stage', () => {
