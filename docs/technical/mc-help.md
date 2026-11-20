@@ -25,7 +25,9 @@ brief, criteria, phase, stage and log; `mc plan` and `mc martin` are the person'
 running uses its own verbs, not an entrance that starts another session.
 `mc learning` is a terminal command for factual area updates, starting the
 same headless role as chores; its in-session routes and refusal rules are in
-[mc-martin.md](mc-martin.md#lessons-and-the-learning-pass).
+[mc-martin.md](mc-martin.md#lessons-and-the-learning-pass). With no eligible
+lessons, it prints `mc: no area information to update` and exits successfully
+without a model session.
 Projects went on 2026-11-03; migration is described in
 [mc-goals.md § From a project](mc-goals.md#from-a-project).
 
@@ -37,7 +39,10 @@ that silently performs the old operation. `mc status` points to the page and
 
 `mc repair` starts from the terminal with no arguments or one of
 `--proposal <path>`, `--feedback <file>` and
-`--error <digest-file> [--fingerprint <id>]`.
+`--error <digest-file> [--fingerprint <id>]`. The input limit is 128 KiB per
+file. `--error` takes a dated collector digest in intake or its dated archive
+and selects from the affected repository's fingerprint table. See
+[repair drafts](mc-plan.md#repair-drafts) for the source rules.
 Without a selection it examines waiting dated area proposals by filename
 then path, skipping unchanged non-actionable, ambiguous, stopped and
 already ordered sources. It can resume an existing repair draft. Explicit
