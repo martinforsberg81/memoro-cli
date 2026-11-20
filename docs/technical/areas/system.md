@@ -39,6 +39,15 @@ On main now:
 - [`mc repair`](../mc-plan.md#repair-drafts) takes an evidenced defect through
   independent review to the ordinary planner, or records a scope stop at
   the desk. The release binds the reviewed order and its evidence.
+- A review that finds a goal not OK returns it to build for a repair build, up
+  to two automatic repairs for the current brief; a further failed verdict
+  holds delivery for an automatic desk decision ([goal stages](../mc-goals.md)).
+- The runner's archive turn and `mc plan <programme> --archive` share one
+  writer, which records the retained trees in a versioned receipt before the
+  programme is shelved. The overview and list show a programme's archive status
+  and attention reason, and a programme leaves the page only when that receipt
+  validates against main ([programme archive turn](../mc-run.md#programme-archive-turn),
+  [archiving a programme](../mc-plan.md#archiving-a-programme)).
 - A waiting deploy reserves the next opening for a full run when a different commit is being measured. It can still join a measurement of its own commit.
 - The helper preserves anonymous app suggestions in intake before it acknowledges their receipt. Collection does not create a programme or goal.
 
