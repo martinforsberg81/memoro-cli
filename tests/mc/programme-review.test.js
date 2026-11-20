@@ -387,60 +387,78 @@ test('repair planning: stale ready blocks new and runnable goals; changed bindin
   };
   const newArgs = name => ['new', `p/${name}`, '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Restore', '--structure', '1'];
   const reconcile = () => f.call(['reconcile', 'p', '--reason', 'Compared Part 1 and its goal contract.'], { identity: plan() });
+  const order = page.replace(/### Part 1 — [^\n]+/u, '### Part 1 — Restore rows');
+  writeFileSync(pagePath, order);
   await f.asAuthor(async author => {
-    const release = async evidence => {
-      const reviewed = await f.review(author, f.reader({ evidence }));
-      assert.equal(reviewed.code, 0, reviewed.err);
-      const result = await f.call(['release', 'p'], { identity: author });
-      assert.equal(result.code, 0, result.err);
-      return record().repair.release.revision;
-    };
-    writeFileSync(pagePath, page.replace(/### Part 1 — [^\n]+/u, '### Part 1 — Restore rows'));
-    const first = await release();
-    const planner = plan();
-    assert.equal(readsDue().revision, first);
-    for (const args of [newArgs('restore'), ['document', 'add', 'p/restore', '--label', 'Part 1', '--path', pagePath],
-      ['set', 'p/restore', 'contract', '--text', 'Put row B before row A.']]) {
-      const made = await runGoal(args);
-      assert.equal(made.code, 0, made.err);
-    }
-    assert.match(admitted().problems[0], /not reconciled/u);
-    const firstReconciled = await reconcile();
-    assert.equal(firstReconciled.code, 0, firstReconciled.err);
-    assert.equal(finishTurn({ ...seams, revision: first }).kind, 'cut');
-    assert.equal(admitted().release.revision, first);
-
-    const order = readFileSync(pagePath, 'utf8');
-    const changedDesign = 'Put row A before row B.';
-    writeFileSync(f.artifact, changedDesign);
-    assert.equal(readsDue().due, false);
-    assert.match(readsDue().reason, /needs review/u);
-    assert.match(admitted().problems[0], /needs review/u);
-    const refused = await runGoal(newArgs('another'), planner);
-    assert.equal(refused.code, 1, refused.err);
-    assert.match(refused.err, /needs review/u);
-    assert.equal(existsSync(join(f.dir, 'goals', 'another')), false);
-    assert.equal(reopenRepair(f.dir, author).changed, true);
-    const second = await release(changedDesign);
-    assert.equal(readFileSync(pagePath, 'utf8'), order, 'only the binding file changed');
-    assert.notEqual(first, second);
-    assert.equal(readsDue().revision, second, 'even though Part 1 already has a goal');
-    assert.match(admitted().problems[0], /not reconciled/u);
-    const unchanged = await reconcile();
-    assert.equal(unchanged.code, 1);
-    assert.match(unchanged.err, /released part changed/u);
-    assert.match(admitted().problems[0], /not reconciled/u);
-    const obsolete = await runGoal(['set', 'p/restore', 'contract', '--text', 'Contract from an older turn.'], planner);
-    assert.equal(obsolete.code, 1);
-    assert.match(obsolete.err, /different repair release/u);
-    const update = await runGoal(['set', 'p/restore', 'contract', '--text', changedDesign]);
-    assert.equal(update.code, 0, update.err);
-    const secondReconciled = await reconcile();
-    assert.equal(secondReconciled.code, 0, secondReconciled.err);
-    assert.equal(readsDue().due, false);
-    assert.equal(admitted(second).release.revision, second);
-    assert.match(admitted(first).problems[0], /different repair release/u);
+    const reviewed = await f.review(author, f.reader());
+    assert.equal(reviewed.code, 0, reviewed.err);
+    const result = await f.call(['release', 'p'], { identity: author });
+    assert.equal(result.code, 0, result.err);
   });
+  const first = record().repair.release.revision;
+  const sources = record().repair.sources;
+  const planner = plan();
+  assert.equal(readsDue().revision, first);
+  for (const args of [
+    newArgs('restore'), ['document', 'add', 'p/restore', '--label', 'Part 1', '--path', pagePath],
+    ['set', 'p/restore', 'goal', '--text', 'Restore settled row order.'],
+    ['set', 'p/restore', 'contract', '--text', 'Put row B before row A.'],
+    ['criterion', 'add', 'p/restore', '--criterion', 'The rows use the settled order.', '--check', 'mc gate'],
+    ['stage', 'p/restore', 'build'],
+  ]) {
+    const made = await runGoal(args);
+    assert.equal(made.code, 0, made.err);
+  }
+  assert.match(admitted().problems[0], /not reconciled/u);
+  const firstReconciled = await reconcile();
+  assert.equal(firstReconciled.code, 0, firstReconciled.err);
+  assert.equal(finishTurn({ ...seams, revision: first }).kind, 'cut');
+  assert.equal(admitted().release.revision, first);
+
+  const changedDesign = 'Put row A before row B.';
+  writeFileSync(f.artifact, changedDesign);
+  assert.equal(readsDue().due, false);
+  assert.match(readsDue().reason, /needs review/u);
+  assert.match(admitted().problems[0], /needs review/u);
+  const refused = await runGoal(newArgs('another'), planner);
+  assert.equal(refused.code, 1, refused.err);
+  assert.match(refused.err, /needs review/u);
+  assert.equal(existsSync(join(f.dir, 'goals', 'another')), false);
+  const stdout = sink(), stderr = sink();
+  const goalPath = join(f.dir, 'goals', 'restore', 'GOAL.json');
+  const goalBeforeResume = readFileSync(goalPath, 'utf8');
+  assert.equal(JSON.parse(goalBeforeResume).stage, 'build');
+  const resumed = await repair(['--resume', 'p'], {
+    env: { MC_WORK_ROOT: f.root }, stdout, stderr, now: () => NOW, wake: () => {},
+    settle: details => assert.deepEqual(details.sources, sources),
+    programmeReview: {
+      known: () => ['/known/memoro-cli.git', '/known/memoro'],
+      review: { ...f.deps, session: f.reader({ evidence: changedDesign, during: () => assert.equal(record().state, 'draft') }) },
+    },
+  });
+  assert.equal(resumed, 0, stderr.text());
+  assert.match(stdout.text(), /repair programme p is ready for planning/u);
+  const second = record().repair.release.revision;
+  assert.deepEqual(record().repair.sources, sources);
+  assert.equal(readFileSync(goalPath, 'utf8'), goalBeforeResume);
+  assert.equal(readFileSync(pagePath, 'utf8'), order, 'only the binding file changed');
+  assert.notEqual(first, second);
+  assert.equal(readsDue().revision, second, 'even though Part 1 already has a runnable goal');
+  assert.match(admitted().problems[0], /not reconciled/u);
+  const unchanged = await reconcile();
+  assert.equal(unchanged.code, 1);
+  assert.match(unchanged.err, /released part changed/u);
+  assert.match(admitted().problems[0], /not reconciled/u);
+  const obsolete = await runGoal(['set', 'p/restore', 'contract', '--text', 'Contract from an older turn.'], planner);
+  assert.equal(obsolete.code, 1);
+  assert.match(obsolete.err, /different repair release/u);
+  const update = await runGoal(['set', 'p/restore', 'contract', '--text', changedDesign]);
+  assert.equal(update.code, 0, update.err);
+  const secondReconciled = await reconcile();
+  assert.equal(secondReconciled.code, 0, secondReconciled.err);
+  assert.equal(readsDue().due, false);
+  assert.equal(admitted(second).release.revision, second);
+  assert.match(admitted(first).problems[0], /different repair release/u);
 });
 
 test('repair delivery: a queued or in-flight PR cannot use a stale order or a later release', async t => {
