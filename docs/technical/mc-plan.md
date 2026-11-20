@@ -247,8 +247,10 @@ the no-record page only when no README exists. `mc programs show` prints the
 
 ### Repair drafts
 
-The draft is a full programme document with affected repositories, numbered
-parts, observable acceptance and original source pointers in Where things are.
+The draft is a full programme document with affected repositories, three to
+eight numbered parts, observable acceptance and original source pointers in
+Where things are. The draft writer rejects an order outside that part range
+before writing it.
 The validated record carries `repair.sources`: absolute source references
 (`kind`, `path`), logical keys and SHA-256 evidence digests. Fingerprint
 identity includes the repository, not the date or intake path; the evidence
@@ -350,7 +352,9 @@ handoff even for a goal the planner keeps unchanged; see
 
 ### Repair scope stops and dispositions
 
-Repair can release a restoration of settled behaviour. An order that needs
+Repair can release a restoration of settled behaviour. When the written
+standards leave the behaviour open, repository evidence of the app's
+established pattern can establish what a repair restores. An order that needs
 a new user-visible design decision or a change to a text Martin holds must
 stop at the desk before release.
 

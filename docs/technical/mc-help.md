@@ -57,6 +57,8 @@ Sources, records and draft admission are in [mc-plan.md](mc-plan.md#repair-draft
 can use `mc programs disposition <programme> decline|return|takeover --reason
 <text>`. An unauthorised disposition or malformed invocation exits 2 without
 writing. A valid call whose record or inputs prevent the transition exits 1.
+A successful call confirms the outcome as `declined`, `returned to repair`,
+or `taken over by Martin`.
 See [repair scope stops](mc-martin.md#repair-scope-stops).
 
 The selected order continues through independent review and bounded revision
