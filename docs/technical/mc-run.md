@@ -1124,7 +1124,8 @@ keeps one (no new reading, no session), the runner:
    declared `page`, read at origin/main), else `~/mc/areas/memoro-cli/system/proposals/` —
    each with a first line naming the programme, never over a file already there;
 3. calls `archiveProgramme` with the runner's own git, gh, docs merge and release
-   and a `fence`, the same function `mc plan <p> --archive` calls. The fence
+   and a `fence`, the same function `mc plan <p> --archive` calls. Receipt
+   fetches finish before the pre-release fence. The fence
    re-reads `goals/` and `~/mc/restricted/<p>/` after each docs PR merge, before
    release and before shelving. A live goal or a restricted entry that has
    appeared stops the next local step and leaves the programme directory in
