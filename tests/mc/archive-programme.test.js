@@ -480,6 +480,7 @@ describe('archiveProgramme with the runner\'s fence', () => {
     await check(['gone']);
 
     // The successor's only file is still read by code, so its archive has no PR.
+    mkdirSync(join(fx.repo, 'tests'));
     writeFileSync(join(fx.repo, 'tests', 'x.test.js'), "readFileSync('docs/project/gone/README.md', 'utf8');\n");
     land(fx.repo, 'read retained programme file from code');
     mkdirSync(area);
