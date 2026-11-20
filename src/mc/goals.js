@@ -110,6 +110,14 @@ const LABEL = /^(Done|Comment|Next|Gjort|Kommentar|Nästa): ?(.*)$/u;
 // stages has only a status there, and is read with `stage` null. The `by` segment names
 // the session that wrote the entry, and is absent from older entries and from runner's.
 const HEADING = /^## (\S+) · (\S+)(?: (\S+))? · (\S+)(?: · (\S+))?(?: · by (\S+))?$/u;
+// What begins an entry: `## ` and a date. A `## ` line without one is a markdown heading in a
+// session's text (a build's `## Criterion 1` section), read as part of the field it is in.
+const ENTRY_START = /^## \d{4}-\d{2}-\d{2}T/u;
+
+/** The lines of a LOG.md that begin an entry, read or not: more than `parseLog` returns is a malformed heading. */
+export function entryHeadings(text) {
+  return String(text ?? '').split('\n').filter((line) => ENTRY_START.test(line)).length;
+}
 
 /** The key a goal named the goals it started after by, before phases (`goal-convert.js` `phaseGoals`), named only to say so. */
 export const LEGACY_AFTER = 'after';
@@ -311,7 +319,7 @@ export function unmetGoalWords(goal, name = '<programme>/<goal>') {
 export function parseLog(text) {
   const blocks = [];
   for (const line of String(text ?? '').split('\n')) {
-    if (line.startsWith('## ')) blocks.push({ head: line, lines: [] });
+    if (ENTRY_START.test(line)) blocks.push({ head: line, lines: [] });
     else if (blocks.length) blocks.at(-1).lines.push(line);
   }
   return blocks.flatMap((block) => {

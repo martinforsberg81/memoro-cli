@@ -308,7 +308,12 @@ Next: what the next session should do
   `Nästa:`; the parser reads those as the same fields, so no log is rewritten.
   A label's text runs on until the next label or heading, so a field may take
   several paragraphs.
-- A heading that does not match the form is skipped with its lines.
+- An entry begins at a line of `## ` and a date (`## 2026-…T`). A `## ` line
+  without one is a markdown heading in a session's text, such as a build's
+  `## Criterion 1` section, and is read as part of the field it is in. A dated
+  heading that does not match the form is skipped with its lines and counted
+  as a malformed entry: the desk opens no item for a goal whose LOG.md has one,
+  and names the file as a source issue.
 - `mc goal new` writes the first entry: `draft · ready` (or `build · ready`), `Done: created`.
 - A session count is every entry whose tool is neither `runner` nor `person`.
 - The **last build entry** is the last entry a session wrote in `build`, or

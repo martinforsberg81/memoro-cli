@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { writeJsonAtomic } from './atomic-write.js';
 import { collectMartinQueue, currentQuestion } from './martin-collect.js';
 import { mainMendPath, readMainMends } from './main-repair.js';
-import { archiveDirIn, listDirsOf, parseGoal, parseLog, GOAL_FILE, LOG_FILE, waitsOnPerson } from './goals.js';
+import { archiveDirIn, entryHeadings, listDirsOf, parseGoal, parseLog, GOAL_FILE, LOG_FILE, waitsOnPerson } from './goals.js';
 import { NAME_RE } from './plan-schema.js';
 import { archivedProgramsHome, mcHome, martinDir, programsHome, workRoot } from './paths.js';
 import { ledgerPath, rowAnswer } from './jev.js';
@@ -172,7 +172,7 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
         else {
           const logPath = join(gd, LOG_FILE), text = read(logPath);
           const log = parseLog(text || '');
-          if (text == null || (text.match(/^## /gmu) || []).length !== log.length) {
+          if (text == null || entryHeadings(text) !== log.length) {
             issues.set(logPath, { path: logPath, error: 'missing, unreadable or malformed LOG.md' });
             continue;
           }

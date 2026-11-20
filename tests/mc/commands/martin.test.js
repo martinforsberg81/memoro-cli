@@ -223,7 +223,7 @@ describe('mc martin get', () => {
     f.make('alpha', 'done', { stage: 'done' }, []);
     f.make('alpha', 'dropped', { stage: 'dropped' }, []);
     f.make('beta', 'third', {}, [log('2026-01-01T00:00Z', 'Martin', 'Martin is asked: Beta question?\nOption a: A\nOption b: B\nRecommended: a')]);
-    f.make('alpha', 'badlog', {}, ['## this is not a valid log heading\n\nComment: malformed']);
+    f.make('alpha', 'badlog', {}, ['## 2026-01-01T00:00Z this is not a valid log heading\n\nComment: malformed']);
     const archived = join(f.home, 'alpha', 'goals', '.archive', 'old'); mkdirSync(archived, { recursive: true }); writeFileSync(join(archived, 'GOAL.json'), goalJson({ status: 'Martin' }));
     mkdirSync(join(f.home, 'alpha', 'goals', 'malformed'), { recursive: true }); writeFileSync(join(f.home, 'alpha', 'goals', 'malformed', 'GOAL.json'), '{bad');
     const before = snapshot(f.home);
