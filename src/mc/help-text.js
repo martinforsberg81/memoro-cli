@@ -9,10 +9,10 @@ export const HELP_TEXT = `mc — source-owned coding sessions
 THE PAGE
   mc                              The one page; at a terminal, a way in
   mc --json [--fresh]              The same page as data; --fresh asks GitHub
-
 PLAN AND FOLLOW
   mc server set <dest>|clear      Set server; entrances accept --local, --bg
-  mc learning                         update permanent area information
+  mc learning                     Update permanent area information
+  mc repair                       Prepare a bounded repair
   mc martin [brief [--json]]       Person: the desk; brief prints its opening
   mc martin get [--json]             Read the live decision queue
   mc plan [<programme>]            Person: open or resume a plan session
@@ -130,6 +130,8 @@ ${commandReference('session')}
 
 ${commandReference('manager')}
 ${commandReference('learning')}
+
+${commandReference('repair')}
 
 ${commandReference('brief')}
 
