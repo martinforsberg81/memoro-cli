@@ -208,6 +208,7 @@ describe('mc programs', () => {
       mkdirSync(goal, { recursive: true });
       writeFileSync(join(goal, 'GOAL.json'), goalJson({ status: 'open', repos: ['memoro'], class: 'fast', created: '2026-11-02T00:00:00Z', title: 'Rollout' }));
       writeFileSync(join(goal, 'LOG.md'), '');
+      mkdirSync(join(root, 'programs', 'planned'), { recursive: true });
       mkdirSync(join(root, 'runner', 'foreground'), { recursive: true });
       writeFileSync(join(root, 'runner', 'foreground', '1.json'), JSON.stringify({ ...SESSION, pid: process.pid }));
       const repo = { name: 'memoro', git: root, path: root };

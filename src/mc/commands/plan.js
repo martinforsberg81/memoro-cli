@@ -51,6 +51,7 @@ import { planSessionRefusal } from '../session-role.js';
 import { PLAN_ROLE } from '../goals.js';
 import { scanArgs } from './flags.js';
 import { interactiveToolRefusal } from '../interactive-tool.js';
+import { directoryAccessRefusal } from '../interactive-access.js';
 import { commandUsage } from '../command-help.js';
 import { canonRoot } from '../canon.js';
 
@@ -233,7 +234,8 @@ export async function run(argv, deps = {}) {
  * the session over the other one's absence helps nobody. Nothing at all is the
  * only failure.
  */
-export function ensurePlanArea(programme, { repos, env = process.env, stdout, stderr, git = null, attach = attachRepoDeps, exists = existsSync } = {}) {
+export function ensurePlanArea(programme, { repos, env = process.env, stdout, stderr, git = null,
+  attach = attachRepoDeps, exists = existsSync, create = createWorkArea } = {}) {
   const name = planArea(programme, env);
   const branch = planBranch(programme);
   const runGit = git || ((args) => gitRun(undefined, args, { stdio: 'ignore' }));
@@ -242,7 +244,15 @@ export function ensurePlanArea(programme, { repos, env = process.env, stdout, st
   // repositories all fail leaves this call holding the empty directory — and
   // the one that made it is the one that takes it away again.
   const madeTheArea = !area.exists;
-  if (madeTheArea) createWorkArea(name, env);
+  if (madeTheArea) {
+    try { create(name, env); }
+    catch (error) {
+      const reason = directoryAccessRefusal(error, area.path);
+      if (!reason) throw error;
+      stderr.write(`mc: ${reason}\n`);
+      return { ok: false };
+    }
+  }
 
   for (const repo of repos) {
     // A checkout that stands is reopened, and its attachment may predate the

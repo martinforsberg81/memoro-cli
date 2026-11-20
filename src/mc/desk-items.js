@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { writeJsonAtomic } from './atomic-write.js';
 import { collectMartinQueue, currentQuestion } from './martin-collect.js';
 import { mainMendPath, readMainMends } from './main-repair.js';
-import { archiveDirIn, listDirsOf, parseGoal, parseLog, GOAL_FILE, LOG_FILE } from './goals.js';
+import { archiveDirIn, listDirsOf, parseGoal, parseLog, GOAL_FILE, LOG_FILE, waitsOnPerson } from './goals.js';
 import { NAME_RE } from './plan-schema.js';
 import { archivedProgramsHome, mcHome, martinDir, programsHome, workRoot } from './paths.js';
 import { ledgerPath, rowAnswer } from './jev.js';
@@ -262,6 +262,14 @@ export function deskItemQuestion(item, { env = process.env, home = programsHome(
     const entry = readMainMends({ root, repo: match[1], read }).find(entry => entry.id === match[2]);
     return firstLine(entry?.reason || 'Source reason unavailable.');
   } catch { return 'Source reason unavailable.'; }
+}
+
+/** Read the current goal item's exact source. An older brief must not label a new stop. */
+export function readGoalDeskItem(goal, options = {}) {
+  if (!waitsOnPerson(goal)) return null;
+  const question = currentQuestion(goal.log ?? [], goal.status);
+  if (!question?.at) return null;
+  return readDeskItem(deskItemId('goal', `${goal.programme}/${goal.goal}`, question.at), options);
 }
 
 export function readDeskItem(id, { env = process.env, read = readText } = {}) {

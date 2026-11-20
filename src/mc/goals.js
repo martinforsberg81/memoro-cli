@@ -600,9 +600,8 @@ function countStart(log) {
 }
 
 /**
- * How many times a review session has rejected the goal: its entries that moved it from review to build, since the
- * latest move into draft or, with none, the goal's creation. A move to `finish` made before finish went is not one. At
- * two the next NOT OK is the third, which moves nothing (`mc goal stage build`, commands/goal.js).
+ * How many times review sent the goal back to build since its latest move into draft or its creation.
+ * Used for numbering review verdicts and bounding automatic repairs. Moves to the retired `finish` stage are excluded.
  */
 export function rejections(log) {
   const from = countStart(log);

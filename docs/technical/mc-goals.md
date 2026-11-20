@@ -24,10 +24,10 @@ måste innehålla även processen så att den inte går tillbaka."* *"Det kan
 aldrig gå bakåt i ordningen."*): its **stage**, where in the process it is,
 which only moves forward, and its **status**, whether that stage can run now.
 A goal passes each stage once but for one move: a review that finds it not OK
-moves it from review back to build. That return is bounded: the third
-rejection stays in review for Martin (*What a review session does*). The
-sessions a goal can start are bounded: planning, builds while they make
-progress, reviews, then merge.
+moves it from review back to build. A repair build addresses the finding and
+returns the goal to review. Two automatic repairs are allowed for the current
+goal brief. A further failed verdict holds delivery for automatic desk
+decision. A defect in the goal itself is reported through `mc goal defect`.
 Mend is reserved for merge failures; pre-merge acceptance obstacles stay with build/review, while legacy blocked records are reconciled to Martin without launching.
 
 ```
@@ -43,8 +43,8 @@ build    ── three sessions without progress (runner) ───────�
 build    ── mc goal defect (build session) ───────────────────▶ build · Martin
 review   ── mc goal defect (review session) ──────────────────▶ review · Martin
 review   ── review: OK, mc goal stage merge (queues its head) ▶ merge
-review   ── review: a NOT OK line, mc goal stage build ───────▶ build (a repair build)
-review   ── the third rejection (mc goal stage build) ─────────▶ review · Martin
+review   ── review: a NOT OK line, mc goal stage build ───────▶ build (up to two automatic repairs)
+review   ── further NOT OK, repair limit reached ─────────────▶ review · Martin (automatic decision)
 review   ── no open pull request (runner, first time) ─────────▶ build
 review   ── no open pull request (runner, second time) ────────▶ review · Martin
 finish   ── an old record, in finish · ready (runner) ─────────▶ build
@@ -255,6 +255,31 @@ session, after the lines that say where the goal is (`goalPrompt`,
 `goalReviewPrompt`, `goalPlanPrompt` in `run-plan.js`). `mc goal list` and the
 goal rows on the page say `criteria <met>/<all>`; the page's is green when all
 are met.
+
+The list's Next cell and goal detail show the latest recorded build dispatch
+outcome when available, including a repair build after rejection. A tool
+start needs an announcement, a completed run of the matching kind with a
+session identity, and the tool's own start event (including Antigravity's
+native `init`); an announcement or exit alone is not a start. A credits
+gateway's pre-spawn refusal is named only when its diagnostic can be
+attributed to that dispatch; an unmatched announcement is shown as an unknown
+start, not a refusal. These are historical evidence, not a change to eligibility.
+A ready build with neither a dispatch announcement nor an active main-red wait
+has no outcome summary: list falls back to the last log entry's Next (or `—`),
+and show keeps its ordinary log and worktree detail without a BUILD OUTCOME
+section. When a ready build does have a summary, it keeps the most recent
+recorded Next in its current build stage even
+after a runner bookkeeping entry, or says that no bounded continuation was
+recorded. An unopened phase or missing criterion does not give a build an
+assignment. While the runner's [main-red wait](#what-a-build-session-does)
+is active, the summary names the repairs it waits for instead of reporting
+eligibility, without dropping the attempt outcome or recorded Next. A recorded
+build-to-review transition names independent review only for a ready review
+in an open phase; a stopped review can still show the historical handoff.
+A technical stop names its reason and the technical desk.
+It reports branch or worktree facts only when read from the worktree, and
+lists registered PRs separately; the goal detail keeps the existing log and
+worktree entries. A goal hold takes precedence over this summary.
 
 ## LOG.md
 
@@ -601,7 +626,8 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   other refusal the runner gets is
   written once into the goal's LOG.md, as a runner entry, and not again at
   every pass; the page shows it under NEEDS ATTENTION (`archive_refused`).
-  A programme is never archived by the runner.
+  The runner's separate [programme archive turn](mc-run.md#programme-archive-turn)
+  handles eligible programmes after their goals have finished.
 - **A goal's branch is made when the goal can start.** A goal in a later phase
   got its branch at `new`, before the phases ahead of it landed. Before the
   runner starts its first build session (no build entry in its log yet), and
@@ -629,8 +655,9 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   or bypass review, acceptance, publication or merge evidence. `MC_HEADLESS=1`
   Martin authority is refused; decision authority is allowed, but headless deploy, admin, production-data and credential hooks remain enforced. Decision may use `mc ask` at any active stage, not just the stage of a delivery role. Its mutations log `by decision`; criterion rewrites remain unmet until checked. Build, review and mend retain their ordinary limits.
 - **`show <p>/<g>`** — a status line (`<p>/<g> · stage · status · phase <n> · repos · class ·
-  criteria <met>/<all> · created …`, with `· prs …` when set), the goal as text (*Seen, not only stored*), the last three entries, and
-  each worktree's changed files, commits past `origin/main` and last commit date.
+  criteria <met>/<all> · created …`, with `· prs …` when set), the goal as text (*Seen, not only stored*), the
+  [BUILD OUTCOME summary](#goaljson) when available, the last three log entries,
+  and each worktree's changed files, commits past `origin/main` and last commit date.
 - **`list [<p>]`** — each programme's goals under a line per phase,
   `<p> · phase <n> · in progress` for the phase the programme is in, `· done`
   for one before it and `· after phase <n-1>` for one after it (a stated
@@ -638,8 +665,10 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   phase <m>[, <m>…]` for what the record says the phase waits for, and above
   them `<p> · record invalid — no phase is open` for an invalid record); under it,
   indented, one line per goal: `programme/goal · repos · stage · status ·
-  criteria <met>/<all> · n sessions · the last entry's Next` — `—` for a `done` or `dropped` goal,
-  whose last next action is over. A goal waiting for Martin reads `<stage> · Martin,
+  criteria <met>/<all> · n sessions · Next`. Next shows the
+  [build outcome](#goaljson) when available, otherwise the last log entry's
+  Next (or `—`). It is always `—` for a `done` or `dropped` goal, whose last
+  next action is over. A goal waiting for Martin reads `<stage> · Martin,
   waits on a person` (`waitsOnPerson`); a goal in `build` with no criterion
   `build · ready, no criteria — not started`. A goal that
   does not parse has no phase and is listed last, with its problems.
@@ -1146,8 +1175,9 @@ ends in `review`.** Claude Code's Stop hook runs `mc hook stop`
 (`reviewStopDecision`, `hooks.js`): for a session with `MC_ROLE=review-session:goal`
 it refuses the end — `{ "decision": "block", "reason": … }` — while the goal is in
 `review` or no `.md` has been written in any area's `~/mc/areas/<repo>/<area>/proposals/` since
-`MC_SESSION_STARTED`, naming what is missing. A goal moved to `merge` or `build`, `blocked` or in `Martin` is not held (a third rejection stays in review, set Martin): the review
-has asked, and the question is Martin's. Any other session ends as it will. A review that dies anyway leaves the goal `review · ready` (*How the
+`MC_SESSION_STARTED`, naming what is missing. The hook lets the review end after
+a move to `merge` or `build`, or when the goal is `blocked` or in `Martin`.
+Any other session ends as it will. A review that dies anyway leaves the goal `review · ready` (*How the
 runner takes a goal*, step 5).
 
 ### The verdict, the rounds and the tripped areas
@@ -1236,12 +1266,19 @@ find the files. A path outside `shots/` is refused.
 and moves it to `review`. The next review is narrow: its prompt names the earlier
 review's heads and failed items, and it judges those and what changed since,
 copying every other line as `<id>: OK — carried from round <n>`, which counts as
-OK. An old REVIEW.md with no head line gives a whole review. The **third**
-rejection does not move: `mc goal stage build` with a NOT OK line exits 0,
-leaves the stage `review`, sets status `Martin` with a comment that the goal was
-rejected a third time and queues nothing. A move to `finish` in a log from before,
-and the rejections before the goal's latest move into draft, are not counted
-(`rejections`, `goals.js`). A goal moved to `merge` and back to `build` by a
+OK. An old REVIEW.md with no head line gives a whole review. After two
+review-to-build moves since the latest draft, a further NOT OK verdict stays in
+`review` with a `no progress: review repair limit reached` entry and the
+internal status `Martin`. It archives the verdict, removes the rejected
+evidence and opens a stop for automatic decision. A decision can recover and
+return the goal to delivery once. If that recovery reaches the limit again,
+a subsequent decision must brief the unresolved stop. The goal verbs refuse
+its automatic resume until an interactive intervention. See
+[mc-martin.md](mc-martin.md#unattended-decision-pass).
+
+The archive number starts at one plus the count of review-to-build moves
+since the latest draft (`rejections`, `goals.js`) and advances past existing
+files at that number. A goal moved to `merge` and back to `build` by a
 person after a rejection is not a repair (`isRepair`: the latest rejection, or the
 runner's move of an old `finish` record to build, must be later than the latest move
 to `merge`), nor is one the runner returned to build for want of a pull request.
@@ -1282,13 +1319,13 @@ the criterion's now counts as none.
   `untouched` one is not asked). Martin, decision, a person and plan keep the
   check on criteria and parts only. mc judges presence and head, never whether
   the evidence is good: that is the review's.
-- **Rejection.** A review's move back to build removes the records of the items
+- **Rejection.** A review's failed verdict on a move back to build or a repair-limit hold removes the records of the items
   its REVIEW.md marks NOT OK (`criterion <n>`, a preserve id,
   `obligation <area>`), so the repair gives them new evidence. The repair's
   commit makes every other criterion's mark stale, so the repair build runs
   every criterion's check again and records it at its new head; preserve items
-  and obligations judged OK keep their records. A person's move back and the
-  third rejection remove none.
+  and obligations judged OK keep their records. A person's move back keeps
+  all records.
 - **Reading.** `mc goal show` prints an EVIDENCE part, one entry per record with
   its heads, time, tool, model and text, and marks `stale` beside a met
   criterion whose record is at another head. A review reads the evidence there.

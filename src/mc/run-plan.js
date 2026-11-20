@@ -759,6 +759,11 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
   };
 }
 
+/** The native stream's start payload, not a terminal result. */
+export function agyInit(event) {
+  return event?.event === 'init' ? { conversation_id: event.conversation_id ?? event.init?.conversation_id, ...(event.init || {}) } : null;
+}
+
 /**
  * What agy printed, from either documented shape: stream-json's NDJSON events
  * (`init`, `step_update`, `result`, each payload under its own name) or the
@@ -775,7 +780,7 @@ export function readAgyOutput(stdout) {
     if (!line.startsWith('{')) continue;
     let event = null;
     try { event = JSON.parse(line); } catch { continue; }
-    if (event?.event === 'init') init = { conversation_id: event.conversation_id ?? event.init?.conversation_id, ...(event.init || {}) };
+    init = agyInit(event) ?? init;
     if (event?.event === 'result' && event.result && typeof event.result === 'object') result = { conversation_id: event.conversation_id, ...event.result };
   }
   if (!result) {

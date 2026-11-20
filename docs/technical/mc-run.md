@@ -315,8 +315,9 @@ role tells the session to read LOG.md first.
 - A review uses `review-session:goal`, the open PR and its head. It judges,
   never builds: it writes REVIEW.md in its fixed form, then `mc goal stage merge`
   sends all registered PRs to merge, or `mc goal stage build` returns the goal to
-  build (a third rejection stays in review, set Martin). A second review is narrow:
-  its prompt names the first review's heads and failed items, and lists the
+  build for up to two automatic repairs. A further failed verdict opens a
+  stop for the decision lane. A review after repair is narrow:
+  its prompt names the previous review's heads and failed items, and lists the
   untouched areas the diff tripped. A review that dies still in review
   is retried once, then waits directly on Martin if it dies again.
 - A repair build uses `build-session:goal` on the `finish` catalog list, not
@@ -1058,6 +1059,12 @@ once in `runner.log`, the desk sync reports it and the item stays open.
 
 ## Programme archive turn
 
+The runner and manual archive use the same writer: after the repository step,
+it records retained trees in a versioned receipt in the programme directory.
+It checks the fence after receipt preparation and immediately before shelving.
+The receipt travels with the directory. See
+[archiving a programme](mc-plan.md#archiving-a-programme).
+
 For a repair order the current reconciled release also gates write-back and
 archival. The write-back names the release on its first line, `release:
 <revision>`. The runner retains an OK only for that revision and the same
@@ -1149,11 +1156,12 @@ keeps one (no new reading, no session), the runner:
    declared `page`, read at origin/main), else `~/mc/areas/memoro-cli/system/proposals/` —
    each with a first line naming the programme, never over a file already there;
 3. calls `archiveProgramme` with the runner's own git, gh, docs merge and release
-   and a `fence`, the same function `mc plan <p> --archive` calls. The fence
+   and a `fence`, the same function `mc plan <p> --archive` calls. Receipt
+   fetches finish before the pre-release fence. The fence
    re-reads `goals/` and `~/mc/restricted/<p>/` after each docs PR merge, before
-   release and before shelving; a live goal or a restricted entry that has
-   appeared stops the archive with nothing local released, deleted or moved
-   (a landed docs PR stays). With a fence, `clearRestricted` is never called;
+   release and before shelving. A live goal or a restricted entry that has
+   appeared stops the next local step and leaves the programme directory in
+   place. A landed docs PR stays. With a fence, `clearRestricted` is never called;
 4. records the destination it returns in the state file at once, then sets the
    record there to `done` (`setRecordState`) and clears the state.
 

@@ -98,7 +98,7 @@ import { PR_LIST_ARGS } from './open-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
-import { answerMainMend, failMainMend, mainMendBranch, mainMendPrompt, readMainMends, removeFinishedWorktrees, updateMainMends } from './main-repair.js';
+import { answerMainMend, buildWaitsForMain, failMainMend, mainMendBranch, mainMendPrompt, mainRepairWaits, readMainMends, removeFinishedWorktrees, updateMainMends } from './main-repair.js';
 import { answerDeployMend, deployMendBranch, deployMendPrompt, failDeployMend, readDeployMends, REPOS as DEPLOY_REPOS, removeCopies, retryFailed, retryHolder, retryVerdict, updateDeployMends, FINISHED as DEPLOY_MEND_FINISHED } from './deploy-repair.js';
 import { deployAlive, readDeploys } from './deploys.js';
 import { deployCheckTick } from './deploy-check.js';
@@ -2418,28 +2418,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   const mendState = (repo) => ({ root, repo, read: deps.read, write: writeJson, lock });
 
-  /** The main-red repair states a build waits for: queued, running or published. Martin and the final states do not hold a build. */
-  const MAIN_WAIT_STATES = ['queued', 'running', 'published'];
-  /** The goal's repairs a build waits for, by repository (`{ repo, ids }`); a state that cannot be read waits for nothing. */
-  function mainRepairWaits(goal) {
-    return goal.repos.map((repo) => {
-      let entries = [];
-      try { entries = readMainMends(mendState(repo)).filter((entry) => MAIN_WAIT_STATES.includes(entry.state)); }
-      catch { entries = []; } // mainMendWork reports the unreadable state at the next pick.
-      return { repo, ids: entries.map((entry) => entry.id) };
-    }).filter((wait) => wait.ids.length);
-  }
   /** Each goal whose pick is held by main's wait is said once while it lasts, by the repairs it waits for (`waitSaid`). */
   const waitSaid = new Map();
-  /**
-   * Whether a build goal waits for main's repair: its last entry is the runner's `WAITS_FOR_MAIN` and a repository of
-   * the goal still has a repair in `MAIN_WAIT_STATES`. Any other last entry is never held here, and the hold ends by
-   * itself when the repair ends.
-   */
   function heldForMain(goal) {
-    const last = goal.log.at(-1);
-    const waiting = goal.stage === 'build' && goal.status === 'ready' && last?.tool === 'runner' && String(last.comment ?? '').startsWith(WAITS_FOR_MAIN);
-    const waits = waiting ? mainRepairWaits(goal) : [];
+    const waits = buildWaitsForMain(goal, { root, read: deps.read });
     const name = goalName(goal);
     if (!waits.length) { waitSaid.delete(name); return false; }
     const key = waits.map(({ repo, ids }) => `${repo} (${ids.join(', ')})`).join('; ');
@@ -3273,7 +3255,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       else goalState(goal, name, {}, { comment: `${BUILD_SESSION} (${sessions} of ${BUILD_SESSION_LIMIT}): ${count}, heads ${headsText}` });
       return;
     }
-    const waits = mainRepairWaits(goal);
+    const waits = mainRepairWaits(goal, { root, read: deps.read });
     if (waits.length) {
       const said = `${WAITS_FOR_MAIN} in ${waits.map(({ repo, ids }) => `${repo} (${ids.join(', ')})`).join('; ')}`;
       if (limited([said, `Heads: ${headsText}`, `Criteria: ${count}`])) return;

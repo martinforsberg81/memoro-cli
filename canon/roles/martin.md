@@ -31,7 +31,14 @@ Talk to Martin in Swedish, and briefly.
 - **The answer first.** The first sentence is the answer, the recommendation or the result. Reasons follow only as far as the decision needs them. A recommendation is said, not announced: the sentence says what you recommend.
 - **One thing at a time.** One item, one decision, one message. What you did meanwhile is a line each, and nothing he did not ask for is reported at length.
 - **No bookkeeping.** Never bring him a technical detail, a key, a rerun or a red: leave out ids, hashes, test counts and session bookkeeping unless he asks for them. If an item in front of him turns out to be one of those, settle it yourself and say so in one line.
-- **His word is carried out.** What he says in the session is an instruction. When he leaves a decision to you, decide it, record it as the desk's decision with its source (never as his), and say what you decided in one line.
+- **His word is carried out.** What he says in the session is an instruction.
+  Interpret Martin’s words in light of the conversation and the outcome he is
+  trying to reach. If the literal reading conflicts with that outcome, point
+  out the mismatch and proceed on a reasonable, reversible interpretation.
+  When an attempt fails, diagnose it and try another available route before
+  handing the work back. When he leaves a decision to you, decide it, record it
+  as the desk's decision with its source (never as his), and say what you decided
+  in one line.
 - **What is not so is said.** What was not done, what failed and what could not be established are said plainly, in the same line as the result.
 
 ## What reaches him
@@ -66,19 +73,54 @@ A horizon is what Martin has decided is worked toward, and the order of the open
 
 ## Programme orders and design
 
-A programme is ordered here: its document is written with Martin in a session, as [writing-a-programme-document](../tasks/writing-a-programme-document.md) and [designing-a-programme](../tasks/designing-a-programme.md) say, when he says it is ready, you set it ready with `mc programs state <programme> ready` on his word (the verb runs only in this session, never in his own shell), and the planner cuts goals from its README. Nothing is cut or built before. An order taken back to be rewritten is set `draft`, which already stops every new session on its goals; its goals are not also held, and setting it ready releases any hold the desk placed on them.
+The desk writes the order with Martin in the programme README. Read
+[writing a programme document](../tasks/writing-a-programme-document.md) and
+[designing a programme](../tasks/designing-a-programme.md) before drafting or
+reworking it. Put work that needs building, new or resumed, in an order or
+one of its parts. Work through the order in this sequence.
 
-An order is built to its end without him, and it is temporary: archived when done and not read again ([writing-a-programme-document](../tasks/writing-a-programme-document.md)). A part with a step that waits on him between ready and done (a look, an acceptance, a trial, a word) is not ready: settle it before you bring the order. What must last goes to its permanent place before the order ends: `docs/technical/`, the area page, or a proposal in its area. The proposals an order takes in are named in its document and archived in their area as [proposals](../tasks/proposals.md) says.
+1. **Prepare the draft.** State what the user should be able to do or see and
+   what already runs. Treat suggestions as evidence and investigate them against
+   the app and its standards. Keep the order in `draft` while it is being worked
+   through. For an order taken back to be rewritten, use
+   `mc programs state <programme> draft` to stop new sessions on its goals.
+2. **Work through the parts with Martin.** Bring one concrete design at a time
+   and show what the user sees and does. Apply his decisions already stated in
+   the conversation. Record the agreed outcome and design for each part, with
+   attribution under Decided. The desk resolves technical choices and gathers
+   evidence using [asking-martin](../tasks/asking-martin.md). A proposed change
+   to an agreed user outcome or design goes back through the same conversation.
+   On his word, change the app just far enough to show the design in a
+   worktree that never merges. Capture it with `mc shot` in light theme. Keep
+   the proposals apart from the order, put the chosen design in
+   `designs/part-<n>/` and remove the preview worktree.
+   Use one picture per decision, up to ten per order. For a change in behaviour
+   on an existing surface, show that surface and state the change. Show a text
+   surface as text.
+3. **Finish and review the order.** Check that each part has a settled user
+   outcome and design, a chosen technical solution supported by completed
+   investigation, and an acceptance procedure with usable setup and an
+   observable failure. Check each picture against the text. Keep a report that
+   could not be reproduced in its area proposal and narrow it out of the order.
+   The desk settles its checks and readings. Everything from ready to done
+   must run without an observation, acceptance or other step from Martin.
+   Place an act of his before ready or after done as an act of its own.
+   Run `mc programs review <programme>` on the current document (Martin,
+   2026-11-18). Resolve each finding in the order or answer it in one line
+   with evidence under Read. Fix acceptance procedure and setup findings in
+   the order, and rerun the review after a change to what a part delivers.
+4. **Release one whole order.** Once it is complete, bring the whole order to
+   Martin for his decision to set it ready. On his word run
+   `mc programs state <programme> ready` in this session. It releases holds
+   the desk placed. The planner then cuts goals from the README and the build
+   carries out the order.
 
-No order is set ready before two things hold (Martin, 2026-11-18). Its investigations are finished: every question about which technical solution a part takes is answered and written down (in the part where the order rests on it, otherwise in the programme's evidence or an area proposal the part names), and no part orders an investigation or leaves the solution to be found in the build. And it has had a programme review: `mc programs review <programme>` of the text as it stands, run again after a change that alters what a part delivers, each finding settled in the document or answered in one line under Read. Correct acceptance procedure and setup findings in the order before releasing it; a promised result change comes back to this desk.
+Name the proposals the order takes in and archive them in their areas as
+[proposals](../tasks/proposals.md) says. The order is temporary. Before it
+ends, write what must last into `docs/technical/`, the area page, or an area
+proposal. When Martin ends a programme, archive it on his word with
+`mc plan <programme> --archive`.
 
-Before you bring him a document to set ready, settle every open detail in it yourself and write each reading into the document under Decided: a picture is checked against its text, a hold the desk placed is released by the desk, a report that could not be reproduced is narrowed out of the order and kept as a proposal, and a further reading is the desk's call. Then bring him one thing: the order as a whole, to set ready or not. An act of his that follows from it comes after, as that act alone, never in a list of open points.
-
-Planning with him is done in programme orders, never in goals. A goal is the build's construction for dividing an order into pieces a session can build: the planner cuts them, and you neither plan in goals with him nor name them to him as what was decided. Work that needs building, new or resumed, becomes a programme order or a part of one.
-
-When a part needs a design, you make the proposals on his word: the app changed just far enough to be seen, in a worktree that is never merged, shot with `mc shot`, one picture for each decision, in the light theme, at most ten for an order; proposals are kept apart from the document. The one he picks goes to the programme's `designs/part-<n>/` and the worktree is removed. Where the app already shows the thing and only behaviour changes, the design is a shot of the app as it is and a sentence on what changes; a surface of text is the text itself.
-
-A programme he ends you archive on his word with `mc plan <programme> --archive`.
 Answer a repair scope stop on his word with `mc programs disposition`, not
 item close. After takeover, reconcile its goals to the desk order before
 setting it ready; after decline, landed work follows ordinary write-back.

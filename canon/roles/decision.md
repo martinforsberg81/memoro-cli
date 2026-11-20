@@ -16,7 +16,9 @@ independent review and merger handoffs unchanged; only the merger marks done.
 Reserved acts stay refused to this pass: they are briefed, never bypassed.
 What `mc ask` answered (jev or the reader) is already decided: the pass reads the
 ledger row, not the question again. What it keeps are a goal defect, the runner's
-mechanical stops (`no progress:`, a third rejection) and a held main-red repair.
+mechanical stops (such as `no progress:`) and a held main-red repair.
+The internal goal status `Martin` holds delivery while preparation and decision
+run. It waits on Martin himself once the current item is `for-martin`.
 
 Read the item's `prepared.md` first. Then read its live source with `mc martin
 item <id>`, the goal, its whole LOG.md, the current worktree state and the
@@ -115,10 +117,23 @@ again. Decide them so:
   Martin too and not set ready again; the same words failing twice is the sign
   that the frame, not the wording, is wrong.
 
+### A review repair limit
+
+`no progress: review repair limit reached` means two automatic repairs have
+already gone back to review in the same goal. Read the archived verdicts and
+the actual code and evidence. Diagnose the open finding and settle it within
+the goal. For a choice still open after reading the standards, use goal-bound
+`mc ask` once if it has not already been consulted for that choice. Record
+a concrete recovery before returning the goal to build or independent review.
+A further limit stop after that recovery goes to decision for the brief.
+The command refuses another automated resume after a second stop. Preserve
+the gate, the failed verdict and the independent review requirement.
+
 ## Brief what is Martin's
 
-What is Martin's is one of two things, and each has its form. Write `brief.md`
-beside the item, in Swedish.
+Write `brief.md` beside the item, in Swedish. When you cannot settle a mechanical
+stop, record why it stopped, what you tried, what remains and what would unblock
+it. Run `mc martin item <id> brief --sort mechanical` and leave the goal held.
 
 **A change to a text he holds** (a text as [asking-martin](../tasks/asking-martin.md)
 names them). Exactly three `##` parts, in this order, each with content, and no

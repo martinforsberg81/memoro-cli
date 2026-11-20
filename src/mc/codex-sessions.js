@@ -28,6 +28,7 @@ import { workRoot } from './paths.js';
 import { scrubProviderApiKeysFromEnv, scrubRuntimeSecretsFromEnv } from './runtime-secrets.js';
 import { registerSession, terminalEnvironment } from './session-entrance.js';
 import { pidAlive } from './status-collect.js';
+import { directoryAccessRefusal } from './interactive-access.js';
 
 const READY_MS = 15_000;
 const READY_ASK_MS = 2_000;
@@ -173,7 +174,13 @@ export function codexSessionDriver({
     if (plan.billing.billing === 'unavailable') return failure(`Codex billing unavailable: ${plan.billing.why}`);
     let split;
     try { split = splitLaunchArgs(plan.args); } catch (error) { return failure(error.message); }
-    const directory = createSessionDirectory(options.env, io);
+    let directory;
+    try { directory = createSessionDirectory(options.env, io); }
+    catch (error) {
+      const reason = directoryAccessRefusal(error, rootOf(options.env));
+      if (!reason) throw error;
+      return failure(reason);
+    }
     const socket = join(directory, 'app.sock');
     const cwd = resolve(options.worktree.path);
     const abandon = (reason, pid) => {

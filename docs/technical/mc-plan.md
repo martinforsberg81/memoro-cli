@@ -77,6 +77,14 @@ is refused, the planning turn does not run, no session starts on its goals).
 only interactive Martin can prepare its goals while it is draft; a declined
 repair with landed work reads ready for write-back only.
 
+Both the overview and `mc programs list` include current local programme
+directories, including recordless directories. They share the same rules
+for omitting finished entries: a done record leaves both views when no live
+goal remains, and a retained repository tree alone stops counting as
+membership only with a validated receipt on the shelf. A current local
+directory or live goal takes precedence over an earlier receipt. See
+[the overview](mc-ui.md#the-overview) for what the receipt proves.
+
 Reading an older record normalizes it in memory: `open` reads as `ready`, `dropped`
 as `done`, and removed fields are ignored. It does not change disk bytes or state.
 Only an actual write upgrades a record to version 2.
@@ -204,11 +212,14 @@ setting the order ready is Martin's word that its work goes on. Any other hold i
 It is advice: Martin's interactive session calls it when he wants, it writes its report
 beside the programme as `PROGRAMME-REVIEW.md`, and no code reads the report: it gates
 nothing in mc, is bound to no version of the text and never goes stale.
-It records no verdict or currency. The desk requires it all the same (Martin,
-2026-11-18): no order is brought to him to set ready before it has had a review of
-the text as it stands and the investigations it depends on are finished, so that
-the technical solution of each part is known (`canon/roles/martin.md`, *Programme
-orders and design*). That is the desk's rule; `state ready` checks neither.
+It records no verdict or currency. The desk keeps the order in draft while
+working through each part's user outcome and design with Martin. The desk
+settles the technical solution, its supporting investigations and how to check
+the result, then reviews the current text. The desk fixes review findings on
+procedure and setup, works through changes to an agreed outcome or design with
+Martin and reviews again if what a part delivers changes. Once the findings
+are settled, Martin decides whether the whole order is ready. The desk records
+his decision using `state ready` (see `canon/tasks/writing-a-programme-document.md`).
 The child has MC_ROLE=programme-review, MC_PROGRAMME and its own
 MC_PROGRAMME_REVIEW_TOKEN.
 The reader writes PROGRAMME-REVIEW.md with line one `findings: <n>`, then findings naming
@@ -481,16 +492,25 @@ anything the planning area's release forecast would keep, and any entry under
 `~/mc/restricted/<programme>/` without a README.md. It checks before changing
 anything.
 
-In each repository that holds `docs/project/<programme>/`, it removes that
-directory and adds a `closed` row for the programme in `project_log.md`, in a
-docs-only pull request. An existing archive PR is reused. Only after those
+In each repository that holds `docs/project/<programme>/`, archive retains
+files that code or tests still read. It removes the other files and adds a
+`closed` row for the programme in `project_log.md` in a docs-only pull
+request. If all files are kept, there is nothing to remove and no row or PR
+is created. An existing archive PR is reused. Only after those
 PRs land are the planning worktrees released. In layout 2
 `~/mc/restricted/<programme>/` is then removed, each entry's README.md first
 copied to the programme's `evidence/<entry>/RESTRICTED-README.md`
 ([mc-layout.md § Data outside the repositories](mc-layout.md#data-outside-the-repositories)),
 and the programme's directory is moved whole to `~/mc/archive/programs/<programme>/` (a dated
-name if needed); its remaining documents are not deleted. A network failure
-leaves the planning area intact so a later attempt can continue.
+name if needed); its remaining documents are not deleted. Before the move the shared
+writer records a versioned receipt of retained repository trees, their repository
+identity, tracked paths and inspected main commits in the programme directory.
+It takes the tree from the archive merge commit or, when every file is kept,
+from the main commit inspected for that decision.
+The rename carries that receipt to the shelf; older shelves need not have one.
+A failure to land the repository change leaves the planning area intact so
+a later attempt can continue. A failed receipt fetch leaves that repository's
+membership unproven.
 
 `--archive` refuses session-selection flags and requires an explicit name.
 No-record programmes are not automatically archived or migrated. The manual
@@ -537,8 +557,11 @@ refresh](mc-goals.md#the-verbs) on promotion and the first build. In the
 next-draft worktree, fetch first, fast-forward an unbuilt branch to the fetched
 base, and verify there. On a branch with its own commits, verify the branch
 the refresh will retain. Do not discard work or promote on unverified setup.
-If a named premise changes before promotion, reverify it; unrelated movement
-does not invalidate the evidence.
+Before promotion, fetch again and confirm that the named premises still hold
+against the source of the branch refresh. Reverify on the updated setup if a
+named premise changed; unrelated main movement does not invalidate the evidence.
+If either fetch or a required fast-forward fails, or planning cannot establish
+what setup build will receive, leave the goal in draft and log why.
 
 A sound check missing its input in an open phase is logged and left draft and
 ready, with the blocking input and technical desk action in `mc goal log

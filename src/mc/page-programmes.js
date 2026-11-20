@@ -45,9 +45,10 @@ function goalLines(lines, c, wide, goal, sessions, note, { paused, saidHolds }) 
   const isFinished = finished(goal);
   const stage = goal.stage || '—';
   const waits = goal.status === 'Martin' || goal.status === 'blocked';
+  const decisionPending = goal.status === 'Martin' && goal.person === false;
   const pausedNow = !isFinished && !waits && (paused || Boolean(goal.hold));
-  const status = pausedNow && goal.status === 'ready' ? 'paused' : goal.status || '—';
-  const tone = waits ? ['red'] : ['grey'];
+  const status = decisionPending ? 'decision' : pausedNow && goal.status === 'ready' ? 'paused' : goal.status || '—';
+  const tone = waits && !decisionPending ? ['red'] : ['grey'];
   const number = String(goal.number ?? '').padStart(3);
   line(lines, c, wide, 4, `${number} ${goal.title || goal.name}`, goal.running ? ['bold'] : []);
   const criteria = goal.criteria ? `${goal.criteria.met}/${goal.criteria.all}` : '—';
@@ -68,8 +69,8 @@ function goalLines(lines, c, wide, goal, sessions, note, { paused, saidHolds }) 
   if (goal.problems?.length) line(lines, c, wide, GOAL_DETAIL, `GOAL.json: ${goal.problems[0]}`, ['red']);
   else if (note) line(lines, c, wide, GOAL_DETAIL, note, ['red']);
   else if (['blocked', 'Martin'].includes(goal.status)) {
-    const reason = goal.question || goal.last?.comment || (goal.status === 'Martin' ? 'waits on Martin' : 'a mend session resolves the obstacle');
-    line(lines, c, wide, GOAL_DETAIL, goal.stage === 'merge' && goal.status === 'blocked' ? mergeFailureSummary(reason) : reason, ['red']);
+    const reason = goal.question || goal.last?.comment || (decisionPending ? 'waits on automatic decision' : goal.status === 'Martin' ? 'waits on Martin' : 'a mend session resolves the obstacle');
+    line(lines, c, wide, GOAL_DETAIL, goal.stage === 'merge' && goal.status === 'blocked' ? mergeFailureSummary(reason) : reason, tone);
   }
   for (const session of sessions) lines.push(...activityLines(c, wide, session, { indent: GOAL_DETAIL, expand: true }));
   for (const pr of goal.prs || []) {
@@ -140,9 +141,10 @@ export function programmeTreeLines(c, wide, group, { sessions = [] } = {}) {
       goalLines(lines, c, wide, goal, owned(goal), null, goalOptions);
     }
   }
-  if (needing.length) {
+  if (needing.length || group.archive?.status === 'attention') {
     if (lines.length) lines.push('');
     line(lines, c, wide, 2, 'NEEDS ATTENTION', ['red', 'bold']);
+    if (group.archive?.status === 'attention') line(lines, c, wide, 4, group.archive.reason, ['red']);
     for (const [index, goal] of needing.entries()) {
       if (index > 0) lines.push('');
       goalLines(lines, c, wide, goal, owned(goal), finished(goal) ? notArchived(goal) : null, goalOptions);

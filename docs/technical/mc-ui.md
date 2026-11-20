@@ -84,6 +84,26 @@ without details are consecutive heading rows. Each heading has the programme
 name in bold, and in Other its fallback horizon reference, then draft or phase
 when applicable, or `ready` for a ready record without a phase, goal count,
 nonzero priority and finished-in-tree count, and `record invalid` when applicable.
+After the goal count, `archive pending` is grey for a due read or archive turn;
+`archive needs attention` is red and adds its reason to NEEDS ATTENTION. The
+collector reads the runner's archive state, physical live goals and open archive
+desk items. With no live goal, an applicable open item takes precedence over
+the current runner notice. Otherwise, if no notice applies and the turn is
+still due with no live goal, the latest recorded failure since the last item
+stays visible through retries. Attention clears when its source no longer
+applies, and a due read or archive then shows as pending. Notices and failures
+are shown verbatim. An item uses its first brief line (or prepared text),
+falling back to `see the desk` for a missing line, heading or reading verdict.
+An earlier archive destination holding a successor's turn shows as a previous
+archive repair.
+
+A done record with no live goal leaves the page. A local directory or live goal
+otherwise takes precedence over an earlier archive. Repository membership is
+removed only when the shared shelved-receipt reader validates the repository,
+path, main ancestry, retained tree and directory presence along that ancestry.
+Absent, unreadable or mismatched proof leaves the membership visible. Residual
+sessions and PRs are reported in Strays. Open archive items
+remain on the desk after the move.
 Held, blocked and malformed goals and sessions are drawn in their programme.
 Programme headings and tree text, including goal titles, metadata, holds and
 blockers, wrap within the inset at narrow widths. A goal's stage, criteria,
@@ -184,8 +204,12 @@ among the waiting rows), and what the desk costs today of the ceiling.
 An unreadable part says so in red in its own row and the rest still draws: an
 invalid `last-open.json` and an unreadable ledger on the decided row, `desk.json`
 or `runs.tsv` on the cost row, a failure of the whole read as `desk unreadable —`
-with nothing else. The read never throws, so the page always comes. `⚑n`,
-and `status Martin` stay as they are; MARTIN QUEUE is no longer drawn (the operations view has none).
+with nothing else. The read never throws, so the page always comes.
+
+A programme goal held for automatic preparation or decision shows `status
+decision`. Its row shows `status Martin` once the current desk item is
+`for-martin`. A mechanical item that reaches that state is listed among the
+stuck items in Not ready.
 
 `desk` in `--json`: `since`, `last_opened`, `waiting`, `texts` and `acts` (each
 `id`, `kind`, `reference`, `sort`, `source_at`, `waited_minutes`, `blocks`,
@@ -206,8 +230,10 @@ so the page and the desk agree on what waits, in what order and what was decided
 
 The default page draws HORIZONS below DESK and the warnings (`page-horizons.js`,
 `horizonsLines`). The roll-up counts open horizons, programmes under way, open goals
-and running sessions. Its programme and session totals include Other; its open-goal
-total includes only open horizons. A zero running total is omitted.
+and running sessions. A programme is under way when it is a draft or has an
+unfinished goal, a session, an open PR, or a goal under NEEDS ATTENTION. The
+programme and session totals include Other. The open-goal total includes
+only open horizons. A zero running total is omitted.
 
 Each open horizon has a heading in desk order (`position`, then set time, then slug),
 with its number and title in bold at the left and its facts aligned to the right
@@ -243,7 +269,10 @@ names>], error }`, `error` being the reason the store could not be listed, else
 null. Each programme in `programmes.programmes` gains `number`, `horizon` (the
 slug its valid record names, else null) and `horizon_state` (`open`, `reached`,
 `dropped`, `not held` for a slug without a readable horizon record, or null),
-and `record_state` (a valid record's state, otherwise null).
+and `record_state` (a valid record's state, otherwise null). The `archive` field
+is `null` for ordinary work, `{ status: "pending" }` for a due read or archive
+turn without attention, or `{ status: "attention", reason }` with the reason
+shown on the card.
 Red in a programme means that someone must act: status `Martin` or `blocked`, a
 malformed goal, a refused archive, a failed merge. A goal that gets no session although
 nothing is wrong with it is paused, and a pause is grey: in a draft programme, and on a held
@@ -620,11 +649,15 @@ criteria and running mark, and inline details such as explicit hold reasons,
 log detail, blocker question and attached PR state. It tracks session identity,
 advisor and check-ins, and the desk's waiting ids, not-ready, failed and stuck
 counts and decided figures, not ages or cost. It also tracks programme
-headings and horizon references, horizon labels, membership and read warnings,
+headings, archive status and attention reason, horizon references, labels,
+membership and read warnings,
 which sessions are in flight, MAINTENANCE facts without their ages (session
 items by identity), and MERGE and DEPLOY row facts. If the key changes while
 the top of the page is off-screen, the live reader prints the whole page so
-scrolling up finds the new state. Clocks alone do not trigger that reset.
+scrolling up finds the new state. A changed PR count, including a PR without
+a goal, refreshes off-screen horizon facts even at the same line count.
+A change only to an archive attention reason also refreshes off-screen rows.
+Clocks alone do not trigger that reset.
 
 ## The live page
 
@@ -833,8 +866,9 @@ still at the prompt with the cursor after it, backspace taking it back, `q`
 leaving with exit 0, no alternate screen buffer (`\x1b[?1049` never written),
 and `stty -g` identical before and after. What it does not do is press return
 on that `1`, because that exercised the interactive menu rather than the refresh loop.
-Today a number shows the goal it numbers, or opens the programme; `front-door.test.js`
-checks that routing without opening a coding tool.
+`front-door.test.js` checks that goal numbers open goal details and that former
+programme selectors are rejected. The programme trees are already visible
+in the overview.
 
 ## The modules and tests
 

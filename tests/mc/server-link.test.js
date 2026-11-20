@@ -131,6 +131,11 @@ function clientFixture({ outcome = 'clean', resume = null, version = 'codex 0.16
     finish: async clean => { ended = clean; return { status: 0 }; } };
   const link = serverLink('tc', { env: { MC_WORK_ROOT: root, SSH_AUTH_SOCK: '/person/agent.sock' }, io, now: () => clock,
     sleep: async ms => { clock += ms; }, run: (bin, args) => { calls.push({ bin, args }); return { status: 0, stdout: version }; },
+    probeSocket: async () => {
+      if (outcome !== 'forward refused') return;
+      tunnelProcess.stderr.write('channel 2: open failed: administratively prohibited: open failed\n');
+      throw new Error('read ECONNRESET');
+    },
     spawnProcess: (bin, args, options) => {
       const child = processStub(); calls.push({ bin, args, options, child });
       if (bin === 'ssh') { tunnelProcess = child; present.add(args[4].split(':')[0]); }
@@ -176,6 +181,17 @@ for (const outcome of ['clean', 'nonzero', 'signal', 'tunnel lost', 'connection 
   assert.equal(f.ended, outcome === 'clean');
   const forward = f.calls.find(call => call.bin === 'ssh');
   assert.deepEqual(forward.child.killedWith, outcome === 'tunnel lost' ? [] : ['SIGTERM']);
+  assert.deepEqual(f.removed.map(row => row[0]), ['/mc/runner/s/c-abcdef']);
+});
+
+test('a bound local socket with refused SSH forwarding names the remote socket and leaves the server joinable', async () => {
+  const f = clientFixture({ outcome: 'forward refused' });
+  await assert.rejects(f.link.codexClient(f.connection),
+    /on tc: could not reach Codex socket \/server\/socket through SSH:.*administratively prohibited.*then rejoin/u);
+  assert.equal(f.client, undefined);
+  assert.equal(f.ended, false);
+  const forward = f.calls.find(call => call.bin === 'ssh');
+  assert.deepEqual(forward.child.killedWith, ['SIGTERM']);
   assert.deepEqual(f.removed.map(row => row[0]), ['/mc/runner/s/c-abcdef']);
 });
 for (const [name, options, reason] of [['overlong path', { root: `/${'a'.repeat(90)}` }, /bytes \(must be under 100\)/u],
