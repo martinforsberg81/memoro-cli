@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 import { adapterOfProvider, apiProviders } from '../adapters/index.js';
 import { readBillingApiKey } from '../vault/engine/step-credit-key.js';
+import { RESERVE_DISABLED_EXIT, RESERVE_UNAVAILABLE_EXIT } from './billing-route.js';
 import { readBillingApi } from './billing.js';
 import { scrubRuntimeSecretsFromEnv } from './runtime-secrets.js';
 import { createBillingGateway, listenBillingGateway } from './billing-gateway.js';
@@ -35,7 +36,7 @@ export async function openGatewayGrant({ provider, model = '*', readKey = readBi
   // before `mc run --billing <provider> off` still never reaches the API.
   if (readApi()?.[provider] === false) {
     process.stderr.write(`mc: ${provider} API is off (mc run --billing ${provider} on)\n`);
-    return { ok: false };
+    return { ok: false, disabled: true };
   }
   const opened = await readKey(provider);
   if (!opened?.ok || !opened.key) {
@@ -66,11 +67,11 @@ export async function openGatewayGrant({ provider, model = '*', readKey = readBi
 
 /** Runs until the coding tool exits; never returns the provider key. */
 export async function runGatewaySession({ provider, model, bin, args, env = process.env, readKey = readBillingApiKey, readApi = () => readBillingApi(), spawnTool = spawn, createGateway = createBillingGateway, terminal = isatty(1),
-  sessionDirectory = null, openGrant = openGatewayGrant, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout,
+  sessionDirectory = null, runnerAdmission = false, openGrant = openGatewayGrant, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout,
 } = {}) {
   if (!apiProviders().includes(provider) || !bin || !Array.isArray(args) || !model) return 2;
   const session = await openGrant({ provider, model, readKey, readApi, createGateway, now });
-  if (!session.ok) return 1;
+  if (!session.ok) return runnerAdmission ? (session.disabled ? RESERVE_DISABLED_EXIT : RESERVE_UNAVAILABLE_EXIT) : 1;
   let child;
   let childExited = false;
   let expiryTimer;
@@ -88,7 +89,8 @@ export async function runGatewaySession({ provider, model, bin, args, env = proc
       child.once('error', () => resolve(1));
       child.once('close', (code, signal) => {
         childExited = true;
-        resolve(signal ? 128 + (signal === 'SIGTERM' ? 15 : 2) : code ?? 1);
+        const exit = signal ? 128 + (signal === 'SIGTERM' ? 15 : 2) : code ?? 1;
+        resolve(runnerAdmission && [RESERVE_DISABLED_EXIT, RESERVE_UNAVAILABLE_EXIT].includes(exit) ? 1 : exit);
       });
       if (sessionDirectory) expiryTimer = setTimer(() => {
         expired = true;
@@ -109,6 +111,8 @@ export async function runGatewaySession({ provider, model, bin, args, env = proc
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const argv = process.argv.slice(2);
+  const runnerAdmission = argv[0] === '--runner-admission';
+  if (runnerAdmission) argv.shift();
   const sessionDirectory = argv[0] === '--session-directory' ? (argv.shift(), argv.shift()) : null;
   const [provider, model, bin, ...args] = argv;
   for (const signal of ['SIGTERM', 'SIGINT']) {
@@ -117,5 +121,5 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       else process.exitCode = signal === 'SIGTERM' ? 143 : 130;
     });
   }
-  process.exitCode = await runGatewaySession({ provider, model, bin, args, sessionDirectory });
+  process.exitCode = await runGatewaySession({ provider, model, bin, args, sessionDirectory, runnerAdmission });
 }

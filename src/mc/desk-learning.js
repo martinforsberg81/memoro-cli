@@ -2,11 +2,11 @@
  * The shared terminal and scheduled area-learning session.
  */
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync } from 'node:fs';
+import { appendFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { requireCapability, resolveLaunch } from '../adapters/index.js';
-import { writeJsonAtomic } from './atomic-write.js';
-import { billingRouteNow, gatewayLaunch } from './billing-route.js';
+import { writeFileAtomic, writeJsonAtomic } from './atomic-write.js';
+import { billingRouteNow, gatewayLaunch, gatewayRefusal } from './billing-route.js';
 import { runTool } from './child-async.js';
 import { deskBudget, deskBudgetReason, deskRunsPath } from './desk-budget.js';
 import { lessonsDir, listLessons } from './desk-lessons.js';
@@ -21,6 +21,7 @@ import { runnerDir, workRoot } from './paths.js';
 import { profileArgs } from './portrait.js';
 import { instructionsFor, readCanonRole } from './roles.js';
 import { headlessArgs, readSessionOutput, TIMEOUT_EXIT, tsvHeader, tsvRow } from './run-plan.js';
+import { realLock } from './runner-lock.js';
 import { quotaFields, refusePlanOnRead } from './plan-refusal.js';
 import { defaultRepos } from './repos.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
@@ -161,15 +162,38 @@ async function launchLearning({ env, now, offered, due, manual, run, deps, candi
   const started = now();
   const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: candidate.model, effort: candidate.effort,
     instructions: instructionsFor(launch.id, role.overlay), prompt: learningPrompt({ reason: due, lessons: offered }), profileArgs, stream: false, cache: role.cache });
-  const processLaunch = gatewayLaunch({ provider: requireCapability(launch.id, 'BILLING_PROVIDER'), model: candidate.model, bin: launch.spec.bin, args, billing: billing.billing });
+  const processLaunch = gatewayLaunch({ provider: requireCapability(launch.id, 'BILLING_PROVIDER'), model: candidate.model, bin: launch.spec.bin, args, billing: billing.billing, runnerAdmission: !manual && Boolean(deps.reserveAdmission) });
+  const wait = processLaunch.reserve && deps.reserveAdmission.blocked(processLaunch.reserve);
+  if (wait) return { started: false, reason: wait };
   const childEnv = withoutSessionIdentity(env);
   for (const key of ['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SCRATCH']) delete childEnv[key];
   delete childEnv.MC_SESSION_STARTED;
   Object.assign(childEnv, { MC_ROLE: 'learning', MC_HEADLESS: '1', MC_TOOL: candidate.tool, MC_MODEL: candidate.model, MC_LEARNING_RUN: run });
-  if (!manual) (deps.writeMarker || writeJsonAtomic)(learningMarkerPath(env), { started_at: started.toISOString(), reason: due });
+  const markerPath = learningMarkerPath(env);
+  const readMarker = () => {
+    try { return readFileSync(markerPath, 'utf8'); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  };
+  const priorMarker = processLaunch.reserve ? readMarker() : null;
+  const marker = { started_at: started.toISOString(), reason: due, ...(processLaunch.reserve ? { run } : {}) };
+  if (!manual) (deps.writeMarker || writeJsonAtomic)(markerPath, marker);
   let result;
   try { result = await (deps.session || realSession)({ ...processLaunch, cwd: dir, env: scrubProviderApiKeysFromEnv(childEnv), timeoutMs: LEARNING_TIMEOUT_MS, group: true }); }
   catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
+  const refusal = gatewayRefusal(processLaunch, result);
+  if (refusal) {
+    const reason = deps.reserveAdmission.denied(refusal);
+    (deps.logRun || (row => appendRun(row, env)))({ ts: now().toISOString(), name: 'learning', kind: 'learning',
+      exit: result.status, seconds: Math.round((now().getTime() - started.getTime()) / 1000), pr: '-', note: reason,
+      model: candidate.model, cls: 'decision', tool: candidate.tool, effort: candidate.effort, billing: billing.billing });
+    realLock(workRoot(env), () => {
+      let live;
+      try { live = JSON.parse(readMarker()); } catch { return; }
+      if (live?.run !== run) return;
+      if (priorMarker === null) unlinkSync(markerPath); else writeFileAtomic(markerPath, priorMarker);
+    }, { strict: true, name: 'learning-admission' });
+    return { started: false, reason };
+  }
   const summary = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, now: now(), model: candidate.model });
   refusePlanOnRead({ read: summary, launch, model: candidate.model, billing: billing.billing, env, now: now(), say: deps.say });
   const row = { ...summary, ts: now().toISOString(), name: 'learning', kind: 'learning', exit: result.status ?? 1,

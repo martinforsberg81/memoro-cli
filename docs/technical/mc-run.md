@@ -517,6 +517,28 @@ the switch again before it opens the key, so a launch decided before the switch
 was turned off never reaches the API. A running session keeps its billing.
 Absent, both are on.
 
+### API admission before the model starts
+
+Runner-owned API launches distinguish a disabled reserve from a key that
+cannot be opened. Both are admission refusals while the wrapper still owns
+the launch. A tool that has started answers through the ordinary exit and
+stream rules. A refusal spends no work retry or scheduled turn. The runner
+releases the claim, restores any queue request or cadence marker still
+owned by this launch, and records the reason without model usage.
+
+An unavailable enabled reserve is held for that provider for 60 seconds.
+The chooser considers eligible subscriptions first, including the held
+provider's plan, then the remaining reserves in its configured list. If the
+selected reserve is explicitly disabled, work waits. Both the final billing
+choice and dispatch check the hold, including a plan pick now billed on the
+reserve. The wrapper still checks the switch before opening the grant.
+
+The runner log names the provider and either says when its reserve is
+eligible again or that its API is off. If there is no eligible route, the
+normal pick reconsiders the work. This applies to goals, decisions, programme
+planning and archival, scheduled manager, both goal-less mends, and
+scheduled desk preparation and learning.
+
 ### Quota scope (`QUOTA_SCOPE`)
 
 A quota refusal names who was refused. Each adapter declares it as

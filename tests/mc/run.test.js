@@ -19,6 +19,8 @@ import { COOLDOWN_MS, EVENTS_KEEP, POLL_MS } from '../../src/mc/disk-pressure.js
 import { parseGoal, parseLog, redMergeText, STAGES } from '../../src/mc/goals.js';
 import { seenAreas, trippedAreas } from '../../src/mc/review-verdict.js';
 import { mcCheckout, startRunner } from '../../src/mc/run-control.js';
+import { learningMarkerPath } from '../../src/mc/desk-learning.js';
+import { RESERVE_DISABLED_EXIT, RESERVE_UNAVAILABLE_EXIT } from '../../src/mc/billing-route.js';
 import { TIDY_KIND } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import * as agyAdapter from '../../src/adapters/antigravity-cli.js';
@@ -4064,7 +4066,7 @@ test('a full Claude plan launches through the gateway without exposing its key',
   const [{ call, current }] = calls;
   assert.equal(call.bin, process.execPath);
   assert.ok(call.args.some((arg) => arg.endsWith('/billing-gateway-session.js')));
-  assert.deepEqual(call.args.slice(1, 4), ['claude', 'opus', '/bin/claude']);
+  assert.deepEqual(call.args.slice(1, 5), ['--runner-admission', 'claude', 'opus', '/bin/claude']);
   assert.equal(call.env.ANTHROPIC_API_KEY, undefined);
   assert.equal(current.billing, 'credits');
   assert.doesNotMatch(JSON.stringify(f.files), /sk-ant-test-key/u);
@@ -5308,6 +5310,160 @@ const judges = (f, stage, inner = okSession()) => (call) => {
   return inner(call);
 };
 const goalEntries = (f, name = 'judged') => parseLog(f.files[`${GOALS}/${name}/LOG.md`]);
+
+const LOCKED_RESERVE = Object.freeze({ status: RESERVE_UNAVAILABLE_EXIT, stdout: '', stderr: 'mc: claude API reserve unavailable (vault-locked)' });
+const CLAUDE_RESERVE = Object.freeze({ tool: 'claude', model: 'sonnet', effort: 'high' });
+const CODEX_RESERVE = Object.freeze({ tool: 'codex', model: 'gpt-6-luna', effort: 'high' });
+function reserveFixture(f, lists, api = {}) {
+  f.deps.catalog = () => ({ ...DEFAULT_CATALOG, ...lists });
+  f.deps.capacity.write(capacityWith({ claude: 1, codex: 1 }));
+  f.deps.billing = { ...f.deps.billing, readApi: () => api };
+  return f;
+}
+
+test('a locked API reserve spends no build or review retry and reopens only after the hold', async () => {
+  for (const [kind, f, goal, list] of [
+    ['build', goalFixture({ checking: {} }), 'checking', 'large'],
+    ['review', reviewFixture(), 'judged', 'review'],
+  ]) {
+    reserveFixture(f, { [list]: [CLAUDE_RESERVE] });
+    let now = ROUTING_NOW.getTime();
+    f.deps.now = () => new Date(now);
+    f.answer = () => LOCKED_RESERVE;
+    const runner = createRunner({ deps: f.deps });
+    const previous = goalEntries(f, goal);
+    assert.equal((await runner.pass()).ran, 0);
+    assert.ok(f.calls.sessions[0].args.includes('--runner-admission'));
+    assert.equal(f.calls.sessions.length, 1);
+    assert.equal((await runner.pass()).ran, 0);
+    assert.equal(f.calls.sessions.length, 1, 'the unstartable reserve is held on the next pick');
+    assert.deepEqual(goalEntries(f, goal), previous);
+    assert.equal(where(f, goal), `${kind} · ready`);
+
+    f.deps.capacity.write(capacityWith({ claude: 0.2, codex: 1 }));
+    f.answer = () => ({ ...LOCKED_RESERVE, stderr: '' });
+    assert.equal((await runner.pass()).ran, 1, 'a direct tool exit with this number is still a session failure');
+    assert.equal(f.calls.sessions.length, 2, 'the same provider can run on its plan during the hold');
+    assert.equal(f.calls.sessions.at(-1).args.includes('--runner-admission'), false);
+    f.deps.capacity.write(capacityWith({ claude: 1, codex: 1 }));
+    f.answer = () => LOCKED_RESERVE;
+    now += 60_000;
+    assert.equal((await runner.pass()).ran, 0);
+    assert.equal(f.calls.sessions.length, 3, 'the next ordinary pick can try the expired reserve');
+    assert.equal(f.calls.sessions.at(-1).args.includes('--runner-admission'), true);
+  }
+});
+
+test('a plan pick that rereads as credits cannot launch a held API reserve', async () => {
+  const f = reserveFixture(goalFixture({ resume: {} }), { large: [CLAUDE_RESERVE] });
+  f.answer = () => LOCKED_RESERVE;
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass()).ran, 0);
+  assert.equal(f.calls.sessions.length, 1);
+  f.deps.capacity.write(capacityWith({ claude: 0.2 }));
+  const resolve = f.deps.launch;
+  f.deps.launch = tool => {
+    f.deps.capacity.write(capacityWith({ claude: 1 }));
+    return resolve(tool);
+  };
+  assert.equal((await runner.pass()).ran, 0);
+  assert.equal(f.calls.sessions.length, 1, 'no wrapper gets the late credits launch');
+  assert.equal(where(f, 'resume'), 'build · ready');
+  assert.deepEqual(goalEntries(f, 'resume'), []);
+});
+
+test('decision reconsideration can use another enabled reserve, and an explicitly off reserve waits', async () => {
+  const f = reserveFixture(goalFixture({ held: { status: 'Martin' } }), { decision: [CLAUDE_RESERVE, CODEX_RESERVE] });
+  const at = '2026-08-29T09:00:00Z';
+  const id = deskItemId('goal', 'prog/held', at);
+  const item = { id, kind: 'goal', reference: 'prog/held', source_at: at, state: 'prepared' };
+  const path = join(itemDirectory(item, f.deps.env), 'item.json');
+  f.files[path] = JSON.stringify(item);
+  wireDesk(f);
+  const api = { claude: true, codex: false };
+  f.deps.billing.readApi = () => api;
+  f.answer = () => LOCKED_RESERVE;
+  const runner = createRunner({ deps: f.deps });
+  const first = await runner.decisionOne(id);
+  assert.equal(first.ran, 0);
+  assert.match(first.reason, /claude API reserve unavailable before launch/u);
+  assert.equal(JSON.parse(f.files[path]).decision_failures, undefined);
+  const waiting = await runner.decisionOne(id);
+  assert.equal(waiting.ran, 0);
+  assert.match(waiting.reason, /codex API off/u);
+  assert.equal(f.calls.sessions.length, 1);
+  api.codex = true;
+  f.answer = call => {
+    f.files[path] = JSON.stringify({ ...item, state: 'closed' });
+    return okSession()(call);
+  };
+  assert.equal((await runner.decisionOne(id)).ran, 1);
+  assert.deepEqual(f.calls.sessions.map(call => call.env.MC_TOOL), ['claude', 'codex']);
+  assert.equal(f.calls.sessions[1].args.includes('--runner-admission'), true);
+  assert.equal(f.log.some(line => line.includes('decision session exited')), false);
+});
+
+test('a reserve refusal during a switch race spends neither planning nor archive reading attempts', async () => {
+  for (const [list, f, state] of [
+    ['plan', programmeFixture(), TURN_STATE], ['large', archiveFixture({ body: null }), ARCHIVE_STATE],
+  ]) {
+    reserveFixture(f, { [list]: [CLAUDE_RESERVE] });
+    f.answer = () => ({ status: RESERVE_DISABLED_EXIT, stdout: '', stderr: 'mc: claude API is off' });
+    const result = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+    assert.equal(result.ran, 0);
+    assert.equal(f.calls.sessions.length, 1);
+    assert.equal(f.files[state], undefined);
+    assert.ok(f.log.some(line => line.includes('claude API off — waiting for an eligible route')));
+  }
+});
+
+test('a locked reserve returns both goal-less mends to their queues without spending an attempt', async () => {
+  const main = mainRedFixture(), deploy = deployMendFixture();
+  for (const [f, entries] of [[main, main.mainEntries], [deploy, deploy.entries]]) {
+    reserveFixture(f, { mend: [CLAUDE_RESERVE] });
+    f.answer = () => LOCKED_RESERVE;
+    const runner = createRunner({ deps: f.deps });
+    assert.equal((await runner.pass()).ran, 0);
+    assert.equal(f.calls.sessions.length, 1);
+    assert.ok(entries().length > 0);
+    for (const entry of entries()) assert.deepEqual([entry.state, entry.failures ?? 0, entry.owner], ['queued', 0, undefined]);
+    assert.equal((await runner.pass()).ran, 0);
+    assert.equal(f.calls.sessions.length, 1);
+  }
+});
+
+test('a locked reserve leaves scheduled desk preparation and learning eligible', async t => {
+  const l = learningFixture(t, { ages: [7] });
+  const { f } = l;
+  reserveFixture(f, { medium: [CLAUDE_RESERVE], decision: [CLAUDE_RESERVE] });
+  const marker = learningMarkerPath(f.deps.env);
+  const at = '2026-08-28T09:00:00Z';
+  const id = deskItemId('goal', 'prog/held', at);
+  const item = { id, kind: 'goal', reference: 'prog/held', source_at: at, state: 'new' };
+  f.deps.syncDeskItems = () => {};
+  writeDeskItem(item, { env: f.deps.env });
+  let now = ROUTING_NOW.getTime();
+  f.deps.now = () => new Date(now);
+  let preparations = 0, learnings = 0;
+  f.deps.deskPrepare = { billingRoute: () => ({ billing: 'credits' }), session: async () => { preparations++; return LOCKED_RESERVE; } };
+  f.deps.deskLearning.billingRoute = () => ({ billing: 'credits' });
+  f.deps.deskLearning.session = async () => { learnings++; return LOCKED_RESERVE; };
+  mkdirSync(dirname(marker), { recursive: true });
+  writeFileSync(marker, JSON.stringify({ started_at: at, reason: 'prior day' }));
+  const runner = createRunner({ deps: f.deps });
+  await runner.runDeskPreparation();
+  assert.deepEqual(listDeskItems({ env: f.deps.env }).find(row => row.id === id), item);
+  assert.equal(preparations, 1);
+  assert.equal(await runner.runDeskPreparation().then(result => result.done.length), 0);
+  assert.equal(preparations, 1);
+  now += 60_000;
+  // Use the same real learning fixture in a fresh runner. A denied attempt
+  // may provisionally write today's marker but restores yesterday's bytes.
+  writeDeskItem({ ...item, state: 'closed' }, { env: f.deps.env });
+  await runner.chores();
+  assert.equal(learnings, 1);
+  assert.deepEqual(JSON.parse(readFileSync(marker, 'utf8')), { started_at: at, reason: 'prior day' });
+});
 
 test('a review releases its lane after merge handoff so the next assignment can start', async () => {
   for (const stage of ['review']) {
@@ -7497,6 +7653,16 @@ test('curation turn: a failed turn waits for the cadence and opens no item; a pr
   quota.f.answer = REFUSED_429;
   await createRunner({ deps: quota.f.deps }).pass({ repo: 'memoro' });
   assert.equal(JSON.parse(quota.f.files[CURATION_STATE]).started, null, 'a provider ending gives the cadence back');
+
+  const locked = managerFixture({ now: ROUTING_NOW.toISOString() });
+  const prior = curationSeed('2026-08-27T09:00:00Z', { memoro: 'previous' });
+  locked.f.files[CURATION_STATE] = prior;
+  reserveFixture(locked.f, { large: [CLAUDE_RESERVE] });
+  locked.f.answer = () => LOCKED_RESERVE;
+  await createRunner({ deps: locked.f.deps }).pass({ repo: 'memoro' });
+  assert.equal(managerSessions(locked.f).length, 1);
+  assert.equal(locked.f.files[CURATION_STATE], prior);
+  assert.match(managerRows(locked.f)[0].note, /reserve unavailable before launch/u);
 
   // memoro's branch is published, memoro-cli's holds a commit that is not.
   const trees = managerFixture();

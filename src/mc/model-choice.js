@@ -97,6 +97,13 @@ function judge(capacity, candidate, now) {
 
 /** Whether a candidate's tool declares an API route its reserve can use. */
 const hasApiRoute = (candidate) => apiProviders().includes(declared(candidate.tool, 'BILLING_PROVIDER'));
+const usableReserve = (entry, wait) => hasApiRoute(entry.candidate) && !wait(entry.candidate.tool);
+const reserveWaits = (judged, wait) => judged.map(entry => {
+  const reserve = hasApiRoute(entry.candidate) ? wait(entry.candidate.tool) : null;
+  if (!reserve) return entry;
+  const retry = [entry.retry_at, reserve.retry_at].filter(Boolean);
+  return { ...entry, why: `${entry.why}; ${reserve.reason}`, retry_at: retry.length ? earliest(retry) : null };
+});
 const sameCandidate = (a, b) => a.tool === b.tool && a.model === b.model && a.effort === b.effort;
 
 /** The wait a list answers when its reserve has no candidate to take: each candidate and why, "no API route" where it has none. */
@@ -118,7 +125,7 @@ const answer = (cls, candidate, basis, headroom, why) => ({ ok: true, class: cls
  * headroom, and build-model avoidance breaks ties. `first` is the catalog's first candidate: absent, the list's
  * own first; `null`, none (the catalog's first is not in this list).
  */
-function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto', launchable = () => true, first = undefined) {
+function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto', launchable = () => true, first = undefined, waitForReserve) {
   const list = catalog.review;
   const builtOn = (value) => Boolean(avoid?.model) && value.model === avoid.model;
   const others = list.filter((value) => !builtOn(value));
@@ -156,8 +163,8 @@ function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto', lau
     return answer(cls, chosen.candidate, chosen.state === 'unknown' && priority !== 'auto' ? 'bootstrap' : 'preferred', chosen.headroom ?? null, `${reasons.length ? `${place} — ${reasons.join('; ')}` : `${place}, the first`}${fallback}`);
   }
   const ordered = priority === 'auto' ? judged : [...judged.filter((entry) => entry.candidate.tool === priority), ...judged.filter((entry) => entry.candidate.tool !== priority)];
-  const reserve = ordered.find((entry) => hasApiRoute(entry.candidate) && launchable(entry.candidate.tool));
-  if (!reserve) return waiting(cls, judged);
+  const reserve = ordered.find((entry) => usableReserve(entry, waitForReserve) && launchable(entry.candidate.tool));
+  if (!reserve) return waiting(cls, reserveWaits(judged, waitForReserve));
   const priorityWhy = priority === 'auto' ? '' : `; ${priority} priority has no usable subscription`;
   return { ...answer(cls, reserve.candidate, 'api', null, `${judged.map(passed).join('; ')}${priorityWhy}; API reserve`), billing: 'credits' };
 }
@@ -184,8 +191,8 @@ function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto', lau
  * default yes), and the catalog's first candidate when the list given is a
  * reduction of it (`null` when the reduction removed it).
  */
-export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoid = null, priority = 'auto', launchable = () => true, first }) {
-  if (cls === REVIEW_CLASS) return chooseReview(cls, catalog, capacity, now, avoid, priority, launchable, first);
+export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoid = null, priority = 'auto', launchable = () => true, first, waitForReserve = () => null }) {
+  if (cls === REVIEW_CLASS) return chooseReview(cls, catalog, capacity, now, avoid, priority, launchable, first, waitForReserve);
   if (!LISTS.includes(cls)) throw new Error(`"${cls}" is not a list — ${LISTS.join(', ')}`);
   const judged = catalog[cls].map((candidate) => ({ candidate, ...judge(capacity, candidate, now) }));
   if (cls === 'decision') {
@@ -206,7 +213,7 @@ export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoi
       return answer(cls, best.candidate, best.state === 'unknown' ? 'bootstrap' : 'known', best.headroom, `${best.why} — ${priority} provider priority${fallback}`);
     }
     const ordered = [...judged.filter((entry) => entry.candidate.tool === priority), ...judged.filter((entry) => entry.candidate.tool !== priority)];
-    const reserve = ordered.find((entry) => ['exhausted', 'refused', 'unavailable'].includes(entry.state) && hasApiRoute(entry.candidate));
+    const reserve = ordered.find((entry) => ['exhausted', 'refused', 'unavailable'].includes(entry.state) && usableReserve(entry, waitForReserve));
     if (reserve) return { ...answer(cls, reserve.candidate, 'api', null, `${reserve.why}; ${priority} priority has no usable subscription; API reserve`), billing: 'credits' };
   }
   const known = judged.filter((entry) => entry.state === 'known');
@@ -216,7 +223,7 @@ export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoi
   }
   const bootstrap = judged.find((entry) => entry.state === 'unknown' && bootstraps(entry.candidate.tool));
   if (bootstrap) return answer(cls, bootstrap.candidate, 'bootstrap', null, `${bootstrap.why} — bootstrapped on the included plan`);
-  const reserve = judged.find((entry) => ['exhausted', 'refused', 'unavailable'].includes(entry.state) && hasApiRoute(entry.candidate));
+  const reserve = judged.find((entry) => ['exhausted', 'refused', 'unavailable'].includes(entry.state) && usableReserve(entry, waitForReserve));
   if (reserve) return { ...answer(cls, reserve.candidate, 'api', null, `${reserve.why}; API reserve`), billing: 'credits' };
-  return waiting(cls, judged);
+  return waiting(cls, reserveWaits(judged, waitForReserve));
 }

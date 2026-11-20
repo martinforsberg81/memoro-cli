@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from '
 import { join } from 'node:path';
 import { requireCapability, resolveLaunch } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
-import { billingRouteNow, gatewayLaunch } from './billing-route.js';
+import { billingRouteNow, gatewayLaunch, gatewayRefusal } from './billing-route.js';
 import { runTool } from './child-async.js';
 import { deskBudget, deskBudgetReason, deskRunsPath } from './desk-budget.js';
 import { itemDirectory, listDeskItems, readDeskItem, updateDeskItem } from './desk-items.js';
@@ -76,7 +76,10 @@ export async function prepareDeskItem({ id, env = process.env, now = () => new D
     const dir = itemDirectory(item, env);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: candidate.model, effort: candidate.effort,
       instructions: instructionsFor(launch.id, role.overlay), prompt: `Prepare only desk item ${id}. Read it with mc martin item ${id}. Write prepared.md here, then mc martin item ${id} prepared --sort <sort> and stop.`, profileArgs, stream: false, cache: role.cache });
-    const processLaunch = gatewayLaunch({ provider, model: candidate.model, bin: launch.spec.bin, args, billing: billing.billing });
+    const processLaunch = gatewayLaunch({ provider, model: candidate.model, bin: launch.spec.bin, args,
+      billing: billing.billing, runnerAdmission: Boolean(deps.reserveAdmission) });
+    const wait = processLaunch.reserve && deps.reserveAdmission.blocked(processLaunch.reserve);
+    if (wait) return { started: false, reason: wait };
     const childEnv = withoutSessionIdentity(env);
     for (const key of ['MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'MC_SCRATCH']) delete childEnv[key];
     Object.assign(childEnv, { MC_ROLE: 'desk-prepare', MC_HEADLESS: '1', MC_TOOL: candidate.tool, MC_MODEL: candidate.model });
@@ -84,6 +87,14 @@ export async function prepareDeskItem({ id, env = process.env, now = () => new D
     let result;
     try { result = await (deps.session || realSession)({ ...processLaunch, cwd: dir, env: scrubProviderApiKeysFromEnv(childEnv), timeoutMs: PREPARE_TIMEOUT_MS, group: true }); }
     catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
+    const refusal = gatewayRefusal(processLaunch, result);
+    if (refusal) {
+      const reason = deps.reserveAdmission.denied(refusal);
+      (deps.logRun || (row => appendRun(row, env)))({ ts: now().toISOString(), name: id, kind: 'desk-prepare',
+        exit: result.status, seconds: Math.round((now().getTime() - started.getTime()) / 1000), pr: '-', note: reason,
+        model: candidate.model, cls: 'medium', tool: candidate.tool, effort: candidate.effort, billing: billing.billing });
+      return { started: false, reason };
+    }
     const summary = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, now: now(), model: candidate.model });
     refusePlanOnRead({ read: summary, launch, model: candidate.model, billing: billing.billing, env, now: now(), say: deps.say });
     let prepared = false;
