@@ -116,6 +116,13 @@ must be **under 100 bytes**, leaving room under macOS's 104-byte limit. An
 unprivate/overlong path refuses before forwarding and removes the directory;
 use a shorter `MC_WORK_ROOT` if needed. No fallback writes a socket elsewhere.
 
+After the local socket appears, mc allows up to five seconds to initialize an
+app-server connection through it. This checks that OpenSSH can reach the
+remote socket before opening the terminal client. Initialization neither
+loads a conversation nor starts a turn. On failure, mc names the destination,
+the remote socket and the SSH or connection error. The control connection
+closes without a clean end, keeping the existing session available to rejoin.
+
 ```text
 ssh -N -o ExitOnForwardFailure=yes -L <local>:<remote> <destination>
 codex <descriptor access flags> --remote unix://<local> [prompt]

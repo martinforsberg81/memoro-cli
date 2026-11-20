@@ -204,8 +204,12 @@ among the waiting rows), and what the desk costs today of the ceiling.
 An unreadable part says so in red in its own row and the rest still draws: an
 invalid `last-open.json` and an unreadable ledger on the decided row, `desk.json`
 or `runs.tsv` on the cost row, a failure of the whole read as `desk unreadable —`
-with nothing else. The read never throws, so the page always comes. `⚑n`,
-and `status Martin` stay as they are; MARTIN QUEUE is no longer drawn (the operations view has none).
+with nothing else. The read never throws, so the page always comes.
+
+A programme goal held for automatic preparation or decision shows `status
+decision`. Its row shows `status Martin` once the current desk item is
+`for-martin`. A mechanical item that reaches that state is listed among the
+stuck items in Not ready.
 
 `desk` in `--json`: `since`, `last_opened`, `waiting`, `texts` and `acts` (each
 `id`, `kind`, `reference`, `sort`, `source_at`, `waited_minutes`, `blocks`,

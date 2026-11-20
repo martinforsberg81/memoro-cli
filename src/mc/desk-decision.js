@@ -34,6 +34,7 @@ export function decisionPrompt(item, { env, goal }) {
     + (item.kind === 'programme' ? programmeLine(item, env) : item.kind === 'manager' ? managerLine(item) : item.kind === 'archive' ? archiveLine(item, env) : '')
     + (goal ? `Goal: ${item.reference}. Goal directory: ${goal.dir}. Read the goal, its whole LOG.md, worktree state and stage role, and record takeover before acting.\n` : item.kind === 'programme' || item.kind === 'manager' || item.kind === 'archive' ? '' : 'No goal identity is assigned; work in the item directory.\n')
     + 'Settle and close --by decision. A remaining change to a text Martin holds is written to brief.md in Swedish, in the form of docs/technical/mc-martin.md (## Vad den säger, ## Vad som föreslås, ## Vad som hittades; no options, no recommendation) and marked brief --sort text --text \'<the text>\' --reversible yes|no; a reserved act is marked brief --sort reserved --reversible yes|no. No clock carries out a brief.\n'
+    + 'If you cannot settle a mechanical stop, write the cause, what you tried and what remains in brief.md, then run mc martin item <id> brief --sort mechanical.\n'
     + 'Keep evidence, gate, review, publish and merge unchanged. Do not launch another decision or Martin session.';
 }
 

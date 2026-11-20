@@ -22,34 +22,31 @@ Use the supported manual route without a record, or the valid-record route when 
 - `README.md` — the working document; read first. The document reference owns its headings and part entries.
 - `goals/<goal>/` — goal briefs written with [writing-a-goal](writing-a-goal.md); README does not repeat them.
 - No `proposals/`: findings wait in their area, and the document names those it takes in ([proposals](proposals.md)).
-- `docs/technical/` (memoro, memoro-cli) — what runs; README points to it. No session writes
-  `docs/project/`.
-- `evidence/<date>-<slug>/` — measured evidence linked from README. No `PLAN.md`, `decisions/` or
-  second plan format.
+- `docs/technical/` (memoro, memoro-cli) — what runs; README points to it. No session writes `docs/project/`.
+- `evidence/<date>-<slug>/` — measured evidence linked from README. No `PLAN.md`, `decisions/` or second plan format.
 
-## Design, in order
+## Programme design
 
 1. Define what the implementation plan delivers and its end; point to its
    area's enduring direction and, where applicable, the horizon it serves.
 2. Read affected code, technical standards, programme README and the areas' proposals; design claims cite files actually opened.
-3. Resolve questions through [asking-martin](asking-martin.md). Record decisions in the README or goal, or in the technical standard
-   if it reaches beyond the programme, then in affected goals. Add needed standards within the app's
-   direction. No goal is written with a decision still open.
-4. Cut work into goals buildable start to finish by headless sessions. Investigate, measure and design before the cut, not as
-   the goal's first task ([goal design](references/goal-design.md)).
-5. Order by prerequisites and shared files. A programme whose record states its phases runs independent phases side by side: state a prerequisite, shared files included, with `mc programs after`. Elsewhere independent goals share a phase and dependent goals go later. In both a prerequisite is a phase dependency, never a note.
-6. Move a complete goal to `build` only with its acceptance procedure and setup verified.
+3. Resolve questions through [asking-martin](asking-martin.md). Record decisions in the README or goal. Put shared decisions in the technical standard and then in affected goals. Add needed standards within the app's direction.
+4. Read the README against [the document structure](references/programme-document.md) (repairs use their short page). Follow [writing a programme document](writing-a-programme-document.md) through the desk's release of the ready order.
+
+## Goal design
+
+1. For a recorded desk order, start the cut once the desk sets it ready. Cut fully investigated, measured and designed work into [goals](references/goal-design.md) headless sessions can build to the end. Settle decisions before writing the goal.
+2. Order by prerequisites and shared files. A programme whose record states its phases runs independent phases side by side: state a prerequisite, shared files included, with `mc programs after`. Elsewhere independent goals share a phase and dependent goals go later. In both a prerequisite is a phase dependency, never a note.
+3. Move a complete goal to `build` only with its acceptance procedure and setup verified.
    Keep a consumer needing a producer in draft in a dependent phase; use the plan role's
    next-draft procedure when evidence is missing or a relevant premise has changed.
-7. Write and read back the README against [the document structure](references/programme-document.md)
-   (repairs use their short page). A programme is written with Martin in a session, when he says it is ready the desk sets it ready, and the planner cuts goals from its README.
-   Landed sections leave the README.
 
 ## When a goal lands
 
 Write landed functionality to `docs/technical/`. When the work is finished,
 archive the programme after write-back. Automatic archive requires a valid record
 and the runner's safety checks; otherwise use the supported manual archive route.
+Landed sections leave the README.
 
 ## Faithful scope correction and handoff
 

@@ -64,7 +64,6 @@ describe('the plan role', () => {
     assert.match(told, /runner assigns exactly that one next draft/u);
     assert.match(told, /Do not implement it, plan another draft/u);
     assert.match(told, /A \*\*review session\*\* judges and moves it to `merge` \(all OK\) or back to `build` \(a NOT OK line\)/u);
-    assert.match(told, /A goal rejected a third time stays in review with status Martin/u);
     assert.match(told, /A \*\*mend session\*\* handles merge failures only/u);
     assert.match(told, /You move a stage forward only; mc refuses a session's move back/u);
     assert.match(told, /not a runner area/u);
@@ -423,6 +422,21 @@ describe('what it refuses', () => {
 describe('a planning area nothing could be checked out into', () => {
   const missing = (root) => [{ name: 'memoro', path: join(root, 'no-such-repo') }];
   const area = (root, programme) => join(root, 'plan', programme);
+
+  it('reports the denied directory and how to retry before building a checkout', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-plan-denied-'));
+    const stderr = sink();
+    try {
+      const path = area(root, 'example');
+      const result = ensurePlanArea('example', {
+        repos: missing(root), env: { MC_WORK_ROOT: root }, stdout: sink(), stderr,
+        create: () => { throw Object.assign(new Error('permission denied'), { code: 'EACCES', syscall: 'mkdir', path }); },
+      });
+      assert.equal(result.ok, false);
+      assert.equal(stderr.out.text, `mc: host denied creating ${path} — check permissions on ${join(root, 'plan')}, then retry\n`);
+      assert.equal(existsSync(path), false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 
   it('is taken away again, and says why', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-plan-empty-'));

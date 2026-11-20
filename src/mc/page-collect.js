@@ -114,6 +114,7 @@ import { OPENAI_PRICES_DATED, PRICES_DATED, rowCost } from './prices.js';
 import { landedSection, readRunRows } from './landed.js';
 import { readDeskCost } from './desk-cost.js';
 import { readPageDesk } from './page-desk.js';
+import { readGoalDeskItem } from './desk-items.js';
 import { agyBrainDir } from './agy-brain.js';
 import { claudeHome, codexHome } from './conversations.js';
 import { PR_LIST_ARGS, parseWorktrees, prOwner } from './open-prs.js';
@@ -1325,10 +1326,12 @@ export function programmesSection({
  * `order(programme)`: a lower phase still to finish, or a stated phase it waits
  * for, or an invalid record), so the runner does not pick it yet.
  */
-export function goalsOf({ goals = [], currents = [], alive = pidAlive, order = () => SEQUENTIAL } = {}) {
+export function goalsOf({ goals = [], currents = [], alive = pidAlive, order = () => SEQUENTIAL, deskItem = readGoalDeskItem } = {}) {
   return goals.map((goal) => {
     const running = currents.some((current) => current.name === goalName(goal) && alive(current.pid));
     const sessions = goalSessions(goal.log);
+    const stopped = waitsOnPerson(goal);
+    const person = stopped && deskItem(goal)?.state === 'for-martin';
     return {
     name: goal.goal,
     title: goal.title || null,
@@ -1356,11 +1359,9 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive, order = (
     criteria: criteriaCount(goal),
     last: goal.log.at(-1) ?? null,
     running,
-    // Martin, in any stage, waits on a person (`waitsOnPerson`).
-    person: waitsOnPerson(goal),
-    // What it waits on the person for: the last entry's comment — the
-    // session's question, or the runner's word on why it stopped.
-    question: waitsOnPerson(goal) ? (goal.log.at(-1)?.comment ?? null) : null,
+    person,
+    // The source hold is also visible while preparation or decision is pending.
+    question: stopped ? (goal.log.at(-1)?.comment ?? null) : null,
     // The hold `mc goal hold` wrote (`{by, tool, at, reason}`), or null.
     hold: readHold(goal.dir),
     problems: goal.problems,
@@ -1817,7 +1818,7 @@ export async function collectPage({
     programmeSessions: sessions.programme_sessions,
     runnerSessions: runner.sessions,
     sessionStrays: sessions.strays,
-    goalRows: goalsOf({ goals, currents, alive, order }),
+    goalRows: goalsOf({ goals, currents, alive, order, deskItem: goal => readGoalDeskItem(goal, { env }) }),
     programmes: [...repositoryNames, ...localProgrammes(programsHome(env))],
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
     order,

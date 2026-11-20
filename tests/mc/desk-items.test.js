@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { renameSync } from 'node:fs';
-import { deskItemId, deskItemQuestion, itemDirectory, syncDeskItems, listDeskItems, readDeskItem, updateDeskItem } from '../../src/mc/desk-items.js';
+import { deskItemId, deskItemQuestion, itemDirectory, syncDeskItems, listDeskItems, readDeskItem, readGoalDeskItem, updateDeskItem } from '../../src/mc/desk-items.js';
 import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { run as martin } from '../../src/mc/commands/martin.js';
 import { goalJson } from './_helpers/goal-file.js';
-import { NO_PROGRESS_STOP } from '../../src/mc/goals.js';
+import { NO_PROGRESS_STOP, parseLog } from '../../src/mc/goals.js';
 import { writeDeskItem } from '../../src/mc/desk-items.js';
 
 const roots=[]; after(()=>roots.forEach(x=>rmSync(x,{recursive:true,force:true})));
@@ -41,6 +41,23 @@ test('a goal defect opens one desk item, labelled by its first line, and a secon
   assert.equal(items.length,1); assert.equal(items[0].kind,'goal'); assert.equal(items[0].source_at,stamp); assert.equal(items[0].state,'new');
   assert.equal(syncDeskItems(dep).length,1,'a second sync adds nothing');
   assert.equal(deskItemQuestion(items[0],{env:f.env,home:f.home,read:fixtureRead}),DEFECT_LINE);
+});
+
+test('review repair stops open for decision and a stale brief does not label the current stop', () => {
+  const f = fixture();
+  const stop = 'no progress: review repair limit reached after 2 automatic repairs. Failed: bugs. See REVIEW.md.';
+  const earlier = '2026-11-14T09:10:00Z';
+  const previousId = deskItemId('goal', 'alpha/one', earlier);
+  writeDeskItem({ id: previousId, kind: 'goal', reference: 'alpha/one', source_at: earlier, state: 'for-martin' }, { env: f.env });
+  const rawLog = `## ${stamp} · claude opus · review · Martin · by review\n\nComment: ${stop}\n`;
+  writeFileSync(join(f.dir, 'GOAL.json'), goalJson({ stage: 'review', status: 'Martin' }));
+  writeFileSync(join(f.dir, 'LOG.md'), rawLog);
+  const goal = { programme: 'alpha', goal: 'one', stage: 'review', status: 'Martin', log: parseLog(rawLog) };
+  assert.equal(readGoalDeskItem(goal, { env: f.env }), null, 'an older brief is not the current item');
+  syncDeskItems({ env: f.env, home: f.home, now: () => new Date(stamp), read: fixtureRead });
+  const item = readGoalDeskItem(goal, { env: f.env });
+  assert.equal(item.state, 'new');
+  assert.equal(deskItemQuestion(item, { env: f.env, home: f.home, read: fixtureRead }), stop);
 });
 
 test('the label of an item is the Martin entry of its minute, even when another entry shares the minute',()=>{

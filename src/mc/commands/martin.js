@@ -10,6 +10,7 @@ import { openInWorkArea } from '../work-open.js';
 import { interactive } from '../prompt.js';
 import { scanArgs } from './flags.js';
 import { interactiveToolRefusal } from '../interactive-tool.js';
+import { directoryAccessRefusal } from '../interactive-access.js';
 import { collectMartinQueue, renderMartinQueue } from '../martin-collect.js';
 import { deskItemQuestion, itemDirectory, listDeskItems, readDeskItem, syncDeskItems, updateDeskItem } from '../desk-items.js';
 import { drainDeskPreparation, prepareDeskItem } from '../desk-prepare.js';
@@ -86,7 +87,13 @@ export async function run(argv, deps = {}) {
   let last;
   try { last = readLastOpen({ env, read: deps.read || readDeskText }); } catch (error) { stderr.write(`mc: ${error.message}; correct or remove it, then open the desk again\n`); return 1; }
   const root = (deps.desk || martinDir)(env);
-  (deps.mkdir || mkdirSync)(root, { recursive: true });
+  try { (deps.mkdir || mkdirSync)(root, { recursive: true }); }
+  catch (error) {
+    const reason = directoryAccessRefusal(error, root);
+    if (!reason) throw error;
+    stderr.write(`mc: ${reason}\n`);
+    return 1;
+  }
   const data = openingFor({ env, home, now, last, deps, stderr });
   if (!data) return 1;
   const prompt = renderLaunchSnapshot(data);
@@ -167,6 +174,12 @@ function item(argv, deps) {
     if (verb === 'prepared' && state === 'new' && f.sort && ['mechanical','technical','text','product','judgement','reserved'].includes(f.sort) && exists(join(dir,'prepared.md'))) {
       // product and judgement are the old names of the one sort for a text change; a new record never carries them.
       fresh.state = 'prepared'; fresh.sort = isTextSort(f.sort) ? 'text' : f.sort; return fresh;
+    }
+    if (verb === 'brief' && state === 'prepared' && f.sort === 'mechanical') {
+      if (!maybeRead(join(dir, 'brief.md'))?.trim()) return refuse('write the unresolved stop and its evidence in brief.md first');
+      if (f.text !== null || f.recommend !== null || f.reversible !== null || f['no-option']) return refuse('brief --sort mechanical takes no text name, option or reversibility flags');
+      fresh.state = 'for-martin'; fresh.sort = 'mechanical'; fresh.reversible = false; fresh.due_at = null;
+      return fresh;
     }
     if (verb === 'brief' && state === 'prepared' && ['text','product','judgement','reserved'].includes(f.sort) && ['yes','no'].includes(f.reversible) && exists(join(dir,'brief.md'))) {
       const briefText = maybeRead(join(dir, 'brief.md'));

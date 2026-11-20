@@ -30,7 +30,15 @@ On main now:
 - Before build, programme review and planning check the acceptance procedure
   and its setup ([acceptance preparation](../mc-plan.md#acceptance-preparation-before-build)).
   During delivery, goal list and show report the evidenced outcome and who
-  acts next when available ([goal displays](../mc-goals.md#the-verbs)).
+  acts next when available. A build that has more in-scope work records a
+  bounded continuation instead of presenting the goal as ready for review
+  ([goal verbs](../mc-goals.md#the-verbs)).
+- The [learning pass](../mc-martin.md#lessons-and-the-learning-pass) can
+  publish an evidenced factual correction to one area page. It does not
+  change held wording or create a repair order.
+- [Repair drafting](../mc-plan.md#internal-repair-drafts) exists as an
+  internal entry. Its drafts cannot be set ready by the ordinary state
+  command or enter planning or build; the repair release path has not landed.
 - A waiting deploy reserves the next opening for a full run when a different commit is being measured. It can still join a measurement of its own commit.
 - The helper preserves anonymous app suggestions in intake before it acknowledges their receipt. Collection does not create a programme or goal.
 
@@ -73,6 +81,8 @@ On main now:
 - `canon/` in memoro-cli: the roles, verbs and task pages that every session is started from.
 - `.mc/areas.json` in each repository: the areas it declares, their standards, paths and questions. This page is the page of the source area `system`.
 - The `~/mc` layout: programmes, archive, the areas' proposals, horizons, runner state and the desk's items, as [mc-layout.md](../mc-layout.md) describes it.
+- `~/mc/martin/lessons/` — [lesson evidence](../mc-martin.md#lessons-and-the-learning-pass)
+  used by the separate area-learning pass.
 
 ## Standards
 

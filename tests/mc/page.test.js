@@ -2681,7 +2681,7 @@ describe('collectPage', () => {
     const group = data.programmes.programmes.find((item) => item.programme === 'mc');
     const [base] = group.goals;
     const goal = (name, extra) => ({ ...base, name, title: name, prs: [], running: false, ...extra });
-    const waiting = goal('waits', { status: 'Martin' });
+    const waiting = goal('waits', { status: 'Martin', person: true });
     const blocked = goal('stuck', { status: 'blocked' });
     const held = goal('parked', { hold: { by: 'martin', at: '2026-11-14T10:00:00Z', reason: 'wait for the deploy' } });
     const done = goal('over', { stage: 'done', status: 'done', phase: 3 });

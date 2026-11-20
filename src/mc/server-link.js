@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { workRoot } from './paths.js';
 import { terminalEnvironment } from './session-entrance.js';
 import { MC_VERSION, validateDescriptor } from './server-protocol.js';
+import { withCodexServer } from './codex-rpc.js';
 import { declared, idsWith } from '../adapters/index.js';
 
 import { sshDestination } from './server-settings.js';
@@ -23,6 +24,7 @@ export function remoteCommand(argv) {
 
 export function serverLink(destination, {
   env = process.env, io = fs, spawnProcess = spawn, run = spawnSync, now = Date.now, sleep = delay, stderr = process.stderr,
+  probeSocket = socket => withCodexServer(socket, () => {}, { timeoutMs: 5_000 }),
 } = {}) {
   sshDestination(destination);
   const options = { env: terminalEnvironment(env) };
@@ -137,12 +139,12 @@ export function serverLink(destination, {
       completion = new Promise(resolve => child.once('close', () => { closed = true; lost = true; resolve(); }));
       child.once('error', error => { reason = error.message; lost = true; });
       child.stderr.setEncoding('utf8');
-      child.stderr.on('data', chunk => { reason = (reason || '') + chunk; });
+      child.stderr.on('data', chunk => { reason = ((reason || '') + chunk).slice(-8192); });
       for (const deadline = now() + 10_000; !io.existsSync(socket);) {
         if (lost || now() >= deadline) refusal(`ssh ${destination}: ${reason?.trim() || (lost ? 'tunnel exited before its socket appeared' : 'tunnel socket did not appear within 10000 ms')}`);
         await sleep(25);
       }
-      return { socket, child, get lost() { return lost; }, completion, cleanup };
+      return { socket, child, get lost() { return lost; }, get diagnostic() { return reason?.trim(); }, completion, cleanup };
     } catch (error) { await cleanup(); throw error; }
   }
 
@@ -163,6 +165,12 @@ export function serverLink(destination, {
       const localVersion = measured.status === 0 && measured.stdout?.trim() ? measured.stdout.trim() : `unavailable (${measured.error?.message || measured.stderr?.trim() || measured.status})`;
       if (localVersion !== session.providerVersion) refusal(`${localVersion} here, ${session.providerVersion} on ${destination}`);
       forward = await tunnel(session.socket);
+      // The local bind can succeed while the SSH host refuses the forwarded channel.
+      try { await probeSocket(forward.socket); }
+      catch (error) {
+        const reason = (forward.diagnostic || error.message).replace(/\s+/gu, ' ');
+        refusal(prefix(`could not reach Codex socket ${session.socket} through SSH: ${reason} — check forwarding and server status, then rejoin`));
+      }
       result = await new Promise(resolve => {
         client = spawnProcess(wire.bin, [...(session.sessionId ? ['resume', session.sessionId] : session.access), '--remote', `unix://${forward.socket}`,
           ...(session.prompt ? (session.prompt.startsWith('-') ? ['--', session.prompt] : [session.prompt]) : [])],
@@ -174,10 +182,15 @@ export function serverLink(destination, {
       });
       await connection.finish(result.status === 0 && !result.signal && !result.error && !forward.lost && !linkLost);
       return result;
+    } catch (error) {
+      if (!result) {
+        // Retain the startup diagnostic if closing the control connection also failed.
+        try { await connection.finish(false); } catch { /* the open failure is primary */ }
+      }
+      throw error;
     } finally {
       // Finish first: removing the tunnel must not turn a clean quit into a lost connection.
-      try { if (!result) await connection.finish(false); }
-      finally { await forward?.cleanup(); }
+      await forward?.cleanup();
     }
   }
   return { destination, request, handshake: () => request('version'), passthrough, connect, tunnel, codexClient };
