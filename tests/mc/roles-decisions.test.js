@@ -122,7 +122,7 @@ describe('the rules every session gets, whichever role it is', () => {
     const told = skillText('proposals');
     assert.match(told, /`<date>-<system>-<slug>\.md`, in the area it belongs to:\s+`~\/mc\/areas\/<repo>\/<area>\/proposals\/`/u);
     assert.match(told, /There is no place without an area/u);
-    assert.match(told, phrase('drained one file'));
-    assert.match(told, phrase('asks a second session to work it out again'));
+    assert.match(told, phrase('raw material that waits for a person'));
+    assert.match(told, phrase('asks someone to work it out again from less than you had'));
   });
 });
