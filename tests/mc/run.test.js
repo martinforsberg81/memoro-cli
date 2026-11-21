@@ -6855,67 +6855,47 @@ test('a goal whose part has left the order starts no session, said once, and is 
   assert.deepEqual(goalsNow(f).map(([name]) => name), ['one', 'two']);
 });
 
-test('the cut: nothing is cut for a programme that is not eligible, what the desk must do is said once, and another programme\'s goal still starts in the same pass', async () => {
-  const goalAt = (path) => (f) => { f.files[path] = goalJson({ stage: 'draft', status: 'Martin', phase: 1, repos: ['memoro'], title: 'x', goal: [], prs: [] }); };
+// Why a programme is not due is `programmeDue`'s, covered case by case in programme-turn.test.js. Here: what the
+// runner does with that answer through its own seams (its desk items, its horizon reader, its log), one case each.
+test('the cut: nothing is cut for a programme that is not due, and what the desk must do is said once while it lasts', async () => {
   const noLines = README_MD.replaceAll(/Waits for: [^\n]+\n\n/gu, '');
+  const withHorizon = recordWith({ ...JSON.parse(READY), horizon: 'h' });
   const table = [
-    ['no record', (f) => { delete f.files[RECORD_AT]; }],
-    ['an invalid record', (f) => { f.files[RECORD_AT] = '{ not json'; }],
-    ['a record in state done', (f) => { f.files[RECORD_AT] = recordWith({ state: 'done' }); }],
-    ['no README.md', (f) => { delete f.files[`${PROG}/README.md`]; }],
-    ['a README.md with no parts', (f) => { f.files[`${PROG}/README.md`] = '# prog\n\nNo parts.\n'; }],
-    ['a record in state draft', (f) => { f.files[RECORD_AT] = draftRecordText(); }],
-    ['goals that already name all parts', (f) => { writesGoals(f, { old: { status: 'Martin', parts: [1, 2] } }); }],
-    ['a goal in goals/ that names no part of README.md', goalAt(`${GOALS}/a-draft/GOAL.json`)],
-    ['an open desk item of kind programme', (f) => { wireDesk(f); f.files['/w/martin/items/x/item.json'] = JSON.stringify({ id: 'x', kind: 'programme', reference: 'programme:prog', state: 'for-martin', sort: 'mechanical', reversible: false, due_at: null }); }],
-    ['a horizon that is reached', (f) => { f.files[RECORD_AT] = recordWith({ ...JSON.parse(READY), horizon: 'h' }); f.deps.horizon = () => ({ state: 'reached' }); }],
-    ['a horizon that is missing', (f) => { f.files[RECORD_AT] = recordWith({ ...JSON.parse(READY), horizon: 'h' }); f.deps.horizon = () => null; }],
-    ['an order whose parts have no "Waits for" line', (f) => { f.files[README_AT] = noLines; }],
-    ['a record that states no dependency of the order', (f) => { f.files[RECORD_AT] = plainText(); }],
+    ['a record in state draft', (f) => { f.files[RECORD_AT] = draftRecordText(); }, null],
+    ['an open desk item of kind programme', (f) => { wireDesk(f); f.files['/w/martin/items/x/item.json'] = JSON.stringify({ id: 'x', kind: 'programme', reference: 'programme:prog', state: 'for-martin', sort: 'mechanical', reversible: false, due_at: null }); }, null],
+    ['a horizon that is reached', (f) => { f.files[RECORD_AT] = withHorizon; f.deps.horizon = () => ({ state: 'reached' }); }, 'prog: its horizon h reads reached — the programme is not cut while that lasts'],
+    ['an order whose parts have no "Waits for" line', (f) => { f.files[README_AT] = noLines; }, 'prog: its order has no "Waits for" lines — the desk adds them and sets it ready again'],
+    ['a record that does not state what the lines say', (f) => { f.files[RECORD_AT] = plainText(); }, 'prog: its record does not state what the "Waits for" lines of its order say — the desk sets it ready again'],
   ];
-  for (const [kind, make] of table) {
+  for (const [kind, make, line] of table) {
     const f = programmeFixture({ record: READY });
     make(f);
-    const before = goalsNow(f);
     const runner = createRunner({ deps: f.deps });
     assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, kind);
-    assert.deepEqual(goalsNow(f), before, `${kind}: no goal is made`);
+    runner.nextWork(); runner.nextWork();
+    assert.deepEqual(goalsNow(f), [], `${kind}: no goal is made`);
     assert.deepEqual(f.calls.sessions, [], `${kind}: no session`);
     assert.equal(f.files[TURN_STATE], undefined, `${kind}: nothing counted`);
+    if (line) assert.equal(said(f, line), 1, `${kind}: said once over three picks`);
+    assert.equal(said(f, 'programme:prog'), 0, `${kind}: and nothing else is said of the cut`);
   }
-  // Entries that are no readable goal do not keep uncut parts from the cut.
-  for (const [kind, make] of [['a goal directory with no goal file', (f) => { f.files[`${GOALS}/unreadable/LOG.md`] = ''; }], ['an entry in goals/.archive/', (f) => { f.files[`${GOALS}/.archive/old/LOG.md`] = ''; }], ['a dot-entry', (f) => { f.files[`${GOALS}/.hold.json`] = '{}'; }]]) {
-    const holding = programmeFixture({ record: READY });
-    make(holding);
-    createRunner({ deps: holding.deps }).nextWork();
-    assert.deepEqual(goalsNow(holding).map(([name]) => name), ['one', 'two'], `${kind}: the parts are cut`);
-  }
-  // What the desk must do is said once while it lasts, over several passes.
-  for (const [make, line] of [
-    [(f) => { f.files[README_AT] = noLines; }, 'prog: its order has no "Waits for" lines — the desk adds them and sets it ready again'],
-    [(f) => { f.files[RECORD_AT] = plainText(); }, 'prog: its record does not state what the "Waits for" lines of its order say — the desk sets it ready again'],
-    [(f) => { f.files[RECORD_AT] = recordWith({ ...JSON.parse(READY), horizon: 'h' }); f.deps.horizon = () => ({ state: 'reached' }); }, 'prog: its horizon h reads reached — the programme is not cut while that lasts'],
-  ]) {
-    const f = programmeFixture({ record: READY });
-    make(f);
-    const runner = createRunner({ deps: f.deps });
-    await runner.pass({ repo: 'memoro' }); await runner.pass({ repo: 'memoro' }); runner.nextWork();
-    assert.equal(said(f, line), 1, line);
-  }
-  // An old order whose first part has a goal of the old form: once its lines are there, only the part without a goal is cut.
+});
+
+test('the cut: a goal of the old form keeps its part and only the part without a goal is cut; an order is cut and a goal started in one pass', async () => {
+  // An old order whose first part has a goal a planning session wrote: once its lines are there, Part 2 alone is cut.
   const mixed = programmeFixture({ record: READY });
   writesGoals(mixed, { first: { stage: 'build', status: 'Martin', parts: [1] } });
   const kept = mixed.files[`${GOALS}/first/GOAL.json`];
   createRunner({ deps: mixed.deps }).nextWork();
   assert.deepEqual(goalsNow(mixed), [['first', 'build · Martin', 1, undefined], ['two', 'build · ready', 2, 2]]);
   assert.equal(mixed.files[`${GOALS}/first/GOAL.json`], kept, 'the goal of the old form keeps its form');
-  // An eligible programme beside another programme's build: the order is cut and a goal starts, in one pass.
+  // An order beside another programme's build: the order is cut and the goal that waited longest starts, in one pass.
   const both = programmeFixture({ record: READY });
   both.files['/w/programs/other/goals/go/GOAL.json'] = goalJson({ repos: ['memoro'], title: 'go', goal: [] });
   both.files['/w/programs/other/goals/go/LOG.md'] = '';
   both.dirs.add('/w/programs/other/goals/go/memoro');
-  assert.equal((await createRunner({ deps: both.deps }).pass({ repo: 'memoro' })).name, 'goal:other/go', 'the goal that waited longest is the pick');
-  assert.deepEqual(goalsNow(both).map(([name]) => name), ['one', 'two'], 'and the order was cut in that pass');
+  assert.equal((await createRunner({ deps: both.deps }).pass({ repo: 'memoro' })).name, 'goal:other/go');
+  assert.deepEqual(goalsNow(both).map(([name]) => name), ['one', 'two'], 'the order was cut in that pass');
 });
 
 test('the cut: a cut that cannot be made is counted, the second opens a prepared item, a closed one lets it be tried again, two more open a for-martin brief, and a repaired order is cut', async () => {
