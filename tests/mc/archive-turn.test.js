@@ -1,14 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { archiveDue, archiveName, archiveOnOk, archiveReadPrompt, archivedGoals, archiveStatePath, failuresSinceItem, finishDestination, keepReading, moveProposals, pendingDestination, noteDestination, openRestrictedItem, parseWriteBack, readArchiveState, recordArchiveFailure, statedProgrammes } from '../../src/mc/archive-turn.js';
+import { archiveDue, archiveName, archiveOnOk, archivedGoals, archiveStatePath, failuresSinceItem, finishDestination, moveProposals, pendingDestination, noteDestination, openRestrictedItem, readArchiveState, recordArchiveFailure, statedProgrammes } from '../../src/mc/archive-turn.js';
 import { itemDirectory } from '../../src/mc/desk-items.js';
 import { FALLBACK_AREAS, pageAreaOf } from '../../src/mc/area-proposals.js';
 import { renderGoal } from '../../src/mc/goals.js';
 
 /**
- * The programme archive turn's model-free rules (docs/technical/mc-run.md, "Programme archive turn"): what is due, how the
- * reader's WRITE-BACK.md parses, what the archive does on an OK reading and what a NOT OK reading or a failure opens. The
- * runner's own seam tests live in run.test.js.
+ * The programme archive turn's model-free rules (docs/technical/mc-run.md, "Programme archive turn"): what is due, what the
+ * archive does and what a failure opens. The runner's own seam tests live in run.test.js.
  */
 
 const HOME = '/p';
@@ -35,17 +34,12 @@ const finished = (extra = {}) => store({
 const due = (s, options = {}) => archiveDue({ programme: 'prog', home: HOME, root: ROOT, list: s.list, read: s.read, state: { status: 'none' }, ...options });
 const seams = (s) => ({ root: ROOT, programme: 'prog', read: s.read, writeJson: s.writeJson, lock: s.lock });
 const stateOf = (s) => JSON.parse(s.files[archiveStatePath(ROOT, 'prog')]);
-const fail = (s, at, extra = {}) => recordArchiveFailure({ kind: 'failed', reason: 'WRITE-BACK.md is missing', log: `/l/${at}.jsonl`, at, env: ENV, write: s.write, itemDirectory, ...seams(s), ...extra });
+const fail = (s, at, extra = {}) => recordArchiveFailure({ reason: 'archiveProgramme returned 1', log: `/l/${at}.jsonl`, at, env: ENV, write: s.write, itemDirectory, ...seams(s), ...extra });
 
 const GOALS = ['a-goal', 'b-goal'];
-const CHECKOUTS = { 'memoro-cli': 'a'.repeat(40), 'other-repo': 'b'.repeat(40) };
-const READS = `read: memoro-cli ${'a'.repeat(40)}\nread: other-repo ${'b'.repeat(40)}`;
-const parse = (body) => parseWriteBack(body, { goals: GOALS, checkouts: CHECKOUTS });
-const OK_LINES = 'a-goal: OK — memoro-cli/docs/technical/mc-run.md § Programme archive turn\nb-goal: OK — none — a repair that left no new rule';
-
 test('archive turn: a programme is due with an open record, no live goal and a done archived goal', () => {
   const answer = due(finished());
-  assert.deepEqual([answer.due, answer.mode, answer.goals, answer.dropped, answer.repos], [true, 'read', GOALS, ['c-goal'], ['memoro-cli', 'other-repo']]);
+  assert.deepEqual([answer.due, answer.mode, answer.goals, answer.dropped, answer.repos], [true, 'archive', GOALS, ['c-goal'], ['memoro-cli', 'other-repo']]);
   assert.equal(archiveName('prog'), 'archive:prog');
   assert.deepEqual(archivedGoals({ home: HOME, programme: 'prog', list: finished().list, read: finished().read }).done, GOALS);
   assert.equal(due(finished({ [`${HOME}/prog/goals/.hold.json`]: '{}' })).due, true, 'a dot-entry is no live goal');
@@ -69,18 +63,6 @@ test('archive turn: no record, an invalid or a done record, a live goal, no done
   assert.equal(due(finished(), { items: [{ kind: 'archive', reference: 'archive:prog', state: 'closed' }, { kind: 'archive', reference: 'archive:other', state: 'prepared' }, { kind: 'programme', reference: 'archive:prog', state: 'prepared' }] }).due, true);
 });
 
-test('archive turn: a kept OK reading of exactly the done goals is archived again with no new reading', () => {
-  const s = finished();
-  keepReading({ at: '2026-11-15T10:00:00Z', goals: GOALS, ...seams(s) });
-  const state = readArchiveState({ root: ROOT, programme: 'prog', read: s.read });
-  assert.equal(state.status, 'valid');
-  assert.equal(due(s, { state }).mode, 'archive');
-  const more = finished({ [`${HOME}/prog/goals/.archive/z-goal/GOAL.json`]: goalFile('done') });
-  assert.equal(due(more, { state }).mode, 'read', 'a goal archived since the reading needs a new one');
-  const less = store({ ...finished().files }); delete less.files[`${HOME}/prog/goals/.archive/b-goal/GOAL.json`];
-  assert.equal(due(less, { state }).mode, 'read');
-});
-
 test('archive turn: a missing state reads as nothing, an unreadable one starts nothing and counts nothing', () => {
   const s = finished();
   assert.deepEqual(readArchiveState({ root: ROOT, programme: 'prog', read: s.read }), { status: 'none' });
@@ -92,11 +74,10 @@ test('archive turn: a missing state reads as nothing, an unreadable one starts n
     assert.deepEqual([answer.due, answer.reason], [false, 'its turn state is unreadable'], text);
     assert.match(answer.notice, /runner\/archive-turn\/prog\.json is unreadable \(/u);
     assert.throws(() => fail(bad, '2026-11-15T10:00:00Z'), /is unreadable/u);
-    assert.throws(() => keepReading({ at: 'x', goals: GOALS, ...seams(bad) }), /is unreadable/u);
     assert.equal(bad.files[archiveStatePath(ROOT, 'prog')], text, 'and nothing is rewritten');
   }
   const older = finished({ [archiveStatePath(ROOT, 'prog')]: JSON.stringify({ schema: 'mc-archive-turn', version: 0, programme: 'prog', failures: 'x' }) });
-  assert.deepEqual(readArchiveState({ root: ROOT, programme: 'prog', read: older.read }), { status: 'none' }, 'a state file of an older version is no failures and no kept reading');
+  assert.deepEqual(readArchiveState({ root: ROOT, programme: 'prog', read: older.read }), { status: 'none' }, 'a state file of an older version is no failures');
   assert.deepEqual(statedProgrammes({ root: ROOT, list: finished({ [archiveStatePath(ROOT, 'prog')]: '{}', [archiveStatePath(ROOT, 'second')]: '{}' }).list }), ['prog', 'second']);
 });
 
@@ -110,55 +91,6 @@ test('archive turn: a destination in the state is due that write alone, whatever
   const unreadable = due(lost, { state });
   assert.deepEqual([unreadable.due, unreadable.reason], [false, 'its destination record cannot be read']);
   assert.match(unreadable.notice, /the record at \/arch\/prog cannot be read \(none\)/u);
-});
-
-test('archive turn: WRITE-BACK.md parses to its verdict and the NOT OK lines, and every malformed form is a failed reading', () => {
-  const ok = parse(`${READS}\n${OK_LINES}\nverdict: OK\n`);
-  assert.deepEqual([ok.ok, ok.verdict, ok.lines], [true, 'OK', []]);
-  assert.deepEqual(Object.keys(ok.goals), GOALS);
-  const notOk = parse(`${READS}\na-goal: NOT OK — the archive turn is in no page\nb-goal: OK — none — nothing a page should say\nverdict: NOT OK\n`);
-  assert.deepEqual([notOk.ok, notOk.verdict, notOk.lines], [true, 'NOT OK', ['a-goal: NOT OK — the archive turn is in no page']]);
-  const bad = (body, pattern) => { const answer = parse(body); assert.equal(answer.ok, false, body); assert.match(answer.problems.join('\n'), pattern, body); };
-  assert.deepEqual(parseWriteBack(null, { goals: GOALS, checkouts: CHECKOUTS }), { ok: false, problems: ['WRITE-BACK.md is missing'] });
-  bad(`${READS}\n${OK_LINES.replace('a-goal: OK — memoro-cli/docs/technical/mc-run.md § Programme archive turn', 'a-goal: NOT OK — a gap')}\nverdict: OK\n`, /`verdict: OK` beside a NOT OK line/u);
-  bad(`${READS}\n${OK_LINES}\nverdict: NOT OK\n`, /`verdict: NOT OK` with no NOT OK line/u);
-  bad(`${READS}\na-goal: OK — memoro-cli/docs/technical/mc-run.md § Programme archive turn\nverdict: OK\n`, /no line for the done goal b-goal/u);
-  bad(`${READS}\n${OK_LINES}\nc-goal: OK — none — dropped\nverdict: OK\n`, /a line for "c-goal", which is no done goal/u);
-  bad(`${READS}\n${OK_LINES}\na-goal: OK — none — twice\nverdict: OK\n`, /two lines for a-goal/u);
-  bad(`${READS}\na-goal: OK — none —\nb-goal: OK — none\nverdict: OK\n`, /a-goal: .*b-goal: /su);
-  bad(`${READS}\na-goal: OK\nb-goal: OK — none — x\nverdict: OK\n`, /a-goal: /u);
-  bad(`${READS}\na-goal: NOT OK —\nb-goal: OK — none — x\nverdict: NOT OK\n`, /not in form: "a-goal: NOT OK —"/u);
-  bad(`${OK_LINES}\nverdict: OK\n`, /no `read: memoro-cli <sha>` line/u);
-  bad(`read: memoro-cli ${'c'.repeat(40)}\nread: other-repo ${'b'.repeat(40)}\n${OK_LINES}\nverdict: OK\n`, /is not the checkout's commit/u);
-  bad(`${READS}\nread: third ${'c'.repeat(40)}\n${OK_LINES}\nverdict: OK\n`, /names no checkout given/u);
-  bad(`${READS}\n${OK_LINES}\n`, /no last line `verdict: OK`/u);
-  bad(`${READS}\n${OK_LINES}\nverdict: OK\nafter\n`, /not in form: "after"/u);
-  bad(`${READS}\nverdict: OK\n${OK_LINES}\n`, /`verdict:` is not the last line/u);
-});
-
-test('archive turn: the prompt names the file, the checkouts and the forms', () => {
-  const prompt = archiveReadPrompt({ programme: 'prog', dir: '/p/prog', goals: GOALS, dropped: ['c-goal'], checkouts: { 'memoro-cli': '/c/m' }, archive: '/p/prog/goals/.archive' });
-  for (const text of ['programme prog', '/p/prog/WRITE-BACK.md', '/p/prog/goals/.archive/a-goal', 'memoro-cli: `/c/m`', 'Dropped goals (c-goal)', 'verdict: OK']) assert.ok(prompt.includes(text), text);
-});
-
-test('archive turn: a NOT OK reading opens a prepared item at once and is no failure; a decided one opens a for-martin brief', () => {
-  const s = finished();
-  const first = fail(s, '2026-11-15T10:00:00Z', { kind: 'not-ok', reason: 'the write-back is not OK', lines: ['a-goal: NOT OK — the archive turn is in no page'] });
-  const item = first.item;
-  assert.deepEqual([item.kind, item.reference, item.state, item.sort, item.reversible, item.due_at, item.outcome], ['archive', 'archive:prog', 'prepared', 'mechanical', null, null, null]);
-  const dir = itemDirectory(item, ENV);
-  assert.ok(s.files[`${dir}/prepared.md`].includes('a-goal: NOT OK — the archive turn is in no page'));
-  assert.ok(`${dir}/item.json` in s.files);
-  assert.equal(`${dir}/brief.md` in s.files, false);
-  assert.deepEqual(stateOf(s).failures, [], 'a NOT OK reading is a finding, not a counted failure');
-  assert.deepEqual(stateOf(s).items, [{ id: item.id, opened_at: '2026-11-15T10:00:00Z' }]);
-
-  const later = fail(s, '2026-11-15T12:00:00Z', { kind: 'not-ok', reason: 'again', lines: ['a-goal: NOT OK — still'], decided: true }).item;
-  assert.deepEqual([later.state, later.sort, later.reversible], ['for-martin', 'mechanical', false]);
-  const brief = s.files[`${itemDirectory(later, ENV)}/brief.md`];
-  assert.match(brief, /^## Vad det gäller\n/u);
-  assert.match(brief, /a-goal: NOT OK — still/u);
-  assert.equal(`${itemDirectory(later, ENV)}/prepared.md` in s.files, false);
 });
 
 test('archive turn: the first failure is kept for the next pass, the second since the last item opens a for-martin brief', () => {

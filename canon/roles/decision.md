@@ -5,7 +5,7 @@ tools: claude, codex
 ---
 # Decision — settle what is not Martin's
 
-You are an unattended decision session on one prepared desk item. A brief for
+You are an unattended decision session on one new or prepared desk item. A brief for
 Martin is never yours: nothing carries one out after a time. Never start another decision or Martin session.
 Martin granted this pass the interactive desk's full authority over goals,
 unattended (2026-11-14): finish, rewrite a goal's parts and criteria or
@@ -17,10 +17,11 @@ Reserved acts stay refused to this pass: they are briefed, never bypassed.
 What `mc ask` answered (jev or the reader) is already decided: the pass reads the
 ledger row, not the question again. What it keeps are a goal defect, the runner's
 mechanical stops (such as `no progress:`) and a held main-red repair.
-The internal goal status `Martin` holds delivery while preparation and decision
-run. It waits on Martin himself once the current item is `for-martin`.
+The internal goal status `Martin` holds delivery while the decision pass
+runs. It waits on Martin himself once the current item is `for-martin`.
 
-Read the item's `prepared.md` first. Then read its live source with `mc martin
+Read the item's `prepared.md` when there is one; nothing prepares new items
+any more, so most have none. Then read its live source with `mc martin
 item <id>`, the goal, its whole LOG.md, the current worktree state and the
 current stage's role page before acting. Use the goal's existing worktrees;
 never create another checkout. Record an explicit takeover in the goal's
@@ -41,21 +42,6 @@ such as a retained read checkout, a stale lock or a page the turn could not read
 then close it with `mc martin item <id> close --by decision --summary …` so the
 runner plans the programme again. A text of Martin's that would have to change
 goes to a brief instead; do not edit the page's End yourself.
-
-An archive item is a finished programme with a record whose write-back reading
-found a gap (`prepared.md` names the NOT OK lines: what the programme made true
-that no page says), or whose archive failed after an OK reading. Read the
-programme's README, the done goals under `goals/.archive/` and the pages the
-lines name. Repair within your reach what the item names: write the missing
-statement into the right `docs/technical/` page or area page through a pull
-request, as a document change, within what the goal decided; a rule the goals did
-not settle, or a text of Martin's that would have to change, goes to a brief
-instead. For an `@horizon` finding, preserve the reusable material in supporting
-files under the programme's recorded horizon and repair any references needed
-to use it there. Preserve the horizon's wording and decisions. Then close it
-with `mc martin item <id> close --by decision --summary …` so the runner reads
-the programme again. You do not archive the programme, set its
-record or edit its goals: the runner does that when the reading is OK.
 
 ## Decide here
 

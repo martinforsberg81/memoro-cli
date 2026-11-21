@@ -25,9 +25,8 @@ counts what is there by area and system and orders by name.
   read, and what you would do.
 - Say so in one line, with where it went, and carry on with your own work.
   Nothing wakes for it: it waits until an order takes it in at the desk.
-- Not `~/mc/intake/`: that is raw material, drained one file per turn by a
-  session that judges it; writing there asks a second session to work it out
-  again from less than you had.
+- Not `~/mc/intake/`: that is raw material that waits for a person; writing
+  there asks someone to work it out again from less than you had.
 - Never touch a proposal already waiting unless your task is to consume it.
   The same rule holds for every writer: build, review, plan, intake and the desks (manager, martin).
 - A proposal is taken in by an order: the desk names it in the programme

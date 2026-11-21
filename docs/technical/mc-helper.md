@@ -14,7 +14,7 @@ until Martin picks it up at `mc martin`, or the manager's curation turn reads it
 | | what it does |
 |---|---|
 | `mc helper --intake` | **the eye.** The day's digest per repository, then the inbox drained: one headless turn per file, oldest first, each file archived the moment its turn ends |
-| `mc helper --collect` | the eye's script half alone: write `~/mc/intake/errors-<repo>-<date>.md` for each repository, with the delta against that repository's previous digest. **No model, no writes to production** |
+| `mc helper --collect` | the eye's script half alone: write `~/mc/runner/log/intake/<date>/errors-<repo>-<date>.md` for each repository, with the delta against that repository's previous digest. **No model, no writes to production** |
 | `--since <iso>` | the window; default is the last 24 h |
 | `--limit <n>` | fingerprints asked for; default 50, the route caps at 200 |
 | `--threshold <n>` | hits at or above which a *new* fingerprint is marked `!`; default 20 |
@@ -37,8 +37,16 @@ unattended every day.
 
 ## The inbox
 
+**The runner starts no intake turn** (Martin, 2026-11-21: "Intake: låter som
+slöseri."). Its drain takes only app suggestions (`suggestion-*.md`), each
+catalogued by jev with no model turn and archived as below; every other file in
+`~/mc/intake/` waits for a person. The collect writes its daily digests straight
+into `~/mc/runner/log/intake/<date>/`, where the page and the next delta read
+them (`digestDirs`), so they do not wait in the inbox. What follows describes a
+person's `mc helper --intake`, which still gives every file its turn.
+
 `~/mc/intake/` is an inbox. Anyone may drop a file in it — an error log, a
-screenshot, a note — and the collect step adds one digest a day per repository.
+screenshot, a note.
 Nothing stays in it: **one file, one turn, one outcome**, and the file is
 archived under `~/mc/runner/log/intake/<date>/` the moment its turn ends. The
 next chore pass takes the next files, until the directory holds nothing.
@@ -262,7 +270,7 @@ wrong system.
 
 ## The digest
 
-`~/mc/intake/errors-<repo>-<date>.md`, in this order:
+`~/mc/runner/log/intake/<date>/errors-<repo>-<date>.md` (in `~/mc/intake/` before 2026-11-21), in this order:
 
 - **New since the last digest** — the agenda. One bullet per new fingerprint
   and per newly failing condition, marked `!` at or above the threshold and
@@ -381,8 +389,9 @@ retried within the day": a `collect-failed` row closes the day exactly as a
 successful one does.
 There is no model in this half — it writes two files and two rows.
 
-**The drain is a question about a directory.** `runIntakeDrain` asks only *is
-there a file in the inbox?*, so a pass can drain without collecting, and
+**The drain is a question about a directory.** In the runner it takes app
+suggestions only (`drainIntake`'s `suggestionsOnly`); `mc helper --intake` takes
+every file. `runIntakeDrain` asks only *is there a file in the inbox?*, so a pass can drain without collecting, and
 collect and drain in the same pass. It takes the oldest `INTAKE_PER_ROUND` = 3
 files — oldest by the date **in the name** (`intakeQueue`), not by the name
 itself, because `errors-memoro-2026-09-04.md` sorts before

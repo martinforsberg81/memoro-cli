@@ -232,10 +232,10 @@ describe('mc helper --collect — the sources', () => {
     assert.equal(survey[survey.indexOf('--since') + 1], '2026-08-27T00:00:00.000Z');
   });
 
-  it('creates the intake directory on first run, and no proposals directory', async () => {
+  it('writes the digest straight into the day\'s intake archive, and no proposals directory', async () => {
     const g = ground();
     const result = await collect(g);
-    assert.equal(result.path, join(intakeDir(g.env), 'errors-memoro-2026-08-29.md'));
+    assert.equal(result.path, join(g.env.MC_WORK_ROOT, 'runner', 'log', 'intake', '2026-08-29', 'errors-memoro-2026-08-29.md'), 'no turn reads it, so it does not wait in the inbox');
     assert.ok(readFileSync(result.path, 'utf8').startsWith('# Errors and maintenance'));
     // Proposals wait in the areas (~/mc/areas/<repo>/<area>/proposals/); the collect makes no ownerless room for them.
     assert.equal(existsSync(join(g.env.MC_WORK_ROOT, 'proposals')), false, 'no ownerless proposals root is made');

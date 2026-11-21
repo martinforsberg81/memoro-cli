@@ -124,8 +124,9 @@ one of its parts. Work through the order in this sequence.
 Name the proposals the order takes in and archive them in their areas as
 [proposals](../tasks/proposals.md) says. The order is temporary. Before it
 ends, write what must last into `docs/technical/`, the area page, or an area
-proposal. When Martin ends a programme, archive it on his word with
-`mc plan <programme> --archive`.
+proposal. The runner archives a programme with a record by itself once every
+goal is merged or dropped (at least one done); a programme without a record is
+archived on Martin's word with `mc plan <programme> --archive`.
 
 Answer a repair scope stop on his word with `mc programs disposition`, not
 item close. After takeover, reconcile its goals to the desk order before

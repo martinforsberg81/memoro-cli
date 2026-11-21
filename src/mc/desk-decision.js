@@ -6,9 +6,12 @@ import { programsHome, workRoot } from './paths.js';
 import { turnStatePath } from './programme-turn.js';
 import { archiveStatePath } from './archive-turn.js';
 
-/** The decision pass takes prepared items only: no clock brings one, and a for-martin item is Martin's. */
+/**
+ * The decision pass takes new and prepared items: no clock brings one, and a for-martin item is Martin's. Nothing prepares
+ * a new item unattended any more (Martin, 2026-11-21), so the pass reads its source itself.
+ */
 export function decisionEligible(item) {
-  return item?.state === 'prepared';
+  return item?.state === 'new' || item?.state === 'prepared';
 }
 /** What a programme item adds: the programme's directory and the planning turn's state file, where its failures are kept. */
 function programmeLine(item, env) {
@@ -16,10 +19,10 @@ function programmeLine(item, env) {
   return `Programme: ${programme}. Programme directory: ${join(programsHome(env), programme)}. The planning turn's failures are in ${turnStatePath(workRoot(env), programme)}; read them and each session log they name. Repair what failed within your reach, then close --by decision so the runner plans the programme again. A text of Martin's that would have to change goes to a brief instead.\n`;
 }
 
-/** What an archive item adds: the programme's directory, the archive turn's state file and the reading's file. */
+/** What an archive item adds: the programme's directory and the archive turn's state file. */
 function archiveLine(item, env) {
   const programme = item.reference.slice('archive:'.length);
-  return `Programme: ${programme}. Programme directory: ${join(programsHome(env), programme)}; the archive reading's WRITE-BACK.md is there. The archive turn's failures are in ${archiveStatePath(workRoot(env), programme)}; read them and each session log they name. Close the gap the reading found — a goal that writes the missing pages into docs/technical/ and the area pages, supporting files under the recorded horizon for an @horizon finding, or the repair of what failed — then close --by decision so the runner reads the write-back again. A text of Martin's that would have to change goes to a brief instead.\n`;
+  return `Programme: ${programme}. Programme directory: ${join(programsHome(env), programme)}. The archive turn's failures are in ${archiveStatePath(workRoot(env), programme)}; read them. Repair what failed within your reach, then close --by decision so the runner archives the programme again. A text of Martin's that would have to change goes to a brief instead.\n`;
 }
 
 /** What a manager item adds: the horizon its removed horizon turn served; nothing starts that turn again. */
@@ -30,7 +33,7 @@ function managerLine(item) {
 
 export function decisionPrompt(item, { env, goal }) {
   const dir = itemDirectory(item, env);
-  return `Decide desk item ${item.id}. Item directory: ${dir}. Read prepared.md there first, then mc martin item ${item.id} for the live source and state.\n`
+  return `Decide desk item ${item.id}. Item directory: ${dir}. Read prepared.md there when there is one, then mc martin item ${item.id} for the live source and state.\n`
     + (item.kind === 'programme' ? programmeLine(item, env) : item.kind === 'manager' ? managerLine(item) : item.kind === 'archive' ? archiveLine(item, env) : '')
     + (goal ? `Goal: ${item.reference}. Goal directory: ${goal.dir}. Read the goal, its whole LOG.md, worktree state and stage role, and record takeover before acting.\n` : item.kind === 'programme' || item.kind === 'manager' || item.kind === 'archive' ? '' : 'No goal identity is assigned; work in the item directory.\n')
     + 'Settle and close --by decision. A remaining change to a text Martin holds is written to brief.md in Swedish, in the form of docs/technical/mc-martin.md (## Vad den säger, ## Vad som föreslås, ## Vad som hittades; no options, no recommendation) and marked brief --sort text --text \'<the text>\' --reversible yes|no; a reserved act is marked brief --sort reserved --reversible yes|no. No clock carries out a brief.\n'

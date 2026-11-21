@@ -528,7 +528,7 @@ The catalog's first review candidate is read first whenever it can run; the auth
 role's on his word at the desk (no other session and no headless role may call
 it), and the only way to archive a programme without a record. The runner archives finished goals, and it archives
 the programme above them only when the programme has a valid record: once every
-goal is done or dropped, a write-back reading is OK and no restricted data is
+goal is done or dropped, at least one is done and no restricted data is
 held, it calls the same `archiveProgramme` itself and sets the record's `state`
 to `done` ([mc-run.md](mc-run.md#programme-archive-turn)). `archiveProgramme`
 (`src/mc/archive-programme.js`) refuses any goal not done or dropped and

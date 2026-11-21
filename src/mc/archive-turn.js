@@ -1,20 +1,18 @@
 /**
- * The programme archive turn, model-free except for one read-only reading
- * (mc-run.md, "Programme archive turn").
+ * The programme archive turn, model-free (mc-run.md, "Programme archive turn").
  *
- * A programme with a record (PROGRAMME.json) whose goals are all finished is
- * archived by the runner, without a person present, once its write-back reads
- * OK: what the programme made true is written into `docs/technical/` and the
- * area pages (Martin, 2026-11-15, programme horizon). Everything here is what
- * the runner decides around the one reading session: whether a programme is
- * due, the reading's file and its parse, the state that keeps an OK reading
- * and counts what failed, the desk item a NOT OK reading or a second failure
- * opens, a legacy programme's proposals moved to an area, and the archive itself,
- * fenced, with the record's state set to done once the directory has moved.
- * The runner (`run.js`) supplies its own file reads, lock and git, so a
- * fixture drives all of it in memory.
+ * A programme with a record (PROGRAMME.json) whose goals are all finished, at
+ * least one of them done, is archived by the runner without a person present
+ * and without a model session: every goal merged means everything is built
+ * (Martin, 2026-11-21). Each goal writes what it made true into
+ * `docs/technical/` as it lands, so nothing is read again here. What the
+ * runner decides here: whether a programme is due, the state that counts what
+ * failed, the desk item a second failure opens, a legacy programme's proposals
+ * moved to an area, and the archive itself, fenced, with the record's state
+ * set to done once the directory has moved. The runner (`run.js`) supplies
+ * its own file reads, lock and git, so a fixture drives all of it in memory.
  *
- * A programme without a record is never read or archived here: for it
+ * A programme without a record is never archived here: for it
  * `mc plan <programme> --archive` stays a person's act.
  */
 import { basename, join } from 'node:path';
@@ -23,17 +21,12 @@ import { archiveDirIn, parseGoal, GOAL_FILE, GOAL_LOG_FILE } from './goals.js';
 import { NAME_RE } from './plan-schema.js';
 import { changeProgrammeRecord, readRecord, setRecordState } from './programme-record.js';
 import { repairGoalAdmission } from './repair-reconcile.js';
-import { sameHead, writeBackFault } from './review-verdict.js';
 
 export const ARCHIVE_SCHEMA = 'mc-archive-turn';
 export const ARCHIVE_VERSION = 1;
 export const ARCHIVE_ITEM_KIND = 'archive';
-/** The failures since the last item that open one: the first lets the next pass read again, the second is the item. */
+/** The failures since the last item that open one: the first lets the next pass try again, the second is the item. */
 export const FAILURES_TO_ITEM = 2;
-/** The file the reader writes, in the programme's directory. */
-export const WRITE_BACK_FILE = 'WRITE-BACK.md';
-/** The review file an archived goal holds. */
-export const REVIEW_FILE = 'REVIEW.md';
 
 /** `archive:<programme>`: what the turn is called in a claim, a current record and a runs.tsv row, and an item's reference. */
 export const archiveName = (programme) => `archive:${programme}`;
@@ -43,8 +36,6 @@ export const archiveReference = archiveName;
 export const archiveStatePath = (root, programme) => join(root, 'runner', 'archive-turn', `${programme}.json`);
 /** The directory of the state files: a programme whose directory has moved is still named here while its state is unwritten. */
 export const archiveStateDir = (root) => join(root, 'runner', 'archive-turn');
-/** The prefix of the reading's read checkouts' directory, `runner/work/archive-turn-<programme>` (`setUpReadCheckouts`' `prefix`). */
-export const ARCHIVE_CHECKOUTS_PREFIX = 'archive-turn';
 
 const emptyState = (programme) => ({ schema: ARCHIVE_SCHEMA, version: ARCHIVE_VERSION, programme, failures: [], items: [], reading: null, destination: null });
 
@@ -61,7 +52,7 @@ export function readArchiveState({ root, programme, read }) {
   if (text === null || text === undefined) return { status: 'none' };
   let state;
   try { state = JSON.parse(text); } catch (error) { return { status: 'unreadable', problem: `not JSON: ${error.message}` }; }
-  // A file from an older version of the turn is read as nothing recorded: no failures and no kept reading (mixed versions, mc-run.md).
+  // A file from an older version of the turn is read as nothing recorded: no failures (mixed versions, mc-run.md).
   if (state && typeof state === 'object' && state.schema === ARCHIVE_SCHEMA && Number.isInteger(state.version) && state.version < ARCHIVE_VERSION) return { status: 'none' };
   const problems = [];
   if (!state || typeof state !== 'object' || Array.isArray(state)) problems.push('not an object');
@@ -103,9 +94,9 @@ export function archivedGoals({ home, programme, list, read }) {
   return { done, dropped, problems, repos: [...repos].sort() };
 }
 
-// A decline authorizes write-back of what actually landed, not delivery of
-// the discarded order. Its distinct disposition revision cannot reuse an OK
-// from an earlier release, or be consumed by planning, build or merge.
+// A decline authorizes archiving what actually landed, not delivery of the
+// discarded order. Its distinct disposition revision cannot be consumed by
+// planning, build or merge.
 function archiveAdmission(dir, { read, record, revision } = {}) {
   if (record === undefined) {
     const found = readRecord(dir, { read });
@@ -115,7 +106,7 @@ function archiveAdmission(dir, { read, record, revision } = {}) {
   const disposition = record?.repair?.disposition;
   if (record?.state === 'ready' && disposition?.action === 'decline' && !record.repair.stop_item) {
     return revision !== undefined && revision !== disposition.revision
-      ? { problems: ['the write-back belongs to a different repair disposition'] }
+      ? { problems: ['the archive belongs to a different repair disposition'] }
       : { release: { revision: disposition.revision } };
   }
   return repairGoalAdmission(dir, null, { record, revision, read });
@@ -130,8 +121,6 @@ export const liveGoals = ({ home, programme, list }) => list(join(home, programm
 /** Whether a desk item of kind archive is open for `programme`. */
 const openArchiveItem = (items, programme) => items.some((item) => item.kind === ARCHIVE_ITEM_KIND && item.reference === archiveReference(programme) && item.state !== 'closed');
 
-const keptReading = (state, revision) => state.status === 'valid' && state.state.reading?.verdict === 'OK'
-  && (state.state.reading.revision ?? null) === (revision ?? null);
 
 /**
  * A destination named in the state whose record does not yet read done: the programme's directory has moved and the write
@@ -146,11 +135,11 @@ export function pendingDestination(state, { read }) {
 }
 
 /**
- * Whether `programme` is due now, model-free: `{ due: true, mode: 'read', record, goals }` (a reading and, on OK, the
- * archive), `{ due: true, mode: 'archive', record, goals }` (an OK reading is kept for exactly the goals archived now:
- * the archive is tried again with no new reading), `{ due: true, mode: 'state', destination }` (the programme's directory
- * has moved and its record still reads open: that write alone, held while an archive item of the programme is open), or `{ due: false, reason, notice }` where `notice` is the
- * line the runner says once while it lasts. `items` are the desk items, `state` is `readArchiveState`'s answer.
+ * Whether `programme` is due now, model-free: `{ due: true, mode: 'archive', record, goals }` (the archive), `{ due: true,
+ * mode: 'state', destination }` (the programme's directory has moved and its record still reads open: that write alone,
+ * held while an archive item of the programme is open), or `{ due: false, reason, notice }` where `notice` is the line the
+ * runner says once while it lasts. `items` are the desk items, `state` is `readArchiveState`'s answer. A state file's
+ * `reading`, written by the retired archive reading, is read and ignored.
  */
 export function archiveDue({ programme, home, root, list, read, items = [], state }) {
   if (state.status === 'unreadable') {
@@ -158,13 +147,13 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
   }
   const pending = state.status === 'valid' ? state.state.destination : null;
   if (pending) {
-    // The directory moved and the write that sets the record done did not finish: that write alone, with no reading. A record
+    // The directory moved and the write that sets the record done did not finish: that write alone. A record
     // that already reads done is only cleared from the state.
     const found = readRecord(pending, { read });
     if (found.status === 'valid') {
       if (found.record.repair && found.record.state !== 'done') {
         const current = archiveAdmission(pending, { read, record: found.record });
-        if (!current?.release || !keptReading(state, current.release.revision)) return { due: false, reason: current?.problems?.[0] ?? 'its write-back belongs to a different repair release', notice: null };
+        if (!current?.release) return { due: false, reason: current?.problems?.[0] ?? 'it belongs to a different repair release', notice: null };
       }
       // A write that has failed opens an item at the second failure; while it is open no write is tried, so a write that keeps
       // failing opens no further item. A record already done is only cleared from the state, item or not.
@@ -185,7 +174,7 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
     return { due: false, reason: 'an archive desk item is open', notice: null };
   }
   const goals = archivedGoals({ home, programme, list, read });
-  if (goals.problems.length) return { due: false, reason: 'an archived goal cannot be read', notice: `${programme}: ${goals.problems.join('; ')} — no write-back reading is taken until that is repaired` };
+  if (goals.problems.length) return { due: false, reason: 'an archived goal cannot be read', notice: `${programme}: ${goals.problems.join('; ')} — it is not archived until that is repaired` };
   const partiallyLanded = record.record.repair?.disposition?.landed ?? [];
   for (const name of partiallyLanded) {
     if (goals.done.includes(name)) continue;
@@ -196,100 +185,12 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
     goals.done.push(name);
   }
   goals.done.sort();
-  // A programme whose goals were all dropped is no programme that made anything true: nothing is read or archived.
+  // A programme whose goals were all dropped is no programme that made anything true: it is not archived here.
   if (!goals.done.length) return { due: false, reason: 'no goal reached done', notice: null };
-  const reading = state.status === 'valid' ? state.state.reading : null;
   const revision = repair?.release?.revision;
-  const kept = keptReading(state, revision) && (reading.horizon ?? null) === record.record.horizon && reading.goals.join('\n') === goals.done.join('\n');
-  return { due: true, mode: kept ? 'archive' : 'read', record: record.record, goals: goals.done, dropped: goals.dropped, repos: goals.repos,
+  return { due: true, mode: 'archive', record: record.record, goals: goals.done, dropped: goals.dropped, repos: goals.repos,
     ...(partiallyLanded.length ? { partiallyLanded } : {}),
     ...(revision ? { revision } : {}) };
-}
-
-/* ------------------------------------------------------------- the reading */
-
-/**
- * WRITE-BACK.md, parsed (C2): `{ ok: true, verdict, lines, goals }` or `{ ok: false, problems }`. `goals` are the done
- * goals the file must judge, `checkouts` is `{ <repo>: <sha> }` of what the reader was given. The file is malformed, and
- * the reading failed, when a checkout has no `read: <repo> <sha>` line or one with another sha, a done goal has no line or
- * two, a line names a goal that is not a done one, a line is in no form (`<goal>: OK — <repo>/docs/technical/<page>.md §
- * <section>[, …]`, `<goal>: OK — none — <reason>`, `<goal>: NOT OK — <what is true that no page says>`), the last line
- * is not `verdict: OK` or `verdict: NOT OK`, or the verdict is OK beside a NOT OK line (or NOT OK with none).
- */
-export function parseWriteBack(text, { goals, checkouts, horizon = null, revision }) {
-  if (text === null || text === undefined) return { ok: false, problems: [`${WRITE_BACK_FILE} is missing`] };
-  const problems = [];
-  const lines = String(text).split('\n').map((line) => line.trim()).filter(Boolean);
-  if (revision && lines.shift() !== `release: ${revision}`) problems.push('the write-back belongs to a different repair release');
-  const reads = []; const judged = new Map(); let verdict = null; let horizonJudgment = null;
-  for (const [index, line] of lines.entries()) {
-    const readLine = line.match(/^read: (\S+) ([0-9a-f]{7,64})$/u);
-    const verdictLine = line.match(/^verdict: (OK|NOT OK)$/u);
-    const goalLine = line.match(/^([^\s:]+): (OK|NOT OK)(?: — (.*))?$/u);
-    if (readLine) { reads.push({ repo: readLine[1], sha: readLine[2] }); continue; }
-    if (verdictLine) {
-      if (index !== lines.length - 1) problems.push('`verdict:` is not the last line');
-      verdict = verdictLine[1];
-      continue;
-    }
-    if (goalLine) {
-      const [, goal, word, reason = ''] = goalLine;
-      const ok = word === 'OK';
-      if (goal === '@horizon' && horizon) {
-        if (horizonJudgment) problems.push('two horizon lines');
-        if (!reason.trim()) problems.push('the horizon line needs its evidence or finding');
-        horizonJudgment = { ok, line };
-        continue;
-      }
-      if (!goals.includes(goal)) { problems.push(`a line for "${goal}", which is no done goal of the programme`); continue; }
-      if (judged.has(goal)) { problems.push(`two lines for ${goal}`); continue; }
-      if (!ok && !reason.trim()) { problems.push(`${goal}: NOT OK needs what is true that no page says`); }
-      const fault = writeBackFault({ ok, reason: reason.trim() });
-      if (fault) problems.push(`${goal}: ${fault}`);
-      judged.set(goal, { ok, reason: reason.trim() });
-      continue;
-    }
-    problems.push(`not in form: "${line}"`);
-  }
-  for (const [repo, sha] of Object.entries(checkouts)) {
-    const found = reads.filter((one) => one.repo === repo);
-    if (found.length !== 1) problems.push(`${found.length ? 'more than one' : 'no'} \`read: ${repo} <sha>\` line — the checkout is at ${sha}`);
-    else if (!sameHead(found[0].sha, sha)) problems.push(`\`read: ${repo} ${found[0].sha}\` is not the checkout's commit ${sha}`);
-  }
-  for (const one of reads) if (!(one.repo in checkouts)) problems.push(`\`read: ${one.repo}\` names no checkout given`);
-  for (const goal of goals) if (!judged.has(goal)) problems.push(`no line for the done goal ${goal}`);
-  if (horizon && !horizonJudgment) problems.push('no @horizon line for the programme');
-  if (verdict === null) problems.push('no last line `verdict: OK` or `verdict: NOT OK`');
-  else {
-    const notOk = horizonJudgment?.ok === false || [...judged.values()].some((one) => !one.ok);
-    if (verdict === 'OK' && notOk) problems.push('`verdict: OK` beside a NOT OK line');
-    if (verdict === 'NOT OK' && !notOk) problems.push('`verdict: NOT OK` with no NOT OK line saying what is missing');
-  }
-  if (problems.length) return { ok: false, problems };
-  const findings = [...judged.entries()].filter(([, one]) => !one.ok).map(([goal, one]) => `${goal}: NOT OK — ${one.reason}`);
-  if (horizonJudgment?.ok === false) findings.push(horizonJudgment.line);
-  return { ok: true, verdict, goals: Object.fromEntries(judged), lines: findings };
-}
-
-/** What the reader is told: the programme, what to read, the file to write and its forms. */
-export function archiveReadPrompt({ programme, dir, goals, dropped = [], partiallyLanded = [], checkouts, archive, horizonDir = null, revision }) {
-  const read = Object.entries(checkouts).map(([repo, path]) => `${repo}: \`${path}\``).join('; ');
-  const goalList = goals.map((goal) => `- ${goal}: \`${join(archive, goal)}\` (GOAL.json, LOG.md, ${REVIEW_FILE})`).join('\n');
-  const droppedLine = dropped.length ? ` Dropped goals (${dropped.join(', ')}) made nothing true and are not judged.` : '';
-  const partialLine = partiallyLanded.length
-    ? ` Goals ${partiallyLanded.join(', ')} are retired but have a landed PR. Judge only what landed on main, not the promised goal or its abandoned work.` : '';
-  const horizonCheck = horizonDir
-    ? `Read the programme README and evidence for investigations, references and other material needed by a later programme serving the same horizon. Check that the material is usable in \`${horizonDir}\` (basis.md or supporting files), including its referenced files. Add one \`@horizon: OK — <paths and what they preserve, or why no material carries forward>\` or \`@horizon: NOT OK — <what must be carried forward>\` line before the verdict. Do not move or write the material yourself.\n`
-    : '';
-  return `You are the headless archive reader for programme ${programme}, with nobody present. Every goal of the programme is finished; the programme is archived by the system only if what it made true is written into docs/technical/ and the area pages. Its directory is \`${dir}\`; read its README.md first. The goals to judge, each with its goal file, log and review, are:\n${goalList}${droppedLine}${partialLine}\n`
-    + horizonCheck
-    + (revision ? `The first line of ${WRITE_BACK_FILE} must be \`release: ${revision}\` for this repair release or decline.\n` : '')
-    + `Read checkouts at origin/main are ${read}; read code and docs there and change nothing in them. For each done goal decide what it made true of the app that a reader of docs/technical/ and the area pages needs, and read the pages to see whether they say it. Write ${dir}/${WRITE_BACK_FILE} and nothing else, with: one line \`read: <repo> <sha>\` per checkout (the sha its HEAD is at); one line per done goal, \`<goal>: OK — <repo>/docs/technical/<page>.md § <section>[, …]\`, \`<goal>: OK — none — <reason>\` or \`<goal>: NOT OK — <what is true that no page says>\`; and a last line \`verdict: OK\` when every check is OK, else \`verdict: NOT OK\`. Your role page says the rest.`;
-}
-
-/** The check-in for the reading: keep to the one task. */
-export function archiveCheckInPrompt({ minutes, count }) {
-  return `Archive reading check-in after ${minutes} minutes (${count}). Keep to the one task: read each done goal against the pages at origin/main, then write ${WRITE_BACK_FILE} in the programme's directory and end. Change nothing else; write no page yourself.`;
 }
 
 /* ------------------------------------------------------------ state changes */
@@ -309,25 +210,12 @@ function withState({ root, programme, read, writeJson, lock }, change) {
   }, { strict: true, name: 'archive-turn' });
 }
 
-/** The OK reading kept, for exactly the goals it judged: the archive is tried again on it without a new reading. */
-export function keepReading({ at, goals, lines = [], horizon = null, home, revision, ...seams }) {
-  return withState(seams, (state) => {
-    if (home) {
-      const current = archiveAdmission(join(home, seams.programme), { read: seams.read, revision: revision ?? null });
-      if (current?.problems || (revision && current?.release?.revision !== revision)) {
-        throw new Error(current?.problems?.[0] ?? 'the write-back belongs to a different repair release');
-      }
-    }
-    state.reading = { at, verdict: 'OK', goals: [...goals], lines, ...(horizon ? { horizon } : {}), ...(revision ? { revision } : {}) };
-  });
-}
-
 /** Where the programme's directory moved to: recorded before anything else can fail, so the record's state is set later. */
 export function noteDestination({ destination, ...seams }) {
   return withState(seams, (state) => { state.destination = destination; });
 }
 
-/** The archive done and the record read done: the destination is cleared, and the reading is no longer needed. */
+/** The archive done and the record read done: the destination is cleared. */
 export function clearDestination(seams) {
   return withState(seams, (state) => { state.destination = null; state.reading = null; });
 }
@@ -335,31 +223,23 @@ export function clearDestination(seams) {
 const failureLines = (failures) => failures.map((failure) => `- ${failure.at}: ${failure.reason}${failure.log ? ` (session log: ${failure.log})` : ''}`).join('\n');
 
 /**
- * A reading or an archive that did not end in an archived programme, counted. `kind` is `not-ok` (a reading that found a
- * gap: `lines` are its NOT OK lines) or `failed` (a missing or malformed file, a session that ended without one, an archive
- * that returned 1). A NOT OK reading opens an item at once — `prepared`, for the decision lane, unless an item of the
- * programme was closed by a decision or a failure already stands since the last item, then `for-martin` — and a failure
- * opens one at the second since the last item (`for-martin`, sort mechanical, with a Swedish `brief.md`). `decided` says
- * whether an earlier archive item of the programme was closed by decision. Returns `{ count, item }`; an unreadable state
- * throws and nothing is written.
+ * An archive that did not end in an archived programme, counted. The second failure since the last item opens one
+ * (`for-martin`, sort mechanical, with a Swedish `brief.md`). Returns `{ count, item }`; an unreadable state throws and
+ * nothing is written.
  */
-export function recordArchiveFailure({ kind, reason, log = null, lines = [], at, decided = false, env, write, itemDirectory, ...seams }) {
+export function recordArchiveFailure({ reason, log = null, at, env, write, itemDirectory, ...seams }) {
   return withState(seams, (state) => {
     const { programme } = seams;
-    // A NOT OK reading is a finding, not a failure: it opens its item at once and is not counted towards the second failure.
-    if (kind !== 'not-ok') state.failures.push({ at, reason, log });
+    state.failures.push({ at, reason, log });
     const recent = failuresSinceItem(state);
-    const second = kind !== 'not-ok' && recent.length >= FAILURES_TO_ITEM;
-    if (kind !== 'not-ok' && !second) return { count: recent.length, item: null };
-    const mechanical = second || decided;
+    if (recent.length < FAILURES_TO_ITEM) return { count: recent.length, item: null };
     const reference = archiveReference(programme);
     const id = deskItemId(ARCHIVE_ITEM_KIND, reference, at);
     const item = { schema: 'mc-desk-item', version: 1, id, kind: ARCHIVE_ITEM_KIND, reference, source_at: at, opened_at: at,
-      state: mechanical ? 'for-martin' : 'prepared', sort: 'mechanical', reversible: mechanical ? false : null, due_at: null, outcome: null };
+      state: 'for-martin', sort: 'mechanical', reversible: false, due_at: null, outcome: null };
     const dir = itemDirectory(item, env);
-    // The text is written before the item names it: a decision pass that finds the item finds what it reads.
-    if (mechanical) write(join(dir, 'brief.md'), briefText({ programme, kind, failures: recent, lines }));
-    else write(join(dir, 'prepared.md'), preparedText({ programme, failures: recent, lines, item }));
+    // The text is written before the item names it: a pass that finds the item finds what it reads.
+    write(join(dir, 'brief.md'), briefText({ programme, failures: recent }));
     seams.writeJson(join(dir, 'item.json'), item);
     state.items.push({ id, opened_at: at });
     return { count: recent.length, item };
@@ -384,37 +264,18 @@ export function openRestrictedItem({ entries, at, env, write, itemDirectory, ...
   });
 }
 
-/** What the decision session reads for a prepared item: the gap the reading found (or the failures), and where to look. */
-function preparedText({ programme, failures, lines, item }) {
-  const gap = lines.length ? `## What the reading found\n${lines.map((line) => `- ${line}`).join('\n')}\n\n` : '';
-  return `# Programme ${programme}: the write-back reading is not OK\n\n`
-    + `Every goal of programme ${programme} is finished, and the runner's archive reading found missing write-back or horizon material. `
-    + `Nothing was asked of Martin; this is a gap to close within reach.\n\n`
-    + gap
-    + `## The failures\n${failureLines(failures)}\n\n`
-    + `## Where to look\n- Programme directory: ${programme} under the programmes home, with README.md, PROGRAMME.json, WRITE-BACK.md and goals/.archive/.\n`
-    + `- The turn's state: runner/archive-turn/${programme}.json under the work root.\n`
-    + `- Item: ${item.id}.\n\n`
-    + `## What closes it\nWrite the missing pages: make a goal in the programme that writes them into docs/technical/ and the area pages. The item closes by itself when the programme holds a live goal, and the runner reads the write-back again once that goal is archived. `
-    + `For an @horizon finding, preserve the reusable material under the recorded horizon and close by decision so the runner reads again. Or settle that the reading was wrong, and close the item (--by decision) so the runner reads again. A text of Martin's that would have to change goes to a brief instead.\n`;
-}
-
 /** The brief a mechanical item carries. Swedish, as the desk reads it. */
-function briefText({ programme, kind, failures, lines }) {
-  const what = kind === 'not-ok'
-    ? `Skrivningen av vad programmet ${programme} gjorde sant saknas fortfarande efter att ett tidigare ärende stängts; programmet kan inte arkiveras automatiskt.`
-    : `Arkivläsningen eller arkiveringen av programmet ${programme} misslyckades igen; programmet kan inte arkiveras automatiskt.`;
-  const gap = lines.length ? `Läsningen fann:\n${lines.map((line) => `- ${line}`).join('\n')}\n\n` : '';
-  return `## Vad det gäller\n${what}\n\n`
-    + `## Alternativ och konsekvenser\n- Undersök underlaget: arkiveringen kan köras igen när felet är löst eller sidorna är skrivna.\n- Låt programmet vänta: det förblir öppet och syns här.\n\n`
-    + `## Rekommendation och skäl\nUndersök underlaget; läsningen eller arkiveringen har misslyckats igen sedan ett tidigare ärende stängts eller efter två försök.\n\n`
-    + `## Vad som står still\nProgrammet ${programme} väntar på Martin. ${gap}Felunderlag:\n${failureLines(failures)}\n\n`
+function briefText({ programme, failures }) {
+  return `## Vad det gäller\nArkiveringen av programmet ${programme} misslyckades igen; programmet kan inte arkiveras automatiskt.\n\n`
+    + `## Alternativ och konsekvenser\n- Undersök underlaget: arkiveringen körs igen när felet är löst.\n- Låt programmet vänta: det förblir öppet och syns här.\n\n`
+    + `## Rekommendation och skäl\nUndersök underlaget; arkiveringen har misslyckats två gånger.\n\n`
+    + `## Vad som står still\nProgrammet ${programme} väntar på Martin. Felunderlag:\n${failureLines(failures)}\n\n`
     + `## Kan valet ändras efteråt?\nIngen automatisk tillämpning; detta är ett mekaniskt fel som kräver undersökning.\n`;
 }
 
 /** The brief of the restricted-data item. Swedish. */
 function restrictedBrief({ programme, entries }) {
-  return `## Vad det gäller\nProgrammet ${programme} är färdigt och dess skrivning av vad det gjorde sant är bekräftad, men ~/mc/restricted/${programme}/ innehåller uppgifter (${entries.join(', ')}). Att radera dem är ditt beslut, så systemet arkiverar inte programmet.\n\n`
+  return `## Vad det gäller\nProgrammet ${programme} är färdigt, men ~/mc/restricted/${programme}/ innehåller uppgifter (${entries.join(', ')}). Att radera dem är ditt beslut, så systemet arkiverar inte programmet.\n\n`
     + `## Alternativ och konsekvenser\n- Arkivera själv med \`mc plan ${programme} --archive\`: uppgifterna tas bort och varje README.md sparas i programmets evidence/.\n- Låt programmet vänta: det förblir öppet och uppgifterna ligger kvar.\n\n`
     + `## Rekommendation och skäl\nKör \`mc plan ${programme} --archive\` när uppgifterna inte behövs längre; programmet är i övrigt klart.\n\n`
     + `## Vad som står still\nProgrammet ${programme} väntar på att du arkiverar det.\n\n`
@@ -467,7 +328,7 @@ function finishRepairArchive(dir, { revision, read, root, lock, write }) {
 }
 
 /**
- * The archive on an OK reading (C3): `{ ok: true, destination }` (the programme is archived and its record reads done),
+ * The archive (C3): `{ ok: true, destination }` (the programme is archived and its record reads done),
  * `{ ok: false, restricted: [entries] }` (the programme holds restricted data: nothing is moved), or `{ ok: false, reason }`.
  *
  * Checked first, in the runner's own reads: `goals/` holds no live goal and the record is open. Then
@@ -491,7 +352,7 @@ export async function archiveOnOk({ programme, home, restrictedDir, proposalsTar
     const current = archiveAdmission(dir, { read, revision });
     if (!current?.release) return current?.problems?.[0] ?? 'its repair release is no longer current';
     const due = archiveDue({ programme, home, root, list, read, state: readArchiveState({ root, programme, read }) });
-    return due.due && due.mode === 'archive' && due.revision === revision ? null : 'no current write-back for this repair release';
+    return due.due && due.mode === 'archive' && due.revision === revision ? null : 'this repair release is no longer current';
   };
   const blocked = currentRepair();
   if (blocked) return { ok: false, stale: true, reason: blocked };
@@ -522,8 +383,8 @@ export async function archiveOnOk({ programme, home, restrictedDir, proposalsTar
 export function finishDestination({ programme, destination, read, write, setDone = setRecordState, root, writeJson, lock }) {
   const record = readRecord(destination, { read });
   const revision = archiveRevision(record.record);
-  if (record.record?.repair && (!revision || !keptReading(readArchiveState({ root, programme, read }), revision))) {
-    return { ok: false, reason: 'no current write-back for the shelved repair release' };
+  if (record.record?.repair && !revision) {
+    return { ok: false, reason: 'no current repair release for the shelved programme' };
   }
   const set = setDoneSafely(revision ? (dir, _state, options) => finishRepairArchive(dir, { revision, ...options }) : setDone,
     destination, { root, lock, read, write });

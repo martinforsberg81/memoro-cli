@@ -69,15 +69,14 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 | `plan-session` | opus | `plan` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; the runner also assigns one next draft in its goal worktree |
 | `programme-review` | sonnet | `programme-review` | `mc programs review`, called by Martin's interactive session for an advisory reading or by the assigned repair author for a release receipt; never scheduled by the runner; review catalogue/author exclusion, 30-minute limit and no cap ([mc-plan.md](mc-plan.md#programme-state-and-advisory-reading)) |
 | `ask-reader` | opus | `ask-reader` | `mc ask`, when jev did not settle a question: one fresh headless read-only session, in a read-only copy of the asker's worktree, on the `decision` list (not the asker's own model when another can run), limit 10 minutes; never the runner. It may use only `mc goal show\|list\|areas` and `mc ask answer`, and its run row (kind `ask-reader`) counts under the desk's daily ceiling ([mc-jev.md](mc-jev.md) § *The reader*) |
-| `archive-reader` | sonnet | `archive-reader` | `mc run`, once per programme with a record whose goals are all finished: one headless read-only session on a fresh checkout at `origin/main` that writes `WRITE-BACK.md` in the programme directory ([mc-run.md](mc-run.md) § *Programme archive turn*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build`, a repair build when a review rejected it ([mc-goals.md](mc-goals.md) § *Repair and mend*) |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
 | `mend-session` | opus | `mend-session` | `mc run`, one headless session only after a merge failure (conflict, failed candidate check or moved judged head) ([mc-goals.md](mc-goals.md) § *Repair and mend*) |
 | `manager` | opus | `manager` | `mc run`, the manager's horizon and curation turns ([mc-run.md](mc-run.md)); `mc manager --headless`, an explicit fresh task; never a conversation |
 | `martin` | opus | `martin` | `mc martin`, foreground in `~/mc/martin/`; never the runner |
-| `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
+| `intake` | sonnet | `intake` | only a person's `mc helper --intake`, one headless turn per file; the runner starts none (Martin, 2026-11-21) |
 | `decision` | opus | `decision` | runner lane or a person’s `mc decision [<id>]`, unattended on its own `decision` list; full goal desk authority within headless hooks ([mc-martin.md](mc-martin.md)) |
-| `desk-prepare` | sonnet | `desk-prepare` | chores or the person’s `mc martin prepare`, one fresh headless evidence-only turn per new item on the `build` list; no goal identity or mutation authority ([mc-martin.md](mc-martin.md)) |
+| `desk-prepare` | sonnet | `desk-prepare` | only a person's `mc martin prepare`, one fresh headless evidence-only turn per item on the `build` list; the runner starts none (Martin, 2026-11-21); no goal identity or mutation authority ([mc-martin.md](mc-martin.md)) |
 | `learning` | opus | `learning` | `mc learning` or chores, one headless session on the `decision` list in `~/mc/martin/lessons/`. It updates factual area information and records dispositions, never creates a programme or goal ([mc-martin.md](mc-martin.md) § *Lessons and the learning pass*) |
 | `repair` | opus | `repair` | `mc repair`, with `MC_ROLE=repair` and `MC_HEADLESS=1`. It reads one defect to propose a bounded functionality repair or record why none is established. |
 

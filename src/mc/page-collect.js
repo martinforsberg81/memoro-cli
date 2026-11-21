@@ -1579,7 +1579,7 @@ export function archiveStatus({ programme, home, root, items, env }) {
     const failure = failuresSinceItem(state.state).sort((a, b) => a.at.localeCompare(b.at)).at(-1);
     if (failure) return { status: 'attention', reason: failure.reason };
   }
-  return due.due && (due.mode === 'read' || due.mode === 'archive') ? { status: 'pending' } : null;
+  return due.due && due.mode === 'archive' ? { status: 'pending' } : null;
 }
 
 /** A completed local programme is not revived by its sessions, PRs or retained tree. */

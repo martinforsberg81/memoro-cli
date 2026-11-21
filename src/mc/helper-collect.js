@@ -118,11 +118,9 @@ export function intakeArchiveRoot(env = process.env) {
  * Everywhere a digest can be, newest room first: the inbox, then the archive's
  * day directories in reverse date order.
  *
- * The inbox is not a place a digest stays. `runIntakeDrain` takes the three
- * oldest files every round and archives each one the moment its turn ends,
- * unconditionally — so the file a lookup wants is the file the drain is
- * designed to take away, and a lookup that reads only `~/mc/intake/` returns
- * nothing on any day the backlog is clear. It was clear on 2026-09-05.
+ * The collect writes a digest straight into the day's archive directory
+ * (since 2026-11-21); the inbox is still read for digests written before then
+ * or by `mc helper --intake` runs on older files.
  */
 export function digestDirs(env = process.env, list = readdirSync) {
   const root = intakeArchiveRoot(env);
@@ -816,7 +814,7 @@ function runGitDefault(cwd, args) {
 }
 
 /**
- * Gather the sources and write `<work root>/intake/errors-<date>.md`.
+ * Gather the sources and write `<work root>/runner/log/intake/<date>/errors-<repo>-<date>.md`.
  * Returns the path, the rendered text, and the data behind it.
  *
  * Nothing here is fatal on its own. A section that could not be read says so
@@ -843,7 +841,8 @@ export async function collectHelper({
   if (repo === 'memoro-cli') {
     return collectCli({ env, now, since, threshold, cli });
   }
-  const dir = intakeDir(env);
+  // Straight to the day's archive: no turn reads a digest any more (Martin, 2026-11-21); the page and the next delta find it there.
+  const dir = intakeArchiveDir(env, now);
   const name = digestName(now, repo);
   const windowStart = since ? new Date(since) : new Date(now.getTime() - DAY_MS);
   const notes = [];
@@ -943,7 +942,7 @@ export async function collectHelper({
  * cheap half and why it can run every day without asking anybody for a token.
  */
 async function collectCli({ env, now, since, threshold, cli = cliCollect }) {
-  const dir = intakeDir(env);
+  const dir = intakeArchiveDir(env, now);
   const repo = 'memoro-cli';
   const name = digestName(now, repo);
   const windowStart = since ? new Date(since) : new Date(now.getTime() - DAY_MS);

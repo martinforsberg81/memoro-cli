@@ -14,7 +14,7 @@ A recorded programme uses [the programme document](references/programme-document
 a repair uses [the repair page](references/repair-page.md);
 a programme without a record uses [the programme page](references/programme-readme.md).
 For legacy pages, preserve the held Aim in the appropriate area without changing its meaning.
-Finish active work where it stands; archive after write-back even if the enduring direction continues.
+Finish active work where it stands; archive it even if the enduring direction continues.
 Use the supported manual route without a record, or the valid-record route when already established.
 
 ## Files
@@ -43,9 +43,9 @@ Use the supported manual route without a record, or the valid-record route when 
 
 ## When a goal lands
 
-Write landed functionality to `docs/technical/`. When the work is finished,
-archive the programme after write-back. Automatic archive requires a valid record
-and the runner's safety checks; otherwise use the supported manual archive route.
+Write landed functionality to `docs/technical/`. Each goal writes what it made true as it
+lands. The runner archives a programme with a valid record once every goal is
+merged or dropped; otherwise use the supported manual archive route.
 Landed sections leave the README.
 
 ## Faithful scope correction and handoff

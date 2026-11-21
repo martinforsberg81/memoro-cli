@@ -1203,8 +1203,8 @@ say it. The forms are `write-back: OK — <repo>/docs/technical/<page>.md §
 round` one; a NOT OK line sends the goal to build (`mc goal stage merge` is
 refused, `mc goal stage build` allowed), like any NOT OK item. A review launched
 without `MC_REVIEW_WRITE_BACK` is held to no such line and a `write-back` id in
-it is refused, so a goal whose programme has no record is judged as before. The
-programme's archive reads the pages once more when every goal is done
+it is refused, so a goal whose programme has no record is judged as before. This line is the
+programme's write-back: its archive reads no pages again when every goal is done
 ([mc-run.md](mc-run.md#programme-archive-turn)). Free text may
 follow. `mc goal stage merge|build` from a review session checks the file
 (`checkVerdict`, `review-verdict.js`) and refuses, naming each id or line at

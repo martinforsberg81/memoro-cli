@@ -475,10 +475,12 @@ export async function drainIntake({
   limit = INTAKE_PER_ROUND,
   model = null,
   tool = null,
+  suggestionsOnly = false,
   deps = {},
 } = {}) {
   const dir = intakeDir(env);
-  const waiting = intakeQueue((deps.files || listFiles)(dir));
+  // The runner's drain catalogues app suggestions only (jev, no model turn); every other file waits for the desk (Martin, 2026-11-21).
+  const waiting = intakeQueue((deps.files || listFiles)(dir)).filter((file) => !suggestionsOnly || file.startsWith('suggestion-'));
   const done = [];
   for (const file of waiting.slice(0, Math.max(0, limit))) {
     const started = now().getTime();
