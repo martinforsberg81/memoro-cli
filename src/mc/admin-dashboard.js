@@ -1,5 +1,5 @@
 const BASE = 'https://meetmemoro.app/admin';
-import { projectUsage, projectCosts, renderUsageCosts } from './admin-usage-costs.js';
+import { projectUsage, projectDailyUsage, laggingUsageDate, projectCosts, renderUsageCosts } from './admin-usage-costs.js';
 
 const SOURCES = { health: `${BASE}/health`, operations: `${BASE}/operations/status`, usage: `${BASE}/usage-summary`, costs: `${BASE}/costs/summary` };
 const SERVICE_NAMES = ['secrets', 'd1', 'r2', 'kv', 'universeVectors', 'queues'];
@@ -80,6 +80,14 @@ async function readSource(name, token, fetchImpl) {
     const project = { health: healthProjection, operations: operationsProjection, usage: projectUsage, costs: projectCosts }[name];
     const data = project(body);
     const timestamp = sourceTime(name === 'health' ? body.checkedAt : body.generatedAt);
+    if (name === 'usage') {
+      try {
+        data.dailyUsage = projectDailyUsage(body, data);
+      } catch {
+        data.dailyUsage = null;
+        return sourceRecord('partial', 'daily_usage_unavailable', timestamp, data);
+      }
+    }
     return sourceRecord('available', null, timestamp, data);
   } catch (error) {
     const code = error?.message === 'oversized' ? 'response_too_large' : ['invalid_shape','too_many_items'].includes(error?.message) ? error.message : error instanceof SyntaxError ? 'invalid_json' : error?.name === 'TimeoutError' || error?.name === 'AbortError' ? 'timeout' : 'read_failed';
@@ -92,7 +100,8 @@ export async function collectDashboard({ token, fetch: fetchImpl = globalThis.fe
   const nowDate = clock(); const now = nowDate.getTime(); const fetchedAt = nowDate.toISOString();
   for (const source of records) Object.assign(source, age(source.timestamp, now));
   const model = { schemaVersion:2, environment:'production', fetchedAt, sources };
-  return { model, exitCode: records.every(source => source.availability === 'available') ? 0 : 1 };
+  const accepted = records.every(source => source.availability === 'available') && !laggingUsageDate(sources.usage, fetchedAt);
+  return { model, exitCode: accepted ? 0 : 1 };
 }
 const order = { action:0, watch:1, unknown:2, ok:3 };
 export function renderDashboard(model) {
@@ -100,7 +109,10 @@ export function renderDashboard(model) {
   const entries = Object.entries(model.sources);
   const ageText = s => s.ageSeconds === null ? 'unknown' : `${s.ageSeconds}s${s.future ? ' (future timestamp)' : ''}`;
   const out = [`MEMORO ADMIN — production — fetched ${model.fetchedAt}`, `Sources: ${entries.map(([name, s]) => `${name} ${s.availability}`).join('; ')}`, ...entries.map(([name, s]) => `Source time ${name}: ${s.timestamp || 'unknown'} (age ${ageText(s)})`), '', 'ATTENTION'];
-  for (const [name, source] of entries) if (source.availability !== 'available') out.push(`- ${name} unavailable (${source.errorCode})`);
+  for (const [name, source] of entries) if (source.availability === 'unavailable') out.push(`- ${name} unavailable (${source.errorCode})`);
+  if (usage.availability === 'partial') out.push('- Daily usage is unavailable.');
+  const lag = laggingUsageDate(usage, model.fetchedAt);
+  if (lag) out.push(`- Daily usage rollup is behind (latest ${lag}).`);
   if (costs.availability === 'available' && costs.data.vendor.usd === null) out.push('- Vendor cost data unavailable for this month; no zero total inferred.');
   if (health.availability === 'available') {
     if (health.data.status !== 'healthy') out.push(`- health status ${health.data.status}`);
