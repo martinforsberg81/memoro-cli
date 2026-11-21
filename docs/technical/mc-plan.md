@@ -67,7 +67,7 @@ and `legacy` remain readable on old records but are not written:
 | `state` | `draft`, `ready`, `done` or `Martin` with a repair scope stop |
 | `created` | an ISO instant in UTC to the second |
 | `created_by` | `person`, `martin`, `repair` or the historical `manager` |
-| `phases` | optional: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}`; `mc programs state <p> ready` writes it from the order's `Waits for` lines, keyed by part number |
+| `phases` | optional: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}`; `mc programs state <p> ready` writes it from the order's parts, keyed by part number |
 | `repair` | required for `created_by: "repair"`; absent for ordinary orders. Provenance for a functionality repair, with null horizon and no area-text order |
 
 `draft` means not finished; planning and build take nothing from it (`mc goal new`
@@ -118,11 +118,10 @@ another form is a problem, so the record is invalid.
 The record is also what lets the runner cut the programme with nobody present
 and no session: for a programme with a valid `ready` record and a `README.md`
 it makes one goal in build per part, by code
-([mc-run.md](mc-run.md#the-cut-of-a-ready-order)). Each part of the order says
-what it waits for in one line, `Waits for: nothing.` or `Waits for: Part 1,
-Part 3.`; `mc programs state <programme> ready` writes the record's
-`phases.after` from those lines and refuses an order where one is missing or
-wrong, and `mc programs after` is refused for such an order. A programme with
+([mc-run.md](mc-run.md#the-cut-of-a-ready-order)). A part of the order waits
+for the part before it unless it holds the line `In parallel with the previous
+part.`; `mc programs state <programme> ready` writes the record's
+`phases.after` from that. A programme with
 no record, or with an invalid one, is never cut; `mc plan` stays the person's
 entrance.
 
@@ -598,8 +597,8 @@ The desk corrects findings in the order before release.
 
 Nothing between ready and build verifies the setup (Martin, 2026-11-21). The
 cut of a ready order is code: it makes each part a goal in build and reads no
-repository. A part that needs another says so in its `Waits for` line, and its
-goal's phase holds it.
+repository. A part waits for the part before it unless it says it runs in
+parallel with it, and its goal's phase holds it.
 
 The build session establishes the setup before it builds
 (`canon/roles/build-session.md`). Entering build and the first build remake a

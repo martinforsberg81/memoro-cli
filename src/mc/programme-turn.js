@@ -3,8 +3,9 @@
  *
  * A ready programme whose README.md has a part no goal names is cut by the runner itself, with no session and no
  * model: one goal per part (`cutParts`), marked with the part's number and holding no text of its own. Every session
- * on such a goal is given its part as README.md has it at that moment (`partOfOrder`, `partBrief`). What a part waits
- * for is one line in the part (`statedWaits`), which `mc programs state <programme> ready` writes into the record.
+ * on such a goal is given its part as README.md has it at that moment (`partOfOrder`, `partBrief`). A part waits for
+ * the part before it unless it says it runs in parallel with it (`partsOrder`), which `mc programs state <programme>
+ * ready` writes into the record.
  * Everything here is what the runner decides without a model: whether a programme is due (`programmeDue`), the state
  * file that counts the cuts that failed, and the desk item the second failure opens. The runner (`run.js`) supplies
  * its own file reads and lock, so a fixture drives all of it in memory.
@@ -13,7 +14,7 @@ import { join, resolve } from 'node:path';
 import { deskItemId } from './desk-items.js';
 import { appendLog, ARCHIVE_DIR, GOAL_FILE, GOALS_DIR, LOG_FILE, logStamp, parseGoal, renderGoal } from './goals.js';
 import { NAME_RE } from './plan-schema.js';
-import { cycleOf, readRecord } from './programme-record.js';
+import { readRecord } from './programme-record.js';
 import { repairReleaseState } from './repair-release.js';
 
 export const TURN_SCHEMA = 'mc-programme-turn';
@@ -108,53 +109,29 @@ export function partName(section) {
   return /^### Part [1-9]\d*\s+—\s+(\S.*)$/u.exec(String(section ?? '').split(/\r?\n/u)[0])?.[1].trim() ?? '';
 }
 
-/**
- * The parts one section's `Waits for:` line names, ascending: none for `Waits for: nothing.`, the numbers of
- * `Waits for: Part 1, Part 3.`, or null when the section has no such line (a fenced example is no line). Whitespace
- * and the final full stop are read leniently; any other wording is no line.
- */
-function waitsOf(section) {
-  const line = String(section ?? '').replace(FENCES, '').split(/\r?\n/u).map((one) => one.trim()).find((one) => /^Waits for:/u.test(one));
-  if (line === undefined) return null;
-  const said = line.slice('Waits for:'.length).trim().replace(/\.$/u, '').trim();
-  if (/^nothing$/iu.test(said)) return [];
-  const words = said.split(/\s*(?:,|\band\b)\s*/u).filter(Boolean);
-  if (!words.length || !words.every((word) => /^Part\s+[1-9]\d*$/iu.test(word))) return null;
-  return [...new Set(words.map((word) => Number(/\d+/u.exec(word)[0])))].sort((a, b) => a - b);
-}
-
-const partWords = (numbers) => {
-  const words = numbers.map((number) => `Part ${number}`);
-  return words.length > 1 ? `${words.slice(0, -1).join(', ')} and ${words.at(-1)}` : words[0];
-};
+/** The one line that lets a part start beside the part before it; whitespace around it, letter case and the final full stop are read leniently. */
+const PARALLEL_LINE = /^\s*in parallel with the previous part\.?\s*$/iu;
 
 /**
- * What the parts of an order wait for, as its `Waits for` lines say it: `{ after }`, the record's `phases.after`
- * (`{ <part>: [parts it waits for] }`, a part that waits for nothing left out), or `{ problems }`, each one line:
- * a part without the line, a part that waits for a part the order does not have, and parts that wait for each other.
- * Null for a document with no part.
+ * The order the parts of a document give: `{ after }`, the record's `phases.after` (`{ <part>: [parts it waits for] }`,
+ * a part that waits for nothing left out), or null for a document with no part. A part waits for the part before it,
+ * unless its section holds the line `In parallel with the previous part.` (a fenced example is no line): such a part
+ * joins the group of the part before it and waits for what that group waits for, and any other part waits for every
+ * part of the group before it. The first part waits for nothing.
  */
-export function statedWaits(text) {
-  const parts = partSections(text).map(([number, section]) => ({ number, waits: waitsOf(section) }));
+export function partsOrder(text) {
+  const parts = [...partSections(text)].sort(([a], [b]) => a - b);
   if (!parts.length) return null;
-  const numbers = new Set(parts.map((part) => part.number));
-  const problems = [];
   const after = {};
-  for (const { number, waits } of [...parts].sort((a, b) => a.number - b.number)) {
-    if (waits === null) { problems.push(`Part ${number} has no "Waits for" line — write "Waits for: nothing." or "Waits for: Part 1." in the part`); continue; }
-    for (const named of waits) if (!numbers.has(named)) problems.push(`Part ${number} waits for Part ${named}, which the order does not have — name a part of the order`);
-    if (waits.length) after[number] = waits;
+  let group = [];
+  let waits = [];
+  for (const [number, section] of parts) {
+    const parallel = group.length > 0 && String(section).replace(FENCES, '').split(/\r?\n/u).some((line) => PARALLEL_LINE.test(line));
+    if (!parallel) { waits = group; group = []; }
+    group.push(number);
+    if (waits.length) after[number] = [...waits];
   }
-  if (problems.length) return { problems };
-  const cycle = cycleOf(after);
-  if (cycle) return { problems: [cycle.length === 1 ? `Part ${cycle[0]} waits for itself — it waits for nothing or for another part` : `${partWords(cycle)} wait for each other — one of them waits for nothing or for another part`] };
   return { after };
-}
-
-/** Whether every part of the document has a `Waits for` line that reads; false for a document with no part. */
-export function everyPartWaits(text) {
-  const parts = partSections(text);
-  return parts.length > 0 && parts.every(([, section]) => waitsOf(section) !== null);
 }
 
 /**
@@ -263,8 +240,8 @@ export const REPAIR_NOT_CUT = 'not cut: repair releases are cut by hand until re
 
 /**
  * Whether `programme` is due the cut now: `{ due: true, record }`, or `{ due: false, reason, notice }`. It is due
- * while its record reads ready and a part of README.md is named by no goal, every part has its `Waits for` line and
- * the record states what those lines say. A `notice` is what the runner says once while it lasts. A programme
+ * while its record reads ready, a part of README.md is named by no goal and the record states the order the parts
+ * give (`partsOrder`). A `notice` is what the runner says once while it lasts. A programme
  * holding a goal that names no part is written by hand and is not cut; a released repair order is not cut by code.
  */
 export function programmeDue({ programme, home, list, read, items = [], horizon = () => null, state }) {
@@ -291,13 +268,9 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
     const named = unnamed.length > 3 ? `${unnamed.slice(0, 3).join(', ')} and ${unnamed.length - 3} more` : unnamed.join(', ');
     return { due: false, reason: `its goal${unnamed.length === 1 ? '' : 's'} ${named} name${unnamed.length === 1 ? 's' : ''} no part of README.md`, notice: null };
   }
-  if (!everyPartWaits(readme)) {
-    return { due: false, reason: 'its order has no "Waits for" lines', notice: `${programme}: its order has no "Waits for" lines — the desk adds them and sets it ready again` };
-  }
-  const stated = statedWaits(readme);
   const recorded = record.record.phases?.order === 'stated' ? record.record.phases.after ?? {} : null;
-  if (stated.problems || recorded === null || !sameAfter(stated.after, recorded)) {
-    return { due: false, reason: 'its record does not state what its "Waits for" lines say', notice: `${programme}: its record does not state what the "Waits for" lines of its order say — the desk sets it ready again` };
+  if (recorded === null || !sameAfter(partsOrder(readme).after, recorded)) {
+    return { due: false, reason: 'its record does not state the order its parts give', notice: `${programme}: its record does not state the order its parts give — the desk sets it ready again` };
   }
   if (items.some((item) => item.kind === TURN_ITEM_KIND && item.reference === turnReference(programme) && item.state !== 'closed')) {
     return { due: false, reason: 'a programme desk item is open', notice: null };

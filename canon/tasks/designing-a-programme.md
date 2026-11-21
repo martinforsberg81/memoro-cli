@@ -36,7 +36,7 @@ Use the supported manual route without a record, or the valid-record route when 
 ## Goal design
 
 1. A recorded desk order is cut by code once the desk sets it ready: one goal per part, built from the part as it stands. Elsewhere cut fully investigated, measured and designed work into [goals](references/goal-design.md) headless sessions can build to the end. Settle decisions before writing the goal.
-2. Order by prerequisites and shared files. In an order each part says it in one line, `Waits for: nothing.` or `Waits for: Part 1, Part 3.`, shared files included, and ready writes the record from those lines. A programme whose record states its phases without such lines runs independent phases side by side: state a prerequisite with `mc programs after`. Elsewhere independent goals share a phase and dependent goals go later. In both a prerequisite is a phase dependency, never a note.
+2. Order by prerequisites and shared files. In an order a part waits for the part before it unless it holds the line `In parallel with the previous part.`, and ready writes the record from that. A programme whose record states its phases and has no order runs independent phases side by side: state a prerequisite with `mc programs after`. Elsewhere independent goals share a phase and dependent goals go later. In both a prerequisite is a phase dependency, never a note.
 3. Move every complete goal to `build`; a draft is never started. A consumer needing a producer
    goes to `build` in a dependent phase, as [the plan role](../roles/plan-session.md) says.
 

@@ -3670,7 +3670,7 @@ test('goal new refuses headless recordless creation but admits signed, legacy, a
 /* --------------------------------- a goal that is a part of an order (order mc-parts-are-goals, Parts 1 and 2) */
 
 const ORDER_AT = `${HOME}/mc/README.md`;
-const ORDER = '# mc — an order\n\nRepositories: memoro-cli, memoro.\n\n## Parts\n\n### Part 1 — One\n\nWaits for: nothing.\n\n### Part 2 — Two & more\n\nWaits for: Part 1.\n\nSolution: the second thing.\n\n## Order\n\nOne, then two.\n';
+const ORDER = '# mc — an order\n\nRepositories: memoro-cli, memoro.\n\n## Parts\n\n### Part 1 — One\n\n### Part 2 — Two & more\n\nSolution: the second thing.\n\n## Order\n\nOne, then two.\n';
 /** GOAL.json of the goal the runner cuts for Part 2 of ORDER: version 2, `part` 2, no criterion and no other text. */
 const partGoal = (fields = {}) => renderGoal({ version: 2, stage: 'build', status: 'ready', phase: 2, part: 2, repos: ['memoro-cli', 'memoro'], created: '2026-11-01T20:00:00Z', prs: [], title: 'Two & more', success_criteria: [], documents: [{ label: 'Part 2', path: ORDER_AT }], ...fields });
 const PART_LOG = '## 2026-11-01T19:00Z · runner · build · ready\n\nDone: cut from Part 2 of README.md\n';
@@ -3753,7 +3753,7 @@ test('mc goal show of a goal that is a part prints its header, then its part and
   const f = fixture({ files: partFiles() });
   assert.equal(await run(['show', 'mc/plain'], f.deps), 0, f.err());
   const shown = f.out();
-  assert.ok(shown.startsWith('mc/plain · build · ready · phase 2 · memoro-cli, memoro · criteria 0/0 · created 2026-11-01T20:00:00Z\n\nPART 2 — Two & more, as README.md has it now\n\n### Part 2 — Two & more\n\nWaits for: Part 1.\n\nSolution: the second thing.\n\n# mc — an order\n\nRepositories: memoro-cli, memoro.\n'), shown);
+  assert.ok(shown.startsWith('mc/plain · build · ready · phase 2 · memoro-cli, memoro · criteria 0/0 · created 2026-11-01T20:00:00Z\n\nPART 2 — Two & more, as README.md has it now\n\n### Part 2 — Two & more\n\nSolution: the second thing.\n\n# mc — an order\n\nRepositories: memoro-cli, memoro.\n'), shown);
   assert.ok(shown.includes('## Order\n\nOne, then two.\n\nLOG\n'), 'the shared sections, then the log as for any goal');
   assert.doesNotMatch(shown, /OUTCOME|OBLIGATIONS|CRITERIA 0\/0\n|none yet|### Part 1/u, 'no rendered goal text and no other part');
   assert.match(shown, /\nWORKTREES\n/u);

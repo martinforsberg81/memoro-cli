@@ -29,7 +29,7 @@ Keep the findings for the chosen technical solution in the programme's evidence 
 
 - Open with what a user can do or see afterwards that they cannot today.
 - One thing to say yes or no to. If Martin could want half, it is two programmes.
-- Three to eight parts, cut by user outcome, not layer. Each can land alone and keeps its number. Each says in one line what must be done before it starts, `Waits for: nothing.` or `Waits for: Part 1, Part 3.`; ready is refused while a part lacks it.
+- Three to eight parts, cut by user outcome, not layer. Each can land alone and keeps its number. Each waits for the part before it unless it holds the line `In parallel with the previous part.`
 - Order says the sequence of the parts and what the desk does beside the build; it holds no step of Martin's.
 - Aim for 1,500 words, but never cut a user case to fit (Martin, 2026-11-18).
   Cut unnecessary construction first; split into programmes if that makes the choices clearer.

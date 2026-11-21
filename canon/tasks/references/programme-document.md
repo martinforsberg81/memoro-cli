@@ -35,8 +35,6 @@ the revision read. Attribute any finding drawn from a reader's report.>
 
 ### Part 1 — <name>
 
-Waits for: nothing.
-
 Closes: <The gap or gaps.>
 
 Solution: <What the user does and what happens, including relevant existing
@@ -83,11 +81,11 @@ instead of repeating them. Nothing here outlives the programme.>
 ```
 
 Repeat `### Part n — <name>` for each piece of work: code cuts one goal per
-part, and its sessions are given the part as it stands. Each part carries one
-line, `Waits for: nothing.` or `Waits for: Part 1, Part 3.`; ready is refused
-while one is missing or wrong. Code checks nothing else a part says; Martin
-judges it. The document binds what the user gets, how it looks and how one sees
-that it works; the construction is the builder's ([writing a programme document](../writing-a-programme-document.md)).
+part, and its sessions are given the part as it stands. A part waits for the
+part before it unless it holds the line `In parallel with the previous part.`
+Code checks nothing else a part says; Martin judges it. The document binds what
+the user gets, how it looks and how one sees that it works; the construction is
+the builder's ([writing a programme document](../writing-a-programme-document.md)).
 
 Each thing Martin decides is shown, as one picture or as its text; an order
 has at most ten pictures, in the light theme. A state a Solution mentions (a

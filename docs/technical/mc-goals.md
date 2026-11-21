@@ -860,9 +860,9 @@ programme:
   phase another phase waits for, naming that phase and `mc programs after`; and
   after an accepted move it says each dependency the record lost. A sequential
   programme's record is not written; an invalid record is left as it is and the
-  goals are renumbered as before. Where the order's parts carry `Waits for`
-  lines the dependencies are the document's: `mc programs state <p> ready`
-  writes them, `mc programs after` is refused, and nothing renumbers them.
+  goals are renumbered as before. Where the goals are parts of an order,
+  `mc programs state <p> ready` writes the dependencies from the order's parts
+  and nothing renumbers them.
 - **Dropped** goals meet a dependency, as they hold no later phase back in a
   sequential programme: a phase whose goals are all dropped lets the phase that
   waited for it open. Dropping is a person's, interactive Martin's, the

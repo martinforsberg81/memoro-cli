@@ -6577,10 +6577,10 @@ test('when the runner archives the last goal of phase 1 in a stated programme, t
 const PROG = '/w/programs/prog';
 const TURN_STATE = '/w/runner/programme-turn/prog.json';
 /** The order the runner cuts: README.md with two parts, the second waiting for the first. */
-const README_MD = '# prog\n\nEnd: Done when it holds.\n\nRepositories: memoro.\n\n## Parts\n\n### Part 1 — One\n\nWaits for: nothing.\n\nSolution: the first thing.\n\n### Part 2 — Two\n\nWaits for: Part 1.\n\nSolution: the second thing.\n\n## Order\n\nOne, then two.\n';
+const README_MD = '# prog\n\nEnd: Done when it holds.\n\nRepositories: memoro.\n\n## Parts\n\n### Part 1 — One\n\nSolution: the first thing.\n\n### Part 2 — Two\n\nSolution: the second thing.\n\n## Order\n\nOne, then two.\n';
 const README_AT = `${PROG}/README.md`;
 const recordWith = (changes) => `${JSON.stringify({ ...JSON.parse(plainText()), version: 2, state: 'ready', ...changes }, null, 2)}\n`;
-/** The record `mc programs state prog ready` leaves for README_MD: ready, its dependencies written from the `Waits for` lines. */
+/** The record `mc programs state prog ready` leaves for README_MD: ready, its dependencies written from the order's parts. */
 const READY = recordWith({ phases: { order: 'stated', after: { 2: [1] } } });
 
 /** A programme `prog` with a record and a README and no goal, as the cut finds it; `goals` are goals it already holds. */
@@ -6779,10 +6779,10 @@ test('programme draft leaves a running build free to finish and a queued merge f
 
 // Order mc-parts-are-goals, Part 1. Fault replayed: `cutParts` made to skip a part that has no goal (the last one):
 // the three goals asserted here are then two, and the assertion on `goalsNow` fails.
-test('the cut: one pass of a ready order of three parts leaves three goals in build · ready with every model route unavailable and launches no session; the part that waits starts only when the other is done', async () => {
-  const three = README_MD.replace('## Order', '### Part 3 — Three\n\nWaits for: nothing.\n\n## Order');
+test('the cut: one pass of a ready order of three parts, the third in parallel with the second, leaves three goals in build · ready with every model route unavailable and launches no session; the second and third start only when the first is done', async () => {
+  const three = README_MD.replace('## Order', '### Part 3 — Three\n\nIn parallel with the previous part.\n\n## Order');
   // Every plan is spent and every API is off: no list has a route.
-  const f = programmeFixture({ record: READY, readme: three, capacity: capacityWith({ claude: 1, codex: 1 }) });
+  const f = programmeFixture({ record: recordWith({ phases: { order: 'stated', after: { 2: [1], 3: [1] } } }), readme: three, capacity: capacityWith({ claude: 1, codex: 1 }) });
   f.deps.billing = { ...f.deps.billing, readApi: () => ({ claude: false, codex: false }) };
   const runner = createRunner({ deps: f.deps });
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'no route: nothing runs');
@@ -6799,19 +6799,22 @@ test('the cut: one pass of a ready order of three parts leaves three goals in bu
   assert.equal(goalsNow(f).length, 3, 'a second pass cuts nothing more');
   assert.equal(f.files[TURN_STATE], undefined, 'and nothing failed');
 
-  // With a route: parts 1 and 3 run side by side, and Part 2 waits for Part 1.
+  // With a route: Part 1 runs alone, and Parts 2 and 3 start side by side once it is done.
   f.deps.capacity.write(capacityWith({ claude: 0.1 }));
-  const { started, release } = gated(f);
-  const running = lanes(runner, 3);
+  const first = gated(f);
+  const alone = lanes(runner, 3);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual([...started].sort(), ['prog/one', 'prog/three'], 'the part that waits is not started');
-  release();
-  await Promise.all(running);
-  assert.deepEqual([...started].sort(), ['prog/one', 'prog/three']);
+  assert.deepEqual(first.started, ['prog/one'], 'the parts that wait are not started');
+  first.release();
+  await Promise.all(alone);
+  assert.deepEqual(first.started, ['prog/one']);
   f.files[`${GOALS}/one/GOAL.json`] = withGoal(f.files[`${GOALS}/one/GOAL.json`], { stage: 'done' });
-  f.files[`${GOALS}/three/GOAL.json`] = withGoal(f.files[`${GOALS}/three/GOAL.json`], { stage: 'done' });
-  f.answer = okSession();
-  assert.equal((await runner.pass({ repo: 'memoro' })).name, 'goal:prog/two', 'Part 1 done: Part 2 starts');
+  const next = gated(f);
+  const beside = lanes(runner, 3);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual([...next.started].sort(), ['prog/three', 'prog/two'], 'Part 1 done: Parts 2 and 3 start, side by side');
+  next.release();
+  await Promise.all(beside);
   assert.equal(f.calls.sessions.every((call) => call.env.MC_ROLE === 'build-session:goal'), true, 'every session is a build of a goal');
 });
 
@@ -6820,7 +6823,7 @@ test('a session on a goal that is a part is given the part byte for byte as READ
   const runner = createRunner({ deps: f.deps });
   assert.equal((await runner.pass({ repo: 'memoro' })).name, 'goal:prog/one');
   const [first] = f.calls.sessions;
-  const part = '### Part 1 — One\n\nWaits for: nothing.\n\nSolution: the first thing.';
+  const part = '### Part 1 — One\n\nSolution: the first thing.';
   assert.ok(first.prompt.includes(`PART 1 — One, as README.md has it now\n\n${part}\n\n# prog\n\nEnd: Done when it holds.\n\nRepositories: memoro.\n\n## Parts\n`), first.prompt);
   assert.ok(first.prompt.trimEnd().endsWith('## Order\n\nOne, then two.'), 'the sections outside the parts follow, to the end');
   assert.equal(first.prompt.includes('### Part 2'), false, 'no other part is given');
@@ -6830,7 +6833,7 @@ test('a session on a goal that is a part is given the part byte for byte as READ
   f.files[README_AT] = README_MD.replace('Solution: the first thing.', edited);
   assert.equal((await runner.pass({ repo: 'memoro' })).name, 'goal:prog/one');
   const second = f.calls.sessions[1];
-  assert.ok(second.prompt.includes(`PART 1 — One, as README.md has it now\n\n### Part 1 — One\n\nWaits for: nothing.\n\n${edited}\n\n# prog`), second.prompt);
+  assert.ok(second.prompt.includes(`PART 1 — One, as README.md has it now\n\n### Part 1 — One\n\n${edited}\n\n# prog`), second.prompt);
   assert.equal(second.prompt.includes('Solution: the first thing.'), false, 'the earlier wording is gone');
   assert.equal(goalsNow(f).length, 2, 'an edited part gets no second goal');
 });
@@ -6858,14 +6861,12 @@ test('a goal whose part has left the order starts no session, said once, and is 
 // Why a programme is not due is `programmeDue`'s, covered case by case in programme-turn.test.js. Here: what the
 // runner does with that answer through its own seams (its desk items, its horizon reader, its log), one case each.
 test('the cut: nothing is cut for a programme that is not due, and what the desk must do is said once while it lasts', async () => {
-  const noLines = README_MD.replaceAll(/Waits for: [^\n]+\n\n/gu, '');
   const withHorizon = recordWith({ ...JSON.parse(READY), horizon: 'h' });
   const table = [
     ['a record in state draft', (f) => { f.files[RECORD_AT] = draftRecordText(); }, null],
     ['an open desk item of kind programme', (f) => { wireDesk(f); f.files['/w/martin/items/x/item.json'] = JSON.stringify({ id: 'x', kind: 'programme', reference: 'programme:prog', state: 'for-martin', sort: 'mechanical', reversible: false, due_at: null }); }, null],
     ['a horizon that is reached', (f) => { f.files[RECORD_AT] = withHorizon; f.deps.horizon = () => ({ state: 'reached' }); }, 'prog: its horizon h reads reached — the programme is not cut while that lasts'],
-    ['an order whose parts have no "Waits for" line', (f) => { f.files[README_AT] = noLines; }, 'prog: its order has no "Waits for" lines — the desk adds them and sets it ready again'],
-    ['a record that does not state what the lines say', (f) => { f.files[RECORD_AT] = plainText(); }, 'prog: its record does not state what the "Waits for" lines of its order say — the desk sets it ready again'],
+    ['a record that does not state the order the parts give', (f) => { f.files[RECORD_AT] = plainText(); }, 'prog: its record does not state the order its parts give — the desk sets it ready again'],
   ];
   for (const [kind, make, line] of table) {
     const f = programmeFixture({ record: READY });
@@ -6882,7 +6883,7 @@ test('the cut: nothing is cut for a programme that is not due, and what the desk
 });
 
 test('the cut: a goal of the old form keeps its part and only the part without a goal is cut; an order is cut and a goal started in one pass', async () => {
-  // An old order whose first part has a goal a planning session wrote: once its lines are there, Part 2 alone is cut.
+  // An old order whose first part has a goal a planning session wrote: once it is set ready again, Part 2 alone is cut.
   const mixed = programmeFixture({ record: READY });
   writesGoals(mixed, { first: { stage: 'build', status: 'Martin', parts: [1] } });
   const kept = mixed.files[`${GOALS}/first/GOAL.json`];
@@ -6941,15 +6942,15 @@ test('the cut: a cut that cannot be made is counted, the second opens a prepared
   assert.deepEqual(f.calls.sessions, []);
 });
 
-test('the cut: a part added to a cut order is cut once the record states what its lines say, and the goals that exist are left as they are', async () => {
+test('the cut: a part added to a cut order is cut once the record states the order its parts give, and the goals that exist are left as they are', async () => {
   const f = programmeFixture({ record: READY });
   const runner = createRunner({ deps: f.deps });
   runner.nextWork();
   const before = Object.fromEntries(Object.entries(f.files).filter(([path]) => path.startsWith(GOALS)));
-  f.files[README_AT] = README_MD.replace('## Order', '### Part 3 — Three\n\nWaits for: Part 2.\n\n## Order');
+  f.files[README_AT] = README_MD.replace('## Order', '### Part 3 — Three\n\n## Order');
   runner.nextWork(); runner.nextWork();
   assert.deepEqual(goalsNow(f).map(([name]) => name), ['one', 'two'], 'not cut before the order is set ready again');
-  assert.equal(said(f, 'prog: its record does not state what the "Waits for" lines of its order say — the desk sets it ready again'), 1);
+  assert.equal(said(f, 'prog: its record does not state the order its parts give — the desk sets it ready again'), 1);
   f.files[RECORD_AT] = recordWith({ phases: { order: 'stated', after: { 2: [1], 3: [2] } } });
   runner.nextWork();
   assert.deepEqual(goalsNow(f), [['one', 'build · ready', 1, 1], ['three', 'build · ready', 3, 3], ['two', 'build · ready', 2, 2]]);

@@ -1864,7 +1864,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /* ------------------------------------------------- the cut of a ready order */
 
-  /** `programme`: its notice, said once while it lasts (no `Waits for` lines, an unreadable state file, a horizon that is not open). */
+  /** `programme`: its notice, said once while it lasts (a record that does not state the order the parts give, an unreadable state file, a horizon that is not open). */
   const turnSaid = new Map();
   const turnItems = () => { try { return deps.deskItems?.list() || []; } catch { return []; } };
   /** Whether `programme` is due the cut now, read through the runner's own list and read. */

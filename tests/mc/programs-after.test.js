@@ -192,11 +192,6 @@ describe('mc programs after: the usage and which programmes take it', () => {
         mkdirSync(dir, { recursive: true });
         writeFileSync(join(dir, 'GOAL.json'), goalJson({ phase }));
       }
-      // The page create writes is an order: its part carries a `Waits for` line, so the dependencies are the document's.
-      result = await call(['after', 'fresh', '2', '1'], a.env);
-      assert.deepEqual([result.code, result.err], [1, 'mc: fresh states its order in README.md — change the part\'s "Waits for" line and set it ready again\n']);
-      const page = join(a.home, 'fresh', 'README.md');
-      writeFileSync(page, readFileSync(page, 'utf8').replace('Waits for: nothing.\n\n', ''));
       result = await call(['after', 'fresh', '2', '1'], a.env);
       assert.equal(result.code, 0, result.err);
 
@@ -212,57 +207,42 @@ describe('mc programs after: the usage and which programmes take it', () => {
   });
 });
 
-// Order mc-parts-are-goals, Part 1: what a part waits for is one line in the part, and the record is written from it.
-describe('an order states what its parts wait for', () => {
+// Order mc-parts-are-goals, Part 1: a part waits for the part before it unless it says it runs in parallel with it,
+// and the record is written from that.
+describe('an order gives what its parts wait for', () => {
   const order = (...lines) => `# prog\n\nRepositories: memoro-cli.\n\n## Parts\n\n${lines.map((line, at) => `### Part ${at + 1} — P${at + 1}\n\n${line}\n`).join('\n')}`;
   const desk = (a) => ({ ...a.env, MC_ROLE: 'martin' });
   const DRAFT = { ...STATED, version: 2, state: 'draft' };
   const page = (a) => join(a.home, 'prog', 'README.md');
+  const LINE = 'In parallel with the previous part.';
 
-  it('mc programs state ready refuses, exit 1 and nothing written, a part with no line, a part that waits for one the order does not have, and parts that wait for each other', async () => {
-    for (const [lines, said] of [
-      [['Waits for: nothing.', 'Waits for: Part 1.', 'Closes: a gap.'], 'mc: Part 3 has no "Waits for" line — write "Waits for: nothing." or "Waits for: Part 1." in the part\n'],
-      [['Waits for: nothing.', 'Waits for: nothing.', 'Waits for: Part 7.'], 'mc: Part 3 waits for Part 7, which the order does not have — name a part of the order\n'],
-      [['Waits for: nothing.', 'Waits for: Part 3.', 'Waits for: Part 2.'], 'mc: Part 2 and Part 3 wait for each other — one of them waits for nothing or for another part\n'],
-    ]) {
-      const a = area(DRAFT);
-      try {
-        writeFileSync(page(a), order(...lines));
-        const before = snapshot(a.root);
-        const result = await call(['state', 'prog', 'ready'], desk(a));
-        assert.deepEqual([result.code, result.err, result.out], [1, said, '']);
-        assert.deepEqual(snapshot(a.root), before, 'nothing is written');
-      } finally { a.done(); }
-    }
-  });
-
-  it('mc programs state ready writes the dependencies from the lines, keyed by part, in the write that sets the state; mc programs after is then refused, exit 1', async () => {
+  it('mc programs state ready writes the dependencies from the parts, keyed by part, in the write that sets the state, and mc programs after works as before', async () => {
     const a = area(DRAFT);
     try {
-      writeFileSync(page(a), order('Waits for: nothing.', 'Waits for: Part 1', 'Waits for:  Part 1, Part 2.'));
+      writeFileSync(page(a), order('Closes: a.', 'Closes: b.', LINE, 'Closes: d.'));
       const result = await call(['state', 'prog', 'ready'], desk(a));
       assert.equal(result.code, 0, result.err);
-      assert.deepEqual([recordOf(a.home).state, recordOf(a.home).phases], ['ready', { order: 'stated', after: { 2: [1], 3: [1, 2] } }]);
+      assert.deepEqual([recordOf(a.home).state, recordOf(a.home).phases], ['ready', { order: 'stated', after: { 2: [1], 3: [1], 4: [2, 3] } }]);
       assert.deepEqual(Object.keys(recordOf(a.home)), Object.keys(STATED), 'every key in its place');
       // A changed line is written by setting the order ready again.
-      writeFileSync(page(a), order('Waits for: nothing.', 'Waits for: nothing.', 'Waits for: Part 2.'));
+      writeFileSync(page(a), order('Closes: a.', LINE, 'Closes: c.'));
       assert.equal((await call(['state', 'prog', 'ready'], desk(a))).code, 0);
-      assert.deepEqual(recordOf(a.home).phases, { order: 'stated', after: { 3: [2] } });
-      const before = snapshot(a.root);
-      const refused = await call(['after', 'prog', '3', '1'], a.env);
-      assert.deepEqual([refused.code, refused.err, refused.out], [1, 'mc: prog states its order in README.md — change the part\'s "Waits for" line and set it ready again\n', '']);
-      assert.deepEqual(snapshot(a.root), before, 'nothing is written');
-      // Setting it draft reads no line.
+      assert.deepEqual(recordOf(a.home).phases, { order: 'stated', after: { 3: [1, 2] } });
+      // The fixture's goals are in phases 1, 2 and 3: the verb states a dependency of theirs as it does on any stated programme.
+      const stated = await call(['after', 'prog', '3', '1'], a.env);
+      assert.deepEqual([stated.code, stated.err], [0, '']);
+      assert.deepEqual(recordOf(a.home).phases, { order: 'stated', after: { 3: [1] } });
+      // Setting it draft reads no part.
       writeFileSync(page(a), order('Closes: a gap.'));
       assert.equal((await call(['state', 'prog', 'draft'], desk(a))).code, 0);
-      assert.deepEqual(recordOf(a.home).phases, { order: 'stated', after: { 3: [2] } });
+      assert.deepEqual(recordOf(a.home).phases, { order: 'stated', after: { 3: [1] } });
     } finally { a.done(); }
   });
 
-  it('a record that stated no phases gets them from the lines, and a document with no part is set ready as before and still takes mc programs after', async () => {
+  it('a record that stated no phases gets them from the parts, and a document with no part is set ready as before', async () => {
     const plain = area({ ...RECORD, version: 2, state: 'draft' });
     try {
-      writeFileSync(page(plain), order('Waits for: nothing.', 'Waits for: Part 1.'));
+      writeFileSync(page(plain), order('Closes: a.', 'Closes: b.'));
       assert.equal((await call(['state', 'prog', 'ready'], desk(plain))).code, 0);
       assert.deepEqual(recordOf(plain.home).phases, { order: 'stated', after: { 2: [1] } });
     } finally { plain.done(); }
@@ -271,7 +251,6 @@ describe('an order states what its parts wait for', () => {
       writeFileSync(page(a), '# prog\n\nNo parts yet.\n');
       assert.equal((await call(['state', 'prog', 'ready'], desk(a))).code, 0);
       assert.deepEqual([recordOf(a.home).state, recordOf(a.home).phases], ['ready', { order: 'stated' }]);
-      assert.equal((await call(['after', 'prog', '3', '1'], a.env)).code, 0);
     } finally { a.done(); }
   });
 });

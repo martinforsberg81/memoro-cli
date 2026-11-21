@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { itemDirectory } from '../../src/mc/desk-items.js';
 import { parseGoal, parseLog } from '../../src/mc/goals.js';
-import { cutParts, cutProblems, cuttable, goalSlug, goalsNamingNoPart, partBrief, partOfOrder, partsCut, partsNamed, programmeDue, readTurnState, recordTurnFailure, documentParts, statedWaits, turnName, turnStatePath } from '../../src/mc/programme-turn.js';
+import { cutParts, cutProblems, cuttable, goalSlug, goalsNamingNoPart, partBrief, partOfOrder, partsCut, partsNamed, programmeDue, readTurnState, recordTurnFailure, documentParts, partsOrder, turnName, turnStatePath } from '../../src/mc/programme-turn.js';
 import { goalJson } from './_helpers/goal-file.js';
 
 /**
@@ -13,7 +13,7 @@ import { goalJson } from './_helpers/goal-file.js';
 
 const HOME = '/p';
 const ROOT = '/w';
-const README_MD = '# prog\n\nRepositories: memoro.\n\n## Parts\n\n### Part 1 — One\n\nWaits for: nothing.\n\n### Part 2 — Two\n\nWaits for: Part 1.\n';
+const README_MD = '# prog\n\nRepositories: memoro.\n\n## Parts\n\n### Part 1 — One\n\n### Part 2 — Two\n';
 const README_AT = `${HOME}/prog/README.md`;
 const BASE = { schema: 'mc-programme', version: 2, horizon: null, end: 'Done when it holds.', state: 'ready', created: '2026-11-14T10:20:30Z', created_by: 'person', phases: { order: 'stated', after: { 2: [1] } } };
 const RECORD = JSON.stringify(BASE);
@@ -43,16 +43,18 @@ test('the cut: a ready programme is due while its parts are not all cut, whateve
   assert.equal(turnName('prog'), 'programme:prog');
 });
 
-test('the cut: an order with a part that has no "Waits for" line, or whose record does not state what the lines say, is not cut and says what the desk does', () => {
-  const noLines = programmeStore({ [README_AT]: README_MD.replace('Waits for: Part 1.\n', '') });
-  assert.deepEqual(due(noLines), { due: false, reason: 'its order has no "Waits for" lines', notice: 'prog: its order has no "Waits for" lines — the desk adds them and sets it ready again' });
-  // Every part of such an order that has a goal already goes on: only the cut waits.
-  const covered = programmeStore({ [README_AT]: README_MD.replaceAll(/Waits for: [^\n]+\n/gu, ''), ...goalAt('both', goalNaming('Part 1; Part 2')) });
-  assert.deepEqual([due(covered).due, due(covered).reason, due(covered).notice], [false, 'its goals are already cut', null]);
+test('the cut: an order whose record does not state the order its parts give is not cut and says what the desk does', () => {
+  const said = 'prog: its record does not state the order its parts give — the desk sets it ready again';
   for (const [kind, record] of [['a record that states no phases', recordOf({ phases: undefined })], ['a record that states no dependency', recordOf({ phases: { order: 'stated' } })], ['a record stated for other parts', recordOf({ phases: { order: 'stated', after: { 2: [1], 3: [2] } } })]]) {
-    const answer = due(programmeStore({ [RECORD_AT]: record }));
-    assert.deepEqual([answer.due, answer.notice], [false, 'prog: its record does not state what the "Waits for" lines of its order say — the desk sets it ready again'], kind);
+    assert.deepEqual(due(programmeStore({ [RECORD_AT]: record })), { due: false, reason: 'its record does not state the order its parts give', notice: said }, kind);
   }
+  // A line added to a part since the order was set ready changes what the parts give.
+  const parallel = programmeStore({ [README_AT]: README_MD.replace('### Part 2 — Two\n', '### Part 2 — Two\n\nIn parallel with the previous part.\n') });
+  assert.deepEqual([due(parallel).due, due(parallel).notice], [false, said]);
+  assert.equal(due(programmeStore({ [README_AT]: parallel.files[README_AT], [RECORD_AT]: recordOf({ phases: { order: 'stated' } }) })).due, true);
+  // Every part of such an order that has a goal already goes on: only the cut waits.
+  const covered = programmeStore({ [RECORD_AT]: recordOf({ phases: undefined }), ...goalAt('both', goalNaming('Part 1; Part 2')) });
+  assert.deepEqual([due(covered).due, due(covered).reason, due(covered).notice], [false, 'its goals are already cut', null]);
 });
 
 test('the cut: a draft, a done or dropped record, and one whose goals name all parts are not due', () => {
@@ -147,22 +149,20 @@ const THREE = [
   '',
   '### Part 1 — A part is a goal',
   '',
-  'Waits for: nothing.',
-  '',
   'Closes: the rewriting.',
   '',
   '```',
   '### Part 9 — Fenced',
-  'Waits for: Part 8.',
+  'In parallel with the previous part.',
   '```',
   '',
   '### Part 2 — The build session reads, decides & hands over',
   '',
-  'Waits for:   Part 1',
+  'Closes: the stops.',
   '',
   '### Part 3 — Åter i mål',
   '',
-  'Waits for: Part 1, Part 2.',
+  '  in parallel with the previous part  ',
   '',
   '## Order',
   '',
@@ -177,20 +177,16 @@ const repositories = (text) => {
 const cut = (s) => cutParts({ programme: 'prog', home: HOME, list: s.list, read: s.read, write: s.write, repositories, now: new Date('2026-11-21T16:00:30.000Z') });
 const goalOf = (s, name) => parseGoal(s.files[goalFile(name)]);
 
-test('what a part waits for: one line per part, read leniently, written as the record states it, and the three refusals', () => {
-  assert.deepEqual(statedWaits(THREE), { after: { 2: [1], 3: [1, 2] } }, 'no full stop, extra spaces and a fenced example are read as written');
-  assert.deepEqual(statedWaits(README_MD), { after: { 2: [1] } });
-  assert.deepEqual(statedWaits('## Parts\n\n### Part 1 — One\n\nWaits for: nothing.\n'), { after: {} }, 'a part that waits for nothing states no dependency');
-  assert.equal(statedWaits('# no parts\n'), null, 'a document with no part states nothing');
+test('what a part waits for: the part before it, or with the line "In parallel with the previous part." what that part waits for', () => {
   const order = (...lines) => `## Parts\n\n${lines.map((line, at) => `### Part ${at + 1} — P${at + 1}\n\n${line}\n`).join('\n')}`;
-  assert.deepEqual(statedWaits(order('Waits for: nothing.', 'Waits for: Part 1.', 'Closes: a gap.')).problems,
-    ['Part 3 has no "Waits for" line — write "Waits for: nothing." or "Waits for: Part 1." in the part']);
-  assert.deepEqual(statedWaits(order('Waits for: nothing.', 'Waits for: nothing.', 'Waits for: Part 7.')).problems,
-    ['Part 3 waits for Part 7, which the order does not have — name a part of the order']);
-  assert.deepEqual(statedWaits(order('Waits for: nothing.', 'Waits for: Part 3.', 'Waits for: Part 2.')).problems,
-    ['Part 2 and Part 3 wait for each other — one of them waits for nothing or for another part']);
-  assert.deepEqual(statedWaits(order('Waits for: the weather.')).problems,
-    ['Part 1 has no "Waits for" line — write "Waits for: nothing." or "Waits for: Part 1." in the part'], 'any other wording is no line');
+  const LINE = 'In parallel with the previous part.';
+  assert.deepEqual(partsOrder(order('Closes: a.', 'Closes: b.', LINE, 'Closes: d.')), { after: { 2: [1], 3: [1], 4: [2, 3] } }, 'a parallel part joins the group of the part before it, and the next part waits for the whole group');
+  assert.deepEqual(partsOrder(README_MD), { after: { 2: [1] } }, 'no line: each part waits for the part before it');
+  assert.deepEqual(partsOrder(order(LINE, LINE, LINE)), { after: {} }, 'the first part waits for nothing even with the line, and parts beside it wait for nothing');
+  assert.deepEqual(partsOrder(THREE), { after: { 2: [1], 3: [1] } }, 'surrounding spaces, letter case and a missing full stop are read; a fenced example is no line');
+  assert.deepEqual(partsOrder(order('Closes: a.', `Runs ${LINE}`, 'Closes: in parallel with the previous part, mostly.')), { after: { 2: [1], 3: [2] } }, 'the line is a line of its own: the words inside another sentence are not it');
+  assert.deepEqual(partsOrder('## Parts\n\n### Part 1 — One\n'), { after: {} });
+  assert.equal(partsOrder('# no parts\n'), null, 'a document with no part gives no order');
 });
 
 test('the cut: one goal per part with none, in build · ready, named from its heading, holding the part number and no text of its own', () => {
@@ -221,11 +217,11 @@ test('the cut: one goal per part with none, in build · ready, named from its he
 test('what a session on a goal that is a part is given: the part byte for byte under its heading line, then the shared sections; a part that has left gives nothing', () => {
   const part = partOfOrder(THREE, 2);
   assert.deepEqual([part.number, part.name, part.heading], [2, 'The build session reads, decides & hands over', 'PART 2 — The build session reads, decides & hands over, as README.md has it now']);
-  assert.equal(part.section, '### Part 2 — The build session reads, decides & hands over\n\nWaits for:   Part 1');
+  assert.equal(part.section, '### Part 2 — The build session reads, decides & hands over\n\nCloses: the stops.');
   assert.equal(partBrief(part), `${part.heading}\n\n${part.section}\n\n${part.shared}\n`);
   for (const text of ['Repositories: memoro, memoro-cli.', '## Why\n\nBecause.', '## Order\n\nIn sequence.']) assert.ok(part.shared.includes(text), text);
   assert.equal(part.shared.includes('### Part 1'), false, 'no other part is in the shared sections');
-  assert.equal(partOfOrder(THREE.replace('Waits for:   Part 1', 'Waits for: nothing.\n\nSolution: read the part.'), 2).section.endsWith('Solution: read the part.'), true, 'an edited part reads as edited');
+  assert.equal(partOfOrder(THREE.replace('Closes: the stops.', 'Closes: the stops.\n\nSolution: read the part.'), 2).section.endsWith('Solution: read the part.'), true, 'an edited part reads as edited');
   assert.equal(partOfOrder(THREE, 4), null);
   assert.equal(partOfOrder(null, 1), null, 'no document, no part');
 });

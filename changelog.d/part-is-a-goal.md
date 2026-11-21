@@ -15,15 +15,13 @@ section: Changed
   headless plan session, its prompt and its read checkouts are removed. Before,
   a plan session rewrote every part into a goal of about a thousand words, and
   the rewriting added contradictions that stopped builds.
-- **Each part says what it waits for.** A part carries one line, `Waits for:
-  nothing.` or `Waits for: Part 1, Part 3.`. `mc programs state <programme>
-  ready` writes the record's dependencies from those lines and refuses an
-  order where a line is missing, names a part the order does not have, or
-  waits in a circle. `mc programs after` is refused for such an order, and the
-  phases of a programme whose goals are parts are never renumbered. An order
-  that was ready before finishes the goals it has in their old form; a part of
-  it that has no goal is cut once the desk has added the lines and set it
-  ready again.
+- **A part waits for the part before it.** A part that holds the line `In
+  parallel with the previous part.` starts beside that part instead. `mc
+  programs state <programme> ready` writes the record's dependencies from
+  that, and the phases of a programme whose goals are parts are never
+  renumbered. An order that was ready before finishes the goals it has in
+  their old form; a part of it that has no goal is cut once the desk has set
+  it ready again.
 - **A build session on such a goal reads, decides and hands over.** It writes
   its reading of anything unclear in the log as a line beginning `Read as:`
   and builds on it; its `mc goal defect` is refused. Goals written before keep

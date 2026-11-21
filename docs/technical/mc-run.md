@@ -933,8 +933,7 @@ so a goal the cut makes is a candidate of that same pick. `programmeDue`
   `README.md`. A goal that names none, one made by hand or one cut from
   another document, means the programme is written by hand: nothing is cut,
   and the programme is silent (*Legacy goals*, below);
-- every part carries its `Waits for` line, and the record states what those
-  lines say (below);
+- the record states the order the parts give (below);
 - no open desk item of kind `programme` has the reference `programme:<p>`;
 - when the record names a horizon, that horizon reads `open`.
 
@@ -942,32 +941,22 @@ Otherwise nothing is cut. What the desk must do, a horizon that is missing or
 not open and a state file that is unreadable are each said once in
 `runner.log` while they last; a programme that simply is not due is silent.
 
-**What a part waits for.** Each part carries one line, `Waits for: nothing.` or
-`Waits for: Part 1, Part 3.`, read leniently on whitespace and the final full
-stop (`statedWaits`). `mc programs state <programme> ready` reads the lines and
-writes them as the record's `phases.after`, keyed by part number, in the write
-that sets the state; it refuses, exit 1 and nothing written, with one line per
-problem:
-
-```
-mc: Part 3 has no "Waits for" line — write "Waits for: nothing." or "Waits for: Part 1." in the part
-mc: Part 3 waits for Part 7, which the order does not have — name a part of the order
-mc: Part 2 and Part 3 wait for each other — one of them waits for nothing or for another part
-```
-
-`mc programs after` on an order whose every part has the line is refused, exit
-1: `mc: <programme> states its order in README.md — change the part's "Waits
-for" line and set it ready again`. The runner cuts only an order whose every
-part has the line and whose record states what the lines say. A ready order
-with a part that has no goal and no such lines is not cut, and the runner
-says `<programme>: its order has no "Waits for" lines — the desk adds them and
-sets it ready again`; where the lines are there and the record does not state
-them (an order set ready before the lines were written, or a line changed
-since), it says `<programme>: its record does not state what the "Waits for"
-lines of its order say — the desk sets it ready again`. An order that was
-ready before the cut became code finishes the goals it has in their old form;
-a part of it that has no goal is cut once the desk has added the lines and
-set it ready again.
+**What a part waits for.** A part waits for the part before it, unless it holds
+the line `In parallel with the previous part.` (read leniently on surrounding
+whitespace, letter case and the final full stop; a fenced example is no line).
+`partsOrder` walks the parts in ascending number and keeps a group: a part
+with the line joins the group of the part before it and waits for what that
+group waits for, any other part starts a new group and waits for every part of
+the group before it, and the first part waits for nothing. Parts 1, 2, 3
+(parallel) and 4 give `{"2": [1], "3": [1], "4": [2, 3]}`. There is no other
+dependency and nothing is refused. `mc programs state <programme> ready`
+writes this as the record's `phases.after`, keyed by part number, in the write
+that sets the state. Where the record does not state what the document now
+gives (an order set ready before, or a part or line changed since), the runner
+cuts nothing and says `<programme>: its record does not state the order its
+parts give — the desk sets it ready again`. An order that was ready before the
+cut became code finishes the goals it has in their old form; a part of it that
+has no goal is cut once the desk has set it ready again.
 
 **The goal.** `cutParts` makes, for each part with no goal, the goal's
 directory with its goal file and its log, through the functions every goal is
@@ -995,7 +984,7 @@ names, whatever the part says now. `mc goal show` prints the same text
 ([mc-goals.md](mc-goals.md#a-goal-that-is-a-part)).
 
 **Phases.** A goal's phase is its part's number, so the record's
-dependencies, written from the `Waits for` lines, hold a goal back until every
+dependencies, written by `mc programs state ready`, hold a goal back until every
 goal of each part it waits for is done, dropped or archived (`phaseOpen`). The
 phases of a programme that holds a goal that is a part are never renumbered
 (`partProgramme`): archiving the goal of Part 1 leaves Part 2 in phase 2.

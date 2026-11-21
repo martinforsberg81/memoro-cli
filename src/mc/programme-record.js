@@ -342,7 +342,7 @@ export function changePhases(dir, change, options = {}) {
  * The change to a record's `state`: draft, ready or done.
  * Validated and written whole and atomically (`write`), every other key as it was, in its place;
  * a record already in that state is not written again. An invalid record or none is never touched.
- * `options.after` is what the order's `Waits for` lines say (`statedWaits`, programme-turn.js): given, the same
+ * `options.after` is the order the parts of the document give (`partsOrder`, programme-turn.js): given, the same
  * write states the record's phases with it, so the state and the dependencies are one write.
  * Returns `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
  */

@@ -814,7 +814,7 @@ test('cacheTtlMs: claude follows the role, codex keeps its five minutes', () => 
 // runner cut is told is below.
 test('the prompts of a goal that is a part give the part under its heading line, and the build is told which section of its role applies; any other goal is briefed as before', () => {
   const args = { name: 'p/g', dir: '/goal', worktree: '/goal/repo', branch: 'goal/g' };
-  const brief = 'PART 2 — Two, as README.md has it now\n\n### Part 2 — Two\n\nWaits for: Part 1.\n\n# p\n\n## Order\n\nIn sequence.\n';
+  const brief = 'PART 2 — Two, as README.md has it now\n\n### Part 2 — Two\n\nSolution: the second thing.\n\n# p\n\n## Order\n\nIn sequence.\n';
   const lead = 'The goal is Part 2 of its programme\'s order and holds no text of its own. This is the part, and after it the order\'s sections outside its parts, as README.md has them now:\n\n';
   const role = 'Your goal is a part of an order: the section "A goal that is a part" of your role applies, and what the role says about criteria, obligations, evidence records and goal defects does not.';
   const build = goalPrompt({ ...args, brief, part: 2 });

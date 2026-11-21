@@ -789,7 +789,7 @@ export function renumberedAfter(after, number) {
 
 /**
  * Whether `programme`'s goals are parts of its order: one of them, live or archived, carries `part`. The phase of
- * such a goal is its part's number, which the order's `Waits for` lines name, so its programme's phases are never
+ * such a goal is its part's number, which the record's dependencies name, so its programme's phases are never
  * renumbered and may have holes.
  */
 export function partProgramme({ home, programme, list = listDirsOf, read = readTextOrNull }) {
