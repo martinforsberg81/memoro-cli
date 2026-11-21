@@ -16,7 +16,8 @@ Paths below are relative to this skill's directory. Do not preload the tree.
 - Before using `mc goal`, read [verbs/goal.md](verbs/goal.md).
   `mc <verb> --help` gives command syntax for other verbs.
 - A file shown or referred to Martin is a clickable link, never a bare path:
-  `http://mc-server.tail6983e4.ts.net:8080/<path under ~/mc/programs>`
+  `http://mc-server.tail6983e4.ts.net:8080/<path under ~/mc/programs>`, or
+  `…:8080/martin/<path>` for a file under `~/mc/martin/{designs,design-work,horizons,items,lessons}`
   (a markdown link whose text is the file name). In a Claude session a
   picture is also opened with the Read tool, which the Claude app shows in
   the conversation (a markdown image does not render there). A picture or evidence
