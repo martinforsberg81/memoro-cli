@@ -28,6 +28,10 @@ section: Changed
   its reading of anything unclear in the log as a line beginning `Read as:`
   and builds on it; its `mc goal defect` is refused. Goals written before keep
   every rule they had.
+- **The `plan` model list is gone with the session it routed.** `mc model`
+  lists, adds to and sets build, review, finish, mend, manager and decision. A
+  `models.json` that still holds a `plan` list reads as before; the list is
+  ignored and is not written back the next time `mc model` changes the file.
 - **A released repair order is not cut by code yet.** Its reconciliation
   compares authored goal contracts, which a goal that is a part does not have.
   The runner says `not cut: repair releases are cut by hand until

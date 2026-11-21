@@ -2,7 +2,7 @@
  * Antigravity CLI (`agy`) adapter — unattended and interactive sessions.
  *
  * agy is Google's coding CLI. mc launches it headless (the build, review,
- * finish, mend, plan, manager, intake and decision sessions) and
+ * finish, mend, manager, intake and decision sessions) and
  * in a person's terminal (`mc plan`, `mc martin`, the server's `mc session`).
  * An agy session lives in the terminal that started it: it has no daemon, no
  * remote client and no socket, so `PERSISTENT_DRIVER` is `terminal`, a server

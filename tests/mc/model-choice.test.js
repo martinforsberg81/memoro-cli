@@ -289,7 +289,7 @@ test('an unavailable plan may still use the provider API reserve', () => {
 });
 
 test('a list is the build list or a role list', () => {
-  assert.throws(() => choose(empty(), 'credits'), /"credits" is not a list — build, review, finish, mend, plan, manager/u);
+  assert.throws(() => choose(empty(), 'credits'), /"credits" is not a list — build, review, finish, mend, manager, decision/u);
 });
 
 test('a role list chooses within itself and never borrows a class', () => {
@@ -297,7 +297,6 @@ test('a role list chooses within itself and never borrows a class', () => {
   for (const [list, claudeSpec, codexSpec] of [
     ['finish', 'claude:opus:high', 'codex:gpt-6.2-sol:high'],
     ['mend', 'claude:opus:medium', 'codex:gpt-6.2-sol:high'],
-    ['plan', 'claude:opus:high', 'codex:gpt-6.2-sol:high'],
     ['manager', 'claude:opus:medium', 'codex:gpt-6.2-sol:medium'],
   ]) {
     assert.equal(chooseCandidate({ cls: list, catalog, capacity: empty(), now: NOW, priority: 'claude' }).spec, claudeSpec, `${list} bootstraps on its own claude candidate`);

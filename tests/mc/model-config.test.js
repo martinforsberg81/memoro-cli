@@ -91,7 +91,7 @@ test('mc model add and remove review change the list as they do build; set revie
 
     const unknown = await c.verb('add', 'slow', 'claude:opus:high');
     assert.equal(unknown.code, 2);
-    assert.match(unknown.err, /"slow" is not a list: add takes build, review, finish, mend, plan, manager/u);
+    assert.match(unknown.err, /"slow" is not a list: add takes build, review, finish, mend, manager, decision/u);
   } finally {
     c.done();
   }
@@ -103,10 +103,11 @@ test('a file without the role lists reads them as the defaults; mc model lists e
     const models = readModels(c.env);
     assert.deepEqual(models.finish, [{ tool: 'claude', model: 'opus', effort: 'high' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }]);
     assert.deepEqual(models.mend, [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }, { tool: 'claude', model: 'opus', effort: 'medium' }]);
-    assert.deepEqual(models.plan, [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }, { tool: 'claude', model: 'opus', effort: 'high' }]);
+    assert.equal(models.plan, undefined, 'the headless plan session is gone, and its list with it');
     assert.deepEqual(models.manager, [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'medium' }]);
     const listed = (await c.verb('list')).out;
-    for (const list of ['build', 'review', 'finish', 'mend', 'plan', 'manager']) assert.match(listed, new RegExp(`\\n${list}\\n {2}1 `, 'u'));
+    for (const list of ['build', 'review', 'finish', 'mend', 'manager']) assert.match(listed, new RegExp(`\\n${list}\\n {2}1 `, 'u'));
+    assert.doesNotMatch(listed, /\nplan\n/u);
     assert.equal(c.file().finish, undefined, 'reading writes nothing');
 
     const set = await c.verb('set', 'finish', 'codex:gpt-6.2-sol:high');
@@ -119,7 +120,7 @@ test('a file without the role lists reads them as the defaults; mc model lists e
     assert.deepEqual(c.file().manager.map((item) => item.model), ['gpt-6.2-sol', 'sonnet']);
     const classSet = await c.verb('set', 'build', 'claude:opus:high');
     assert.equal(classSet.code, 2);
-    assert.match(classSet.err, /mc model set review\|finish\|mend\|plan\|manager/u);
+    assert.match(classSet.err, /mc model set review\|finish\|mend\|manager\|decision/u);
   } finally {
     c.done();
   }
@@ -149,12 +150,14 @@ test('a catalog written with fast, medium and large reads build as its large lis
     assert.equal(added.code, 0, added.err);
     assert.deepEqual(c.file().build, [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }]);
     for (const key of ['fast', 'medium', 'large']) assert.equal(c.file()[key], undefined, `${key} is not written back`);
-    for (const key of ['review', 'finish', 'mend', 'plan', 'manager']) assert.deepEqual(c.file()[key], BEFORE_MEDIUM[key]);
+    for (const key of ['review', 'finish', 'mend', 'manager']) assert.deepEqual(c.file()[key], BEFORE_MEDIUM[key]);
+    // A file written while the headless plan session had a list still reads; the list is ignored and not written back.
+    assert.equal(c.file().plan, undefined);
     assert.equal((await c.verb('remove', 'build', 'claude:opus')).code, 0);
     assert.deepEqual(c.file().build.map((candidate) => candidate.model), ['gpt-6.2-sol']);
     const set = await c.verb('set', 'build', 'claude:opus:high');
     assert.equal(set.code, 2);
-    assert.match(set.err, /mc model set review\|finish\|mend\|plan\|manager/u);
+    assert.match(set.err, /mc model set review\|finish\|mend\|manager\|decision/u);
     assert.equal((await c.verb('add', 'fast', 'claude:opus:high')).code, 2, 'the retired classes are no lists');
   } finally { c.done(); }
 });

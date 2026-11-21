@@ -1,5 +1,5 @@
 /**
- * The candidate a list's session runs on (ruling 59) — `build` for a goal's build, or a role list (review, finish, mend, plan, manager) — decided from
+ * The candidate a list's session runs on (ruling 59) — `build` for a goal's build, or a role list (review, finish, mend, manager, decision) — decided from
  * the catalog and the local capacity snapshot alone.
  *
  * Pure: it reads no file, spends no model turn and writes nothing, and the one

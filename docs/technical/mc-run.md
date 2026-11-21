@@ -652,8 +652,7 @@ billing boundaries starts a cold cache context.
 A goal names no model and no class (Martin, 2026-11-21: the classes `fast`, `medium`
 and `large` are removed): its build sessions run on the catalog's one `build` list.
 Every other unattended role runs on its
-own catalog list: `review`, `finish` (a repair build), `mend`, `plan`
-(a list no session routes: the cut of a ready order is code), `manager` (an unattended manager turn
+own catalog list: `review`, `finish` (a repair build), `mend`, `manager` (an unattended manager turn
 without an explicit tool or model) and `decision` (desk items). A role list never borrows `build`'s
 candidates: with none of its own usable and its API off, the session waits
 (Martin, 2026-11-09). Interactive `mc plan` and `mc martin` keep their own
@@ -690,28 +689,27 @@ chosen, and review falls through to the next.
 written whole or not at all:
 
 - `mc model [list] [--json]` — the candidates of build, review, finish,
-  mend, plan, manager and decision, each a numbered list in catalog order, and whether
+  mend, manager and decision, each a numbered list in catalog order, and whether
   they come from the file or the defaults.
 - `mc model priority [auto|codex|claude]` — show or change the provider
   preference for unattended launches; an absent setting means `auto`.
 - `mc model add build|review <tool>:<model>:<effort>` — appends a candidate;
-  `add` takes finish, mend, plan, manager and decision as well.
+  `add` takes finish, mend, manager and decision as well.
 - `mc model remove build|review <tool>:<model>` — removes the candidate
   with exactly that tool and model; a list keeps at least one. `remove` takes
   every list as `add` does.
 - `mc model set review <tool>:<model>:<effort>` — replaces the whole review
-  list with that one candidate; `set` takes finish, mend, plan, manager and decision as
+  list with that one candidate; `set` takes finish, mend, manager and decision as
   well, never `build`.
 
 With no file, the defaults are: `build`, `codex:gpt-6.2-sol:high` then
 `claude:opus:high`; review, `agy:gemini-4-argon-high:high`, then
 `claude:opus:medium`, then `codex:gpt-6.2-sol:medium`; finish, `claude:opus:high` then
 `codex:gpt-6.2-sol:high`; mend, `codex:gpt-6.2-sol:high` then
-`claude:opus:medium`; plan, `codex:gpt-6.2-sol:high` then
-`claude:opus:high`; manager, `claude:opus:medium` then
+`claude:opus:medium`; manager, `claude:opus:medium` then
 `codex:gpt-6.2-sol:medium`; decision, `claude:opus:high` then
-`codex:gpt-6.2-sol:high`. A file without finish, mend, plan, manager or decision reads
-that list from the defaults; a file without `build` also reads its default. A file written with the retired classes `fast`, `medium` and `large` reads `build` as its `large` list (else `medium`, else `fast`) and is written back with `build` and none of them the first time `mc model` changes it.
+`codex:gpt-6.2-sol:high`. A file without finish, mend, manager or decision reads
+that list from the defaults; a file that still holds the `plan` list of the removed headless plan session reads, and the list is ignored and not written back; a file without `build` also reads its default. A file written with the retired classes `fast`, `medium` and `large` reads `build` as its `large` list (else `medium`, else `fast`) and is written back with `build` and none of them the first time `mc model` changes it.
 Missing defaulted lists are written back with every list the first time
 `mc model` changes it. A file whose
 `review` is one candidate object, as files were before review was a list, reads

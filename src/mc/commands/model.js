@@ -3,7 +3,7 @@
  *
  * It says which models a goal's build may run on (the build list),
  * and which ones each other unattended role runs on (review, finish, mend,
- * plan, manager, decision). It says nothing about capacity:
+ * manager, decision). It says nothing about capacity:
  * that is the routing's, and this verb does not poll anything.
  *
  *   mc model [list] [--json]                    the catalog, and whether it is the file's or the defaults
