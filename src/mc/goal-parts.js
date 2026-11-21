@@ -55,9 +55,12 @@ export const ID_LETTERS = Object.freeze(['B', 'P', 'D', 'C', 'V', 'R', 'X']);
 /** The keys of an obligation. */
 export const OBLIGATION_KEYS = Object.freeze(['area', 'stand', 'text', 'standard']);
 
-/** A version 2 GOAL.json's keys, in the order it is written. */
+/**
+ * A version 2 GOAL.json's keys, in the order it is written. `part` is there only on a goal that is a part of its
+ * programme's order (`programme-turn.js`, `cutParts`): the part's number. Such a goal holds no text of its own.
+ */
 export const GOAL_KEYS_V2 = Object.freeze([
-  'schema', 'version', 'stage', 'status', 'phase', 'repos', 'created', 'prs',
+  'schema', 'version', 'stage', 'status', 'phase', 'part', 'repos', 'created', 'prs',
   'title', 'aim', 'outcome', 'problem', 'premises', 'decisions', 'change', 'latitude', 'preserve', 'obligations', 'risks',
   'success_criteria', 'protection', 'out_of_scope', 'documents', 'ids',
 ]);

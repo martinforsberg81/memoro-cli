@@ -7,7 +7,7 @@ description: Designing a programme in mc — its README, decisions, phases and b
 A programme is thought through once, before its goals are written. Its design is read from one
 page, `~/mc/programs/<programme>/README.md`; a session that must ask about an unplanned decision
 means the programme was not designed. A recorded programme's document is written with
-[writing a programme document](writing-a-programme-document.md): it binds what the user gets, how it looks and how one sees that it works; the construction is the planner's and the builder's.
+[writing a programme document](writing-a-programme-document.md): it binds what the user gets, how it looks and how one sees that it works; the construction is the builder's.
 
 Every programme is a bounded implementation plan; enduring direction belongs to area pages.
 A recorded programme uses [the programme document](references/programme-document.md);
@@ -35,8 +35,8 @@ Use the supported manual route without a record, or the valid-record route when 
 
 ## Goal design
 
-1. For a recorded desk order, start the cut once the desk sets it ready. Cut fully investigated, measured and designed work into [goals](references/goal-design.md) headless sessions can build to the end. Settle decisions before writing the goal.
-2. Order by prerequisites and shared files. A programme whose record states its phases runs independent phases side by side: state a prerequisite, shared files included, with `mc programs after`. Elsewhere independent goals share a phase and dependent goals go later. In both a prerequisite is a phase dependency, never a note.
+1. A recorded desk order is cut by code once the desk sets it ready: one goal per part, built from the part as it stands. Elsewhere cut fully investigated, measured and designed work into [goals](references/goal-design.md) headless sessions can build to the end. Settle decisions before writing the goal.
+2. Order by prerequisites and shared files. In an order each part says it in one line, `Waits for: nothing.` or `Waits for: Part 1, Part 3.`, shared files included, and ready writes the record from those lines. A programme whose record states its phases without such lines runs independent phases side by side: state a prerequisite with `mc programs after`. Elsewhere independent goals share a phase and dependent goals go later. In both a prerequisite is a phase dependency, never a note.
 3. Move every complete goal to `build`; a draft is never started. A consumer needing a producer
    goes to `build` in a dependent phase, as [the plan role](../roles/plan-session.md) says.
 
@@ -51,4 +51,4 @@ Landed sections leave the README.
 
 Investigate until facts and remaining uncertainty are established. Separate technical gaps planning can resolve from what [asking-martin](asking-martin.md) names as his; the rest is decided and recorded. On clarification, amend the README/design, standards, briefs and criteria consistently; change only clarified scope and preserve other requirements/prerequisites unless Martin changes them. Deferring consumer features does not imply deferring provider, data or DPA prerequisites. Before handoff reconcile README, briefs, phases and actual stages; name remaining gaps. Do not hand unresolved prerequisites to build with a ceremonial LOG.md hold.
 
-The runner's programme planning turn cuts a ready order into goals in build under the same rules; see [the plan role](../roles/plan-session.md) and mc-run.md, Programme planning turn.
+Code cuts a ready order, with no session: the runner makes one goal in build for each part that has none; see mc-run.md, The cut of a ready order.

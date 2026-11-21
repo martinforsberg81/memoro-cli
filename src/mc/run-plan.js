@@ -297,19 +297,27 @@ export function intakeNote(turn) {
 
 /**
  * The goal as text (`renderGoalText`, what `mc goal show` prints), after a
- * prompt: the brief every session on a goal is given.
+ * prompt: the brief every session on a goal is given. For a goal that is a
+ * part of an order (`part`, its number) the brief is the part and the order's
+ * shared sections as README.md has them when the session starts (`partBrief`,
+ * programme-turn.js), and the prompt says so.
  */
-function withBrief(prompt, brief) {
-  return brief ? `${prompt}\n\nThe goal, as \`mc goal show\` renders it:\n\n${brief.trimEnd()}` : prompt;
+function withBrief(prompt, brief, part = null) {
+  if (!brief) return prompt;
+  if (part) return `${prompt}\n\nThe goal is Part ${part} of its programme's order and holds no text of its own. This is the part, and after it the order's sections outside its parts, as README.md has them now:\n\n${brief.trimEnd()}`;
+  return `${prompt}\n\nThe goal, as \`mc goal show\` renders it:\n\n${brief.trimEnd()}`;
 }
+
+/** What a build session on a goal that is a part is told about its role: which section of it applies, and what does not. */
+const PART_GOAL_ROLE_LINE = 'Your goal is a part of an order: the section "A goal that is a part" of your role applies, and what the role says about criteria, obligations, evidence records and goal defects does not.';
 
 /**
  * What a goal session is told: where the goal is and where it works, and the
  * goal itself (`brief`). The rest is the build role's
  * (`canon/roles/build-session.md`, its `goal` part).
  */
-export function goalPrompt({ name, dir, worktree, branch, brief = null }) {
-  return withBrief(`You are a session on the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; your worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`, brief);
+export function goalPrompt({ name, dir, worktree, branch, brief = null, part = null }) {
+  return withBrief(`You are a session on the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; your worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.${part ? ` ${PART_GOAL_ROLE_LINE}` : ''}`, brief, part);
 }
 
 /** The fixed-form lines relevant to a repair and its next review; old free-form reviews have no heads. */
@@ -332,7 +340,7 @@ export function goalRepairPrompt({ verdict, ...args }) {
  * request with the head it is to judge. The rest is `canon/roles/review-session.md`'s
  * (its `goal` part).
  */
-export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief = null, verdict = null, tripped = [], trippedError = null, seen = [], seenError = null, writeBack = false }) {
+export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief = null, part = null, verdict = null, tripped = [], trippedError = null, seen = [], seenError = null, writeBack = false }) {
   const { heads, failed } = priorVerdict(verdict);
   const prior = heads.length ? `\n\nThe previous review judged:\n${heads.join('\n')}\nIts NOT OK items:\n${failed.join('\n') || '(none)'}` : '';
   const areas = tripped.length
@@ -346,7 +354,7 @@ export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief 
     ? '\n\nThis goal\'s programme has a record, so REVIEW.md also holds one `write-back` line, beside the others: judge whether what the goal made true is written into the repository\'s `docs/technical/` pages (and the area pages), reading the pages at the head you judge. Write exactly one of:\n`write-back: OK — <repo>/docs/technical/<page>.md § <section>[, <repo>/docs/technical/<page>.md § <section>…]`   |   `write-back: OK — none — <reason>`   |   `write-back: NOT OK — <what the goal made true that no page says>`\nA NOT OK line sends the goal back to build; the line is judged anew each round, never carried.'
     : '';
   const unseen = seenError ? `\n\nThe areas judged as the user sees it could not be checked (${seenError}); no \`seen\` line is asked of this review.` : '';
-  return withBrief(`You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.${prior}${areas}${unread}${shown}${unseen}${written}`, brief);
+  return withBrief(`You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.${prior}${areas}${unread}${shown}${unseen}${written}`, brief, part);
 }
 
 /** The last word on a goal, for a prompt: the last entry's `Done` and `Comment`, joined. */
@@ -360,13 +368,13 @@ function lastWord(why) {
  * word on it, and where its worktree is. The rest is
  * `canon/roles/mend-session.md`'s.
  */
-export function goalMendPrompt({ name, dir, worktree, branch, stage, status = 'blocked', why = null, brief = null }) {
+export function goalMendPrompt({ name, dir, worktree, branch, stage, status = 'blocked', why = null, brief = null, part = null }) {
   const reason = lastWord(why);
   const task = `it is in merge${status === 'blocked' ? ' · blocked' : ''} and the merger did not land it: read LOG.md and the merger's red, resolve it in its worktree, gate, publish, and queue it again with mc goal stage merge`;
   return withBrief([
     `You mend the goal ${name}, headless — ${task}.${reason ? ` The last word on it: ${reason}.` : ''}`,
     `Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,
-  ].join('\n'), brief);
+  ].join('\n'), brief, part);
 }
 
 /** `checkInPrompt` for a goal's mend session. */
@@ -378,27 +386,6 @@ export function goalMendCheckInPrompt({ minutes, count }) {
     'Your job is the merge failure: diagnose it, resolve it within the contract, and requeue the merge with `mc goal stage merge`. Preserve acceptance and gate requirements.',
     'Mend is merge recovery only. Resolve merge failures within the contract, or ask directly with `mc ask` for a choice the contract does not settle or for a reserved act; continue when jev answers, otherwise wait on Martin.',
   ].join('\n');
-}
-
-/**
- * What the headless programme turn is told (mc-run.md, "Programme planning
- * turn"): the programme to cut, its signed document, the commands that read it, and the
- * read checkouts of the served repositories. The rest is the plan role's
- * headless programme-turn section. `checkouts` is `{ repo: path }`; `horizon`
- * is the slug the record names, or null.
- */
-export function programmePlanPrompt({ programme, dir, horizon = null, repos = [], checkouts = {}, released = null, revision = null }) {
-  const read = Object.entries(checkouts).map(([repo, path]) => `${repo}: \`${path}\``).join('; ') || '(none)';
-  const horizonLine = horizon ? ` Its record names the horizon ${horizon}: read it with \`mc martin horizon show ${horizon}\`.` : '';
-  const areas = repos.length ? ` Read the rule areas of each repository with \`mc goal areas <repo>\` (${repos.join(', ')}).` : '';
-  const order = released ? `The fixed programme inputs for repair release ${revision} are in \`${released}\`. Read those files, not the live inputs. The goals' part documents still point at \`${dir}/README.md\`.` : `Read \`${dir}/README.md\`.`;
-  const past = released ? `Check every existing goal contract against this release. Keep matching goals. For changed unfinished goals update the contract through validated goal verbs, take back criterion marks and return any review goal to build. Return unfinished merge goals to build even if their contract matched: the prior handoff cannot land under this release. Retire unfinished work for removed parts and retain landed goals as evidence (cut a separate goal for any further correction). Before ending record reconciliation with \`mc programs reconcile ${programme} --reason "<what was compared and changed>"\`.` : 'Where goals already exist from an earlier cut, compare them with README.md: a part unchanged since then keeps its goals; for a changed part a goal not yet in build is rewritten and moved to build, and a goal already built gets a new goal for the difference. A draft left by an earlier turn is finished the same way.';
-  return `You are the headless plan session: cut programme ${programme} from README.md, with nobody present. Its directory is \`${dir}\`; read \`mc programs show ${programme}\` first. ${order}${horizonLine}${areas} Read checkouts of the served repositories, detached at origin/main, are ${read}; read code there and change nothing in them. The turn is short. Cut one goal per part, in the Order's sequence as phases: its problem, change, intended result and criteria are taken from that part's Closes, Solution, Design and Proved by; its outcome is what is true once the Closes line no longer holds, in the words of the Solution and Design, never the Closes line itself; and each goal names its part by a document that points at README.md and is labelled with \`Part <n>\`. Add nothing about what is delivered or how it looks: no solution, design or decision of your own there, no investigation and no proposal; the construction is the builder's. ${past} Create each goal through the mc verbs, write its stand on every rule area with \`mc goal obligation set\` (saying only what the part says), and move it to build with \`mc goal stage <programme>/<goal> build\`: every goal of the cut is in build when you end, and a goal left in draft fails the turn. A goal that waits for another is held by its phase alone: state a stated programme's dependencies with \`mc programs after\`. You do not verify the acceptance setup; the build session does, in its own worktree. Where a part leaves open a choice of what is delivered or how it looks that the document neither shows nor routes, do not make it: leave it at the desk with \`mc martin propose --text ${programme}/README.md --file <brief>\`, and end. A question that is not such a choice goes through goal-bound \`mc ask\` on the goal that needs it. Do not implement a goal, process proposals or commit. Your plan role's headless programme-turn section says the rest.`;
-}
-
-/** `checkInPrompt` for the programme turn: the same judgement as a plan session's, over every goal the turn cuts. */
-export function programmePlanCheckInPrompt({ minutes, count }) {
-  return `Programme planning check-in after ${minutes} minutes (${count}). Keep cutting README.md: one or more goals per part, each naming its part, its change, criteria and protection copied from that part's Solution, Design and Proved by. Write each goal's stand on every rule area and move it to build: a goal left in draft fails the turn. A part unchanged since an earlier cut keeps its goals. Add nothing the part does not say. Do not implement, process proposals or commit.`;
 }
 
 /** `checkInPrompt` for the manager's turns (mc-run.md, "Manager turns"): keep to the turn's one task and end in one of its endings. */

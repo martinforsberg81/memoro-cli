@@ -13,10 +13,10 @@ import { archiveStatePath } from './archive-turn.js';
 export function decisionEligible(item) {
   return item?.state === 'new' || item?.state === 'prepared';
 }
-/** What a programme item adds: the programme's directory and the planning turn's state file, where its failures are kept. */
+/** What a programme item adds: the programme's directory and the cut's state file, where its failures are kept. */
 function programmeLine(item, env) {
   const programme = item.reference.slice('programme:'.length);
-  return `Programme: ${programme}. Programme directory: ${join(programsHome(env), programme)}. The planning turn's failures are in ${turnStatePath(workRoot(env), programme)}; read them and each session log they name. Repair what failed within your reach, then close --by decision so the runner plans the programme again. A text of Martin's that would have to change goes to a brief instead.\n`;
+  return `Programme: ${programme}. Programme directory: ${join(programsHome(env), programme)}. The failures of its cut into goals are in ${turnStatePath(workRoot(env), programme)}; read them. Repair what failed within your reach, then close --by decision so the runner cuts the programme again. A text of Martin's that would have to change goes to a brief instead.\n`;
 }
 
 /** What an archive item adds: the programme's directory and the archive turn's state file. */

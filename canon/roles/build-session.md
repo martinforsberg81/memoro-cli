@@ -143,6 +143,37 @@ You never change the goal's text, and never edit `GOAL.json` by hand: the
 criterion verbs are yours. You never start the runner or open another goal's
 worktree.
 
+## A goal that is a part
+
+When the prompt says your goal is a part of an order, the goal holds no text
+of its own: the prompt gives the part as README.md has it now, and after it
+the order's sections outside its parts. This section then replaces what this
+role says about criteria, obligations, evidence records and goal defects; the
+rest of the role applies as written.
+
+Read the whole part and `LOG.md` first. Where the part is unclear, contradicts
+itself or contradicts the code, choose the reading that gives the user what
+Closes, Solution and Design describe, write it in the log as a line beginning
+`Read as:`, and build on it. You report no goal defect: mc refuses `mc goal
+defect` from a build session on such a goal.
+
+Build until the part is done. Then commit everything, run what Proved by names
+once at the head you publish, publish with `mc publish --no-merge`, and write
+the handover entry with `mc goal log … --stage review`, which moves the goal
+to review:
+
+```
+Done: Part <n> built and published at <sha>.
+Comment: Proved: <the Proved by sentence it answers> — <command> — <result>
+Read as: <what was unclear> — <the reading built>
+Next: Review.
+```
+
+The move asks only for a clean worktree in every repository of the goal and a
+published head. A session that ends earlier logs what is done and what remains
+for the next one. In a repair, repair each rejected line of `REVIEW.md` and
+every other place in your change that has the same fault.
+
 ## Test implementation
 
 Implement the protection commissioned in the goal and extend existing approved

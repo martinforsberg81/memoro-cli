@@ -35,12 +35,11 @@ branch (the reason goes into the mend prompt), or `drop --reason "<text>"` to
 end it. `mc martin item <id> close` is refused while the entry still reads
 Martin; once you have answered, the close succeeds.
 
-A programme item is a planning turn that failed twice: the programme holds a
-valid signed open record and its page, whose signature no goal cut. Read its state file and each session
-log it names (the prompt gives both paths). Repair what failed within your reach,
-such as a retained read checkout, a stale lock or a page the turn could not read,
-then close it with `mc martin item <id> close --by decision --summary …` so the
-runner plans the programme again. A text of Martin's that would have to change
+A programme item is a cut that failed twice: the runner could not make a goal
+for every part of a ready order. Read its state file (the prompt gives the
+path). Repair what failed within your reach, such as a stale lock or a page the
+cut could not read, then close it with `mc martin item <id> close --by decision
+--summary …` so the runner cuts the programme again. A text of Martin's that would have to change
 goes to a brief instead; do not edit the page's End yourself.
 
 ## Decide here

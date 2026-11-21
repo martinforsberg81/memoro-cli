@@ -266,7 +266,7 @@ function dayLine(lines, c, wide, day) {
   const kinds = day.by_kind || {};
   const dot = { text: ' · ', styles: ['grey'] };
   const parts = [{ text: '24 h', styles: ['grey'] }];
-  // `plan` includes historical sessions and the programme planning turn.
+  // `plan` is historical sessions: the runner starts none.
   // A kind that is not always running (repair, finish, mend, plan) prints only when the day has one.
   for (const kind of ['build', 'review', 'repair', 'finish', 'mend', 'plan']) {
     const counted = kinds[kind];

@@ -4,9 +4,9 @@
  * The runner starts goal sessions: a free lane takes the next goal that could
  * start on any repository (`nextWork`, `pickWork` in lane-pick.js) — a build
  * session on an open goal (a repair after a rejection), a review session on a goal in review, or the mend session a merge failure wakes — runs it, and picks again. One session is one fresh headless
- * process in the goal's worktree. A draft gets no session: the programme
- * planning turn cuts a ready programme into goals and moves each to build
- * (Martin, 2026-11-21). The runner decides
+ * process in the goal's worktree. A draft gets no session, and no session
+ * plans: the runner itself cuts a ready order into one goal per part
+ * (`cutOrders`; Martin, 2026-11-21). The runner decides
  * nothing with a model: it reads files, runs git and gh, starts the session
  * through the launch adapter and waits for it. It is the parent of the
  * process it starts.
@@ -71,7 +71,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addBranchWorktree, addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, BUILD_SESSION, BUILD_SESSION_LIMIT, BUILD_SESSION_STOP, buildSessionCount, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, WAITS_FOR_MAIN, PLAN_ROLE, PROGRESS_AGAIN, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addBranchWorktree, addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, BUILD_SESSION, BUILD_SESSION_LIMIT, BUILD_SESSION_STOP, buildSessionCount, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, WAITS_FOR_MAIN, PROGRESS_AGAIN, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainingOwners, drainState, drainWaiting, fullRunWords, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -83,6 +83,7 @@ import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
 import { readRecord } from './programme-record.js';
 import { repairGoalAdmission } from './repair-reconcile.js';
+import { programmeRepositories } from './programme-review.js';
 import { repairMergeBinding } from './repair-delivery.js';
 import { RUNNER_DISK, RUNNER_MEMORY, planAreaName, programsHome, restrictedProgrammeDir, runnerDir, runnerScratchDir, workRoot } from './paths.js';
 import { archiveGoal, finalizeDroppedGoal, goalArchiveDue } from './goal-archive.js';
@@ -113,7 +114,7 @@ import { archiveProgramme } from './archive-programme.js';
 import { AREAS_HOME, FALLBACK_AREAS, keyProposalsDir, pageAreaOf } from './area-proposals.js';
 import { runDocsMerge } from './docs-merge.js';
 import { releaseWorkArea } from './work-area.js';
-import { finishTurn, goalCount, programmeDirs, programmeDue, readTurnState, recordTurnFailure, removeReadCheckouts, setUpReadCheckouts, turnName } from './programme-turn.js';
+import { cutParts, orderText, partBrief, partLeftWords, partOfOrder, programmeDirs, programmeDue, readTurnState, recordTurnFailure, turnName } from './programme-turn.js';
 import { runLearningPass } from './desk-learning.js';
 import { reconcileLessons } from './desk-lessons.js';
 import { reconcileAreaLearning } from './learning-publication.js';
@@ -139,7 +140,7 @@ import { SCRATCH_MARKER, SCRATCH_SCHEMA } from './tidy.js';
 import { dockerStep, tidyStep } from './disk-admission.js';
 import {
   DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, RESULT_GRACE_MS, TIMEOUT_EXIT,
-  BUILD_ROLES, collectNote, goalCheckInPrompt, goalMendCheckInPrompt, goalMendPrompt, goalPrompt, managerCheckInPrompt, programmePlanCheckInPrompt, programmePlanPrompt, goalRepairPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
+  BUILD_ROLES, collectNote, goalCheckInPrompt, goalMendCheckInPrompt, goalMendPrompt, goalPrompt, managerCheckInPrompt, goalRepairPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
   readSessionOutput, sessionResult, routedSettings, streamSummary, describeSettings, describeWatch, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
@@ -184,7 +185,7 @@ const CAPACITY_READERS = Object.freeze({
 });
 
 /** The role each goal session kind runs with (`goalSession`). */
-const GOAL_ROLES = Object.freeze({ plan: PLAN_ROLE, build: BUILD_ROLES.goal, repair: BUILD_ROLES.goal, review: REVIEW_ROLE, mend: MEND_ROLE });
+const GOAL_ROLES = Object.freeze({ build: BUILD_ROLES.goal, repair: BUILD_ROLES.goal, review: REVIEW_ROLE, mend: MEND_ROLE });
 const NO_REVIEW_PR = 'in review without an open pull request';
 
 /*
@@ -1685,7 +1686,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * The session a goal gets (`goalSession`): `mend` only for unqueued merge failures,
    * `review` in review, in build a `repair` after a rejection and else `build`. Only a candidate of
    * `goalWork` comes here, so the merger's line is not asked again. A draft
-   * has no session (null): the programme planning turn finishes it.
+   * has no session (null): it is its writer's to finish.
    */
   function goalKind(goal) {
     if (goal.stage === 'draft') return null;
@@ -1861,168 +1862,55 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     }
   }
 
-  /* ------------------------------------------------- programme planning turn */
+  /* ------------------------------------------------- the cut of a ready order */
 
-  /** `programme`: its notice, said once while it lasts (an unreadable state file, a horizon that is not open). */
+  /** `programme`: its notice, said once while it lasts (no `Waits for` lines, an unreadable state file, a horizon that is not open). */
   const turnSaid = new Map();
   const turnItems = () => { try { return deps.deskItems?.list() || []; } catch { return []; } };
-  /** A draft held (`mc goal hold`) or under a live decision claim is its holder's: it neither calls the turn back nor fails it. */
-  const draftUnavailable = ({ dir }) => Boolean(readHold(dir, deps.read)) || decisionClaimed(join(dir, '.decision.json'));
-  /** Whether `programme` is due a planning turn now (D3), read through the runner's own list and read. */
+  /** Whether `programme` is due the cut now, read through the runner's own list and read. */
   function turnDue(programme, items = turnItems()) {
     const state = readTurnState({ root, programme, read: deps.read });
-    return programmeDue({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, items, horizon: slug => deps.horizon?.(slug) ?? null, state, unavailable: draftUnavailable });
+    return programmeDue({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, items, horizon: slug => deps.horizon?.(slug) ?? null, state });
   }
-  function programmeWork(names, passed = new Set()) {
-    if (!names.length) return [];
-    const held = new Set([...claims, ...stepsHeld().map(x => x.name)]);
+  /** A cut that could not be made, counted under the lock; one that cannot be written is said. */
+  function countTurnFailure(programme, reason) {
+    try {
+      const failed = recordTurnFailure({ root, programme, reason, log: null, at: stamp(), env: deps.env, read: deps.read, write: deps.write, writeJson, lock, itemDirectory });
+      if (failed.item) say(`${turnName(programme)}: the cut failed ${failed.count} times — desk item ${failed.item.id} (${failed.item.state}) opened`);
+      return failed;
+    } catch (error) { say(`${turnName(programme)}: the failure was not counted — ${error.message || String(error)}`); return null; }
+  }
+  /**
+   * Every ready order with a part no goal names is cut here, by code: one goal per such part, in `build · ready`
+   * (`cutParts`, programme-turn.js). No session, no model, no lane and no `runs.tsv` row: the pick that follows reads
+   * the new goals with every other goal. The cut is made under the runner lock, on a second reading of what is due.
+   */
+  function cutOrders() {
     const items = turnItems();
     const home = programsHome(deps.env);
-    return programmeDirs({ home, list: deps.list }).flatMap(programme => {
+    const known = repos.map((repo) => ({ repo: repo.name, path: repo.path }));
+    for (const programme of programmeDirs({ home, list: deps.list })) {
       const name = turnName(programme);
-      if (passed.has(name) || held.has(name)) return [];
       const due = turnDue(programme, items);
       if (due.notice) {
         if (turnSaid.get(programme) !== due.notice) { say(due.notice); turnSaid.set(programme, due.notice); }
       } else turnSaid.delete(programme);
-      if (!due.due) return [];
-      return [{ name, repo: names[0], kind: 'plan', variant: null, since: due.record.created, resumed: false,
-        programmeTurn: { record: due.record }, programme, priority: readProgrammePriority(programme, { home, read: deps.read }) }];
-    });
-  }
-  async function programmePass(item, { lane }) {
-    const { name, repo: repoName } = item;
-    const claimed = lock(root, () => {
-      if (claims.has(name) || stepsHeld().some(x => x.name === name)) return false;
-      claims.add(name); claimRepos.set(name, repoName);
-      return true;
-    }, { strict: true, name: 'programme-claim' });
-    if (!claimed) return { ran: 0 };
-    try {
-      const outcome = await runProgramme(item, { lane });
-      if (outcome === 'stop') return { ran: 0, stop: true };
-      if (outcome === 'skipped:disk' || outcome === 'skipped:disk-busy') return { ran: 0, waited: outcome };
-      return outcome === 'ran' ? { ran: 1, name, goal: false } : { ran: 0, reason: outcome };
-    } finally { claims.delete(name); claimRepos.delete(name); }
-  }
-  /** A failure of the turn, counted under the lock (D6); one that cannot be written is said, never a missing run row. */
-  function countTurnFailure(programme, reason, log) {
-    try {
-      const failed = recordTurnFailure({ root, programme, reason, log, at: stamp(), env: deps.env, read: deps.read, write: deps.write, writeJson, lock, itemDirectory });
-      if (failed.item) say(`${turnName(programme)}: planning failed ${failed.count} times — desk item ${failed.item.id} (${failed.item.state}) opened`);
-      return failed;
-    } catch (error) { say(`${turnName(programme)}: the failure was not counted — ${error.message || String(error)}`); return null; }
-  }
-  const retainedSaid = new Set();
-  async function runProgramme(item, { lane }) {
-    const { name, repo: repoName, programme } = item;
-    const dir = join(programsHome(deps.env), programme);
-    const roleName = GOAL_ROLES.plan;
-    const role = deps.role(roleName);
-    if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
-    // The programme turn carries README.md over into goals: simple work, on the plan list (Martin, 2026-11-16).
-    const route = routeClass('plan');
-    if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
-    const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
-    const launch = deps.launch(settings.tool);
-    if (!launch?.ok) { say(`${name}: ${settings.tool} is not available on this machine (${launch?.hint || launch?.reason}), skip`); return 'skipped:tool-missing'; }
-    const slot = await waitForSlot(name, { repo: repoName, lane });
-    if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
-    if (slot !== 'ok') { say(`${name}: UPDATE while waiting for a lane — starting no session, skip`); return 'skipped:update'; }
-    let admission; let scratch; let marker; let result; let set = null;
-    const currentPath = paths.currentFor(repoName, lane);
-    try {
-      const picked = await billingFor(launch, route, settings.model);
-      if (picked.billing === 'unavailable') { return noCapacity(name, picked.why); }
-      admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
-      if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
-      if (offlineHeld()) { say(`${name}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
-      // Read again after admission: a goal cut, a record changed or an item opened meanwhile leaves nothing to plan (D3).
-      const due = turnDue(programme);
-      if (!due.due) { say(`${name}: programme changed during admission — planning deferred (${due.reason})`); return 'skipped:programme-changed'; }
-      set = setUpReadCheckouts({ git: deps.git, root, programme, repos, exists: deps.exists });
-      if (!set.ok) {
-        const refused = set;
-        set = null;
-        // A fetch that fails is the network's, not the programme's: nothing is counted.
-        if (refused.fetch) { say(`${name}: ${refused.reason} — skip`); return 'skipped:fetch'; }
-        if (!retainedSaid.has(refused.reason)) { retainedSaid.add(refused.reason); say(`${name}: no session started — ${refused.reason}`); }
-        countTurnFailure(programme, refused.reason, null);
-        return 'skipped:setup';
-      }
-      const rechecked = await admission.recheck?.();
-      if (rechecked && !rechecked.admitted) return 'skipped:disk';
-      if (stopRequested()) return 'stop';
-      if (updateRequested()) return 'skipped:update';
-      if (due.revision && turnDue(programme).revision !== due.revision) return 'skipped:programme-changed';
-      const stem = `programme-${programme}-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;
-      const out = join(paths.log, stem);
-      scratch = join(paths.scratch, stem);
-      marker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind: 'plan', stem, started: stamp() };
-      deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
-      const released = due.revision ? join(scratch, 'released-order') : null;
-      if (released) for (const { path, bytes } of due.snapshot.files) deps.write(join(released, path), bytes);
-      const prompt = programmePlanPrompt({ programme, dir, horizon: due.record.horizon, repos: repos.map(repo => repo.name), checkouts: set.paths, released, revision: due.revision });
-      const instructions = instructionsFor(launch.id, role.overlay);
-      const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
-      const current = { name, step: null, kind: 'plan', variant: null, programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
-        effort: settings.effort, advisor: settings.advisor, class: 'plan', billing: picked.billing,
-        check_in_minutes: requireCapability(launch.id, 'WATCH')?.checkIn ? settings.checkInMinutes : null, check_ins: 0, started: stamp(), pid, worktree: dir,
-        ...(due.revision ? { repair_revision: due.revision } : {}),
-        ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
-        role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
-      writeJson(currentPath, current);
-      say(`${name}: plan starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · plan list: ${route.basis} (${route.why})`);
-      const t0 = deps.now().getTime();
-      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing, runnerAdmission: true });
+      if (!due.due) continue;
+      let outcome;
       try {
-        const pending = runnerSession(tool, { cwd: dir, logPath: `${out}.jsonl`,
-          onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
-          ...watchFor(launch, settings, { prompt, name, checkInText: programmePlanCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
-          // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). No MC_GOAL: this session is the programme's, not a goal's.
-          env: { MC_HEADLESS: '1', MC_ROLE: roleName, MC_PROGRAMME: programme, MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch,
-            ...(due.revision ? { MC_REPAIR_REVISION: due.revision } : {}) },
-          unsetEnv: ['MC_GOAL', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', ...dropEnv(launch)] });
-        admission.release?.();
-        result = await pending;
-      } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
-      writeSessionLogs(out, result);
-      const refusal = gatewayRefusal(tool, result);
-      if (refusal) {
-        return recordReserveWait(refusal, { name, kind: 'plan', settings, result, t0 });
-      }
-      const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
-      noteWindows({ name, launch }, result.stdout || '');
-      noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
-      recordRefusal({ name, launch, route }, read, picked.billing);
-      refuseProvider(read, launch, picked.billing, settings.model);
-      const seconds = Math.round((deps.now().getTime() - t0) / 1000);
-      const count = goalCount({ home: programsHome(deps.env), programme, list: deps.list });
-      // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
-      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
-      const ended = finishTurn({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, write: deps.write, lock, root, revision: due.revision, unavailable: draftUnavailable });
-      let note = `${read.note},${count} goal${count === 1 ? '' : 's'}`;
-      if (ended.kind === 'cut') note = `${note},cut`;
-      else if (ended.kind === 'settled') note = `${note},not cut (${ended.problems.join('; ')})`;
-      else if (!providerEnding) {
-        const reason = `planning session exited ${result.status ?? 1} without every part of README.md cut into a goal in build (${ended.problems.join('; ')}; ${read.note})`;
-        countTurnFailure(programme, reason, `${out}.jsonl`);
-        note = reason;
-      }
-      logRun({ ...read, ts: stamp(), name, kind: 'plan', exit: result.status, seconds, pr: '-', note, model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing });
-      say(`${name}: plan done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
-      return 'ran';
-    } finally {
-      remove(currentPath);
-      try {
-        if (scratch) { writeJson(join(scratch, SCRATCH_MARKER), { ...marker, ended: stamp(), exit: result?.status ?? null }); await reclaimSessionExports(scratch, name); }
-      } finally {
-        try {
-          if (set?.ok) {
-            const kept = removeReadCheckouts({ git: deps.git, root, programme, repos, exists: deps.exists });
-            for (const path of kept) say(`${name}: read checkout ${path} holds work and was kept`);
-          }
-        } finally { admission?.release?.(); dropSlot(); }
+        outcome = lock(root, () => {
+          if (!turnDue(programme, items).due) return { made: [] };
+          try {
+            return { made: cutParts({ programme, home, list: deps.list, read: deps.read, write: deps.write, repositories: (text) => programmeRepositories(text, known), now: deps.now() }) };
+          } catch (error) { return { failed: error.message || String(error) }; }
+        }, { strict: true, name: 'programme-cut' });
+      } catch (error) { say(`${name}: not cut now — ${error.message || String(error)}`); continue; }
+      if (outcome.failed) {
+        const reason = `the cut could not be made: ${outcome.failed}`;
+        say(`${name}: ${reason}`);
+        countTurnFailure(programme, reason);
+      } else if (outcome.made.length) {
+        say(`${name}: cut — ${outcome.made.map((goal) => `Part ${goal.part} is ${programme}/${goal.name}`).join(', ')}, in build · ready`);
       }
     }
   }
@@ -2127,6 +2015,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /* ------------------------------------------------------------ manager turns */
 
+  /** The worktrees a manager turn kept, each said once. */
+  const retainedSaid = new Set();
   /** A notice, said once while it lasts: the key is its place, the text is replaced when it changes and dropped when it stops. */
   const managerSaid = new Map();
   function sayManager(notices) {
@@ -2652,6 +2542,15 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const key = `order:${repair || goal.programme}`;
       if (holdsSaid.get(name) !== key) {
         say(`${name}: ${repair || `${goal.programme} is draft`} — no session is started`);
+        holdsSaid.set(name, key);
+      }
+      return true;
+    }
+    // A goal that is a part of an order is built from its part: one whose part is no longer a heading of the order starts no session.
+    if (goal.part !== undefined && !FINISHED.includes(goal.stage) && !partOfOrder(orderText({ home: programsHome(deps.env), programme: goal.programme, read: deps.read }), goal.part)) {
+      const key = `part:${goal.part}`;
+      if (holdsSaid.get(name) !== key) {
+        say(`${name}: ${partLeftWords(goal.part)} — no session is started`);
         holdsSaid.set(name, key);
       }
       return true;
@@ -3309,9 +3208,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const writeBack = review && goal.version === 2 && readRecord(join(programsHome(deps.env), goal.programme), { read: (path) => deps.read(path) }).status === 'valid';
       const attached = await deps.attachDeps(worktree);
       if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
-      // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
-      const brief = goal.title ? renderGoalText(goalOfRecord(goal)) : null;
-      const told = { name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief };
+      // The brief is the goal as `mc goal show` renders it; a record from a test without one has none. A goal that is a
+      // part of an order holds no text: its brief is the part and the order's shared sections as the document has them
+      // at this moment (the released snapshot of a repair programme, else README.md), read anew for every session.
+      const part = goal.part === undefined ? null : partOfOrder(release?.snapshot ? release.snapshot.text : orderText({ home: programsHome(deps.env), programme: goal.programme, read: deps.read }), goal.part);
+      if (goal.part !== undefined && !part) return 'skipped:held';
+      const brief = part ? partBrief(part) : goal.title ? renderGoalText(goalOfRecord(goal)) : null;
+      const told = { name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief, part: part?.number ?? null };
       const prompt = review
         ? goalReviewPrompt({ ...told, pr: pr.number, head: pr.head, verdict: goal.verdict, tripped: found.tripped ?? [], trippedError: found.error ?? null, seen: judged.seen ?? [], seenError: judged.error ?? null, writeBack })
         : repair
@@ -3557,11 +3460,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function nextWork({ repo = null, passed = new Set(), waited = new Map(), carry = null } = {}) {
     const others = stepsHeld().filter((held) => held.other);
     const names = (repo ? [repo] : repos.map((item) => item.name)).filter((name) => !waited.has(name));
-    const items = [...goalWork({ repos: names, passed }), ...mainMendWork(names, passed), ...deployMendWork(names, passed), ...decisionWork(names, passed), ...programmeWork(names, passed), ...archiveWork(names, passed), ...managerWork(names, passed)];
+    // A ready order is cut before the goals are read, so a goal the cut makes is a candidate of this same pick.
+    cutOrders();
+    const items = [...goalWork({ repos: names, passed }), ...mainMendWork(names, passed), ...deployMendWork(names, passed), ...decisionWork(names, passed), ...archiveWork(names, passed), ...managerWork(names, passed)];
     const held = [...claimRepos.values(), ...others.map((item) => item.repo)].filter(Boolean);
     const priorities = new Map();
     for (const item of items) {
-      if (item.mainMend || item.decision || item.deployMend || item.programmeTurn || item.archiveTurn || item.managerTurn) continue;
+      if (item.mainMend || item.decision || item.deployMend || item.archiveTurn || item.managerTurn) continue;
       const programme = item.goal.programme;
       if (!priorities.has(programme)) priorities.set(programme, readProgrammePriority(programme, { home: programsHome(deps.env), read: deps.read }));
       item.priority = priorities.get(programme);
@@ -3668,8 +3573,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       say(`${label}: next — ${pick.name} (${pick.variant ? `${pick.kind} ${pick.variant}` : pick.kind})`);
       const ran = pick.decision
         ? await decisionPass(pick, { lane })
-        : pick.programmeTurn
-        ? await programmePass(pick, { lane })
         : pick.archiveTurn
         ? await archivePass(pick, { lane })
         : pick.managerTurn

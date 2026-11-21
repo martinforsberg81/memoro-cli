@@ -28,8 +28,7 @@ not a migration. `src/mc/commands/layout.js` and `src/mc/paths.js` supply it.
 ~/mc/runner/
   deps/<name>/<repo>/               dependency-update worktrees
   log/  merges.json  register.lock  runner and merger records
-  programme-turn/<programme>.json   a programme planning turn's failures and items
-  work/programme-turn-<programme>/<repo>/   its read checkouts, detached at origin/main
+  programme-turn/<programme>.json   the failures and items of a programme's cut into goals
 ~/mc/martin/items/<id>/              durable Martin desk records (outside programmes)
 ~/mc/martin/horizons/<slug>/        the horizons the desk holds, each with its playback
 ~/mc/archive/programs/              programmes archived by the person

@@ -3,8 +3,8 @@
 The complete document of a programme with a record, except an area repair
 ([repair page](repair-page.md)). `mc programs create` fills in the name, End,
 horizon and purpose in the first fenced block below. A programme is written with
-Martin in a session, he sets it ready there, and the planner cuts goals from its
-README. [Designing a programme](../designing-a-programme.md) owns the design
+Martin in a session, he sets it ready there, and code cuts one goal per part of
+its README. [Designing a programme](../designing-a-programme.md) owns the design
 procedure. A programme without a record has [the older page](programme-readme.md).
 
 ```markdown
@@ -35,6 +35,8 @@ the revision read. Attribute any finding drawn from a reader's report.>
 
 ### Part 1 — <name>
 
+Waits for: nothing.
+
 Closes: <The gap or gaps.>
 
 Solution: <What the user does and what happens, including relevant existing
@@ -47,8 +49,7 @@ otherwise “nothing a user sees”.>
 
 Proved by: <What would fail if the behaviour were wrong and how to check it.
 Name the workspace, prerequisites and usable data or fixtures. For tests,
-name the fault and existing test file. State any new test area explicitly
-for a planning decision.>
+name the fault and existing test file. State any new test area explicitly.>
 
 Not in this part: <The nearest thing a builder might add.>
 
@@ -81,11 +82,12 @@ rules belong in docs/technical/ and lasting direction on the area page; point th
 instead of repeating them. Nothing here outlives the programme.>
 ```
 
-Repeat `### Part n — <name>` for each piece of work: the planner cuts one or
-more goals per part, each naming its part. Code checks none of these headings;
-Martin judges what the document says. The document binds what the user gets,
-how it looks and how one sees that it works; the construction is the planner's
-and the builder's ([writing a programme document](../writing-a-programme-document.md)).
+Repeat `### Part n — <name>` for each piece of work: code cuts one goal per
+part, and its sessions are given the part as it stands. Each part carries one
+line, `Waits for: nothing.` or `Waits for: Part 1, Part 3.`; ready is refused
+while one is missing or wrong. Code checks nothing else a part says; Martin
+judges it. The document binds what the user gets, how it looks and how one sees
+that it works; the construction is the builder's ([writing a programme document](../writing-a-programme-document.md)).
 
 Each thing Martin decides is shown, as one picture or as its text; an order
 has at most ten pictures, in the light theme. A state a Solution mentions (a

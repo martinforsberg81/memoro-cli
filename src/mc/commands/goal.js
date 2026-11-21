@@ -82,7 +82,7 @@ import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
 import { readGoalDeskItem } from '../desk-items.js';
-import { addPr, backward, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, goalReferences, inStage, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, phaseOpen, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { addPr, backward, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, goalReferences, inStage, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, partProgramme, phaseOpen, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { addItem, ITEM_PARTS, ITEM_WORDS, moveGate, partsLacks, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { buildWaitsForMain } from '../main-repair.js';
@@ -98,6 +98,7 @@ import { deskRepairDraft, repairReleaseState } from '../repair-release.js';
 import { repairGoalAdmission, repairPlanRevision } from '../repair-reconcile.js';
 import { REPAIR_HANDOFF, repairHandoff } from '../repair-delivery.js';
 import { programsHome } from '../paths.js';
+import { orderText, partBrief, partLeftWords, partOfOrder } from '../programme-turn.js';
 import { repoNameOf } from '../repos.js';
 import { MERGE_HANDOFF_FILE } from '../session-role.js';
 import { documentPath, LOG_ENTRIES, redactText, returnInstruction, secretsOf } from '../jev.js';
@@ -381,7 +382,7 @@ function newGoal(args, flags, ctx) {
   } else create();
   stdout.write(`mc: ${programme}/${goal} · ${stage} · ready · phase ${phase} — ${dir}\n`);
   stdout.write(`  no worktree yet: the runner makes ${repos.join(', ')} on goal/${goal} at the goal's first session\n`);
-  if (held) stdout.write(`  held from creation: mc goal stage ${programme}/${goal} build moves it on and frees it; mc goal release ${programme}/${goal} removes the hold: a draft naming a part of a ready programme is then finished by the programme planning turn, any other draft stays its writer's\n`);
+  if (held) stdout.write(`  held from creation: mc goal stage ${programme}/${goal} build moves it on and frees it; mc goal release ${programme}/${goal} removes the hold, and the draft stays its writer's to finish\n`);
   if (structure === 2) {
     stdout.write(`${GOAL_FILE} (version 2) is to be filled in by verbs: mc goal set ${programme}/${goal} ${PROSE_PARTS.join('|')} --text "…", mc goal item add ${programme}/${goal} ${ITEM_WORDS.join('|')} --text "…" …, mc goal obligation set ${programme}/${goal} <area> --stand touched|untouched --text "…", mc goal criterion add ${programme}/${goal} --criterion "…" --check "…"\n`);
     return 0;
@@ -627,6 +628,16 @@ function retiredMartin(argv, stderr) {
 export function reportDefect(args, flags, ctx) {
   const { stderr, env, read, write } = ctx;
   if (args.length > 1) { stderr.write(usage()); return 2; }
+  // A goal that is a part of an order has no text of its own to be wrong: its build session reads the part, writes
+  // its reading in the log and builds on it. Refused before anything else is asked of the call, and nothing is written.
+  if (isSession(env) && writerRole(env) === 'build') {
+    const asked = goalNamed(args[0], ctx);
+    const text = asked.error ? null : read(join(asked.dir, GOAL_FILE));
+    if (text !== null && parseGoal(text).part !== undefined) {
+      stderr.write('mc: a build session reports no goal defect — write your reading in the log and build on it: mc goal log --comment "Read as: …"\n');
+      return 2;
+    }
+  }
   const named = args[0] ?? env.MC_GOAL;
   const problems = [];
   const part = oneLine(flags.part ?? '').trim();
@@ -875,9 +886,13 @@ function remakeBranches(target, goal, { stdout, git, exists }) {
 /**
  * Why `phase` would leave a hole in `programme`'s phases, or null: a phase is
  * at most one past the highest of the programme's other goals (`self` left
- * out, a goal being moved), so phases run 1, 2, … with nothing between.
+ * out, a goal being moved), so phases run 1, 2, … with nothing between. A
+ * programme whose goals are parts of its order (`partProgramme`) has no such
+ * rule: a phase there is a part's number.
  */
 function phaseHole(phase, programme, self, ctx) {
+  // A programme whose goals are parts of its order keeps each part's number as its phase, holes and all.
+  if (partProgramme({ home: ctx.home, programme, list: ctx.list, read: ctx.read })) return null;
   const others = programsGoals({ home: ctx.home, list: ctx.list, read: ctx.read })
     .filter((goal) => goal.programme === programme && goal.goal !== self && goal.problems.length === 0);
   const highest = others.reduce((most, goal) => Math.max(most, goal.phase), 0);
@@ -1650,7 +1665,9 @@ function worktreeWords(state) {
 /**
  * `mc goal show <programme>/<goal>` — its status line, the goal as text
  * (`renderGoalText`: goal, contract, out of scope, documents, each criterion
- * with ✓/✗ and its check), the last three log entries, and for each repository's worktree its changed
+ * with ✓/✗ and its check; for a goal that is a part of an order, the line
+ * `PART <n> — <name>, as README.md has it now`, the part and the order's shared
+ * sections instead), the last three log entries, and for each repository's worktree its changed
  * files, its commits past origin/main and its last commit's date.
  */
 function showGoal(args, ctx) {
@@ -1672,7 +1689,11 @@ function showGoal(args, ctx) {
   // The records are in a file of their own (`goal-evidence.js`): the goal's text is the same with or without them,
   // and a met criterion whose record is at another head than the worktrees' has `stale` written beside it.
   const evidence = evidenceLines({ goal, dir: target.dir, git: ctx.git, exists: ctx.exists, read });
-  stdout.write(`\n${markStale(renderGoalText(goal), evidence.stale)}`);
+  if (goal.part !== undefined) {
+    // A goal that is a part of an order holds no text: what is shown is the part and the order's shared sections as the document has them now.
+    const part = partOfOrder(orderText({ home, programme: target.programme, read }), goal.part);
+    stdout.write(part ? `\n${partBrief(part)}` : `\n${partLeftWords(goal.part)}\n`);
+  } else stdout.write(`\n${markStale(renderGoalText(goal), evidence.stale)}`);
   if (evidence.lines.length) stdout.write(`\nEVIDENCE\n${evidence.lines.join('\n')}\n`);
 
   const log = parseLog(read(join(target.dir, LOG_FILE)) ?? '');
@@ -1841,8 +1862,10 @@ function listGoals(args, ctx) {
 function goalLine(goal, ctx, isPhaseOpen) {
   const name = `${goal.programme}/${goal.goal}`;
   const hold = readHold(goal.dir, ctx.read);
+  // A goal that is a part of an order and whose part is no longer a heading of it starts no session, and says why here.
+  const left = goal.part !== undefined && !FINISHED.includes(goal.stage) && !partOfOrder(orderText({ home: ctx.home, programme: goal.programme, read: ctx.read }), goal.part);
   // A finished goal has no next action, whatever its last entry said.
-  const next = buildOutcome(goal, ctx, { hold, isPhaseOpen }) ?? (FINISHED.includes(goal.stage) ? '—' : oneLine(goal.log.at(-1)?.next ?? '—'));
+  const next = left ? partLeftWords(goal.part) : buildOutcome(goal, ctx, { hold, isPhaseOpen }) ?? (FINISHED.includes(goal.stage) ? '—' : oneLine(goal.log.at(-1)?.next ?? '—'));
   let status = stageWords(goal);
   if (waitsOnPerson(goal)) {
     const item = readGoalDeskItem(goal, { env: ctx.env });

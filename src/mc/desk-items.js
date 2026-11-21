@@ -181,7 +181,7 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
         }
       }
     } else if (item.kind === 'programme') {
-      // A programme item is the planning turn's: it closes when a goal names every part of the programme document,
+      // A programme item is the cut's: it closes when a goal names every part of the programme document,
       // its record no longer reads valid and ready, or its directory is gone. A state file that cannot be read keeps it open, said.
       const programme = item.reference.slice('programme:'.length);
       const turn = readTurnState({ root, programme, read });

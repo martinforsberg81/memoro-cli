@@ -190,6 +190,7 @@ export function validateGoal(value, { draft = false } = {}) {
   else for (const repo of value.repos) if (typeof repo !== 'string' || !NAME_RE.test(repo)) problems.push(`repos: ${repo} is not a repository name — lower-case letters, digits and hyphens`);
   if (value.created !== undefined && value.created !== null && !(typeof value.created === 'string' && Number.isFinite(Date.parse(value.created)))) problems.push('created: an ISO instant, or null');
   if (value.phase !== undefined && !isPhase(value.phase)) problems.push(`phase: a whole number from 1, not ${JSON.stringify(value.phase)}`);
+  if (version === 2 && value.part !== undefined && !isPhase(value.part)) problems.push(`part: the number of the part of the order the goal is, a whole number from 1, not ${JSON.stringify(value.part)}`);
   if (value.prs !== undefined && !Array.isArray(value.prs)) problems.push('prs: an array of <repo>#<number>, possibly empty');
   else for (const ref of value.prs ?? []) if (!parsePrRef(ref)) problems.push(`prs: ${ref} is not <repo>#<number>`);
   if (!text(value.title)) problems.push('title: what the goal is, in one line');
@@ -213,7 +214,8 @@ export function isPhase(value) {
  * A GOAL.json, as `{ stage, status, phase, repos, class, created, prs, title, goal,
  * contract, out_of_scope, success_criteria, documents }`, or `{ problems }`
  * when it does not parse or validate (`validateGoal`, as a draft: a goal with
- * no criterion yet parses). `phase` is 1 when GOAL.json has none. `repos` is
+ * no criterion yet parses). `phase` is 1 when GOAL.json has none; `part` is there
+ * only on a version 2 goal that is a part of its programme's order. `repos` is
  * in order, the first being where a session starts; `prs` is `[{ repo, pr }]`,
  * each once.
  */
@@ -229,7 +231,9 @@ export function parseGoal(text) {
   const prs = [];
   for (const ref of (value.prs ?? []).map(parsePrRef)) if (!prs.some((other) => other.repo === ref.repo && other.pr === ref.pr)) prs.push(ref);
   const head = {
-    version: value.version, stage: readStage(value.stage), status: value.status, phase: value.phase ?? 1, repos: [...value.repos], created: value.created ?? null,
+    version: value.version, stage: readStage(value.stage), status: value.status, phase: value.phase ?? 1,
+    ...(value.version === 2 && value.part !== undefined ? { part: value.part } : {}),
+    repos: [...value.repos], created: value.created ?? null,
     prs, title: value.title.trim(),
   };
   if (value.version === 2) return { ...head, ...partsOf(value) };
@@ -248,7 +252,9 @@ export function parseGoal(text) {
 export function renderGoal(goal) {
   const version = goal.version === 2 ? 2 : GOAL_VERSION;
   const head = {
-    schema: GOAL_SCHEMA, version, stage: readStage(goal.stage), status: goal.status, phase: goal.phase ?? 1, repos: goal.repos,
+    schema: GOAL_SCHEMA, version, stage: readStage(goal.stage), status: goal.status, phase: goal.phase ?? 1,
+    ...(version === 2 && goal.part !== undefined ? { part: goal.part } : {}),
+    repos: goal.repos,
     created: goal.created ?? null, prs: (goal.prs ?? []).map((item) => (typeof item === 'string' ? item : prRef(item))),
     title: goal.title,
   };
@@ -296,9 +302,12 @@ export function criteriaWords(goal) {
 
 /**
  * Why a goal may not go to review, or null: it has no criterion, or one is not
- * met — named by number, with the verb that records it.
+ * met — named by number, with the verb that records it. A goal that is a part
+ * of an order needs none.
  */
 export function unmetGoalWords(goal, name = '<programme>/<goal>') {
+  // A goal that is a part of an order holds no criterion: its part is what is built, and review judges the build against it.
+  if (!(goal.success_criteria ?? []).length && goal.part) return null;
   if (!(goal.success_criteria ?? []).length) return `${name} has no criterion — mc goal criterion add ${name} --criterion "…" --check "…"`;
   const unmet = unmetCriteria(goal);
   if (!unmet.length) return null;
@@ -589,7 +598,7 @@ export function waitsOnPerson(goal) {
   return goal.status === 'Martin' && !FINISHED.includes(goal.stage);
 }
 
-/** Interactive planning and the runner's programme planning turn use canon/roles/plan-session.md. */
+/** Interactive planning uses canon/roles/plan-session.md. */
 export const PLAN_ROLE = 'plan';
 /** The role a goal's mend session runs with: `canon/roles/mend-session.md`. It handles merge failures only. */
 export const MEND_ROLE = 'mend-session';
@@ -629,7 +638,7 @@ export function isRepair(log, hasVerdict) {
 
 /**
  * The session the runner starts on `goal`, or null: a build session on
- * `build · ready` (with a criterion) — a `repair` when the goal was
+ * `build · ready` (with a criterion, or a goal that is a part) — a `repair` when the goal was
  * rejected (`isRepair`) — a review session on `review · ready`, and a mend
  * session only on an unqueued blocked merge or `merge · ready` after a red
  * (`mergeRetryDue`). Never on `draft · ready`, on `Martin`, on `finish` (the
@@ -779,6 +788,20 @@ export function renumberedAfter(after, number) {
 }
 
 /**
+ * Whether `programme`'s goals are parts of its order: one of them, live or archived, carries `part`. The phase of
+ * such a goal is its part's number, which the order's `Waits for` lines name, so its programme's phases are never
+ * renumbered and may have holes.
+ */
+export function partProgramme({ home, programme, list = listDirsOf, read = readTextOrNull }) {
+  const goals = join(home, programme, GOALS_DIR);
+  const dirs = [...list(goals).filter((name) => !name.startsWith('.')).map((name) => join(goals, name)), ...list(join(goals, ARCHIVE_DIR)).map((name) => join(goals, ARCHIVE_DIR, name))];
+  return dirs.some((dir) => {
+    const text = read(join(dir, GOAL_FILE));
+    return text !== null && text !== undefined && parseGoal(text).part !== undefined;
+  });
+}
+
+/**
  * Renumbers the phases of `programme`'s goals under `home` (`phaseMoves`),
  * each change written by `updateGoal`. Returns the moves made. `mc goal
  * archive`, the runner's archive and `mc goal phase` call it, so the lowest
@@ -789,9 +812,11 @@ export function renumberedAfter(after, number) {
  * moves with its phase, a phase with no goal left that parses is taken out, and
  * the record is written once, only when it changes, after the goals — on every
  * call, also when no goal moves. No record, a record that does not state its
- * phases and an invalid record are left as they are.
+ * phases and an invalid record are left as they are. A programme whose goals are
+ * parts of its order (`partProgramme`) is left as it is too: nothing moves.
  */
 export function renumberPhases({ home, programme, list = listDirsOf, read = readTextOrNull, write = writeFileAtomic }) {
+  if (partProgramme({ home, programme, list, read })) return [];
   const goals = programsGoals({ home, list: (path) => (path === home ? [programme] : list(path)), read });
   const own = goals.filter((goal) => goal.programme === programme && goal.problems.length === 0);
   const numbers = [...new Set(own.map((goal) => goal.phase))].sort((a, b) => a - b);
@@ -832,9 +857,12 @@ export function nextGoal(goals, { repos = [], held = new Set(), may = () => true
   return eligible.reduce((oldest, goal) => (oldest === null || lastAt(goal) < lastAt(oldest) ? goal : oldest), null);
 }
 
-/** Whether a goal has no criterion yet: `mc goal new`'s skeleton, which no session is started on. */
+/**
+ * Whether a goal has no criterion yet: `mc goal new`'s skeleton, which no session is started on. A goal that is a
+ * part of an order (`part`) is never one: it holds no criterion and is built from its part.
+ */
 export function noCriteria(goal) {
-  return Array.isArray(goal.success_criteria) && goal.success_criteria.length === 0;
+  return !goal.part && Array.isArray(goal.success_criteria) && goal.success_criteria.length === 0;
 }
 
 /**

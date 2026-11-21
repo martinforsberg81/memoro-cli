@@ -1,39 +1,33 @@
 /**
- * The programme planning turn, model-free (mc-run.md, "Programme planning turn").
+ * The cut of a ready order into goals, model-free (mc-run.md, "The cut of a ready order").
  *
- * A ready programme whose README.md has parts no goal names yet, or whose goals naming a part are
- * still drafts, is planned by one headless plan session with nobody present: it cuts every part into
- * a goal and moves each to build (Martin, 2026-11-21). Everything here is what the runner decides around
- * that session without a model: whether a programme is due, the state file that
- * counts the turns that failed, the desk item the second failure opens, and the
- * read checkouts the turn stands beside. The runner (`run.js`) supplies its own
- * file reads, lock and git, so a fixture drives all of it in memory.
+ * A ready programme whose README.md has a part no goal names is cut by the runner itself, with no session and no
+ * model: one goal per part (`cutParts`), marked with the part's number and holding no text of its own. Every session
+ * on such a goal is given its part as README.md has it at that moment (`partOfOrder`, `partBrief`). What a part waits
+ * for is one line in the part (`statedWaits`), which `mc programs state <programme> ready` writes into the record.
+ * Everything here is what the runner decides without a model: whether a programme is due (`programmeDue`), the state
+ * file that counts the cuts that failed, and the desk item the second failure opens. The runner (`run.js`) supplies
+ * its own file reads and lock, so a fixture drives all of it in memory.
  */
-import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { deskItemId } from './desk-items.js';
-import { ARCHIVE_DIR, GOAL_FILE, GOALS_DIR, parseGoal } from './goals.js';
+import { appendLog, ARCHIVE_DIR, GOAL_FILE, GOALS_DIR, LOG_FILE, logStamp, parseGoal, renderGoal } from './goals.js';
 import { NAME_RE } from './plan-schema.js';
-import { readRecord } from './programme-record.js';
+import { cycleOf, readRecord } from './programme-record.js';
 import { repairReleaseState } from './repair-release.js';
 
 export const TURN_SCHEMA = 'mc-programme-turn';
 export const TURN_VERSION = 1;
 export const TURN_ITEM_KIND = 'programme';
-/** The failures that open a desk item: the first lets the next pick plan again, the second is the item. */
+/** The failures that open a desk item: the first lets the next pass cut again, the second is the item. */
 export const FAILURES_TO_ITEM = 2;
 
-/** `programme:<programme>`: what the turn is called in a claim, a current record and a runs.tsv row, and an item's reference. */
+/** `programme:<programme>`: what the cut is called in the runner's lines, and an item's reference. */
 export const turnName = (programme) => `programme:${programme}`;
 export const turnReference = turnName;
 
 /** `runner/programme-turn/<programme>.json` under the work root. */
 export const turnStatePath = (root, programme) => join(root, 'runner', 'programme-turn', `${programme}.json`);
-
-/** `runner/work/programme-turn-<programme>`: the directory holding the turn's read checkouts, one per served repository. */
-export const readCheckoutsDir = (root, programme, prefix = 'programme-turn') => join(root, 'runner', 'work', `${prefix}-${programme}`);
-
-const lastLine = (text) => String(text ?? '').trim().split('\n').at(-1) || '';
 
 /**
  * The state file: `{ status: 'none' }` when it is not there (no failures),
@@ -69,12 +63,6 @@ export function failuresSinceItem(state) {
 
 /** The names of the programme directories under `home`. */
 export const programmeDirs = ({ home, list }) => list(home).filter((name) => NAME_RE.test(name)).sort();
-
-/** How many goals the programme holds now: the entries of `goals/` but a dot-entry, and of `goals/.archive/`. */
-export function goalCount({ home, programme, list }) {
-  const goals = join(home, programme, 'goals');
-  return list(goals).filter((name) => !name.startsWith('.')).length + list(join(goals, '.archive')).length;
-}
 
 /** The `### Part n —` headings of the programme document's `## Parts` entry (fenced examples do not count), as numbers. */
 export function documentParts(text) {
@@ -112,6 +100,96 @@ export function splitProgrammeParts(text) {
     sharedContract,
   };
 }
+
+const FENCES = /^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[^\n]*(?:\n|$)/gmu;
+
+/** The name of a part: the text after `### Part n — ` in the heading its section begins with. */
+export function partName(section) {
+  return /^### Part [1-9]\d*\s+—\s+(\S.*)$/u.exec(String(section ?? '').split(/\r?\n/u)[0])?.[1].trim() ?? '';
+}
+
+/**
+ * The parts one section's `Waits for:` line names, ascending: none for `Waits for: nothing.`, the numbers of
+ * `Waits for: Part 1, Part 3.`, or null when the section has no such line (a fenced example is no line). Whitespace
+ * and the final full stop are read leniently; any other wording is no line.
+ */
+function waitsOf(section) {
+  const line = String(section ?? '').replace(FENCES, '').split(/\r?\n/u).map((one) => one.trim()).find((one) => /^Waits for:/u.test(one));
+  if (line === undefined) return null;
+  const said = line.slice('Waits for:'.length).trim().replace(/\.$/u, '').trim();
+  if (/^nothing$/iu.test(said)) return [];
+  const words = said.split(/\s*(?:,|\band\b)\s*/u).filter(Boolean);
+  if (!words.length || !words.every((word) => /^Part\s+[1-9]\d*$/iu.test(word))) return null;
+  return [...new Set(words.map((word) => Number(/\d+/u.exec(word)[0])))].sort((a, b) => a - b);
+}
+
+const partWords = (numbers) => {
+  const words = numbers.map((number) => `Part ${number}`);
+  return words.length > 1 ? `${words.slice(0, -1).join(', ')} and ${words.at(-1)}` : words[0];
+};
+
+/**
+ * What the parts of an order wait for, as its `Waits for` lines say it: `{ after }`, the record's `phases.after`
+ * (`{ <part>: [parts it waits for] }`, a part that waits for nothing left out), or `{ problems }`, each one line:
+ * a part without the line, a part that waits for a part the order does not have, and parts that wait for each other.
+ * Null for a document with no part.
+ */
+export function statedWaits(text) {
+  const parts = partSections(text).map(([number, section]) => ({ number, waits: waitsOf(section) }));
+  if (!parts.length) return null;
+  const numbers = new Set(parts.map((part) => part.number));
+  const problems = [];
+  const after = {};
+  for (const { number, waits } of [...parts].sort((a, b) => a.number - b.number)) {
+    if (waits === null) { problems.push(`Part ${number} has no "Waits for" line — write "Waits for: nothing." or "Waits for: Part 1." in the part`); continue; }
+    for (const named of waits) if (!numbers.has(named)) problems.push(`Part ${number} waits for Part ${named}, which the order does not have — name a part of the order`);
+    if (waits.length) after[number] = waits;
+  }
+  if (problems.length) return { problems };
+  const cycle = cycleOf(after);
+  if (cycle) return { problems: [cycle.length === 1 ? `Part ${cycle[0]} waits for itself — it waits for nothing or for another part` : `${partWords(cycle)} wait for each other — one of them waits for nothing or for another part`] };
+  return { after };
+}
+
+/** Whether every part of the document has a `Waits for` line that reads; false for a document with no part. */
+export function everyPartWaits(text) {
+  const parts = partSections(text);
+  return parts.length > 0 && parts.every(([, section]) => waitsOf(section) !== null);
+}
+
+/**
+ * Part `number` of an order as its document `text` has it: `{ number, name, heading, section, shared }`, where
+ * `section` is the part verbatim, heading to the next heading, `shared` the order's sections outside its parts, and
+ * `heading` the line `mc goal show` and a session's prompt put above them. Null when the document has no such part.
+ */
+export function partOfOrder(text, number) {
+  if (text === null || text === undefined) return null;
+  const { parts, shared } = splitProgrammeParts(text);
+  const section = parts.find(([one]) => one === number)?.[1];
+  if (section === undefined) return null;
+  const name = partName(section);
+  return { number, name, heading: `PART ${number} — ${name}, as README.md has it now`, section, shared: shared.trim() };
+}
+
+/** What a session on a goal that is a part is given, and what `mc goal show` prints: the heading line, the part, the shared sections. */
+export function partBrief(part) {
+  return `${part.heading}\n\n${part.section}\n\n${part.shared}\n`;
+}
+
+/**
+ * The document a programme's parts are read from now: the released snapshot of a repair programme with a current
+ * release, else README.md as it stands. Null when there is none.
+ */
+export function orderText({ home, programme, read }) {
+  const dir = join(home, programme);
+  const record = readRecord(dir, { read });
+  const release = record.status === 'valid' ? repairReleaseState(dir, record.record) : null;
+  if (release?.snapshot) return release.snapshot.text;
+  try { return read(join(dir, 'README.md')) ?? null; } catch { return null; }
+}
+
+/** The line `mc goal list` and the runner say for a goal whose part is no longer a heading of its order. */
+export const partLeftWords = (number) => `its part has left the order — restore Part ${number} in README.md or drop the goal`;
 
 /** The part numbers one document label names: `Part 1; Part 2`, `Parts 1, 2 and 4`. No range is read. */
 export function partsNamed(label) {
@@ -156,8 +234,8 @@ export function partsCut({ home, programme, list, read }) {
 }
 
 /**
- * The goals, live and archived, that name no part of the programme's `README.md`: goals planned by hand or cut
- * before the planning turn read README.md. A programme holding one is planned already and is not due a turn.
+ * The goals, live and archived, that name no part of the programme's `README.md`: goals written by hand or cut
+ * from another document. A programme holding one is written by hand and is not cut.
  */
 export function goalsNamingNoPart({ home, programme, list, read }) {
   return goalParts({ home, programme, list, read }).filter(({ named }) => !named.size).map(({ name }) => name).sort();
@@ -177,37 +255,19 @@ export function cutProblems({ home, programme, list, read }) {
   return missing.length ? [`no goal names part${missing.length === 1 ? '' : 's'} ${missing.join(', ')}`] : [];
 }
 
-/**
- * The live goals that name a part of the programme's `README.md` and are still in stage `draft`, by name: what the
- * turn has cut and not yet moved to build. An archived goal is over and is not one.
- */
-export function partDrafts({ home, programme, list, read }) {
-  return goalParts({ home, programme, list, read })
-    .filter(({ named, archived, goal }) => named.size && !archived && goal.stage === 'draft')
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/**
- * The drafts of `partDrafts` that are the turn's to finish: `ready`, and not `unavailable({ name, dir })` (the
- * runner's word that a draft is held or decision-claimed). A draft that is held, claimed, blocked or waiting on
- * Martin is its holder's: it neither calls a turn nor fails one.
- */
-export function freeDrafts({ home, programme, list, read, unavailable = () => false }) {
-  return partDrafts({ home, programme, list, read })
-    .filter((draft) => draft.goal.status === 'ready' && !unavailable({ name: draft.name, dir: draft.dir }));
-}
-
-/** A record the turn cuts from: valid and ready. */
+/** A record the cut reads: valid and ready. */
 export const cuttable = (record, dir) => record?.state === 'ready' && (!record.repair || Boolean(dir && repairReleaseState(dir, record)?.release));
 
+/** Why a released repair order is not cut by code: its reconciliation compares authored goal contracts, which a goal that is a part does not have. */
+export const REPAIR_NOT_CUT = 'not cut: repair releases are cut by hand until reconciliation reads goals that are parts';
+
 /**
- * Whether `programme` is due a planning turn now: `{ due: true, record }`, or `{ due: false, reason, notice }`.
- * It is due while a part of README.md is named by no goal, and while every part is named but a goal naming one is
- * still `draft · ready` and free: a turn that was interrupted or failed is run again and finishes its own drafts.
- * `unavailable({ name, dir })` is the runner's word that a draft is held or decision-claimed; such a draft, and one
- * that waits on Martin or is blocked, is its holder's and calls no turn.
+ * Whether `programme` is due the cut now: `{ due: true, record }`, or `{ due: false, reason, notice }`. It is due
+ * while its record reads ready and a part of README.md is named by no goal, every part has its `Waits for` line and
+ * the record states what those lines say. A `notice` is what the runner says once while it lasts. A programme
+ * holding a goal that names no part is written by hand and is not cut; a released repair order is not cut by code.
  */
-export function programmeDue({ programme, home, list, read, items = [], horizon = () => null, state, unavailable = () => false }) {
+export function programmeDue({ programme, home, list, read, items = [], horizon = () => null, state }) {
   const dir = join(home, programme);
   const record = readRecord(dir, { read });
   if (record.status === 'none') return { due: false, reason: 'no record', notice: null };
@@ -223,62 +283,97 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
   if (!parts.length) return { due: false, reason: 'README.md names no part', notice: null };
   if (repair) {
     if (record.record.repair.reconciled?.revision === repair.release.revision) return { due: false, reason: 'its release is reconciled', notice: null };
-  } else {
-    const problems = cutProblems({ home, programme, list, read });
-    const drafts = problems.length ? [] : freeDrafts({ home, programme, list, read, unavailable });
-    if (problems.length === 0 && drafts.length === 0) return { due: false, reason: 'its goals are already cut', notice: null };
-    const unnamed = goalsNamingNoPart({ home, programme, list, read });
-    if (unnamed.length) {
-      const named = unnamed.length > 3 ? `${unnamed.slice(0, 3).join(', ')} and ${unnamed.length - 3} more` : unnamed.join(', ');
-      return { due: false, reason: `its goal${unnamed.length === 1 ? '' : 's'} ${named} name${unnamed.length === 1 ? 's' : ''} no part of README.md`, notice: null };
-    }
+    return { due: false, reason: REPAIR_NOT_CUT, notice: `${programme}: ${REPAIR_NOT_CUT}` };
+  }
+  if (cutProblems({ home, programme, list, read }).length === 0) return { due: false, reason: 'its goals are already cut', notice: null };
+  const unnamed = goalsNamingNoPart({ home, programme, list, read });
+  if (unnamed.length) {
+    const named = unnamed.length > 3 ? `${unnamed.slice(0, 3).join(', ')} and ${unnamed.length - 3} more` : unnamed.join(', ');
+    return { due: false, reason: `its goal${unnamed.length === 1 ? '' : 's'} ${named} name${unnamed.length === 1 ? 's' : ''} no part of README.md`, notice: null };
+  }
+  if (!everyPartWaits(readme)) {
+    return { due: false, reason: 'its order has no "Waits for" lines', notice: `${programme}: its order has no "Waits for" lines — the desk adds them and sets it ready again` };
+  }
+  const stated = statedWaits(readme);
+  const recorded = record.record.phases?.order === 'stated' ? record.record.phases.after ?? {} : null;
+  if (stated.problems || recorded === null || !sameAfter(stated.after, recorded)) {
+    return { due: false, reason: 'its record does not state what its "Waits for" lines say', notice: `${programme}: its record does not state what the "Waits for" lines of its order say — the desk sets it ready again` };
   }
   if (items.some((item) => item.kind === TURN_ITEM_KIND && item.reference === turnReference(programme) && item.state !== 'closed')) {
     return { due: false, reason: 'a programme desk item is open', notice: null };
   }
   if (state.status === 'unreadable') {
-    return { due: false, reason: 'its turn state is unreadable', notice: `${programme}: ${turnStatePath('<work root>', programme).replace('<work root>/', '')} is unreadable (${state.problem}) — no planning turn is started until it is repaired or removed` };
+    return { due: false, reason: 'its turn state is unreadable', notice: `${programme}: ${turnStatePath('<work root>', programme).replace('<work root>/', '')} is unreadable (${state.problem}) — the programme is not cut until it is repaired or removed` };
   }
   const slug = record.record.horizon;
   if (slug) {
     const found = horizon(slug);
     if (!found || found.state !== 'open') {
-      return { due: false, reason: 'its horizon is not open', notice: `${programme}: its horizon ${slug} ${found ? `reads ${found.state}` : 'is missing or unreadable'} — no planning turn is started while that lasts` };
+      return { due: false, reason: 'its horizon is not open', notice: `${programme}: its horizon ${slug} ${found ? `reads ${found.state}` : 'is missing or unreadable'} — the programme is not cut while that lasts` };
     }
   }
-  return { due: true, record: record.record, ...(repair ? { revision: repair.release.revision, snapshot: repair.snapshot } : {}) };
+  return { due: true, record: record.record };
+}
+
+/** Whether two `after` maps state the same dependencies, whatever the order of their keys. */
+function sameAfter(a, b) {
+  const canon = (after) => JSON.stringify(Object.keys(after).map(Number).sort((x, y) => x - y).map((key) => [key, [...after[key]].sort((x, y) => x - y)]));
+  return canon(a) === canon(b);
 }
 
 /**
- * How the turn ended: `{ kind: 'cut' }` when a goal names every part and no live goal naming a part is still a
- * free draft (`freeDrafts`), `{ kind: 'incomplete', problems }` when parts or such drafts remain (each draft is named), or
- * `{ kind: 'settled', problems }` when the programme state is no longer ready.
+ * A goal's directory name from its part's heading name: lower-case letters, digits and hyphens (`NAME_RE`), `part-<n>`
+ * when the name leaves nothing, and a number added while the name is in `taken`.
  */
-export function finishTurn({ programme, home, list, read, write, lock, root, revision, unavailable = () => false }) {
-  try {
-    const dir = join(home, programme);
-    const record = readRecord(dir, { read });
-    if (record.status !== 'valid') return { kind: 'settled', problems: ['record is invalid'] };
-    if (!cuttable(record.record, dir)) {
-      return { kind: 'settled', problems: [repairReleaseState(dir, record.record)?.problems?.[0] ?? `record reads ${record.record.state}`] };
-    }
-    if (record.record.repair) {
-      if (record.record.repair.release.revision !== revision) return { kind: 'settled', problems: ['repair release changed during planning'] };
-      return record.record.repair.reconciled?.revision === revision ? { kind: 'cut' }
-        : { kind: 'incomplete', problems: ['the programme planner has not reconciled this release'] };
-    }
-    const problems = cutProblems({ home, programme, list, read });
-    if (problems.length > 0) return { kind: 'incomplete', problems };
-    const drafts = freeDrafts({ home, programme, list, read, unavailable }).map(({ name }) => `goal ${name} is still a draft`);
-    if (drafts.length > 0) return { kind: 'incomplete', problems: drafts };
-    return { kind: 'cut' };
-  } catch (error) {
-    return { kind: 'failed', problems: [error.message || String(error)] };
-  }
+export function goalSlug(title, number, taken = new Set()) {
+  const base = String(title).normalize('NFKD').replace(/[̀-ͯ]/gu, '').toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 56).replace(/-+$/u, '') || `part-${number}`;
+  let name = base;
+  for (let n = 2; taken.has(name); n += 1) name = `${base}-${n}`;
+  return name;
 }
 
 /**
- * A turn that ended without its document cut, counted (D6).
+ * The cut: for each part of `programme`'s README.md that no goal names, live or archived, one goal — its directory
+ * named from the part's heading, GOAL.json (version 2) in `build · ready` with `part` and `phase` the part's number,
+ * the title the heading's name, the repositories of the README's `Repositories:` line (`repositories(text)` is the
+ * caller's reading of it: `{ repos: [{ repo }] }` or `{ error }`), a document that points at README.md labelled
+ * `Part <n>`, no criterion and no other text — and LOG.md with the runner's first entry. A name is unique among the
+ * programme's goals, live and archived, and among the live goals of every other programme, since a goal's branch
+ * `goal/<goal>` is one per repository. Returns the goals made as `[{ name, part }]`; throws when the cut cannot be made.
+ */
+export function cutParts({ programme, home, list, read, write, repositories, now }) {
+  const dir = join(home, programme);
+  const readme = join(dir, 'README.md');
+  const text = read(readme);
+  if (text === null || text === undefined) throw new Error('README.md is missing');
+  const found = repositories(text);
+  if (found.error) throw new Error(found.error);
+  const named = partsCut({ home, programme, list, read });
+  const live = (one) => list(join(home, one, GOALS_DIR)).filter((name) => !name.startsWith('.'));
+  const taken = new Set([
+    ...list(home).flatMap(live),
+    ...list(join(dir, GOALS_DIR, ARCHIVE_DIR)).flatMap((name) => [name, name.replace(/-\d{8}T\d{4}$/u, '')]),
+  ]);
+  const made = [];
+  for (const [number, section] of partSections(text)) {
+    if (named.has(number)) continue;
+    named.add(number);
+    const title = partName(section);
+    const name = goalSlug(title, number, taken);
+    taken.add(name);
+    const goalDir = join(dir, GOALS_DIR, name);
+    const goal = { version: 2, stage: 'build', status: 'ready', phase: number, part: number, repos: found.repos.map((one) => one.repo),
+      created: now.toISOString().replace(/\.\d{3}Z$/u, 'Z'), prs: [], title, success_criteria: [], documents: [{ label: `Part ${number}`, path: readme }] };
+    const rendered = renderGoal(goal);
+    write(join(goalDir, GOAL_FILE), rendered);
+    write(join(goalDir, LOG_FILE), appendLog('', { at: logStamp(now), tool: 'runner', model: null, stage: 'build', status: 'ready', done: `cut from Part ${number} of README.md`, comment: null, next: null }));
+    made.push({ name, part: number });
+  }
+  return made;
+}
+
+/**
+ * A cut that could not be made, counted: the second since the last item opens a desk item.
  */
 export function recordTurnFailure({ root, programme, reason, log = null, at, read, write, writeJson, lock, env, itemDirectory }) {
   return lock(root, () => {
@@ -307,79 +402,24 @@ export function recordTurnFailure({ root, programme, reason, log = null, at, rea
 
 const failureLines = (failures) => failures.map((failure) => `- ${failure.at}: ${failure.reason}${failure.log ? ` (session log: ${failure.log})` : ''}`).join('\n');
 
-/** What the decision session reads for the first item: the turns that failed, and where to look. */
+/** What the decision session reads for the first item: the cuts that failed, and where to look. */
 function preparedText({ programme, failures, item }) {
-  return `# Programme ${programme}: its planning turn failed twice\n\n`
-    + `The runner's planning turn for programme ${programme} ended twice without every part of README.md cut into a goal in build. `
+  return `# Programme ${programme}: its cut failed twice\n\n`
+    + `The runner's cut of programme ${programme} ended twice without a goal for every part of README.md. `
     + `Nothing was asked of Martin; this is a mechanical failure to repair within reach.\n\n`
     + `## The failures\n${failureLines(failures)}\n\n`
     + `## Where to look\n- Programme directory: ${programme} under the programmes home, with README.md, PROGRAMME.json and goals/.\n`
-    + `- The turn's state: runner/programme-turn/${programme}.json under the work root.\n`
+    + `- The cut's state: runner/programme-turn/${programme}.json under the work root.\n`
     + `- Item: ${item.id}.\n\n`
-    + `## What closes it\nRepair what failed, then close the item (--by decision) so the runner plans the programme again. `
+    + `## What closes it\nRepair what failed, then close the item (--by decision) so the runner cuts the programme again. `
     + `A text of Martin's that would have to change goes to a brief instead.\n`;
 }
 
-/** The brief a later item carries: the turn failed again after a decision pass closed the first. Swedish, as the desk reads it. */
+/** The brief a later item carries: the cut failed again after a decision pass closed the first. Swedish, as the desk reads it. */
 function briefText({ programme, failures }) {
-  return `## Vad det gäller\nPlaneringspasset för programmet ${programme} slutade igen utan att varje del av programmets README.md blev ett mål i build; arbetet kan inte fortsätta automatiskt.\n\n`
-    + `## Alternativ och konsekvenser\n- Undersök underlaget: planeringen kan köras igen när felet är löst.\n- Låt programmet vänta: inga fler mål skärs förrän felet är löst.\n\n`
-    + `## Rekommendation och skäl\nUndersök underlaget; planeringspasset har misslyckats igen sedan ett tidigare ärende stängts.\n\n`
+  return `## Vad det gäller\nUppdelningen av programmet ${programme} i mål slutade igen utan att varje del av programmets README.md blev ett mål; arbetet kan inte fortsätta automatiskt.\n\n`
+    + `## Alternativ och konsekvenser\n- Undersök underlaget: uppdelningen görs igen när felet är löst.\n- Låt programmet vänta: inga fler mål skapas förrän felet är löst.\n\n`
+    + `## Rekommendation och skäl\nUndersök underlaget; uppdelningen har misslyckats igen sedan ett tidigare ärende stängts.\n\n`
     + `## Vad som står still\nProgrammet ${programme} väntar på Martin. Felunderlag:\n${failureLines(failures)}\n\n`
     + `## Kan valet ändras efteråt?\nIngen automatisk tillämpning; detta är ett mekaniskt fel som kräver undersökning.\n`;
-}
-
-/**
- * Read checkouts (D8): one detached checkout of origin/main per served
- * repository under `readCheckoutsDir`, made by `git` as the runner's seam
- * (`git(cwd, args) → { ok, stdout, stderr }`). A status-clean leftover whose
- * HEAD origin/main already holds is removed and made again; a dirty one, or
- * one holding a commit origin/main lacks, is never touched and refuses the
- * turn. Returns `{ ok: true, paths }` (`{ repo: path }`), or `{ ok: false,
- * reason, retained? }` — `retained` is the path of a leftover kept. A fetch
- * that fails is `{ ok: false, fetch: true }`: nothing counts against the turn.
- */
-export function setUpReadCheckouts({ git, root, programme, repos, exists, prefix }) {
-  const base = readCheckoutsDir(root, programme, prefix);
-  const paths = {};
-  const made = [];
-  const undo = () => removeReadCheckouts({ git, root, programme, prefix, repos: repos.filter((repo) => made.includes(repo.name)), exists });
-  for (const repo of repos) {
-    const fetched = git(repo.path, ['fetch', '--quiet', 'origin']);
-    if (!fetched.ok) { undo(); return { ok: false, fetch: true, reason: `fetch ${repo.name}: ${lastLine(fetched.stderr) || 'git failed'}` }; }
-  }
-  for (const repo of repos) {
-    const path = join(base, repo.name);
-    if (exists(path)) {
-      const state = checkoutState({ git, path });
-      if (!state.removable) { undo(); return { ok: false, retained: path, reason: `read checkout retained: ${path}` }; }
-      const removed = git(repo.path, ['worktree', 'remove', path]);
-      if (!removed.ok) { undo(); return { ok: false, retained: path, reason: `read checkout retained: ${path}` }; }
-    }
-    const added = git(repo.path, ['worktree', 'add', '-q', '--detach', path, 'origin/main']);
-    if (!added.ok) { undo(); return { ok: false, reason: `setup: ${lastLine(added.stderr) || 'git worktree add failed'}` }; }
-    made.push(repo.name);
-    paths[repo.name] = path;
-  }
-  return { ok: true, paths };
-}
-
-/** A checkout is removable when its status is clean and its HEAD is reachable from origin/main: nothing in it exists nowhere else. */
-function checkoutState({ git, path }) {
-  const status = git(path, ['status', '--porcelain']);
-  if (!status.ok || String(status.stdout ?? '').trim() !== '') return { removable: false, why: 'dirty' };
-  const reachable = git(path, ['merge-base', '--is-ancestor', 'HEAD', 'origin/main']);
-  return reachable.ok ? { removable: true } : { removable: false, why: 'unreachable' };
-}
-
-/** The turn's read checkouts removed after it: each one clean and reachable, the others left. Returns the paths left. */
-export function removeReadCheckouts({ git, root, programme, repos, exists, prefix }) {
-  const kept = [];
-  for (const repo of repos) {
-    const path = join(readCheckoutsDir(root, programme, prefix), repo.name);
-    if (!exists(path)) continue;
-    const state = checkoutState({ git, path });
-    if (!state.removable || !git(repo.path, ['worktree', 'remove', path]).ok) kept.push(path);
-  }
-  return kept;
 }

@@ -5,9 +5,9 @@
  *   mc programs priority <programme>... --set <n>    prefer work within a stage
  *   mc programs create <programme> --end "…" [--horizon <slug> | --area <repo>/<id>] [--purpose "…"] [--from-proposal <path>]    a new programme with its record
  *   mc programs record <programme> --end "…" [--horizon <slug>]    the record of an existing one
- *   mc programs state <programme> draft|ready    set draft or ready (interactive Martin only); ready releases the desk's holds on its unfinished goals
+ *   mc programs state <programme> draft|ready    set draft or ready (interactive Martin only); ready writes what each part waits for from the order's "Waits for" lines and releases the desk's holds on its unfinished goals
  *   mc programs review <programme>    one independent advisory reading of the current document
- *   mc programs after <programme> <phase> <phase>… | --none    what a phase of a stated programme waits for
+ *   mc programs after <programme> <phase> <phase>… | --none    what a phase of a stated programme waits for; refused for an order whose parts say it in their "Waits for" lines
  *   mc programs show <programme> [--json]    one programme's record
  *
  * The page draws only the programmes with work on them and folds the dormant
@@ -45,6 +45,7 @@ import { beginRepairReview, repairReviewCall } from '../repair-review.js';
 import { isDesk, releaseRepair, repairReleaseState } from '../repair-release.js';
 import { reconcileRepair, setDeskRepairState } from '../repair-reconcile.js';
 import { disposeRepair, REPAIR_DISPOSITIONS, stopRepair } from '../repair-stop.js';
+import { everyPartWaits, statedWaits } from '../programme-turn.js';
 
 export function usage() {
   return commandUsage('programs');
@@ -393,9 +394,18 @@ function stateVerb({ positional }, { env, stdout, stderr, lock, now = new Date()
     return 1;
   }
   try {
-    const outcome = readRecord(dir).record?.repair?.desk
+    const found = readRecord(dir).record;
+    // An order states what each part waits for in the part (`Waits for:`): ready writes the record's dependencies from
+    // those lines in the same write, and refuses an order where a line is missing or wrong. A repair-owned order is
+    // released by its own verbs and is not read here.
+    const stated = targetState === 'ready' && found && !found.repair ? statedWaits(readTextOrNull(join(dir, 'README.md')) ?? '') : null;
+    if (stated?.problems) {
+      for (const problem of stated.problems) stderr.write(`mc: ${problem}\n`);
+      return 1;
+    }
+    const outcome = found?.repair?.desk
       ? setDeskRepairState(dir, targetState, env, { lock })
-      : setRecordState(dir, targetState, { root: workRoot(env), lock });
+      : setRecordState(dir, targetState, { root: workRoot(env), lock, ...(stated ? { after: stated.after } : {}) });
     if (!outcome.ok) {
       for (const problem of outcome.problems.length ? outcome.problems : [`${name} has no valid record — mc programs show ${name}`]) stderr.write(`mc: ${problem}\n`);
       return 1;
@@ -483,6 +493,7 @@ function afterVerb({ positional, flags }, { env, stdout, stderr, read, lock }) {
   const found = readRecord(dir);
   if (found.status === 'none') return refuse(`${name} has no record, so its phases run in sequence — mc goal phase orders its goals`);
   if (found.status === 'invalid') return refuse(`${name} has an invalid record — mc programs show ${name} says what is wrong; nothing is changed`);
+  if (everyPartWaits(readTextOrNull(join(dir, 'README.md')) ?? '')) return refuse(`${name} states its order in README.md — change the part's "Waits for" line and set it ready again`);
   if (found.record.phases === undefined) return refuse(`${name}'s record does not state its phases, so they run in sequence — mc goal phase orders its goals`);
   const goals = programsGoals({ home, list: (path) => (path === home ? [name] : listDirsOf(path)), ...(read ? { read } : {}) })
     .filter((goal) => goal.programme === name && goal.problems.length === 0);

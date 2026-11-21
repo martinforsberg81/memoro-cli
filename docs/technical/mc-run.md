@@ -189,14 +189,14 @@ order without a model call:
 1. Read the goals under `~/mc/programs/<programme>/goals/`, through the
    runner's own environment. Convert older goal status/dependency records
    before judging them. An unreadable goal is not runnable.
-2. Consider `build · ready` with criteria, `review · ready`,
+2. Consider `build · ready` with criteria or a goal that is a part of an order, `review · ready`,
    `merge · blocked`, or `merge · ready` after its first red or moved head
    and once it is no longer in the merger's line. A merge failure or a queued main-red request wakes a mend session; legacy blocked work outside merge is reconciled to Martin without a launch; `finish · ready` (a name kept for old records) is moved to `build · ready` with a log entry before any session starts, and a build in `build · ready` after a review's rejection is a repair build. `Martin`
    waits for the desk decision pass, not a delivery session: this includes a
    goal reported by `mc goal defect` and one stopped after three build sessions
    without progress or after five build sessions (`no progress:`; *What a build session does* in
    [mc-goals.md](mc-goals.md)), which start no session until `mc goal ready`. A `build · ready` goal whose last entry is the runner's main-red wait (*What a build session does* in [mc-goals.md](mc-goals.md)) is held while a main-red repair of one of its repositories is queued, running or published. `draft · ready`, `done` and `dropped` start no
-   session: nothing is ever started on a draft (Martin, 2026-11-21). A recorded ready programme whose README.md has parts no goal names, or whose goals naming a part are still free drafts, gets the programme planning turn, which cuts every part into a goal in build (*Programme planning turn*).
+   session: nothing is ever started on a draft (Martin, 2026-11-21). A recorded ready programme whose README.md has a part no goal names is cut by the runner itself before the goals are read, with no session: one goal in `build · ready` per such part (*The cut of a ready order*). A goal that is a part whose part is no longer a heading of README.md is held, and the runner says so once: `<goal>: its part has left the order — restore Part <n> in README.md or drop the goal — no session is started`.
 3. Hold any goal whose phase is not open in its programme. The runner reads
    each programme's record at every pick (`programmeOrder`), as it reads
    `PRIORITY.json`, so a dependency stated, removed or renumbered counts at the
@@ -215,10 +215,10 @@ order without a model call:
    repository is not served by the lane. A review without an
    available route does not stand in front of other work.
    The draft hold says `<programme> is draft`, once while it
-   lasts. It is re-read during admission, before spawning plan, build, review
+   lasts. It is re-read during admission, before spawning build, review
    or mend, not just at the pick. A running session finishes normally; neither
    the merger's queued work nor the runner's landed-PR reconciliation is held.
-5. Take merge-failure mend and goal-less main-red mend first, then decision, a repair build, review, then an ordinary build; the programme planning turn follows build, then the programme archive turn ([below](#programme-archive-turn)), and the manager's turns ([below](#the-managers-turns)) come last. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
+5. Take merge-failure mend and goal-less main-red mend first, then decision, a repair build, review, then an ordinary build; the programme archive turn follows build ([below](#programme-archive-turn)), and the manager's turns ([below](#the-managers-turns)) come last. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work
    and longest waiting. Waiting begins at the last log entry. A carried build never
    jumps ahead of recovery or review.
@@ -240,8 +240,9 @@ The phase rule and the stage transitions are in [mc-goals.md](mc-goals.md).
 
 Repair-owned drafts, stops and stale releases are held at selection and
 rechecked during goal admission, including goals that already read
-`build · ready`. Ordinary state values do not clear the hold. The programme
-planning turn needs the current release; build also needs its reconciliation.
+`build · ready`. Ordinary state values do not clear the hold. Build needs
+the current release and its reconciliation; no code cuts or reconciles a
+repair release (*The cut of a ready order*).
 The terminal starts `mc repair`. The runner takes over after release.
 
 ## Lanes
@@ -326,7 +327,7 @@ role tells the session to read LOG.md first.
   The run row's kind is `repair`; it ranks as finish did. It fixes what review
   found, gates, publishes and moves the goal to review.
 - A goal mend uses `mend-session` for merge failures (conflict, failed candidate check or moved judged head), repairs and requeues merge. Pre-merge blockers are resolved in-role or sent directly to Martin. The first two failed merges run mend; its ready result retries delivery. The third failed merge waits on Martin. Both run in the goal's worktree, a repair build on the finish list and mend on the mend list (never the goal's class), and write the merge handoff when they queue. See
-  [repair and mend](mc-goals.md#repair-and-mend). A draft gets no session; planning is the programme planning turn below.
+  [repair and mend](mc-goals.md#repair-and-mend). A draft gets no session, and no session plans: a ready order is cut by code (*The cut of a ready order*).
 
 These are fresh sessions, not a resumed execution chain. If a session ends
 after handing its goal to merge, its lane is available for the next assignment
@@ -652,8 +653,7 @@ A goal names no model and no class (Martin, 2026-11-21: the classes `fast`, `med
 and `large` are removed): its build sessions run on the catalog's one `build` list.
 Every other unattended role runs on its
 own catalog list: `review`, `finish` (a repair build), `mend`, `plan`
-(the programme turn that cuts a ready
-programme's README.md into goals; Martin, 2026-11-16), `manager` (an unattended manager turn
+(a list no session routes: the cut of a ready order is code), `manager` (an unattended manager turn
 without an explicit tool or model) and `decision` (desk items). A role list never borrows `build`'s
 candidates: with none of its own usable and its API off, the session waits
 (Martin, 2026-11-09). Interactive `mc plan` and `mc martin` keep their own
@@ -916,144 +916,133 @@ clock and process boundaries. `tests/mc/goals.test.js` covers phase and stage
 eligibility. `tests/mc/run-doc.test.js` compares the documented defaults and
 routing rules with the code. These tests start no real coding session.
 
-## Programme planning turn
+## The cut of a ready order
 
-A released repair order is planned on a fixed copy of the released inputs.
-The turn carries the release revision and is due until that revision is
-reconciled, even if every part already has goals. The programme planner
-creates goals only against that current release and records its comparison
-with `mc programs reconcile <programme> --reason <text>`. Changed unfinished
-work is updated by the goal verbs. The comparison includes each part's
-README section, shared delivery clauses and the released digests of its
-binding files. A binding file named outside the numbered parts is shared by
-all parts; a file named only inside a part affects that part. Read and
-Where things are remain available for reference and review notes. Replacing
-a release whose planner did not finish records the existing unfinished
-contracts that no completed cut accepted. Those contracts must be updated or
-retired before the new release can be reconciled. A changed contract must
-be back in draft or build without carried criterion marks. The planner may return a repair
-goal from review or merge to build while reconciling. An unfinished merge
-handoff must return to build even if the goal's contract still matches;
-the earlier handoff cannot be reused. Removed parts retire
-their unfinished work. Landed goals are kept as evidence and cannot cover a
-changed part by number alone. The runner checks both the programme manifest
-and the reconciled goal contract before delivery, and passes the revision to
-the session. A result from a superseded session does not advance the goal.
-Merge recovery and completion require the current repair handoff as well as
-the current manifest and goal contract; the runner never assigns a new
-revision to an old queue entry or uses an earlier merge decision to complete
-a goal under a later release.
+Martin, 2026-11-21: a part of an order is a goal, with no rewriting. A
+programme whose record is `ready` is cut into goals by the runner itself, with
+no session and no model: one goal for each part of `README.md` that no goal
+names. No plan session is launched, no model list is routed, no checkout is
+made and no `runs.tsv` row is written; the runner says one line in
+`runner.log`: `programme:<p>: cut — Part 1 is <p>/<goal>, …, in build · ready`.
 
-Martin, 2026-11-16: a programme whose record is `ready` is cut
-into its phases and goals from `README.md`, with nobody present. Martin,
-2026-11-21: the plan session runs once; it takes the whole programme and cuts
-it into phases and goals, and all of them are then ready. Every goal of the cut
-is in `build · ready` when the turn ends, and the runner starts no session on
-a draft.
-`programmeDue` (`programme-turn.js`) is model-free and reads at every pick. A turn is due when
-all hold:
+**When.** `cutOrders` (`run.js`) runs at every pick, before the goals are read,
+so a goal the cut makes is a candidate of that same pick. `programmeDue`
+(`programme-turn.js`) is model-free. A programme is due when all hold:
 
-- the record is valid and `ready`, and `README.md` exists;
-- its goals are not already cut: a part of `README.md` is named by no goal, or
-  every part is named and a live goal naming a part is `draft · ready` and
-  free, that is neither held (`.hold.json`) nor under a live decision claim
-  (`.decision.json`). The runner supplies that word as `unavailable`. A turn
-  that was interrupted or failed is so run again and finishes its own drafts.
-  A draft that is held, decision-claimed, or has status `Martin` or `blocked`
-  is its holder's and makes no turn due;
+- the record is valid and `ready`, and `README.md` exists and has parts;
+- a part of `README.md` is named by no goal, live or archived (`partsCut`);
 - every parseable goal of the programme, live or archived, names a part of
-  `README.md`. A goal that names none, one made by hand or one a removed
-  version cut from another document, means the programme was planned already:
-  no turn starts, and the programme is silent (*Legacy goals*, below);
+  `README.md`. A goal that names none, one made by hand or one cut from
+  another document, means the programme is written by hand: nothing is cut,
+  and the programme is silent (*Legacy goals*, below);
+- every part carries its `Waits for` line, and the record states what those
+  lines say (below);
 - no open desk item of kind `programme` has the reference `programme:<p>`;
 - when the record names a horizon, that horizon reads `open`.
 
-Otherwise no turn starts. A horizon that is missing or not open, a record that
-is invalid and a state file that is unreadable are each said once in
-`runner.log`; a programme that simply is not due is silent.
+Otherwise nothing is cut. What the desk must do, a horizon that is missing or
+not open and a state file that is unreadable are each said once in
+`runner.log` while they last; a programme that simply is not due is silent.
 
-**The session.** One turn runs per programme and it is named `programme:<p>` in
-the claim and the current record, kind `plan`, routed on the `plan` list, with a `runs.tsv`
-row and the programme directory as its cwd. Role `plan`, `MC_HEADLESS=1`,
-`MC_PROGRAMME=<p>` and no `MC_GOAL`; routing, admission, provider refusals,
-offline holds, STOP and UPDATE are those of every session. It never uses a
-`plan/<programme>` worktree and commits nothing: the served repositories are
-given as read checkouts at `runner/work/programme-turn-<p>/<repo>`, detached at
-origin/main. The prompt is `programmePlanPrompt` (`run-plan.js`), and the plan
-role's headless programme-turn section says the rest. `README.md` is the source:
-the session cuts the programme from it, one or more goals per part,
-each naming the part it carries as `Part <n>` in the label of a `documents`
-entry whose path is the programme's `README.md`. It copies the part's
-Solution, Design and Proved by into the goal and decides nothing the document
-does not; a part already built gets a goal for the difference only, and the
-goals of an unchanged part are kept. The session writes each goal's stand on
-every rule area (`mc goal obligation set`, saying only what the part says) and
-moves it to build (`mc goal stage <p>/<g> build`); a draft an earlier turn left
-is finished the same way. A goal that waits for another is held by its phase
-alone: phase order in a sequential programme, `mc programs after` in a stated
-one, and `phaseOpen` keeps a build-stage goal of a closed phase from starting.
-The turn does not verify the acceptance setup: the order carries an acceptance
-procedure with usable setup, checked at the desk before the order was set
-ready, and the build session establishes the check, the required capability
-and the named input in its own worktree before it builds
-([mc-plan.md](mc-plan.md#acceptance-setup-at-build)). A choice the document
-leaves open is not settled by the session: it leaves the question at the desk
-with `mc martin propose --text <programme>/README.md --file <brief>` and ends.
-Only a question that is not such a choice is asked, with a goal-bound `mc ask`
-on the goal that needs it (one way to ask: jev, then a reader), and the other
-goals go on. Proposals are not processed.
+**What a part waits for.** Each part carries one line, `Waits for: nothing.` or
+`Waits for: Part 1, Part 3.`, read leniently on whitespace and the final full
+stop (`statedWaits`). `mc programs state <programme> ready` reads the lines and
+writes them as the record's `phases.after`, keyed by part number, in the write
+that sets the state; it refuses, exit 1 and nothing written, with one line per
+problem:
 
-**The cut.** After the session `finishTurn` reads the record again under the
-runner lock and reads the Part headings (`### Part <n> — …` inside
-`## Parts`, fenced blocks ignored) against the parsed live and archived goals
-(`partsCut`, no stage excluded). The ending is one of:
+```
+mc: Part 3 has no "Waits for" line — write "Waits for: nothing." or "Waits for: Part 1." in the part
+mc: Part 3 waits for Part 7, which the order does not have — name a part of the order
+mc: Part 2 and Part 3 wait for each other — one of them waits for nothing or for another part
+```
 
-- `cut`: every part is named by a goal, and no live goal that names a part is
-  still a free draft: `draft · ready`, not held and not decision-claimed
-  (`freeDrafts`; an archived goal is over and is not one, and a draft that is
-  held, claimed, blocked or waiting on Martin is its holder's);
-- `settled`: the record is no longer ready. Nothing counts;
-- `incomplete`: a part is named by no goal, `README.md` is missing, or a live
-  goal naming a part is still a free draft (`goal <name> is still a draft`, one
-  problem per goal). A failure (below).
+`mc programs after` on an order whose every part has the line is refused, exit
+1: `mc: <programme> states its order in README.md — change the part's "Waits
+for" line and set it ready again`. The runner cuts only an order whose every
+part has the line and whose record states what the lines say. A ready order
+with a part that has no goal and no such lines is not cut, and the runner
+says `<programme>: its order has no "Waits for" lines — the desk adds them and
+sets it ready again`; where the lines are there and the record does not state
+them (an order set ready before the lines were written, or a line changed
+since), it says `<programme>: its record does not state what the "Waits for"
+lines of its order say — the desk sets it ready again`. An order that was
+ready before the cut became code finishes the goals it has in their old form;
+a part of it that has no goal is cut once the desk has added the lines and
+set it ready again.
+
+**The goal.** `cutParts` makes, for each part with no goal, the goal's
+directory with its goal file and its log, through the functions every goal is
+written with (`renderGoal`, `appendLog`). The directory is named from the
+part's heading: lower-case letters, digits and hyphens, `part-<n>` when the
+heading leaves nothing, and a number added while the name is taken by a goal
+of the programme, live or archived, or by a live goal of another programme
+(a goal's branch `goal/<goal>` is one per repository). The goal file is version
+2, in `build · ready`, with `part` and `phase` the part's number, the title
+the heading's name, the repositories of the README's `Repositories:` line, a
+`documents` entry labelled `Part <n>` whose path is the programme's
+`README.md`, no criterion and no other text. The log gets the runner's first
+entry, `Done: cut from Part <n> of README.md`. The cut is made under the
+runner lock, on a second reading of what is due; a lock that cannot be had is
+said and tried again at the next pick.
+
+**What a session is given.** A goal that is a part holds no copy of it. Every
+session on it (build, repair, review and mend) is given the part as
+`README.md` has it when the session starts, heading to the next heading, byte
+for byte, followed by the order's sections outside its parts, under the line
+`PART <n> — <name>, as README.md has it now` (`partOfOrder`, `partBrief`). A
+part changed while its goal is unbuilt is read as changed. A part whose goal
+has landed is not built again: the cut makes no second goal for a part a goal
+names, whatever the part says now. `mc goal show` prints the same text
+([mc-goals.md](mc-goals.md#a-goal-that-is-a-part)).
+
+**Phases.** A goal's phase is its part's number, so the record's
+dependencies, written from the `Waits for` lines, hold a goal back until every
+goal of each part it waits for is done, dropped or archived (`phaseOpen`). The
+phases of a programme that holds a goal that is a part are never renumbered
+(`partProgramme`): archiving the goal of Part 1 leaves Part 2 in phase 2.
+
+**Repair releases.** A released repair order is not cut by code. Its
+reconciliation (`repair-reconcile.js`) compares each goal's authored contract
+with the released part, and a goal that is a part has no contract of its own.
+`programmeDue` answers `not cut: repair releases are cut by hand until
+reconciliation reads goals that are parts`, and the runner says it once per
+programme. Until then the goals of a release are written and the release is
+reconciled by hand, under the planner's identity (`MC_ROLE=plan`,
+`MC_HEADLESS=1`, `MC_PROGRAMME`, `MC_REPAIR_REVISION`) or by a desk takeover.
+The comparison is unchanged: each part's README section, shared delivery
+clauses and the released digests of its binding files; a changed contract must
+be back in draft or build without carried criterion marks; an unfinished merge
+handoff returns to build; removed parts retire their unfinished work; landed
+goals are kept as evidence. The runner checks both the programme manifest and
+the reconciled goal contract before delivery, and passes the revision to the
+session. A result from a superseded session does not advance the goal. Merge
+recovery and completion require the current repair handoff as well as the
+current manifest and goal contract.
 
 **Legacy goals.** A goal whose `documents` names no part of `README.md` is
 never rewritten and never cut again: its programme is not due while it is
 there, live or archived (`goalsNamingNoPart`). A goal that names a part of
-another file, such as the signed copy a removed version kept, counts as naming
-none. Nothing on disk is deleted or rewritten by reading it.
+another file counts as naming none. A goal of the old form that names a part
+keeps that part: the cut makes goals only for the parts no goal names. A draft
+an earlier planning session left is its writer's to finish; no session
+finishes it. Nothing on disk is deleted or rewritten by reading it.
 
-`runs.tsv` notes say `cut` or `not cut (<problem>; …)`.
-
-**Read checkouts.** Before the launch the runner fetches every served
-repository (a fetch failure ends the pick for that programme and counts
-nothing), then makes each checkout. A leftover is replaced only if it is clean
-(`status --porcelain` empty) and its HEAD is reachable from origin/main
-(`merge-base --is-ancestor`): it is removed with `git worktree remove`, without
-force, and added again. A dirty or unreachable leftover is never touched: the
-turn does not launch, the refusal is a failure with the reason
-`read checkout retained: <path>`, and the line is said once in `runner.log`. A
-checkout made earlier in the same setup is undone. Another add failure is a
-failure with the reason `setup: <git's last line>`. After the session the
-checkouts are removed, and any a refusal kept are named.
-
-**Failure.** A session that ends `incomplete` or fails to read the record is a
-failure, with its reason (`planning session exited <n> without every part of README.md
-cut into a goal in build (<problems>)`) and its log kept in
-`runner/programme-turn/<p>.json`; a `cut` or `settled` ending counts none.
-Provider endings (quota, offline, refused login), a refusal at admission and a
-fetch failure count nothing. The first failure retries on the next pick. The
-second opens a desk item of kind `programme`, reference `programme:<p>`: the
-first such item is `prepared`, with a model-free `prepared.md` of the failures
-and their logs, so a decision session repairs it; a later one is `for-martin`,
-sort `mechanical`, `reversible: false`, `due_at: null`, with a `brief.md` in
-Swedish. No turn starts while an item is open. A failure is counted again only
-after the item closed. The item closes by source when goals name every part
-of `README.md`, the record no longer reads valid and ready, or the directory is
-gone, and
-by decision otherwise ([mc-martin.md](mc-martin.md#durable-desk-items)). A state
-file that cannot be read starts no turn and counts nothing; the runner says it
-once in `runner.log`, the desk sync reports it and the item stays open.
+**Failure.** A cut that throws or cannot be made, such as a README with no
+`Repositories:` line or one that names a repository mc does not know, is a
+failure with its reason (`the cut could not be made: <why>`), kept in
+`runner/programme-turn/<p>.json`. The first failure is tried again at the next
+pick. The second opens a desk item of kind `programme`, reference
+`programme:<p>`: the first such item is `prepared`, with a model-free
+`prepared.md` of the failures, so a decision session repairs it; a later one
+is `for-martin`, sort `mechanical`, `reversible: false`, `due_at: null`, with a
+`brief.md` in Swedish. Nothing is cut while an item is open. A failure is
+counted again only after the item closed. The item closes by source when
+goals name every part of `README.md`, the record no longer reads valid and
+ready, or the directory is gone, and by decision otherwise
+([mc-martin.md](mc-martin.md#durable-desk-items)). A state file that cannot be
+read cuts nothing and counts nothing; the runner says it once in `runner.log`,
+the desk sync reports it and the item stays open.
 
 ## Programme archive turn
 

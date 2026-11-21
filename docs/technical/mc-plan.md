@@ -67,11 +67,11 @@ and `legacy` remain readable on old records but are not written:
 | `state` | `draft`, `ready`, `done` or `Martin` with a repair scope stop |
 | `created` | an ISO instant in UTC to the second |
 | `created_by` | `person`, `martin`, `repair` or the historical `manager` |
-| `phases` | optional: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}` |
+| `phases` | optional: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}`; `mc programs state <p> ready` writes it from the order's `Waits for` lines, keyed by part number |
 | `repair` | required for `created_by: "repair"`; absent for ordinary orders. Provenance for a functionality repair, with null horizon and no area-text order |
 
 `draft` means not finished; planning and build take nothing from it (`mc goal new`
-is refused, the planning turn does not run, no session starts on its goals).
+is refused, the order is not cut, no session starts on its goals).
 `ready` means goals may be cut and built subject to their admission rules;
 `done` means finished. Every new record is draft. For a taken-over repair,
 only interactive Martin can prepare its goals while it is draft; a declined
@@ -98,8 +98,8 @@ draft|ready`. The [repair command](#repair-drafts) uses the same validated write
 reviewed release rule.
 
 A record cannot name both a horizon and an area. A repair programme (`--area`)
-orders a set of small adjustments to one area as one document, and the planner
-cuts its goals; an area may have several repair programmes open, and one may
+orders a set of small adjustments to one area as one document, whose goals
+are written by hand in `mc plan` (its page has no parts for code to cut); an area may have several repair programmes open, and one may
 hold several live goals. No programme needs a horizon: Martin decides what is
 taken up and in which form, and only a change small enough to run through
 directly skips the document (Martin, 2026-11-16).
@@ -115,12 +115,15 @@ twice, never the phase itself, no cycle), the rule, what renumbering does to
 it and what is shown are in [mc-goals.md](mc-goals.md#phases). A `phases` of
 another form is a problem, so the record is invalid.
 
-The record is also what lets the runner plan the programme with nobody present:
-a programme with a valid `ready` record and a `README.md`
-gets one headless planning turn that cuts its phases and
-goals from README.md
-([mc-run.md](mc-run.md#programme-planning-turn)). A programme with no record, or
-with an invalid one, is never started that way; `mc plan` stays the person's
+The record is also what lets the runner cut the programme with nobody present
+and no session: for a programme with a valid `ready` record and a `README.md`
+it makes one goal in build per part, by code
+([mc-run.md](mc-run.md#the-cut-of-a-ready-order)). Each part of the order says
+what it waits for in one line, `Waits for: nothing.` or `Waits for: Part 1,
+Part 3.`; `mc programs state <programme> ready` writes the record's
+`phases.after` from those lines and refuses an order where one is missing or
+wrong, and `mc programs after` is refused for such an order. A programme with
+no record, or with an invalid one, is never cut; `mc plan` stays the person's
 entrance.
 
 The slug is not checked against the desk's horizons: mc stores what it is
@@ -131,8 +134,7 @@ take the shared runner lock with `strict: true` around a fresh read, validation
 and atomic replacement, retaining the other fields. They refuse rather than
 write without that lock; archive destination bookkeeping takes its own lock
 separately, never wrapping the record writer in a nested acquisition.
-`state` is read by the programme
-planning turn (a turn starts only for `ready`),
+`state` is read by the cut of a ready order (only `ready` is cut),
 and by the archive turn, and the list and the page show it. Only the runner
 sets it to `done` (`setRecordState`), once it has archived the programme
 ([mc-run.md](mc-run.md#programme-archive-turn)); `mc plan <programme> --archive`
@@ -347,7 +349,7 @@ Once reconciled, delivery writes are for that revision. A stale session keeps
 its local work but cannot register a PR, publish a handoff or move a goal
 forward under a new release. Goal review records the released revision and
 the authorized PR heads before queueing. A later release requires a new
-handoff even for a goal the planner keeps unchanged; see
+handoff even for a goal the reconciliation keeps unchanged; see
 [merge admission](mc-merge.md#repair-owned-work).
 
 ### Repair scope stops and dispositions
@@ -481,7 +483,7 @@ or prompt content. Session ownership and headless restrictions are unchanged.
 
 The plan session owns the coherent programme README/design, prerequisite investigation/decisions, phases, complete goal briefs and executable checks; a finished brief moves to build once its acceptance procedure and setup are verified. It may also investigate,
 write goals, build and land work itself, or take over a goal's branch when
-that costs less than a new build session. This broad freedom belongs to interactive planning with Martin at the terminal. The runner starts no session on a draft; its one headless planning is the [programme planning turn](mc-run.md#programme-planning-turn), which cuts a ready programme into goals in build (Martin, 2026-11-21);
+that costs less than a new build session. This broad freedom belongs to interactive planning with Martin at the terminal. The runner starts no session on a draft, and no headless session plans: [code cuts a ready order](mc-run.md#the-cut-of-a-ready-order) into one goal in build per part (Martin, 2026-11-21);
 a goal in `finish` gets a finish session and a red merge a mend session (a
 merge failure only; a `blocked` goal before merge is Martin's), each with its own role ([mc-goals.md](mc-goals.md) § *Finish
 and mend*).
@@ -594,10 +596,10 @@ permitted checks; missing evidence is a finding, not a pass. For unbuilt
 functionality it assesses the procedure and prerequisites, not a final result.
 The desk corrects findings in the order before release.
 
-Planning does not verify the setup (Martin, 2026-11-21). The programme
-planning turn has read checkouts only: it carries each part's Proved by into
-the goal's criteria and moves the goal to build. A consumer requiring a
-producer is in build in a dependent phase, and the phase holds it.
+Nothing between ready and build verifies the setup (Martin, 2026-11-21). The
+cut of a ready order is code: it makes each part a goal in build and reads no
+repository. A part that needs another says so in its `Waits for` line, and its
+goal's phase holds it.
 
 The build session establishes the setup before it builds
 (`canon/roles/build-session.md`). Entering build and the first build remake a

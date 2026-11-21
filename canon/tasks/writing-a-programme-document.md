@@ -4,7 +4,7 @@ description: Writing a programme document in mc — what the user gets and how o
 ---
 # Writing a programme document
 
-A programme document is an order, as a buyer of software hands it to the firm that builds it. Write it with Martin, the buyer; the planner cuts goals from its README once it is ready.
+A programme document is an order, as a buyer of software hands it to the firm that builds it. Write it with Martin, the buyer; once it is ready code cuts one goal per part, and each part is built as it is written.
 
 ## From proposals to an order
 
@@ -19,17 +19,17 @@ The desk resolves technical choices using [asking-martin](asking-martin.md).
 
 An order is built to its end without him (Martin, 2026-11-17). Between ready and done nothing waits for him: no picture to accept, nothing to look at, listen to or try, no reading to approve. Every choice of his is made in the document before it is ready; the build is judged against the document and measured (`mc shot`, the checks), never by his use. An act of his the work needs (money, a console, a legal commitment) is done before ready or after the end, as an act of its own.
 
-No verification by Martin, on a Mac or on a device is written in an order (Martin, 2026-11-21): no Proved by line, no "after the order" check, no trial of his. Where the work needs such verification, it stands as information under the horizon the order serves, in its `basis.md`, and the order holds at most one sentence saying so. The planner cuts no criterion from it.
+No verification by Martin, on a Mac or on a device is written in an order (Martin, 2026-11-21): no Proved by line, no "after the order" check, no trial of his. Where the work needs such verification, it stands as information under the horizon the order serves, in its `basis.md`, and the order holds at most one sentence saying so.
 
 An order is temporary: archived when its work has landed and not read again. What must last is written where it lasts before then: what runs in `docs/technical/`, aims and decisions on the area page, findings as proposals in their area ([proposals](proposals.md)).
 
-Keep the findings for the chosen technical solution in the programme's evidence or an area proposal the part names (Martin, 2026-11-18). The planner and builder settle routine construction within that solution. Include the technical details the order depends on and keep the document short enough to read in full.
+Keep the findings for the chosen technical solution in the programme's evidence or an area proposal the part names (Martin, 2026-11-18). The builder settles routine construction within that solution. Include the technical details the order depends on and keep the document short enough to read in full.
 
 ## The document
 
 - Open with what a user can do or see afterwards that they cannot today.
 - One thing to say yes or no to. If Martin could want half, it is two programmes.
-- Three to eight parts, cut by user outcome, not layer. Each can land alone and keeps its number.
+- Three to eight parts, cut by user outcome, not layer. Each can land alone and keeps its number. Each says in one line what must be done before it starts, `Waits for: nothing.` or `Waits for: Part 1, Part 3.`; ready is refused while a part lacks it.
 - Order says the sequence of the parts and what the desk does beside the build; it holds no step of Martin's.
 - Aim for 1,500 words, but never cut a user case to fit (Martin, 2026-11-18).
   Cut unnecessary construction first; split into programmes if that makes the choices clearer.
