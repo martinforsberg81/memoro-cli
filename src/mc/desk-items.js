@@ -183,6 +183,7 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
     } else if (item.kind === 'programme') {
       // A programme item is the cut's: it closes when a goal names every part of the programme document,
       // its record no longer reads valid and ready, or its directory is gone. A state file that cannot be read keeps it open, said.
+      // A repair order's cut is done when its release is reconciled, not when its parts are named: its goals may all be there while the release is refused.
       const programme = item.reference.slice('programme:'.length);
       const turn = readTurnState({ root, programme, read });
       if (turn.status === 'unreadable') {
@@ -193,6 +194,7 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
       const record = exists(join(home, programme)) ? readRecord(join(home, programme), { read }) : null;
       if (!record) summary = 'The programme directory is gone.';
       else if (record.status !== 'valid' || record.record.state !== 'ready') summary = 'The programme record no longer reads valid and ready.';
+      else if (record.record.repair) { if (record.record.repair.release && record.record.repair.reconciled?.revision === record.record.repair.release.revision) summary = 'The repair release is now reconciled.'; }
       else if (!cutProblems({ home, programme, list, read }).length) summary = 'Goals now name every part of the programme document.';
     } else if (item.kind === 'archive') {
       // An archive item is the archive turn's: it closes by source only when the programme directory is gone from the

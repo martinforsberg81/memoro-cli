@@ -63,7 +63,7 @@ See [repair scope stops](mc-martin.md#repair-scope-stops).
 
 The selected order continues through independent review and bounded revision
 in the same invocation. Release prints `mc: repair programme <programme> is
-ready for planning`. `mc repair --resume <programme>` resumes a draft or
+released — the runner cuts its goals`. `mc repair --resume <programme>` resumes a draft or
 opens a stale release for a fresh review. On a current release it retries
 source archival only. An interrupted or unsuccessful review leaves a draft
 and reports how to resume. A scope stop reports its desk item.

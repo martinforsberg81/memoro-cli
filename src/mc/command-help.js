@@ -624,7 +624,6 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc programs release <programme>   the assigned repair author releases its current reviewed order\n",
     "        mc programs repair-stop <programme> --title <text> --summary <text> [--item <id>]   the assigned repair author records a scope stop for the desk\n",
     "        mc programs disposition <programme> decline|return|takeover --reason <text>   interactive Martin answers a repair stop\n",
-    "        mc programs reconcile <programme> --reason \"…\"   the planner records the goals checked against this repair release\n",
     "        mc programs after <programme> <phase> <phase>…   the first phase waits for the phases after it, replacing what it waited for\n",
     "        mc programs after <programme> <phase> --none   the phase waits for no phase\n",
     "        mc programs show <programme> [--json]   one programme's record, or that it has none\n",

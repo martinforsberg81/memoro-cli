@@ -1,4 +1,4 @@
-/** Only a current reviewed repair draft can be opened to the ordinary planner. */
+/** Only a current reviewed repair draft can be released to the runner's cut. */
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
 

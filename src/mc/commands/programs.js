@@ -43,7 +43,7 @@ import { realLock } from '../runner-lock.js';
 import { programmeRepositories, programmeReviewCall } from '../programme-review.js';
 import { beginRepairReview, repairReviewCall } from '../repair-review.js';
 import { isDesk, releaseRepair, repairReleaseState } from '../repair-release.js';
-import { reconcileRepair, setDeskRepairState } from '../repair-reconcile.js';
+import { setDeskRepairState } from '../repair-reconcile.js';
 import { disposeRepair, REPAIR_DISPOSITIONS, stopRepair } from '../repair-stop.js';
 import { goalParts, partsOrder } from '../programme-turn.js';
 import { cutFromOrder } from '../goal-parts.js';
@@ -71,8 +71,6 @@ export const ROUTES = {
   disposition: { strictValues: ['--reason'], check: ({ positional, flags }) => positional.length === 2 && NAME_RE.test(positional[0])
     && REPAIR_DISPOSITIONS.includes(positional[1]) && flags.reason?.trim() ? null
     : 'use mc programs disposition <programme> decline|return|takeover --reason "<text>"' },
-  reconcile: { strictValues: ['--reason'], check: ({ positional, flags }) => programmeNameCheck('reconcile', positional)
-    ?? (!flags.reason?.trim() ? 'mc programs reconcile needs --reason "…"' : null) },
   after: { booleans: ['--none'], check: (scanned) => afterCheck(scanned) },
   show: { booleans: ['--json'], check: ({ positional }) => (
     positional.length !== 1 ? 'mc programs show needs one programme'
@@ -81,7 +79,7 @@ export const ROUTES = {
   '*': { booleans: ['--json'], check: ({ positional }) => `mc programs has no ${positional[0]}` },
 };
 
-const VERBS = ['list', 'priority', 'create', 'record', 'state', 'after', 'show', 'review', 'release', 'reconcile', 'repair-stop', 'disposition'];
+const VERBS = ['list', 'priority', 'create', 'record', 'state', 'after', 'show', 'review', 'release', 'repair-stop', 'disposition'];
 
 function stateCheck(positional) {
   if (positional.length !== 2) return 'mc programs state needs <programme> draft|ready';
@@ -181,7 +179,6 @@ export async function run(argv, deps = {}) {
   if (verb === 'state') return stateVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'review') return reviewVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'release') return releaseVerb(scanned, { ...deps, env, stdout, stderr });
-  if (verb === 'reconcile') return reconcileVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'repair-stop') return stopVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'disposition') return dispositionVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'after') return afterVerb(scanned, { ...deps, env, stdout, stderr });
@@ -528,7 +525,7 @@ function releaseVerb({ positional: [name] }, { env, stdout, stderr, lock, author
       stderr.write(`mc: ${result.problems[0] ?? `${name} is not a repair-owned programme`}\n`);
       return 1;
     }
-    stdout.write(`mc: repair programme ${name} is ready for planning\n`);
+    stdout.write(`mc: repair programme ${name} is released — the runner cuts its goals\n`);
     wakeRunner(workRoot(env));
     return 0;
   } catch (error) { stderr.write(`mc: repair release ${name}: ${error.message}\n`); return 1; }
@@ -555,18 +552,6 @@ function dispositionVerb({ positional: [name, action], flags }, { env, stdout, s
     wake();
     return 0;
   } catch (error) { stderr.write(`mc: could not dispose of ${name}: ${error.message}\n`); return 1; }
-}
-
-function reconcileVerb({ positional: [programme], flags }, { env, stdout, stderr, lock }) {
-  try {
-    const result = reconcileRepair({ home: programsHome(env), programme, env, lock, reason: flags.reason });
-    if (!result.ok) {
-      stderr.write(`mc: ${result.problems[0] ?? `${programme} has no valid record`}\n`);
-      return 1;
-    }
-    stdout.write(`mc: ${programme} · release ${result.record.repair.reconciled.revision} reconciled\n`);
-    return 0;
-  } catch (error) { stderr.write(`mc: could not reconcile ${programme}: ${error.message}\n`); return 1; }
 }
 
 async function reviewVerb({ positional: [name] }, deps) {
