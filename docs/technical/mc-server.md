@@ -199,19 +199,26 @@ socket. `mc session` takes it as follows.
 
 ## Files on the tailnet
 
-mc-server serves `~/mc/programs` read-only to Martin's tailnet with Tailscale
-Serve, so a programme's pictures, evidence and pages open in a browser on his
+mc-server serves `~/mc/programs` and the desk's records read-only to Martin's
+tailnet with Tailscale Serve, so a programme's pictures, evidence and pages,
+and the desk's horizons, items, lessons and designs, open in a browser on his
 Mac and iPhone:
 
     http://mc-server.tail6983e4.ts.net:8080/<programme>/<path>
+    http://mc-server.tail6983e4.ts.net:8080/martin/<designs|design-work|horizons|items|lessons>/<path>
 
-A directory's address lists its files. Only devices on Martin's tailnet reach
-it; nothing else under `~/mc` is served, because worktrees there hold
-credentials (`.dev.vars`). It was set up at the desk on 2026-11-21 with
+A directory's address lists its files; `/martin/` itself has no listing.
+Only devices on Martin's tailnet reach it. Nothing else under `~/mc` is
+served, `~/mc/martin/work` included, because worktrees hold credentials
+(`.dev.vars`) and Tailscale path serving cannot filter files out of a mounted
+directory. A further directory is added only if it holds no worktree or
+credential. The root was set up at the desk on 2026-11-21 with
 `sudo tailscale serve --bg --http=8080 /home/martin/mc/programs` (path serving
-needs root) and persists in tailscaled's serve config;
-`sudo tailscale serve --http=8080 off` stops it and `tailscale serve status`
-shows it. On mc-server itself the name does not resolve; a check from there
+needs root), and the desk folders the same day on Martin's word, each with
+`sudo tailscale serve --bg --http=8080 --set-path /martin/<dir> /home/martin/mc/martin/<dir>`.
+The mounts persist in tailscaled's serve config;
+`sudo tailscale serve --http=8080 off` stops them and `tailscale serve status`
+shows them. On mc-server itself the name does not resolve; a check from there
 uses `curl -H 'Host: mc-server.tail6983e4.ts.net:8080' http://100.67.31.13:8080/…`.
 
 A session that shows Martin a file or refers him to one gives this link, as
