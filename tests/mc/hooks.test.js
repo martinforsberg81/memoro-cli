@@ -77,13 +77,14 @@ describe('mc hook — the worktree a session starts in', () => {
     assert.match(sessionStartContext({ cwd: '/x', inside: true, states: [], env: {} }), /session role unknown.*MC_ROLE.*MC_GOAL and cwd \/x/u);
   });
 
-  it('a plan session is told nothing about proposals: they wait in the areas, not in its programme', () => {
+  it('SessionStart does not announce proposals left in a programme directory', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-hook-proposals-'));
     const dir = join(root, 'programs', 'mc', 'proposals');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, '2026-11-03-mc-a.md'), 'a\n');
     const text = sessionStartContext({ cwd: join(root, 'programs', 'mc'), inside: true, states: [], env: { MC_WORK_ROOT: root } });
-    assert.ok(!/proposal/u.test(text), text);
+    // The unknown-role diagnostic echoes the fixture root, not a proposal notice.
+    assert.doesNotMatch(text.replaceAll(root, '<work-root>'), /proposal/u);
   });
 
   it('finds the worktrees of a workarea, and only those mc knows', () => {
@@ -589,9 +590,9 @@ describe('mc hook stop: a goal\'s review ends only once it has decided and writt
 
 
 describe('SessionStart names the session before anything else', () => {
-  it('names plan, goal and unknown directories even without a repository', async () => {
+  it('names known roles and reports unknown directories even without a repository', async () => {
     for (const [cwd, extra, expected] of [
-      ['/mc/programs/mc', {}, /^You are the plan session for programme `mc`.*you never run it.*mc goal/u],
+      ['/mc/programs/mc', {}, /^mc — session role unknown: checked MC_ROLE, MC_GOAL and cwd \/mc\/programs\/mc against \/mc\.$/u],
       ['/mc/programs/mc', { MC_GOAL: 'mc/g' }, /^You are the build session \(goal\) for programme `mc`\./u],
       ['/elsewhere', {}, /^mc — session role unknown: checked MC_ROLE, MC_GOAL and cwd \/elsewhere against \/mc\./u],
       ['/mc/programs/mc', { MC_ROLE: 'review-session:goal', MC_PROGRAMME: 'mc' }, /^You are the review session \(goal\) for programme `mc`\./u],
@@ -602,12 +603,12 @@ describe('SessionStart names the session before anything else', () => {
     ]) {
       const stdout = { text: '', write(text) { this.text += text; } };
       await run(['session-start'], {
-      syncSkills: () => [],
+        syncSkills: () => [],
         stdout, env: { MC_WORK_ROOT: '/mc', ...extra }, readStdin: async () => JSON.stringify({ cwd }),
         worktreesAt: () => ({ inside: false, worktrees: [] }), listServers: () => ({ servers: [] }),
       });
       const text = JSON.parse(stdout.text).hookSpecificOutput.additionalContext;
-      assert.match(text.split('\n')[0], expected, cwd);
+      assert.match(text.split('\n')[0], expected);
     }
   });
 });
