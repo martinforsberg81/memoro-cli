@@ -100,6 +100,11 @@ goals; for a changed part a goal not yet in build is rewritten and moved to
 build, and a goal already built gets a new goal for the difference. A draft an
 earlier turn left is finished the same way.
 
+A line that asks for verification by Martin, on a Mac or on a device is never
+cut as a criterion (Martin, 2026-11-21): such verification is information in
+the horizon's basis, and an order that still carries one is left at the desk
+the same way as an open choice.
+
 Where a part leaves open a choice of what is delivered or how it looks, which
 the document neither shows nor routes, or has a step that waits on Martin
 between ready and done (a look, an acceptance, a trial, a word), do not make

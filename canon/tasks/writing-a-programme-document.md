@@ -19,6 +19,8 @@ The desk resolves technical choices using [asking-martin](asking-martin.md).
 
 An order is built to its end without him (Martin, 2026-11-17). Between ready and done nothing waits for him: no picture to accept, nothing to look at, listen to or try, no reading to approve. Every choice of his is made in the document before it is ready; the build is judged against the document and measured (`mc shot`, the checks), never by his use. An act of his the work needs (money, a console, a legal commitment) is done before ready or after the end, as an act of its own.
 
+No verification by Martin, on a Mac or on a device is written in an order (Martin, 2026-11-21): no Proved by line, no "after the order" check, no trial of his. Where the work needs such verification, it stands as information under the horizon the order serves, in its `basis.md`, and the order holds at most one sentence saying so. The planner cuts no criterion from it.
+
 An order is temporary: archived when its work has landed and not read again. What must last is written where it lasts before then: what runs in `docs/technical/`, aims and decisions on the area page, findings as proposals in their area ([proposals](proposals.md)).
 
 Keep the findings for the chosen technical solution in the programme's evidence or an area proposal the part names (Martin, 2026-11-18). The planner and builder settle routine construction within that solution. Include the technical details the order depends on and keep the document short enough to read in full.
@@ -51,7 +53,7 @@ Keep the findings for the chosen technical solution in the programme's evidence 
 
 Under Decided, give each choice Martin could have made otherwise one line and attribute it to him or the desk. Show any interpretation of his words as an image or text there. Mark uncertainty and state the proposal.
 Before offering readiness, give every part an agreed outcome and design, a chosen solution supported by completed investigations, and the acceptance procedure above. This includes behaviour-only changes and repairs.
-Read every part for a step that waits on him. Settle it now, make it measurable or move his act before ready or after done. Review the current text once with `mc programs review <programme>` (Martin, 2026-11-18) and settle its findings; run it again only when a changed part needs fresh feedback, never until a reading comes back clean (Martin, 2026-11-21).
+Read every part for a step that waits on him. Settle it now, make it measurable or move his act before ready or after done; verification by him, on a Mac or on a device leaves the order for the horizon's basis. Review the current text once with `mc programs review <programme>` (Martin, 2026-11-18) and settle its findings; run it again only when a changed part needs fresh feedback, never until a reading comes back clean (Martin, 2026-11-21).
 When Martin says the order is ready, the desk runs `mc programs state <programme> ready`.
 
 English, whole sentences, the plain word, each thing said once.
