@@ -26,6 +26,11 @@ section: Changed
   its reading of anything unclear in the log as a line beginning `Read as:`
   and builds on it; its `mc goal defect` is refused. Goals written before keep
   every rule they had.
+- **The review of such a goal asks one question.** Does the build do what the
+  part says? `REVIEW.md` is the head line and one line, `part: OK` or `part:
+  NOT OK — <what the part says that the build does not do, and where>`. No
+  criterion, obligation, `untouched`, `seen` or `write-back` line is asked of
+  it. The repair loop is unchanged.
 - **The `plan` model list is gone with the session it routed.** `mc model`
   lists, adds to and sets build, review, finish, mend, manager and decision. A
   `models.json` that still holds a `plan` list reads as before; the list is

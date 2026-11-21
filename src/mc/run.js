@@ -73,6 +73,7 @@ import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
 import { addBranchWorktree, addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, BUILD_SESSION, BUILD_SESSION_LIMIT, BUILD_SESSION_STOP, buildSessionCount, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, WAITS_FOR_MAIN, PROGRESS_AGAIN, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
+import { cutFromOrder } from './goal-parts.js';
 import { realLock } from './runner-lock.js';
 import { drainingOwners, drainState, drainWaiting, fullRunWords, handOver, mcCheckout, readRunner } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
@@ -3199,13 +3200,15 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         }
       }
       // The untouched areas the branch changed: the one function the move out of review checks against (`review-verdict.js`).
-      if (review) found = trippedAreas({ goal, dir: goal.dir, head: pr.head, git: deps.git, exists: deps.exists });
+      // A goal cut from an order has no stand and is judged by one line, `part`: no area is read for it and no write-back line asked.
+      const cut = cutFromOrder(goal);
+      if (review) found = cut ? { tripped: [] } : trippedAreas({ goal, dir: goal.dir, head: pr.head, git: deps.git, exists: deps.exists });
       // The areas judged as the user sees it, asked once here: the prompt names them and MC_REVIEW_SEEN holds the same list.
-      const judged = review ? seenAreas({ goal, dir: goal.dir, tripped: found.tripped ?? [], git: deps.git, exists: deps.exists }) : { seen: [] };
+      const judged = review && !cut ? seenAreas({ goal, dir: goal.dir, tripped: found.tripped ?? [], git: deps.git, exists: deps.exists }) : { seen: [] };
       // The write-back line: asked of a version 2 goal's review when its programme has a record, so what the programme
       // made true is checked against docs/technical goal by goal (mc-goals.md, "The verdict"). The prompt and
       // MC_REVIEW_WRITE_BACK carry the same fact.
-      const writeBack = review && goal.version === 2 && readRecord(join(programsHome(deps.env), goal.programme), { read: (path) => deps.read(path) }).status === 'valid';
+      const writeBack = review && !cut && goal.version === 2 && readRecord(join(programsHome(deps.env), goal.programme), { read: (path) => deps.read(path) }).status === 'valid';
       const attached = await deps.attachDeps(worktree);
       if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
       // The brief is the goal as `mc goal show` renders it; a record from a test without one has none. A goal that is a

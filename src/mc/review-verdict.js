@@ -8,6 +8,8 @@
  * each touched obligation, `untouched <area>` for each tripped area, and
  * `change`, `out-of-scope`, `protection`, `bugs`; and `seen <area>` for each area the review was told is judged as the
  * user sees it (an area that declares `"seen": true` and that the goal stands touched on or trips: `seenAreas`). A
+ * goal cut from an order (`cutFromOrder`) has one item instead of all of these, `part`: does the build do what the
+ * part says. A
  * `seen` line is `OK — <shots>[ — <words>]` or `NOT OK — <shots> — <words>`, where `<shots>` is one or more
  * `shots/<name>.png` paths, separated by `, `, files in the goal's directory, or is `none` and the words are the
  * reason; a `seen` line is never carried. A narrow round copies a line
@@ -25,6 +27,7 @@
 import { join } from 'node:path';
 
 import { isSourceArea, readAreas } from './areas.js';
+import { cutFromOrder } from './goal-parts.js';
 
 /** The items every version 2 verdict holds, besides criteria, preserve ids and areas. */
 export const FIXED_IDS = Object.freeze(['change', 'out-of-scope', 'protection', 'bugs']);
@@ -32,16 +35,23 @@ export const FIXED_IDS = Object.freeze(['change', 'out-of-scope', 'protection', 
 /** The id of the write-back line: held only by a review the runner launched with `MC_REVIEW_WRITE_BACK=1`. */
 export const WRITE_BACK_ID = 'write-back';
 
+/** The one id of a verdict on a goal cut from an order: `part: OK` or `part: NOT OK — <what the part says that the build does not do, and where>`. */
+export const PART_ID = 'part';
+
 const HEAD_LINE = /^head: (\S+) (\S+)\s*$/u;
 const ID = /^(criterion \d+|V\d+|obligation \S+|untouched \S+|seen \S+|write-back|change|out-of-scope|protection|bugs)(?=:)/u;
 const ITEM = /^(criterion \d+|V\d+|obligation \S+|untouched \S+|seen \S+|write-back|change|out-of-scope|protection|bugs): (OK|NOT OK)(?: — (.+?))?\s*$/u;
+const PART_LINE = /^part(?=:)/u;
+const PART_ITEM = /^(part): (OK|NOT OK)(?: — (.+?))?\s*$/u;
 
 /**
  * REVIEW.md's `text` read into `{ heads: [{ repo, sha }], items: [{ id, ok, reason }], malformed: [line] }`.
  * A line that starts with an item id and a colon but is not `OK` or `NOT OK — <what and where>` is malformed; a
- * line that starts with neither an id nor `head:` is free text and read as nothing.
+ * line that starts with neither an id nor `head:` is free text and read as nothing. With `part` (the verdict on a goal
+ * cut from an order) the one id read is `part`, and every other line but a head is free text.
  */
-export function parseVerdict(text) {
+export function parseVerdict(text, { part = false } = {}) {
+  const [id, form] = part ? [PART_LINE, PART_ITEM] : [ID, ITEM];
   const heads = [];
   const items = [];
   const malformed = [];
@@ -49,16 +59,20 @@ export function parseVerdict(text) {
     const head = HEAD_LINE.exec(line);
     if (head) { heads.push({ repo: head[1], sha: head[2] }); continue; }
     if (/^head:/u.test(line)) { malformed.push(line); continue; }
-    if (!ID.test(line)) continue;
-    const item = ITEM.exec(line);
+    if (!id.test(line)) continue;
+    const item = form.exec(line);
     if (!item || (item[2] === 'NOT OK' && !item[3])) { malformed.push(line); continue; }
     items.push({ id: item[1], ok: item[2] === 'OK', reason: item[3] ?? null });
   }
   return { heads, items, malformed };
 }
 
-/** The ids a verdict on `goal` holds, in the order they are written; `tripped` is `trippedAreas`' list, `seen` `seenAreas`'. */
+/**
+ * The ids a verdict on `goal` holds, in the order they are written; `tripped` is `trippedAreas`' list, `seen` `seenAreas`'.
+ * A goal cut from an order holds `part` and nothing else, whatever the other arguments say.
+ */
 export function requiredIds(goal, tripped = [], seen = [], writeBack = false) {
+  if (cutFromOrder(goal)) return [PART_ID];
   const criteria = (goal.success_criteria ?? []).map((_, index) => `criterion ${index + 1}`);
   if (goal.version !== 2) return criteria;
   return [
@@ -127,10 +141,11 @@ function seenReason(item) {
  * line only has to be there), every id of `requiredIds` once, no line that is not in form, no id the goal does not have.
  * With `writeBack` the verdict holds one `write-back` line in form (`writeBackFault`); without it a `write-back` line is not an
  * item of the verdict. For each area in `seen` the line's form and that each screenshot it names is a file (`isFile(path)`, the path as written,
- * read from the goal's directory). `failed` lists the NOT OK items.
+ * read from the goal's directory). `failed` lists the NOT OK items. For a goal cut from an order the head lines and
+ * the one `part` line are all that is read and asked.
  */
 export function checkVerdict({ text, goal, tripped = [], heads = [], seen = [], writeBack = false, isFile = () => false }) {
-  const read = parseVerdict(text);
+  const read = parseVerdict(text, { part: cutFromOrder(goal) });
   const problems = [];
   for (const line of read.malformed) problems.push(`not in form: "${line}" — ${'`<id>: OK` or `<id>: NOT OK — <what and where>`, and `head: <repo> <sha>`'}`);
   for (const repo of goal.repos ?? []) {

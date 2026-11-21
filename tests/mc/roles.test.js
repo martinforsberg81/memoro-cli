@@ -432,6 +432,14 @@ describe('the build role', () => {
     assert.match(told(BUILD_ROLES.goal), /Done: Part <n> built and published at <sha>\.\nComment: Proved: <the Proved by sentence it answers> — <command> — <result>\nRead as: <what was unclear> — <the reading built>\nNext: Review\./u, 'the handover entry, in the order\'s form');
   });
 
+  // Order mc-parts-are-goals, Part 2: the review prompt of a goal that is a part names this section, and mc asks for the line it gives.
+  it('tell a review of a goal that is a part to ask whether the build does what the part says and to write the one part line', () => {
+    const text = told(REVIEW_ROLE).replace(/\s+/gu, ' ');
+    assert.ok(text.includes('## A goal that is a part'), 'the section the prompt of such a goal names');
+    assert.ok(text.includes('You ask one question: does the build do what the part says?'));
+    assert.ok(text.includes('one line: `part: OK`, or `part: NOT OK — <what the part says that the build does not do, and where>`.'), 'the line checkVerdict asks for');
+  });
+
   it('write what every build shares once', () => {
     const carriers = readdirSync(canonRolesDir()).filter((file) => file.endsWith('.md'))
       .filter((file) => ONE_BRANCH.test(readFileSync(join(canonRolesDir(), file), 'utf8')));

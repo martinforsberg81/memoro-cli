@@ -52,6 +52,13 @@ export const ITEM_WORDS = Object.freeze(Object.keys(ITEM_PARTS));
 const PART_OF_LETTER = Object.freeze(Object.fromEntries(Object.values(ITEM_PARTS).map((part) => [part.letter, part])));
 /** The id letters, in the order `ids` is written. */
 export const ID_LETTERS = Object.freeze(['B', 'P', 'D', 'C', 'V', 'R', 'X']);
+/**
+ * Whether a goal was cut from its programme's order by code (`cutParts`, programme-turn.js): it carries `part`, the
+ * number of the part it is. Such a goal holds no text of its own: it starts, goes to review and lands with no
+ * criterion, and its review writes one line, `part`.
+ */
+export const cutFromOrder = (goal) => goal?.part !== undefined;
+
 /** The keys of an obligation. */
 export const OBLIGATION_KEYS = Object.freeze(['area', 'stand', 'text', 'standard']);
 

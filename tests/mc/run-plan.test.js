@@ -812,7 +812,7 @@ test('cacheTtlMs: claude follows the role, codex keeps its five minutes', () => 
 // headless plan session was told: README.md as its source, one goal per part named by a labelled document, nothing
 // invented, every goal moved to build, and its check-in. No session cuts an order now; what a session on a goal the
 // runner cut is told is below.
-test('the prompts of a goal that is a part give the part under its heading line, and the build is told which section of its role applies; any other goal is briefed as before', () => {
+test('the build, repair and mend prompts of a goal that is a part give the part under its heading line, and the build is told which section of its role applies; any other goal is briefed as before', () => {
   const args = { name: 'p/g', dir: '/goal', worktree: '/goal/repo', branch: 'goal/g' };
   const brief = 'PART 2 — Two, as README.md has it now\n\n### Part 2 — Two\n\nSolution: the second thing.\n\n# p\n\n## Order\n\nIn sequence.\n';
   const lead = 'The goal is Part 2 of its programme\'s order and holds no text of its own. This is the part, and after it the order\'s sections outside its parts, as README.md has them now:\n\n';
@@ -822,14 +822,31 @@ test('the prompts of a goal that is a part give the part under its heading line,
   assert.ok(build.includes(`Your role says the rest. ${role}\n\n`), 'the build is told which section of its role applies');
   const repair = goalRepairPrompt({ ...args, brief, part: 2, verdict: 'head: repo abc123\nchange: NOT OK — the refusal is missing\n' });
   for (const text of [role, `${lead}${brief.trimEnd()}`, 'This is a repair build. Read /goal/REVIEW.md.', 'change: NOT OK — the refusal is missing']) assert.ok(repair.includes(text), text);
-  for (const told of [goalReviewPrompt({ ...args, pr: 1, head: 'def456', brief, part: 2 }), goalMendPrompt({ ...args, stage: 'merge', brief, part: 2 })]) {
-    assert.ok(told.endsWith(`${lead}${brief.trimEnd()}`), told);
-    assert.equal(told.includes(role), false, 'the review and mend roles have no such section');
-  }
+  const mend = goalMendPrompt({ ...args, stage: 'merge', brief, part: 2 });
+  assert.ok(mend.endsWith(`${lead}${brief.trimEnd()}`), mend);
+  assert.equal(mend.includes('A goal that is a part'), false, 'the mend role has no such section');
   for (const told of [build, repair]) assert.doesNotMatch(told, /as `mc goal show` renders it/u);
   const other = goalPrompt({ ...args, brief: '# Title\n\nCRITERIA 0/1\n' });
   assert.ok(other.endsWith('Your role says the rest.\n\nThe goal, as `mc goal show` renders it:\n\n# Title\n\nCRITERIA 0/1'), other);
   assert.equal(goalPrompt(args), 'You are a session on the goal p/g. Its directory is `/goal`, with GOAL.json and LOG.md; your worktree is `/goal/repo`, on branch `goal/g`. Your role says the rest.');
+});
+
+// Order mc-parts-are-goals, Parts 2 and 3: the review of a goal that is a part asks one question and writes one line.
+test('the review prompt of a goal that is a part names the role\'s section for it and asks for no write-back, seen or untouched line; a later round still names the previous heads and the NOT OK line; any other goal is asked as before', () => {
+  const args = { name: 'p/g', dir: '/goal', worktree: '/goal/repo', branch: 'goal/g', pr: 1, head: 'def456' };
+  const brief = 'PART 2 — Two, as README.md has it now\n\n### Part 2 — Two\n\nSolution: the second thing.\n\n# p\n';
+  // What the runner would hand a goal of the old form: none of it is said to the review of a part.
+  const asked = { tripped: [{ area: 'repo/system', repo: 'repo', files: ['src/a.js'] }], trippedError: 'areas unreadable', seen: ['repo/app'], seenError: 'areas unreadable', writeBack: true };
+  const first = goalReviewPrompt({ ...args, ...asked, brief, part: 2 });
+  assert.ok(first.startsWith('You review the goal p/g. Its directory is `/goal`, with GOAL.json and LOG.md; its worktree is `/goal/repo`, on branch `goal/g`. Its pull request is #1, at head def456: that head is what you judge. Your role says the rest. The goal is a part of an order: the section "A goal that is a part" of your role applies, and what the role says about criteria, obligations, areas, seen and write-back lines does not.\n\nThe goal is Part 2 of its programme\'s order'), first);
+  assert.ok(first.endsWith(brief.trimEnd()), 'then the part');
+  assert.doesNotMatch(first, /`write-back`|write-back: |`seen |seen repo\/app|untouched <area>|repo\/system|areas unreadable|shots\//u, 'no write-back, seen or untouched line is asked');
+  const later = goalReviewPrompt({ ...args, ...asked, brief, part: 2, verdict: 'head: repo abc123\npart: NOT OK — the refusal is not printed; src/a.js\n' });
+  assert.ok(later.includes('does not.\n\nThe previous review judged:\nhead: repo abc123\nIts NOT OK items:\npart: NOT OK — the refusal is not printed; src/a.js\n\nThe goal is Part 2'), later);
+  assert.doesNotMatch(later, /write-back: OK|untouched <area>|shots\//u);
+  const other = goalReviewPrompt({ ...args, ...asked, brief: '# Title\n' });
+  for (const text of ['write an `untouched <area>` line for each:\nrepo/system: src/a.js', 'seen repo/app: OK — shots/<name>.png', 'REVIEW.md also holds one `write-back` line', 'The goal, as `mc goal show` renders it:']) assert.ok(other.includes(text), text);
+  assert.equal(other.includes('A goal that is a part'), false);
 });
 
 describe('the agy-stream reader (fixtures in tests/fixtures/agy, synthesised from the documentation: see its README)', () => {

@@ -311,6 +311,9 @@ function withBrief(prompt, brief, part = null) {
 /** What a build session on a goal that is a part is told about its role: which section of it applies, and what does not. */
 const PART_GOAL_ROLE_LINE = 'Your goal is a part of an order: the section "A goal that is a part" of your role applies, and what the role says about criteria, obligations, evidence records and goal defects does not.';
 
+/** The same for its review session: one question, and none of the lines a goal of the old form is judged by. */
+const PART_GOAL_REVIEW_LINE = 'The goal is a part of an order: the section "A goal that is a part" of your role applies, and what the role says about criteria, obligations, areas, seen and write-back lines does not.';
+
 /**
  * What a goal session is told: where the goal is and where it works, and the
  * goal itself (`brief`). The rest is the build role's
@@ -338,11 +341,14 @@ export function goalRepairPrompt({ verdict, ...args }) {
 /**
  * What a goal's review session is told: the goal, its worktree, and the pull
  * request with the head it is to judge. The rest is `canon/roles/review-session.md`'s
- * (its `goal` part).
+ * (its `goal` part). For a goal that is a part of an order (`part`) the prompt names the role's section for it and
+ * asks for no `untouched`, `seen` or `write-back` line; a later round still names the previous heads and its NOT OK line.
  */
 export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief = null, part = null, verdict = null, tripped = [], trippedError = null, seen = [], seenError = null, writeBack = false }) {
   const { heads, failed } = priorVerdict(verdict);
   const prior = heads.length ? `\n\nThe previous review judged:\n${heads.join('\n')}\nIts NOT OK items:\n${failed.join('\n') || '(none)'}` : '';
+  const lead = `You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.`;
+  if (part) return withBrief(`${lead} ${PART_GOAL_REVIEW_LINE}${prior}`, brief, part);
   const areas = tripped.length
     ? `\n\nThese areas the goal stands untouched on were changed by its branch; write an \`untouched <area>\` line for each:\n${tripped.map((one) => `${one.area}: ${one.files.join(', ')}`).join('\n')}`
     : '';
@@ -354,7 +360,7 @@ export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief 
     ? '\n\nThis goal\'s programme has a record, so REVIEW.md also holds one `write-back` line, beside the others: judge whether what the goal made true is written into the repository\'s `docs/technical/` pages (and the area pages), reading the pages at the head you judge. Write exactly one of:\n`write-back: OK — <repo>/docs/technical/<page>.md § <section>[, <repo>/docs/technical/<page>.md § <section>…]`   |   `write-back: OK — none — <reason>`   |   `write-back: NOT OK — <what the goal made true that no page says>`\nA NOT OK line sends the goal back to build; the line is judged anew each round, never carried.'
     : '';
   const unseen = seenError ? `\n\nThe areas judged as the user sees it could not be checked (${seenError}); no \`seen\` line is asked of this review.` : '';
-  return withBrief(`You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.${prior}${areas}${unread}${shown}${unseen}${written}`, brief, part);
+  return withBrief(`${lead}${prior}${areas}${unread}${shown}${unseen}${written}`, brief);
 }
 
 /** The last word on a goal, for a prompt: the last entry's `Done` and `Comment`, joined. */

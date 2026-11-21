@@ -1200,7 +1200,9 @@ for each repository of the goal, then one line per item: `<id>: OK` or
 `<id>: NOT OK — <what and where>`. The ids are `criterion <n>`, each preserve id
 (`V1`…), `obligation <area>` for each touched obligation, `untouched <area>` for
 each tripped area (below), `seen <area>` for each area the review was told is judged as the user sees it (below), `write-back` when the review was told to write it (below), and `change`, `out-of-scope`, `protection` and `bugs`.
-A version 1 goal has the criterion lines and the head lines only.
+A version 1 goal has the criterion lines and the head lines only. A goal that
+is a part of an order has the head lines and one id, `part`
+(*A goal that is a part*).
 
 **The write-back line.** A review of a version 2 goal whose programme has a
 valid record (`PROGRAMME.json`) is launched with `MC_REVIEW_WRITE_BACK=1` and a
@@ -1543,8 +1545,15 @@ land. A goal without `part` keeps every rule on this page.
   holds such a goal are never renumbered, on archive, drop or `mc goal phase`,
   and `mc goal new --phase` and `mc goal phase` leave holes there
   (`partProgramme`).
-- **Review.** Its review is today's: with no criterion and no stand, the
-  verdict's lines are the fixed ones.
+- **Review** asks one question: does the build do what the part says? The
+  review role's section *A goal that is a part* applies, and the prompt asks
+  for no `untouched`, `seen` or `write-back` line (`goalReviewPrompt`); on a
+  later round it still names the previous heads and the NOT OK line.
+  `REVIEW.md` is the head line of each repository and one line, `part: OK` or
+  `part: NOT OK — <what the part says that the build does not do, and where>`
+  (`requiredIds`, `checkVerdict`). No other id is asked, and any other line is
+  free text. No area is read for it and `MC_REVIEW_WRITE_BACK` is not set.
+  The repair loop, its limit and the decision session are unchanged.
 
 ## Drafts
 

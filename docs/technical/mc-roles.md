@@ -265,7 +265,11 @@ no goal defect, hand over with one entry, and in a repair fix each rejected
 line and every other place with the same fault. The prompt of such a goal says
 that this section applies and that what the role says about criteria,
 obligations, evidence records and goal defects does not (`goalPrompt`,
-`run-plan.js`). The review role has no such section yet.
+`run-plan.js`). The `review-session:goal` part carries a section of the same
+name: one question, does the build do what the part says, and a `REVIEW.md` of
+the head lines and one `part` line; its prompt says that what the role says
+about criteria, obligations, areas, seen and write-back lines does not apply
+(`goalReviewPrompt`).
 
 Planning aims for a goal a build session can reasonably hand to independent
 review in one turn, not a new limit. When a build continues, its goal log records
