@@ -1031,9 +1031,9 @@ the programme's `README.md`, and then changes the record once
 reconciled (`repair.reconciled`: the revision, the reason `cut by code: one
 goal per released part`, the digest of each part and each goal with the parts
 it names), and `phases.after` is written from the snapshot's parts
-(`partsOrder`). No session and no identity is asked; `mc programs reconcile`
-is gone, and `mc goal new` is refused in a released repair order. A
-reconciliation that refuses is a cut that failed, counted as below.
+(`partsOrder`). No session, no identity and no verb is asked, and `mc goal
+new` is refused in a released repair order. A reconciliation that refuses is
+a cut that failed, counted as below.
 
 A goal cut from the order holds no text, and its sessions read the snapshot of
 the current release, so reconciliation asks less of it than of an authored
