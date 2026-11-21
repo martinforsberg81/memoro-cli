@@ -38,9 +38,10 @@ production readiness.
 Usage has five disjoint groups: regular, managed test, managed review, admin
 and other managed accounts (sandbox/service).
 Admin takes precedence when it is also a managed account; inactive controls do
-not exclude an ordinary account. Totals exclude deleted accounts. Activity
-counts distinct active accounts with an active auth session last seen in each
-window, not product events or daily active user history. Yesterday is a UTC
+not exclude an ordinary account. Text shows the sum of the validated group totals;
+totals exclude deleted accounts. Session recency counts distinct active accounts
+with an active auth session last seen in each window, not product events or
+daily active user history. A return visit or sign-out can change earlier counts. Yesterday is a UTC
 calendar day; seven days is the trailing 168 hours. The server returns the exact
 inclusive starts and exclusive ends. No account ids, names, addresses or roles
 lists reach either output mode.

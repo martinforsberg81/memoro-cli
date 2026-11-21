@@ -15,7 +15,7 @@ function fixtures() {
   return {
     usage: { ok:true, generatedAt:'2026-11-04T11:59:00Z', timezone:'UTC', activityBasis:'active_session_last_seen',
       windows:{yesterdayStart:'2026-11-03T00:00:00Z',todayStart:'2026-11-04T00:00:00Z',sevenDaysStart:'2026-10-28T12:00:00Z',end:'2026-11-04T12:00:00Z'},
-      groups:['regular','test','review','admin','otherManaged'].map(kind => ({kind,total:2,activeYesterday:0,activeLastSevenDays:1,userId:123456789})) },
+      groups:['regular','test','review','admin','otherManaged'].map((kind, i) => ({kind,total:[11,3,4,1,5][i],activeYesterday:[2,0,1,0,3][i],activeLastSevenDays:[5,1,2,1,4][i],userId:123456789})) },
     costs: {ok:true, generatedAt:'2026-11-04T11:59:00Z',month:'2026-11',cards:{
       thisMonth:{usd:12,source:'actual',scope:'external_vendor',vendorRows:4,vendorDays:3,throughDate:'2026-11-03'},
       aiThisMonth:{usd:5,source:'partial',scope:'ai_rollup'},today:{usd:0,source:'estimate'},
@@ -142,11 +142,26 @@ test('usage and costs retain periods, account groups and quality without sensiti
   const data = fixtures();
   const { model, exitCode } = await collectDashboard({token:'t',clock:fixed,fetch:async url=>response(sourceFor(url,data))});
   assert.equal(exitCode,0);
-  assert.deepEqual(model.sources.usage.data.groups, ['regular','test','review','admin','otherManaged'].map(kind=>({kind,total:2,activeYesterday:0,activeLastSevenDays:1})));
-  assert.deepEqual(model.sources.usage.data.windows, data.usage.windows);
+  assert.deepEqual(model.sources.usage.data, {timezone:'UTC', activityBasis:'active_session_last_seen', windows:data.usage.windows, groups:[
+    {kind:'regular',total:11,activeYesterday:2,activeLastSevenDays:5},
+    {kind:'test',total:3,activeYesterday:0,activeLastSevenDays:1},
+    {kind:'review',total:4,activeYesterday:1,activeLastSevenDays:2},
+    {kind:'admin',total:1,activeYesterday:0,activeLastSevenDays:1},
+    {kind:'otherManaged',total:5,activeYesterday:3,activeLastSevenDays:4},
+  ]});
   assert.deepEqual(model.sources.costs.data, {month:'2026-11',vendor:{usd:12,source:'actual',throughDate:'2026-11-03',days:3},aiMonth:{usd:5,source:'partial'},aiToday:{usd:0,source:'estimate'}});
   const text = renderDashboard(model), json = JSON.stringify(model);
-  assert.match(text,/regular: 2 accounts; active yesterday 0; active 7d 1/);
+  assert.deepEqual(text.split('\n').slice(text.split('\n').indexOf('USAGE'), text.split('\n').indexOf('COSTS') - 1), [
+    'USAGE', '24 accounts in total',
+    'UTC session-recency windows: yesterday [2026-11-03T00:00:00Z, 2026-11-04T00:00:00Z), trailing 168 hours [2026-10-28T12:00:00Z, 2026-11-04T12:00:00Z)',
+    'Account totals exclude deleted accounts. Admin takes precedence over managed groups.',
+    'Session recency counts active accounts with an active session last seen in the window. A return visit or sign-out can change earlier counts.',
+    'regular: 11 accounts, with a session last seen yesterday 2, trailing 168 hours 5',
+    'test: 3 accounts, with a session last seen yesterday 0, trailing 168 hours 1',
+    'review: 4 accounts, with a session last seen yesterday 1, trailing 168 hours 2',
+    'admin: 1 account, with a session last seen yesterday 0, trailing 168 hours 1',
+    'otherManaged: 5 accounts, with a session last seen yesterday 3, trailing 168 hours 4',
+  ]);
   assert.match(text,/External vendors 2026-11 \(UTC\): USD 12.00; actual; recorded through 2026-11-03; 3 days represented/);
   assert.match(text,/AI metered 2026-11 to date \(UTC\): USD 5.00; partial/);
   assert.match(text,/AI metered today \(UTC\): USD 0.00; estimate/);
@@ -182,4 +197,25 @@ test('missing vendor imports remain unknown and invalid or unavailable new sourc
   data.usage.groups[0].kind = 'admin';
   result = await collectDashboard({token:'t',clock:fixed,fetch:async url=>response(sourceFor(url,data))});
   assert.equal(result.model.sources.usage.errorCode,'invalid_shape');
+});
+
+
+test('zero usage is successful and an isolated usage failure stays unknown', async () => {
+  const data = fixtures();
+  data.usage.groups = data.usage.groups.map(group => ({...group,total:0,activeYesterday:0,activeLastSevenDays:0}));
+  let result = await collectDashboard({token:'t',clock:fixed,fetch:async url=>response(sourceFor(url,data))});
+  assert.equal(result.exitCode,0);
+  let text = renderDashboard(result.model);
+  assert.match(text,/0 accounts in total/);
+  assert.deepEqual(text.split('\n').filter(line => /^(regular|test|review|admin|otherManaged):/.test(line)),
+    ['regular','test','review','admin','otherManaged'].map(kind => `${kind}: 0 accounts, with a session last seen yesterday 0, trailing 168 hours 0`));
+  result = await collectDashboard({token:'t',clock:fixed,fetch:async url=>url.endsWith('/usage-summary') ? response({},503) : response(sourceFor(url,data))});
+  assert.equal(result.exitCode,1);
+  assert.equal(result.model.sources.usage.availability,'unavailable');
+  assert.equal(result.model.sources.usage.data,null);
+  for (const name of ['health','operations','costs']) assert.equal(result.model.sources[name].availability,'available');
+  text = renderDashboard(result.model);
+  assert.match(text,/unknown \(usage source unavailable\)/);
+  assert.doesNotMatch(text,/accounts in total/);
+  assert.match(text,/External vendors 2026-11/);
 });

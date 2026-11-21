@@ -41,9 +41,12 @@ export function renderUsageCosts(usage, costs) {
   if (usage.availability !== 'available') out.push('unknown (usage source unavailable)');
   else {
     const { windows, groups } = usage.data;
-    out.push(`UTC windows: yesterday [${windows.yesterdayStart}, ${windows.todayStart}); last 7 days [${windows.sevenDaysStart}, ${windows.end})`);
-    out.push('Accounts exclude deleted; groups are disjoint (admin takes precedence). Activity: distinct active accounts with an active session last-seen in the window.');
-    for (const group of groups) out.push(`${group.kind}: ${group.total} accounts; active yesterday ${group.activeYesterday}; active 7d ${group.activeLastSevenDays}`);
+    const total = groups.reduce((sum, group) => sum + group.total, 0);
+    out.push(`${total} ${total === 1 ? 'account' : 'accounts'} in total`);
+    out.push(`UTC session-recency windows: yesterday [${windows.yesterdayStart}, ${windows.todayStart}), trailing 168 hours [${windows.sevenDaysStart}, ${windows.end})`);
+    out.push('Account totals exclude deleted accounts. Admin takes precedence over managed groups.');
+    out.push('Session recency counts active accounts with an active session last seen in the window. A return visit or sign-out can change earlier counts.');
+    for (const group of groups) out.push(`${group.kind}: ${group.total} ${group.total === 1 ? 'account' : 'accounts'}, with a session last seen yesterday ${group.activeYesterday}, trailing 168 hours ${group.activeLastSevenDays}`);
   }
   out.push('', 'COSTS');
   if (costs.availability !== 'available') out.push('unknown (costs source unavailable)');
