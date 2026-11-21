@@ -513,86 +513,19 @@ test('chores syncs a waiting goal item without adding a run row', async (t) => {
   assert.deepEqual(f.calls.sessions.slice(callsBefore),[], 'chores starts no session');
 });
 
-test('chores prepares the three oldest items on the build list, bounds a round, and waits without a candidate', async (t) => {
-  for (const mode of ['three', 'four', 'unavailable']) {
-    const root = mkdtempSync(join(tmpdir(), 'mc-prepare-round-'));
-    t.after(() => rmSync(root, { recursive: true, force: true }));
-    const f = fixture({ root });
-    f.deps.env.MC_HOME = join(root, 'mc-home');
-    Object.assign(f.deps.env, { MC_GOAL: 'example/parent', MC_PROGRAMME: 'example', MC_ROLE: 'build-session:goal', MC_HEADLESS: '1' });
-    const count = mode === 'three' ? 3 : 4;
-    const items = Array.from({ length: count }, (_, n) => {
-      const at = `2026-08-29T0${n}:00:00Z`;
-      return { id: deskItemId('goal', `example/item-${n}`, at), kind: 'goal', reference: `example/item-${n}`, source_at: at, state: 'new' };
-    });
-    // Sync really precedes preparation; do not seed the store before chores.
-    f.deps.syncDeskItems = () => items.toReversed().forEach(item => writeDeskItem(item, { env: f.deps.env }));
-    f.deps.catalog = () => ({ ...TEST_CATALOG, build: [{ tool: 'codex', model: 'gpt-6.1-terra', effort: 'high' }, { tool: 'claude', model: 'sonnet', effort: 'high' }] });
-    if (mode === 'unavailable') {
-      f.deps.capacity.write(capacityWith({ claude: 1 }));
-      f.deps.billing = { readApi: () => ({ claude: false, codex: false }) };
-    }
-    const calls = [];
-    f.deps.deskPrepare = {
-      billingRoute: () => ({ billing: 'plan' }),
-      session: async call => {
-        calls.push(call);
-        const item = items.find(item => itemDirectory(item, f.deps.env) === call.cwd);
-        assert.ok(item);
-        assert.equal(call.env.MC_ROLE, 'desk-prepare'); assert.equal(call.env.MC_HEADLESS, '1');
-        for (const name of ['MC_GOAL', 'MC_PROGRAMME', 'MC_STEP']) assert.equal(call.env[name], undefined);
-        assert.equal(call.env.MC_TOOL, 'claude'); assert.equal(call.env.MC_MODEL, 'sonnet');
-        assert.equal(call.timeoutMs, 15 * 60_000);
-        assert.equal(call.args[call.args.indexOf('--model') + 1], 'sonnet');
-        assert.equal(call.args[call.args.indexOf('--effort') + 1], 'high');
-        const instructions = call.args[call.args.indexOf('--append-system-prompt') + 1];
-        assert.ok(instructions.includes(readCanonRole('desk-prepare').overlay));
-        assert.equal(call.args.includes('--resume'), false);
-        writeFileSync(join(call.cwd, 'prepared.md'), 'Facts with sources.');
-        assert.equal(await martinCommand(['item', item.id, 'prepared', '--sort', 'technical'], { env: call.env }), 0);
-        return { status: 0, stdout: JSON.stringify({ type: 'result', total_cost_usd: 0.25 }), stderr: '' };
-      },
-    };
-    const runner = createRunner({ deps: f.deps });
-    await runner.chores();
-    const expected = mode === 'unavailable' ? [] : items.slice(0, 3).map(item => item.id);
-    assert.deepEqual(calls.map(call => call.cwd.split('/').at(-1)), expected);
-    assert.deepEqual(calls.map(call => [call.env.MC_TOOL, call.env.MC_MODEL]), expected.map(() => ['claude', 'sonnet']), 'first usable build candidate');
-    const rows = String(f.files[runner.paths.runs]).split('\n').map(line => line.split('\t')).filter(row => row[2] === 'desk-prepare');
-    assert.deepEqual(rows.map(row => row[1]), expected);
-    assert.deepEqual(rows.map(row => row.slice(14, 20)), expected.map(() => ['sonnet', 'build', 'claude', 'high', 'plan', '0.2500']));
-    assert.deepEqual(listDeskItems({ env: f.deps.env, state: 'prepared' }).map(item => item.id), expected);
-    assert.deepEqual(listDeskItems({ env: f.deps.env, state: 'new' }).map(item => item.id), items.slice(expected.length).map(item => item.id));
-    if (mode === 'four') {
-      await runner.runDeskPreparation();
-      assert.deepEqual(calls.map(call => call.cwd.split('/').at(-1)), items.map(item => item.id));
-    }
-  }
-});
-
-test('desk ceiling holds a chores round once, ignores other days and kinds, and off restores turns', async (t) => {
-  const root = mkdtempSync(join(tmpdir(), 'mc-prepare-ceiling-'));
+test('chores prepares no desk item: a new item waits as it is (Martin, 2026-11-21)', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-prepare-round-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const f = fixture({ root }); f.deps.env.MC_HOME = join(root, 'mc-home');
-  const ids = ['a'.repeat(24), 'b'.repeat(24), 'c'.repeat(24)];
-  f.deps.syncDeskItems = () => ids.forEach((id, n) => writeDeskItem({ id, state: 'new', source_at: `2026-08-29T0${n}:00:00Z` }, { env: f.deps.env }));
-  let calls = 0;
-  f.deps.deskPrepare = { billingRoute: () => ({ billing: 'plan' }), session: async call => {
-    calls++;
-    writeFileSync(join(call.cwd, 'prepared.md'), 'Prepared');
-    await martinCommand(['item', call.cwd.split('/').at(-1), 'prepared', '--sort', 'mechanical'], { env: call.env });
-    return { status: 0, stdout: '{}', stderr: '' };
-  } };
+  const f = fixture({ root });
+  f.deps.env.MC_HOME = join(root, 'mc-home');
+  const at = '2026-08-29T01:00:00Z';
+  const item = { id: deskItemId('goal', 'example/item', at), kind: 'goal', reference: 'example/item', source_at: at, state: 'new' };
+  f.deps.syncDeskItems = () => writeDeskItem(item, { env: f.deps.env });
+  f.deps.deskPrepare = { billingRoute: () => ({ billing: 'plan' }), session: async () => assert.fail('no preparation turn') };
   const runner = createRunner({ deps: f.deps });
-  f.files[runner.paths.runs] = 'ts\tkind\tcost\n2026-08-29T01:00:00Z\tdesk-prepare\t2\n2026-08-29T02:00:00Z\tdecision\t3\n2026-08-28T23:59:00Z\tdecision\t100\n2026-08-29T01:00:00Z\tgoal\t100\n';
-  f.files[deskSettingsPath(f.deps.env)] = JSON.stringify({ ceiling_usd_per_day: 5 });
   await runner.chores();
-  assert.equal(calls, 0);
-  assert.equal(f.log.filter(line => line.includes('desk ceiling holds turns')).length, 1);
-  assert.deepEqual(deskBudget({ env: f.deps.env, now: f.deps.now(), read: f.deps.read }), { ceiling: 5, spent: 5, day: '2026-08-29', held: true });
-  f.files[deskSettingsPath(f.deps.env)] = JSON.stringify({ ceiling_usd_per_day: null });
-  await runner.runDeskPreparation();
-  assert.equal(calls, 3);
+  assert.equal(runner.runDeskPreparation, undefined, 'the runner has no preparation pass');
+  assert.deepEqual(listDeskItems({ env: f.deps.env }).map(row => [row.id, row.state]), [[item.id, 'new']]);
 });
 
 /** A learning pass fixture: a real lessons store under a physical root, a fake session, the runner's own clock (2026-08-29T10:00Z). */
@@ -2142,7 +2075,8 @@ test('both subscriptions are read at startup, due at 15 minutes, and a failed at
 test('the usage ticker proceeds while a chore waits on its helper turn', async () => {
   let clock = ROUTING_NOW.getTime();
   let releaseTurn;
-  const f = fixture({ inbox: ['decision.md'], helperTurn: () => new Promise((resolve) => { releaseTurn = resolve; }) });
+  const f = fixture({ inbox: ['suggestion-a.md'] });
+  f.deps.catalogSuggestion = () => new Promise((resolve) => { releaseTurn = resolve; });
   f.deps.now = () => new Date(clock);
   let timer;
   f.deps.every = (ms, fn) => { if (ms === 15 * 60 * 1000) timer = fn; return () => { timer = null; }; };
@@ -2155,7 +2089,7 @@ test('the usage ticker proceeds while a chore waits on its helper turn', async (
   await flush();
   const chores = runner.runIntakeDrain();
   await flush();
-  assert.equal(typeof releaseTurn, 'function', 'the intake helper turn is still in flight');
+  assert.equal(typeof releaseTurn, 'function', 'the suggestion catalogue is still in flight');
   clock += 15 * 60 * 1000;
   timer();
   await flush();
@@ -3362,137 +3296,23 @@ test('full run: a runner taken over by another still finishes the run it measure
 
 /* -------------------------------------------------------------- the drain */
 
-/** The archive a drained file lands in, under the fixture's fixed day. */
-const ARCHIVE = '/w/runner/log/intake/2026-08-29';
 
 const inboxLeft = (files) => Object.keys(files)
   .filter((key) => key.startsWith('/w/intake/') && !key.slice('/w/intake/'.length).includes('/'))
   .map((key) => key.slice('/w/intake/'.length))
   .sort();
 
-/**
- * The whole of step 3, in one round: one turn per file, oldest first by the
- * date in the name, the file archived the moment its turn ends, and a row that
- * names it.
- */
-test('the drain takes the oldest files first, one turn each, and archives every one', async () => {
-  const f = fixture({
-    inbox: ['note-from-martin.md', 'errors-memoro-cli-2026-08-27.md', 'errors-memoro-2026-08-26.md'],
-  });
+test('the runner\'s drain gives no file a model turn: it catalogues app suggestions and leaves every other file in the inbox', async () => {
+  const f = fixture({ inbox: ['note-from-martin.md', 'errors-memoro-2026-08-26.md', 'suggestion-abc.md'] });
+  const catalogued = [];
+  f.deps.catalogSuggestion = async ({ file }) => { catalogued.push(file); return { ok: true, note: 'catalogued', wrote: [], waiting: [] }; };
   await createRunner({ deps: f.deps }).runIntakeDrain();
-
-  // Oldest first by the date the name carries. `note-from-martin.md` has no
-  // date and sorts last: the dated files were written on the day they name,
-  // and a file Martin dropped in by hand arrived now.
-  assert.deepEqual(f.calls.turns.map((c) => c.file), [
-    'errors-memoro-2026-08-26.md', 'errors-memoro-cli-2026-08-27.md', 'note-from-martin.md',
-  ]);
-  // The repository is not passed. `repoOfFile` reads it out of the collector's
-  // own names, and answers null for anything a person dropped in.
-  assert.deepEqual(f.calls.turns.map((c) => c.repo), [undefined, undefined, undefined]);
-
-  const rows = runRows(f.files).filter((r) => r.kind === 'intake');
-  assert.deepEqual(rows.map((r) => ({ name: r.name, exit: r.exit, note: r.note })), [
-    { name: 'errors-memoro-2026-08-26.md', exit: '0', note: 'success,1-proposals' },
-    { name: 'errors-memoro-cli-2026-08-27.md', exit: '0', note: 'success,1-proposals' },
-    { name: 'note-from-martin.md', exit: '0', note: 'success,1-proposals' },
-  ]);
-  assert.equal(rows[0].turns, '3', 'the turn is a model call and its usage is logged like a step');
-  assert.equal(rows[0].cache_read, '30');
-
-  assert.deepEqual(inboxLeft(f.files), [], 'the inbox drained');
-  for (const name of ['errors-memoro-2026-08-26.md', 'errors-memoro-cli-2026-08-27.md', 'note-from-martin.md']) {
-    assert.equal(f.files[`${ARCHIVE}/${name}`], `# ${name}`, `${name} is in the archive, not deleted`);
-  }
-  // A directory in the inbox is not an item. `decisions-archive/` is an
-  // archive already, and draining it would file answered decisions as news.
+  assert.deepEqual(f.calls.turns, [], 'no intake turn (Martin, 2026-11-21)');
+  assert.deepEqual(catalogued, ['suggestion-abc.md']);
+  // The suggestion's own archive move takes the real suggestions lock, which this in-memory root has not; helper-turn's tests hold it.
+  assert.deepEqual(inboxLeft(f.files).filter((name) => !name.startsWith('suggestion-')), ['errors-memoro-2026-08-26.md', 'note-from-martin.md'], 'the rest waits for a person');
+  assert.deepEqual(runRows(f.files).filter((r) => r.kind === 'intake').map((r) => r.name), ['suggestion-abc.md']);
   assert.equal(f.files['/w/intake/decisions-archive/mc-2.md'], '# an answered decision');
-});
-
-/**
- * The rule that makes the drain terminate: a turn that failed has still had its
- * turn. A file put back is a file every round after this one takes again.
- */
-test('a turn that failed still archives its file, and the row carries the failure', async () => {
-  const f = fixture({
-    inbox: ['errors-memoro-2026-08-26.md'],
-    helperTurn: async () => ({ ok: false, status: 1, reason: 'no-tool', note: 'claude is not on PATH', wrote: [], waiting: [] }),
-  });
-  await createRunner({ deps: f.deps }).runIntakeDrain();
-
-  const [row] = runRows(f.files).filter((r) => r.kind === 'intake');
-  assert.deepEqual({ name: row.name, exit: row.exit, note: row.note }, {
-    name: 'errors-memoro-2026-08-26.md', exit: '1', note: 'no-tool',
-  });
-  assert.deepEqual(inboxLeft(f.files), []);
-  assert.equal(f.files[`${ARCHIVE}/errors-memoro-2026-08-26.md`], '# errors-memoro-2026-08-26.md');
-  assert.ok(f.log.some((line) => /intake: errors-memoro-2026-08-26\.md — the turn did not finish: no-tool/u.test(line)));
-});
-
-/** A turn that threw is the one path that would otherwise skip the archive. */
-test('a turn that threw is archived too, and named as having thrown', async () => {
-  const f = fixture({
-    inbox: ['errors-memoro-2026-08-26.md'],
-    helperTurn: async () => { throw new Error('claude died'); },
-  });
-  await createRunner({ deps: f.deps }).runIntakeDrain();
-  const [row] = runRows(f.files).filter((r) => r.kind === 'intake');
-  assert.equal(row.note, 'turn-threw');
-  assert.deepEqual(inboxLeft(f.files), []);
-});
-
-/**
- * A quota that refused one model (agy) refuses that model only: no lane sleeps on it (D5). A
- * plan-scoped quota, and a turn that names no scope, still stop every lane until the reset.
- */
-test('an intake turn refused on a model-scoped quota pauses no lane; a plan-scoped one, or none named, still does', async () => {
-  const ran = async (turn) => {
-    const f = fixture({ inbox: ['errors-memoro-2026-08-26.md'], helperTurn: async () => ({ ok: false, status: 1, reason: 'quota', note: 'quota', wrote: [], waiting: [], ...turn }) });
-    const sleeps = [];
-    f.deps.sleep = async (ms) => { sleeps.push(ms); };
-    await createRunner({ deps: f.deps }).runIntakeDrain();
-    assert.deepEqual(inboxLeft(f.files), [], 'the file had its turn either way');
-    return { sleeps, said: f.log.filter((line) => /every lane sleeping/u.test(line)) };
-  };
-  const reset = new Date('2026-08-29T20:00:00Z');
-  const model = await ran({ quota: true, quotaScope: 'model', quotaReset: reset });
-  assert.deepEqual([model.sleeps, model.said], [[], []], 'agy: no pause');
-  const plan = await ran({ quota: true, quotaScope: 'plan', quotaReset: reset });
-  assert.ok(plan.sleeps.length > 0, 'claude/codex: every lane sleeps');
-  assert.match(plan.said[0], /quota seen — every lane sleeping until 2026-08-29T20:01:00\.000Z/u);
-  const unnamed = await ran({ quota: true, quotaReset: null });
-  assert.equal(unnamed.said.length, 1, 'a turn naming no scope keeps the lane-wide pause');
-  const clean = await ran({ quota: false });
-  assert.deepEqual([clean.sleeps, clean.said], [[], []], 'no quota, no pause');
-});
-
-/**
- * The gate the split exists for: the drain asks whether there is a file, not
- * whether the day's collect has run. Thirteen files is five rounds, not
- * thirteen days.
- */
-test('the drain runs every round until the inbox is empty, however the collect went', async () => {
-  const yesterday = 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\n'
-    + '2026-08-29T05:00:00Z\thelper\thelper\t0\t2\t-\t-\t-\t-\t-\t-\t-\tsuccess,memoro,0-new\n';
-  const f = fixture({
-    runs: yesterday,
-    inbox: ['a-2026-08-20.md', 'b-2026-08-21.md', 'c-2026-08-22.md', 'd-2026-08-23.md'],
-  });
-  const runner = createRunner({ deps: f.deps });
-
-  await round(runner);
-  assert.equal(f.calls.collects.length, 0, 'today\'s collect has already run');
-  assert.equal(f.calls.turns.length, 3, 'three a round, so a round stays bounded');
-  assert.deepEqual(inboxLeft(f.files), ['d-2026-08-23.md']);
-  assert.ok(f.log.some((line) => /intake: 1 file\(s\) still waiting/u.test(line)));
-
-  await round(runner);
-  assert.equal(f.calls.turns.length, 4);
-  assert.deepEqual(inboxLeft(f.files), [], 'and it keeps going across rounds until nothing is left');
-
-  await round(runner);
-  assert.equal(f.calls.turns.length, 4, 'an empty inbox costs a listing and no turn');
-  assert.equal(runRows(f.files).filter((r) => r.kind === 'intake').length, 4);
 });
 
 /* ----------------------------------------------------------- archiving */
@@ -5379,9 +5199,9 @@ test('decision reconsideration can use another enabled reserve, and an explicitl
   assert.equal(f.log.some(line => line.includes('decision session exited')), false);
 });
 
-test('a reserve refusal during a switch race spends neither planning nor archive reading attempts', async () => {
+test('a reserve refusal during a switch race spends no planning attempt', async () => {
   for (const [list, f, state] of [
-    ['plan', programmeFixture(), TURN_STATE], ['build', archiveFixture({ body: null }), ARCHIVE_STATE],
+    ['plan', programmeFixture(), TURN_STATE],
   ]) {
     reserveFixture(f, { [list]: [CLAUDE_RESERVE] });
     f.answer = () => ({ status: RESERVE_DISABLED_EXIT, stdout: '', stderr: 'mc: claude API is off' });
@@ -5408,34 +5228,23 @@ test('a locked reserve returns both goal-less mends to their queues without spen
   }
 });
 
-test('a locked reserve leaves scheduled desk preparation and learning eligible', async t => {
+test('a locked reserve leaves scheduled learning eligible', async t => {
   const l = learningFixture(t, { ages: [7] });
   const { f } = l;
   reserveFixture(f, { build: [CLAUDE_RESERVE], decision: [CLAUDE_RESERVE] });
   const marker = learningMarkerPath(f.deps.env);
   const at = '2026-08-28T09:00:00Z';
-  const id = deskItemId('goal', 'prog/held', at);
-  const item = { id, kind: 'goal', reference: 'prog/held', source_at: at, state: 'new' };
   f.deps.syncDeskItems = () => {};
-  writeDeskItem(item, { env: f.deps.env });
   let now = ROUTING_NOW.getTime();
   f.deps.now = () => new Date(now);
-  let preparations = 0, learnings = 0;
-  f.deps.deskPrepare = { billingRoute: () => ({ billing: 'credits' }), session: async () => { preparations++; return LOCKED_RESERVE; } };
+  let learnings = 0;
   f.deps.deskLearning.billingRoute = () => ({ billing: 'credits' });
   f.deps.deskLearning.session = async () => { learnings++; return LOCKED_RESERVE; };
   mkdirSync(dirname(marker), { recursive: true });
   writeFileSync(marker, JSON.stringify({ started_at: at, reason: 'prior day' }));
   const runner = createRunner({ deps: f.deps });
-  await runner.runDeskPreparation();
-  assert.deepEqual(listDeskItems({ env: f.deps.env }).find(row => row.id === id), item);
-  assert.equal(preparations, 1);
-  assert.equal(await runner.runDeskPreparation().then(result => result.done.length), 0);
-  assert.equal(preparations, 1);
   now += 60_000;
-  // Use the same real learning fixture in a fresh runner. A denied attempt
-  // may provisionally write today's marker but restores yesterday's bytes.
-  writeDeskItem({ ...item, state: 'closed' }, { env: f.deps.env });
+  // A denied attempt may provisionally write today's marker but restores yesterday's bytes.
   await runner.chores();
   assert.equal(learnings, 1);
   assert.deepEqual(JSON.parse(readFileSync(marker, 'utf8')), { started_at: at, reason: 'prior day' });
@@ -7784,26 +7593,17 @@ test('curation turn: an unreadable state starts no turn and is said once; the tu
 
 const ARCHIVE_STATE = '/w/runner/archive-turn/prog.json';
 const ARCHIVED_TO = '/w/programs-archived/prog';
-const SHA = 'a'.repeat(40);
-const archiveCheckout = (repo) => `/w/runner/work/archive-turn-prog/${repo}`;
-const archiveSessions = (f) => f.calls.sessions.filter((call) => call.env.MC_ROLE === 'archive-reader');
 const archiveState = (f) => JSON.parse(f.files[ARCHIVE_STATE]);
-const archiveLine = 'g1: OK — memoro/docs/technical/mc-run.md § Programme archive turn';
-const writeBack = (verdict, line = archiveLine, sha = SHA) => `read: memoro ${sha}\n${line}\nverdict: ${verdict}\n`;
 
 /**
- * A programme `prog` with a record whose only goal `g1` is archived as done, and the seams an archive reading and an archive
- * need: read checkouts that answer a commit, an archive that moves the record to ARCHIVED_TO as `archiveProgramme` does,
- * and a reader that writes `body`. `archived` is each archive call with what the fence said.
+ * A programme `prog` with a record whose only goal `g1` is archived as done, and an archive that moves the record to
+ * ARCHIVED_TO as `archiveProgramme` does. `archived` is each archive call with what the fence said. No session is wired:
+ * the archive starts none (Martin, 2026-11-21).
  */
-function archiveFixture({ body = writeBack('OK'), record = plainText(), archiveRc = 0, dropped = false, readme = '# prog\n\nEnd: Done when it holds.\n', ...options } = {}) {
+function archiveFixture({ record = plainText(), archiveRc = 0, dropped = false, readme = '# prog\n\nEnd: Done when it holds.\n', ...options } = {}) {
   const f = programmeFixture({ record, readme, ...options });
-  servedCheckouts(f);
-  const git = f.deps.git;
-  f.deps.git = (cwd, args) => (String(cwd).startsWith('/w/runner/work/archive-turn-') && args.join(' ') === 'rev-parse HEAD' ? { ok: true, stdout: `${SHA}\n` } : git(cwd, args));
   f.files[`${GOALS}/.archive/g1/GOAL.json`] = goalJson({ stage: dropped ? 'dropped' : 'done', status: 'ready', repos: ['memoro'], title: 'g1', goal: [], prs: [] });
   f.files[`${GOALS}/.archive/g1/LOG.md`] = '';
-  f.writes = { body };
   f.archived = [];
   f.rc = { archive: archiveRc };
   f.deps.archiveProgramme = async (programme, options) => {
@@ -7814,147 +7614,42 @@ function archiveFixture({ body = writeBack('OK'), record = plainText(), archiveR
     options.onShelved(ARCHIVED_TO);
     return 0;
   };
-  f.answer = (call) => { if (f.writes.body !== null) f.files[`${PROG}/WRITE-BACK.md`] = f.writes.body; return okSession()(call); };
+  f.answer = () => assert.fail('the archive starts no session');
   return f;
 }
 const archiveRunnable = (runner) => runner.nextWork()?.name === 'archive:prog';
 
-test('programme archive: an OK reading archives the programme through the runner, its record reads done, and no model or person is asked', async () => {
+test('programme archive: a programme whose goals are all merged is archived by the runner with no session, and its record reads done', async () => {
   const f = archiveFixture();
   const items = wireDesk(f);
   const runner = createRunner({ deps: f.deps });
-  assert.equal(runner.nextWork().name, 'archive:prog', 'the archive turn is the pick');
-  const seen = {};
-  const answer = f.answer;
-  f.answer = (call) => { seen.claimed = runner.claims.has('archive:prog'); seen.next = runner.nextWork()?.name ?? null; seen.checkouts = f.dirs.has(archiveCheckout('memoro')); return answer(call); };
+  assert.equal(runner.nextWork().name, 'archive:prog', 'the archive is the pick');
   const result = await runner.pass({ repo: 'memoro' });
   assert.deepEqual([result.ran, result.name], [1, 'archive:prog']);
-  const [call, ...rest] = archiveSessions(f);
-  assert.equal(rest.length, 0, 'one reading');
-  assert.deepEqual([call.env.MC_ROLE, call.env.MC_HEADLESS, call.env.MC_PROGRAMME], ['archive-reader', '1', 'prog']);
-  assert.equal('MC_GOAL' in call.env, false);
-  assert.equal(call.cwd, PROG);
-  assert.match(call.prompt, new RegExp(`${PROG}/WRITE-BACK\\.md`, 'u'));
-  assert.match(call.prompt, new RegExp(archiveCheckout('memoro'), 'u'), 'the read checkout at origin/main is named');
-  assert.match(call.prompt, /g1/u);
-  assert.deepEqual([seen.claimed, seen.next, seen.checkouts], [true, null, true], 'claimed, no second turn, checkouts up while it runs');
-  assert.equal(f.dirs.has(archiveCheckout('memoro')), false, 'taken down after it');
+  assert.deepEqual(f.calls.sessions, [], 'no model session');
   assert.deepEqual(f.archived.map((one) => [one.programme, one.fence]), [['prog', null]], 'archived once, the fence clear');
   assert.equal(JSON.parse(f.files[`${ARCHIVED_TO}/PROGRAMME.json`]).state, 'done', 'the record at the destination reads done');
-  assert.deepEqual([archiveState(f).destination, archiveState(f).reading], [null, null]);
+  assert.equal(archiveState(f).destination, null);
   assert.deepEqual(items(), [], 'no desk item');
   assert.equal(runner.claims.has('archive:prog'), false);
-  assert.deepEqual(runRows(f.files).map((row) => [row.name, row.kind]), [['archive:prog', 'plan']]);
   assert.equal(archiveRunnable(runner), false, 'and nothing is due once it has moved');
 });
 
-test('programme archive: a NOT OK reading archives nothing, opens a prepared desk item with the NOT OK lines, and stops the next reading', async () => {
-  const f = archiveFixture({ body: writeBack('NOT OK', 'g1: NOT OK — the archive turn is in no page') });
-  const items = wireDesk(f);
-  let clock = Date.parse('2026-11-15T09:00:00Z');
-  f.deps.now = () => new Date(clock += 60_000);
-  const runner = createRunner({ deps: f.deps });
-  await runner.pass({ repo: 'memoro' });
-  assert.deepEqual(f.archived, [], 'not archived');
-  assert.equal(JSON.parse(f.files[RECORD_AT]).state, 'open', 'the record stays open');
-  const [item] = items();
-  assert.deepEqual([item.kind, item.reference, item.state, item.sort, item.reversible], ['archive', 'archive:prog', 'prepared', 'mechanical', null]);
-  assert.ok(f.files[`${itemDirectory(item, f.deps.env)}/prepared.md`].includes('g1: NOT OK — the archive turn is in no page'));
-  assert.deepEqual(archiveState(f).failures, [], 'a finding is not a counted failure');
-  assert.equal(archiveRunnable(runner), false, 'no reading and no archive while the item is open');
-  await runner.pass({ repo: 'memoro' }); // the decision lane may take the prepared item; the archive turn starts nothing
-  assert.deepEqual([archiveSessions(f).length, f.archived.length], [1, 0]);
-  // Closed by decision: read again; a second NOT OK after a decision is for Martin.
-  f.files[`${itemDirectory(item, f.deps.env)}/item.json`] = JSON.stringify({ ...item, state: 'closed', outcome: { by: 'decision', at: '2026-11-15T10:00:00Z' } });
-  assert.equal(archiveRunnable(runner), true, 'closed: the programme is read again');
-  await runner.pass({ repo: 'memoro' });
-  const again = items().find((one) => one.id !== item.id);
-  assert.deepEqual([again.state, again.sort, again.reversible], ['for-martin', 'mechanical', false]);
-  assert.match(f.files[`${itemDirectory(again, f.deps.env)}/brief.md`], /## Vad det gäller/u);
-});
-
-/** The archive reading routed to agy's Argon (the large list's first entry), as the programme turn is on the plan list. */
-function archiveOnAgy(f) {
-  f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), build: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
-  const launch = f.deps.launch;
-  f.deps.launch = (tool) => (tool === 'agy' ? { ok: true, id: 'antigravity-cli', shortName: 'agy', adapter: agyAdapter, spec: { bin: '/bin/agy' } } : launch(tool));
-}
-
-test('programme archive: an agy quota refuses that model until the reset it names, no provider and no failure; a claude quota refuses the provider', async () => {
-  const f = archiveFixture({ body: null });
-  wireDesk(f);
-  archiveOnAgy(f);
-  f.answer = () => ({ status: 1, stdout: '', stderr: 'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 149h56m21s.', timedOut: false });
-  const runner = createRunner({ deps: f.deps });
-  await runner.pass({ repo: 'memoro' });
-  assert.deepEqual(archiveSessions(f).map((call) => call.env.MC_TOOL), ['agy']);
-  const { agy, claude } = f.deps.capacity.read().providers;
-  const reset = new Date(f.deps.now().getTime() + ((149 * 60 + 56) * 60 + 21) * 1000).toISOString();
-  assert.deepEqual([agy.refusal_until, agy.model_refusals], [null, { 'gemini-4-argon-high': reset }], 'the model is refused until the reset, the provider is not');
-  assert.equal(claude.refusal_until, null);
-  assert.equal(f.files[ARCHIVE_STATE], undefined, 'a quota ending counts for nothing against the programme');
-
-  // Claude's quota is the plan's: the provider is refused, and no model is.
-  const c = archiveFixture({ body: null });
-  wireDesk(c);
-  c.answer = REFUSED_429;
-  await createRunner({ deps: c.deps }).pass({ repo: 'memoro' });
-  const claudeRefused = c.deps.capacity.read().providers.claude;
-  assert.ok(claudeRefused.refusal_until, 'claude refused as a provider');
-  assert.deepEqual(claudeRefused.model_refusals, {});
-  assert.equal(c.files[ARCHIVE_STATE], undefined);
-});
-
-test('programme archive: a login ending on agy refuses the provider through LOGIN_REFUSES_PLAN and counts no failure', async () => {
-  const f = archiveFixture({ body: null });
-  wireDesk(f);
-  archiveOnAgy(f);
-  f.answer = () => ({ status: 1, stdout: '', stderr: 'authentication required: please sign in', timedOut: false });
-  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
-  const { agy } = f.deps.capacity.read().providers;
-  assert.ok(agy.refusal_until, 'the provider is refused');
-  assert.deepEqual(agy.model_refusals, {});
-  assert.equal(f.files[ARCHIVE_STATE], undefined, 'a refused login counts for nothing against the programme');
-});
-
-test('programme archive: a malformed or missing WRITE-BACK.md is a failed reading; the second opens a for-martin item', async () => {
-  const f = archiveFixture({ body: null });
-  const items = wireDesk(f);
-  let clock = Date.parse('2026-11-15T09:00:00Z');
-  f.deps.now = () => new Date(clock += 60_000);
-  const runner = createRunner({ deps: f.deps });
-  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, 'a session ran');
-  assert.equal(archiveState(f).failures.length, 1);
-  assert.match(archiveState(f).failures[0].reason, /WRITE-BACK\.md is missing/u);
-  assert.deepEqual(items(), [], 'the first failure opens nothing');
-  f.writes.body = writeBack('OK', archiveLine, 'f'.repeat(40));
-  await runner.pass({ repo: 'memoro' });
-  assert.equal(archiveState(f).failures.length, 2);
-  const [item] = items();
-  assert.deepEqual([item.kind, item.state, item.sort], ['archive', 'for-martin', 'mechanical']);
-  assert.match(f.files[`${itemDirectory(item, f.deps.env)}/brief.md`], /## Rekommendation och skäl/u);
-  assert.deepEqual(f.archived, [], 'never archived on a failed reading');
-  assert.equal(archiveRunnable(runner), false, 'and not again while the item is open');
-});
-
-test('programme archive: an OK reading is kept; a failed archive is tried again with no new reading, and the record write retries alone at the kept destination, a write that throws opening one item and holding while it is open', async () => {
+test('programme archive: a failed archive is tried again, and the record write retries alone at the kept destination, a write that throws opening one item and holding while it is open', async () => {
   const f = archiveFixture({ archiveRc: 1 });
   const items = wireDesk(f);
   let clock = Date.parse('2026-11-15T09:00:00Z');
   f.deps.now = () => new Date(clock += 60_000);
   const runner = createRunner({ deps: f.deps });
   await runner.pass({ repo: 'memoro' });
-  assert.equal(archiveSessions(f).length, 1);
   assert.deepEqual(items(), [], 'the first failure opens nothing');
   assert.equal(archiveState(f).failures.length, 1);
-  assert.deepEqual(archiveState(f).reading.goals, ['g1'], 'the OK reading is kept for the goals it judged');
   assert.equal(archiveRunnable(runner), true);
   // The archive moves the directory, then the record write fails: the destination stays in the state.
   f.rc.archive = 0;
   const write = f.deps.write;
   f.deps.write = (path, text) => { if (path === `${ARCHIVED_TO}/PROGRAMME.json`) { const error = new Error('ENOSPC: no space left on device'); error.code = 'ENOSPC'; throw error; } write(path, text); };
   await runner.pass({ repo: 'memoro' });
-  assert.equal(archiveSessions(f).length, 1, 'no new reading on a kept one');
   assert.equal(archiveState(f).destination, ARCHIVED_TO, 'the destination is recorded before the record is written');
   assert.equal(JSON.parse(f.files[`${ARCHIVED_TO}/PROGRAMME.json`]).state, 'open');
   // The write that threw is the second failure: the item opens, and while it is open the write is not tried again.
@@ -7979,7 +7674,7 @@ test('programme archive: an OK reading is kept; a failed archive is tried again 
   const result = await runner.pass({ repo: 'memoro' });
   assert.deepEqual([result.ran, result.name], [1, 'archive:prog']);
   assert.equal(f.archived.length, 2, 'the archive is not run again: the write alone');
-  assert.equal(archiveSessions(f).length, 1);
+  assert.deepEqual(f.calls.sessions, []);
   assert.equal(JSON.parse(f.files[`${ARCHIVED_TO}/PROGRAMME.json`]).state, 'done');
   assert.equal(archiveState(f).destination, null);
   assert.equal(archiveRunnable(runner), false);
@@ -8008,7 +7703,7 @@ test('programme archive: a legacy programme\'s proposals move to the page-area i
   assert.match(f.files['/w/areas/memoro/trust/proposals/idea.md'] ?? '', /^From programme prog/u, Object.keys(f.files).filter((path) => path.endsWith('idea.md')).join(', '));
 });
 
-test('programme archive: no turn for a programme without a record, with a live goal, with every goal dropped, or whose record reads done; nothing is read or archived', async () => {
+test('programme archive: no turn for a programme without a record, with a live goal, with every goal dropped, or whose record reads done; nothing is archived', async () => {
   const table = [
     ['no record', (f) => { delete f.files[RECORD_AT]; }],
     ['an invalid record', (f) => { f.files[RECORD_AT] = '{ not json'; }],
@@ -8023,14 +7718,14 @@ test('programme archive: no turn for a programme without a record, with a live g
     const runner = createRunner({ deps: f.deps });
     assert.equal(archiveRunnable(runner), false, `${kind}: no candidate`);
     await runner.pass({ repo: 'memoro' });
-    assert.deepEqual([archiveSessions(f).length, f.archived.length], [0, 0], `${kind}: no session, no archive`);
+    assert.deepEqual([f.calls.sessions.length, f.archived.length], [0, 0], `${kind}: no session, no archive`);
     assert.equal(f.files[ARCHIVE_STATE], undefined, `${kind}: nothing counted`);
   }
-  // A kept OK reading is no licence: a goal that appeared since stops the retry too.
+  // A failed archive is no licence: a goal that appeared since stops the retry.
   const kept = archiveFixture({ archiveRc: 1 });
   const runner = createRunner({ deps: kept.deps });
   await runner.pass({ repo: 'memoro' });
-  assert.equal(archiveState(kept).reading.verdict, 'OK');
+  assert.equal(archiveState(kept).failures.length, 1);
   kept.files[`${GOALS}/late/GOAL.json`] = goalJson({ stage: 'draft', status: 'Martin', repos: ['memoro'], title: 'late', goal: [], prs: [] });
   assert.equal(archiveRunnable(runner), false);
   await runner.pass({ repo: 'memoro' });
@@ -8041,16 +7736,16 @@ test('programme archive: mixed versions — an older state file reads as nothing
   const older = archiveFixture();
   older.files[ARCHIVE_STATE] = JSON.stringify({ schema: 'mc-archive-turn', version: 0, programme: 'prog', failures: [{ x: 1 }] });
   const first = createRunner({ deps: older.deps });
-  assert.equal(archiveRunnable(first), true, 'the older state is no failures and no kept reading: the programme is read');
+  assert.equal(archiveRunnable(first), true, 'the older state is no failures: the programme is archived');
   assert.equal((await first.pass({ repo: 'memoro' })).ran, 1);
   assert.equal(older.archived.length, 1);
   const bad = archiveFixture();
   bad.files[ARCHIVE_STATE] = '{ not json';
   const second = createRunner({ deps: bad.deps });
   await second.pass({ repo: 'memoro' }); await second.pass({ repo: 'memoro' });
-  assert.deepEqual([archiveSessions(bad).length, bad.archived.length], [0, 0]);
+  assert.deepEqual([bad.calls.sessions.length, bad.archived.length], [0, 0]);
   assert.equal(bad.log.filter((line) => /runner\/archive-turn\/prog\.json is unreadable/u.test(line)).length, 1, 'said once while it lasts');
-  // A programme an older runner or `mc plan --archive` moved is no longer in the programmes home: no candidate, nothing to read.
+  // A programme an older runner or `mc plan --archive` moved is no longer in the programmes home: no candidate.
   const moved = archiveFixture();
   moved.files[`${ARCHIVED_TO}/PROGRAMME.json`] = moved.files[RECORD_AT];
   for (const path of Object.keys(moved.files)) if (path.startsWith(`${PROG}/`)) delete moved.files[path];

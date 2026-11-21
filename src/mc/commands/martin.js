@@ -177,13 +177,14 @@ function item(argv, deps) {
       // product and judgement are the old names of the one sort for a text change; a new record never carries them.
       fresh.state = 'prepared'; fresh.sort = isTextSort(f.sort) ? 'text' : f.sort; return fresh;
     }
-    if (verb === 'brief' && state === 'prepared' && f.sort === 'mechanical') {
+    // Nothing prepares a new item unattended any more (Martin, 2026-11-21): a new item is briefed or closed as a prepared one is.
+    if (verb === 'brief' && ['new','prepared'].includes(state) && f.sort === 'mechanical') {
       if (!maybeRead(join(dir, 'brief.md'))?.trim()) return refuse('write the unresolved stop and its evidence in brief.md first');
       if (f.text !== null || f.recommend !== null || f.reversible !== null || f['no-option']) return refuse('brief --sort mechanical takes no text name, option or reversibility flags');
       fresh.state = 'for-martin'; fresh.sort = 'mechanical'; fresh.reversible = false; fresh.due_at = null;
       return fresh;
     }
-    if (verb === 'brief' && state === 'prepared' && ['text','product','judgement','reserved'].includes(f.sort) && ['yes','no'].includes(f.reversible) && exists(join(dir,'brief.md'))) {
+    if (verb === 'brief' && ['new','prepared'].includes(state) && ['text','product','judgement','reserved'].includes(f.sort) && ['yes','no'].includes(f.reversible) && exists(join(dir,'brief.md'))) {
       const briefText = maybeRead(join(dir, 'brief.md'));
       if (isTextSort(f.sort)) {
         // A change to a text of Martin's is brought in the form of mc-martin.md: no options, no recommendation, no due time.
@@ -207,7 +208,7 @@ function item(argv, deps) {
     }
     if (f['no-option'] && verb !== 'close') return refuse('--no-option belongs to close');
     if (verb === 'close' && f.by === 'default') return refuse('close --by default is refused: no clock carries out a brief; close --by decision or --by martin');
-    if (verb === 'close' && (['prepared','for-martin'].includes(state) || sourceClosedWithSort(fresh)) && ['decision','martin'].includes(f.by)) {
+    if (verb === 'close' && (['new','prepared','for-martin'].includes(state) || sourceClosedWithSort(fresh)) && ['decision','martin'].includes(f.by)) {
       if (f['no-option'] && f.by !== 'martin') return refuse('--no-option is that Martin chose none of the options: only with --by martin');
       if (f['no-option'] && f.chose !== null) return refuse('--no-option and --chose cannot be combined: he chose an option or none');
       let summary = f.summary;
@@ -450,7 +451,7 @@ const DESK_WRITERS = ['person', 'martin', 'desk-prepare', 'decision'];
 export function writerRole(env) { const identity = sessionIdentity({ env, cwd: env.cwd || process.cwd() }); return env.MC_ROLE || (env.MC_TOOL && env.MC_TOOL !== 'person' ? 'session' : identity.role || 'person'); }
 /** Closed by the source after it was prepared or briefed: the one closed item a close still applies to. */
 function sourceClosedWithSort(record) { return record.state === 'closed' && record.outcome?.by === 'source' && record.sort != null; }
-function refused(record, verb, stderr, why) { stderr.write(`mc: item ${record.id} is ${record.state}; ${why}; ${record.state === 'new' ? 'prepared' : record.state === 'prepared' ? 'brief or close' : record.state === 'for-martin' || sourceClosedWithSort(record) ? 'close' : 'no verb'} applies\n`); return 2; }
+function refused(record, verb, stderr, why) { stderr.write(`mc: item ${record.id} is ${record.state}; ${why}; ${record.state === 'new' ? 'prepared, brief or close' : record.state === 'prepared' ? 'brief or close' : record.state === 'for-martin' || sourceClosedWithSort(record) ? 'close' : 'no verb'} applies\n`); return 2; }
 function maybeRead(path) { try { return readFileSync(path, 'utf8'); } catch { return null; } }
 function exists(path) { try { return readFileSync(path); } catch { return null; } }
 function readDecisionRows(env) { return String(maybeRead(ledgerPath(mcHome(env))) || '').split(/\n/u).filter(Boolean).flatMap(line=>{ try { const row=JSON.parse(line); return [{...row,reference:`decision:${row.at}`}]; } catch { return []; } }); }

@@ -243,8 +243,8 @@ also has `text` (the text it changes) and `goal` (the goal it blocks, or null).
 written before this change that holds a due time or `default` as the closer still
 reads, lists and opens.
 
-States are `new` → `prepared` → `for-martin` → `closed`, with `prepared` also
-able to close directly. Sort is null or mechanical, technical, text or reserved
+States are `new` → `prepared` → `for-martin` → `closed`; `new` and `prepared`
+can also brief or close directly, since nothing prepares an item unattended. Sort is null or mechanical, technical, text or reserved
 (`product` and `judgement` are the old names of `text` and are read as such, never
 written); reversible and due time are nullable. Closing records
 `{by, at, summary}` where by is decision, martin or source (`default` only in a
@@ -279,10 +279,8 @@ stuck items of **Not ready**: it is the runner's, not his.
 
 An `archive` item is the programme archive turn's
 ([mc-run.md](mc-run.md#programme-archive-turn)); its reference is
-`archive:<programme>` and one is open at a time per programme. A NOT OK reading
-opens it `prepared` (sort mechanical) with a model-free `prepared.md` carrying
-the NOT OK lines; a NOT OK after an item was closed by decision, and the second
-failure since the last item, open it `for-martin` (sort mechanical, not
+`archive:<programme>` and one is open at a time per programme. The second failure
+of the archive since the last item opens it `for-martin` (sort mechanical, not
 reversible, no due time) with a Swedish `brief.md`; restricted data under
 `~/mc/restricted/<programme>/` opens one `for-martin` with sort `reserved`
 naming `mc plan <programme> --archive`. Its source is the programme's directory
@@ -291,9 +289,7 @@ it by source only when the programme directory is gone from the programmes home 
 `goals/` holds a live goal; a directory gone while the state names a destination
 whose record does not read `done` (the record write failed after the move) keeps
 it open until it is decided; an unreadable state file is reported and keeps it
-open. A decision session answers a prepared one at its source (writes the missing
-statement within reach) and closes it `--by decision`, so the runner reads again;
-it never archives the programme. A `for-martin` mechanical one is among the stuck
+open. A `for-martin` mechanical one is among the stuck
 items of **Not ready**, like a `programme` item; a reserved one is his.
 
 A `manager` item was the manager's horizon turn's second failure, with
@@ -519,40 +515,22 @@ which programme the runner works on. No other reader takes them: the manager has
 programme ([mc-run.md](mc-run.md#the-managers-turns)); a horizon's next
 programme is created by Martin in `mc martin` or by a person.
 
-## Unattended preparation
+## Preparation
 
-Each chores round, after item sync, prepares up to three `new` items in oldest
-source-time order, one fresh headless turn at a time. `mc martin prepare [<id>]`
-is the person's manual entry to the same pass (one named item, or up to three
-waiting items). A per-item PID claim, acquired/released under the strict runner
-lock, prevents simultaneous manual/chore preparations; a dead claim is reclaimed.
-The turn stands in the item's directory, has `MC_ROLE=desk-prepare` and
-`MC_HEADLESS=1`, and inherits no goal or programme identity. It has a fifteen-minute
-wall-clock limit and uses only `routeClass('build')`'s catalog candidates,
-including their tool, model and effort, with the existing provider/billing rules.
-No usable build candidate means wait, never borrow another list. Quota endings
-pause the runner as the intake drain does, before another preparation round.
-Existing headless restrictions in [mc-hooks.md](mc-hooks.md) apply unchanged.
-
-`canon/roles/desk-prepare.md` gathers the item, goal and whole log, named
-documents, programme README and relevant technical contracts. `prepared.md`
-contains the ask/stop in two sentences, sourced facts, existing rules, the
-sort and its reason, visual evidence paths from `mc shot` when applicable,
-and anything not established. It makes no recommendation or decision, asks
-nobody, and changes no goal, log, ledger or repository file. Goal verbs refuse
-every write for this role (including criteria, PRs and creation); `mc ask` refuses before consulting jev
-(`mc goal martin` is gone). Its only item mutation is
-`prepared --sort mechanical|technical|text|reserved`. A goal
-defect is sorted `technical`, a no-progress stop `mechanical`.
-
-A completed turn that left the item `new` appends `{at, reason}` to the item's
-`prepare_failures` array (absent before any failure). Exit without the prepared
-verb, thrown session errors and timeouts all count. After two failures the
-runner writes a `prepared.md` containing only that preparation failed twice
-and the recorded reasons, and sets `prepared` with sort `mechanical`, so the
-decision pass can still take it. No launch because of capacity, ceiling or an
-existing claim is not a failed attempt. Every started turn adds a `runs.tsv`
-row of kind `desk-prepare`, named by item id, with routing, usage and cost.
+Nothing prepares a desk item unattended (Martin, 2026-11-21: "Desk-prepare är
+ett skämt. Saknar värde. Ta bort trigger. Kan lika gärna göras när jag har
+interaktiv session."). The decision lane takes `new` items as they are and
+reads their source itself; the desk reads an item with `mc martin item <id>`
+when Martin takes it up. `mc martin prepare [<id>]` remains a person's manual
+entry: one fresh headless turn per named item (or up to three waiting items) in
+the item's directory, `MC_ROLE=desk-prepare`, `MC_HEADLESS=1`, no goal or
+programme identity, a fifteen-minute limit, on the `build` list. A per-item PID
+claim prevents simultaneous preparations. The role
+(`canon/roles/desk-prepare.md`) only writes `prepared.md` and runs
+`prepared --sort mechanical|technical|text|reserved`; goal verbs and `mc ask`
+refuse it. Two failed attempts write a `prepared.md` saying so and set
+`prepared` with sort `mechanical`. Every started turn adds a `runs.tsv` row of
+kind `desk-prepare`.
 
 ## Daily unattended desk ceiling
 
@@ -563,7 +541,7 @@ file is also off. `mc martin ceiling` prints the setting and today's desk sum;
 There is no implicit ceiling or held work while it is off.
 
 `desk-budget.js` is the shared admission reading for both unattended desk
-passes: preparation, the decision pass and the learning pass. It sums today's UTC
+passes: manual preparation, the decision pass and the learning pass. It sums today's UTC
 `runs.tsv` `cost` values for `desk-prepare`, `decision` and `learning` only; other days/kinds and unknown
 costs (`-`) do not contribute. Before each turn it rereads the setting and sum.
 When the setting is non-null and the sum is at least it, no desk turn starts;
@@ -576,11 +554,11 @@ than silently disabling a ceiling. Decision admission uses the same reading and 
 ## Unattended decision pass
 
 `mc decision [<id>]` is a person's one-session entrance, refused inside a
-session. No id takes the oldest prepared item; no prepared item prints that
-fact and exits 0. An explicit id names a prepared item. It uses
+session. No id takes the oldest new or prepared item; none prints that
+fact and exits 0. An explicit id names a new or prepared item. It uses
 exactly the runner's decision launch and prints the outcome and new state.
 
-The runner supplies every `prepared` item, oldest source first, as lane work; no
+The runner supplies every `new` and `prepared` item, oldest source first, as lane work; no
 `for-martin` item is ever lane work, however long it has waited, behind merge-failure and
 main-red mend and ahead of finish, review, build and planning. The `decision`
 list defaults to `claude:opus:high`, then `codex:gpt-6.2-sol:high`; old catalogs
@@ -599,7 +577,7 @@ files exclude other sessions on that goal; a short lock and live-PID
 `.decision.json` claim in the goal directory (or non-goal item directory) also
 exclude concurrent manual decision launches. The claim is removed on exit.
 
-The role reads prepared evidence, the live source, the whole goal log,
+The role reads prepared evidence when an item has it, the live source, the whole goal log,
 worktree and stage instructions, records takeover and tests the question's
 frame before answering it. It may finish, rewrite or drop the goal with the
 desk's authority; acceptance checks, independent review, gate, publication
@@ -618,7 +596,7 @@ exception or new rule is added without measured need.
 
 No clock changes anything on the desk. A brief waits for Martin without limit; nothing
 carries out its recommendation, closes it or moves it after a time, and the
-decision pass takes `prepared` items only. A horizon is recorded and shown in the opening
+decision pass takes `new` and `prepared` items only. A horizon is recorded and shown in the opening
 (*Horizons*); a change to a text he holds is brought in the form above; and a
 change with no goal reaches the desk by `mc martin propose`, which the
 reader of an `mc ask` call that finds a text of Martin's would change

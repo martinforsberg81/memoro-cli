@@ -2367,16 +2367,14 @@ describe('collectPage', () => {
       writeFileSync(path, text);
     };
     const { item } = recordArchiveFailure({
-      kind: 'not-ok', at: source, lines: ['work: NOT OK — missing write-back'],
+      reason: 'second failure', at: source,
       programme: 'finished', root: fx.root, env: fx.env, itemDirectory, write,
       read: (path) => readFileSync(path, 'utf8'),
       writeJson: (path, value) => write(path, JSON.stringify(value)),
       lock: (_root, update) => update(),
     });
-    assert.equal(item.state, 'prepared');
+    assert.equal(item.state, 'for-martin', 'the second failure opens the item');
     await check({ status: 'attention', reason: 'see the desk' }, 'see the desk');
-    writeFileSync(join(itemDirectory(item, fx.env), 'prepared.md'), 'repair write-back\n');
-    await check({ status: 'attention', reason: 'repair write-back' }, 'repair write-back');
     // Reserved items and a retry keep their own reason ahead of recorded failures.
     item.state = 'for-martin';
     item.sort = 'reserved'; writeDeskItem(item, { env: fx.env });

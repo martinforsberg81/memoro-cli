@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import * as claude from '../../src/adapters/claude-code.js';
-import { archiveDue, archiveOnOk, keepReading, parseWriteBack, readArchiveState } from '../../src/mc/archive-turn.js';
+import { archiveDue, archiveOnOk, readArchiveState } from '../../src/mc/archive-turn.js';
 import { writeFileAtomic, writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { run as ask } from '../../src/mc/commands/ask.js';
 import { run as goal } from '../../src/mc/commands/goal.js';
@@ -694,7 +694,7 @@ test('repair delivery: a queued or in-flight PR cannot use a stale order or a la
   });
 });
 
-test('repair archival: stale inputs and an old write-back cannot complete a newer release', async t => {
+test('repair archival: stale inputs cannot complete a newer release', async t => {
   const f = repairSetup(t);
   const home = join(f.root, 'programs');
   const pagePath = join(f.dir, 'README.md');
@@ -703,7 +703,6 @@ test('repair archival: stale inputs and an old write-back cannot complete a newe
   writeFileSync(join(landed, 'GOAL.json'), goalJson({ stage: 'done', repos: ['memoro-cli'], documents: [{ label: 'Part 1', path: pagePath }] }));
   const seams = { root: f.root, home, programme: 'p', list: listDirsOf, read: readTextOrNull, writeJson: writeJsonAtomic, lock: realLock };
   const due = () => archiveDue({ ...seams, state: readArchiveState(seams) });
-  const keep = revision => keepReading({ ...seams, revision, goals: ['restore'], at: NOW.toISOString() });
   const archived = join(f.root, 'archive', 'p');
   mkdirSync(join(f.root, 'archive'));
   let moves = 0;
@@ -731,24 +730,15 @@ test('repair archival: stale inputs and an old write-back cannot complete a newe
     };
 
     const first = await release();
-    assert.equal(due().mode, 'read');
-    keep(first);
-    assert.equal(due().mode, 'archive');
+    assert.deepEqual([due().mode, due().revision], ['archive', first]);
     writeFileSync(pagePath, readFileSync(pagePath, 'utf8').replace(/^## Read$/mu, '## Read\n\nAdditional reading.'));
     assert.equal(due().due, false);
     assert.match(due().reason, /needs review/u);
     assert.equal((await archive()).stale, true);
     assert.equal(moves, 0);
-    assert.throws(() => keep(first), /needs review/u);
     assert.equal(reopenRepair(f.dir, author).changed, true);
     const second = await release();
-    assert.equal(due().mode, 'read', 'the kept OK is for the first release, not the second');
-    assert.equal((await archive()).stale, true);
-    assert.equal(moves, 0);
-    assert.throws(() => keep(first), /different repair release/u);
-    const result = parseWriteBack(`release: ${first}\nrestore: OK — none — No behaviour changed.\nverdict: OK\n`, { goals: ['restore'], checkouts: {}, revision: second });
-    assert.deepEqual(result.problems, ['the write-back belongs to a different repair release']);
-    keep(second);
+    assert.deepEqual([due().mode, due().revision], ['archive', second], 'the archive is for the current release');
     const archiveResult = await archive();
     assert.equal(archiveResult.ok, true, archiveResult.reason);
     assert.equal(moves, 1);
@@ -875,11 +865,10 @@ for (const [action, confirmation, lateLanding] of [
         assert.equal(due().due, false, 'ordinary goal cleanup has not archived the dropped goal yet');
         renameSync(remaining, join(f.dir, 'goals', '.archive', 'remaining'));
         const picked = due();
-        assert.equal(picked.mode, 'read');
+        assert.equal(picked.mode, 'archive');
         assert.deepEqual(picked.goals, lateLanding ? ['landed', 'remaining'] : ['landed']);
         assert.deepEqual(picked.dropped, lateLanding ? [] : ['remaining']);
         assert.deepEqual(picked.partiallyLanded, lateLanding ? ['remaining'] : undefined);
-        assert.throws(() => keepReading({ ...seams, revision: prior, goals: ['landed'], at: NOW.toISOString() }), /different repair disposition/u);
         const destination = join(f.root, 'archive', 'programs', 'p');
         mkdirSync(join(destination, '..'), { recursive: true });
         const archive = () => archiveOnOk({ ...seams, restrictedDir: join(f.root, 'restricted'), proposalsTarget: () => assert.fail('no legacy proposal'),
@@ -891,9 +880,6 @@ for (const [action, confirmation, lateLanding] of [
             return 0;
           },
         });
-        assert.equal((await archive()).stale, true, 'decline alone does not authorize archival');
-        keepReading({ ...seams, revision: picked.revision, goals: picked.goals, at: NOW.toISOString() });
-        assert.equal(due().mode, 'archive');
         const archived = await archive();
         assert.equal(archived.ok, true, archived.reason);
         assert.equal(readRecord(destination).record.state, 'done');

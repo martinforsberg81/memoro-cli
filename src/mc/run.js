@@ -31,10 +31,8 @@
  *
  * Maintenance chores ride along without opening worktrees or touching branches. `runHelperDay` is the collect: once per calendar day, in
  * the first chore loop after 05:00Z, one digest per repository into
- * `~/mc/intake/`, no model. `runIntakeDrain` is the inbox: every chore loop, the
- * oldest files in `~/mc/intake/` up to `INTAKE_PER_ROUND`, one headless turn
- * each, each file archived under `~/mc/runner/log/intake/<date>/` the moment its
- * turn ends. `runTidyDaily` and `runDepsDaily` are `mc tidy --apply` and
+ * the day's `~/mc/runner/log/intake/<date>/`, no model. `runIntakeDrain`
+ * catalogues app suggestions in `~/mc/intake/` with jev, no model turn. `runTidyDaily` and `runDepsDaily` are `mc tidy --apply` and
  * `mc deps`, once a day each. The last a chore pass does is `runNightly`: every
  * pass starts, without waiting for it, a full run of each repository whose
  * origin/main moved since its last measured full run and that has none in
@@ -72,7 +70,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addBranchWorktree, addGoalWorktree, appendEntry, archiveDirIn, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, BUILD_SESSION, BUILD_SESSION_LIMIT, BUILD_SESSION_STOP, buildSessionCount, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, WAITS_FOR_MAIN, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addBranchWorktree, addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, BUILD_SESSION, BUILD_SESSION_LIMIT, BUILD_SESSION_STOP, buildSessionCount, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, WAITS_FOR_MAIN, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainingOwners, drainState, drainWaiting, fullRunWords, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -104,13 +102,12 @@ import { deployAlive, readDeploys } from './deploys.js';
 import { deployCheckTick } from './deploy-check.js';
 import { takeBackTick } from './take-back-run.js';
 import { pickWork } from './lane-pick.js';
-import { drainDeskPreparation } from './desk-prepare.js';
 import { deskBudget } from './desk-budget.js';
 import { itemDirectory, listDeskItems, readDeskItem, syncDeskItems } from './desk-items.js';
 import { decisionEligible, decisionFailure, decisionPrompt, decisionUnfinished } from './desk-decision.js';
-import { horizonsDir, readHorizon } from './desk-horizons.js';
+import { readHorizon } from './desk-horizons.js';
 import { MANAGER_CLAIM, areaPages, areaRepositories, curationDue, curationPrompt, curationState, curationWorktreesDir, headOf, proposalBacklog, readCurationState, curationStatePath, setUpCurationWorktrees, settleCurationWorktrees } from './manager-pulse.js';
-import { ARCHIVE_CHECKOUTS_PREFIX, FAILURES_TO_ITEM, WRITE_BACK_FILE, archiveDue, archiveName, archiveOnOk, archiveReadPrompt, archiveCheckInPrompt, archiveReference, finishDestination, keepReading, openRestrictedItem, parseWriteBack, readArchiveState, recordArchiveFailure, statedProgrammes } from './archive-turn.js';
+import { FAILURES_TO_ITEM, archiveDue, archiveName, archiveOnOk, finishDestination, openRestrictedItem, readArchiveState, recordArchiveFailure, statedProgrammes } from './archive-turn.js';
 import { archiveProgramme } from './archive-programme.js';
 import { AREAS_HOME, FALLBACK_AREAS, keyProposalsDir, pageAreaOf } from './area-proposals.js';
 import { runDocsMerge } from './docs-merge.js';
@@ -187,8 +184,6 @@ const CAPACITY_READERS = Object.freeze({
 
 /** The role each goal session kind runs with (`goalSession`). */
 const GOAL_ROLES = Object.freeze({ plan: PLAN_ROLE, build: BUILD_ROLES.goal, repair: BUILD_ROLES.goal, review: REVIEW_ROLE, mend: MEND_ROLE });
-/** The role of the archive turn's one read-only reading (archive-turn.js). */
-const ARCHIVE_ROLE = 'archive-reader';
 const NO_REVIEW_PR = 'in review without an open pull request';
 
 /*
@@ -1393,9 +1388,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * The inbox, drained: the oldest files in `~/mc/intake/` up to
-   * `INTAKE_PER_ROUND`, one headless turn each, each one archived under
-   * `~/mc/runner/log/intake/<date>/` the moment its turn ends.
+   * The inbox, drained of app suggestions: the oldest `suggestion-*` files in
+   * `~/mc/intake/` up to `INTAKE_PER_ROUND`, each catalogued by jev and
+   * archived under `~/mc/runner/log/intake/<date>/`. No model turn: any other
+   * file waits for the desk (Martin, 2026-11-21: intake turns were waste).
    *
    * There is no day gate here and there is not meant to be — the question is
    * *is there a file?*, and a round asks it every time. Thirteen files is
@@ -1413,10 +1409,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       env: deps.env,
       now: deps.now,
       limit: INTAKE_PER_ROUND,
+      suggestionsOnly: true,
       deps: {
         files: deps.files,
         move: deps.move,
         turn: deps.helperTurn,
+        catalog: deps.catalogSuggestion,
         stop: stopRequested,
         onTurn: async ({ file, turn, archived, seconds }) => {
           logRun({
@@ -1438,16 +1436,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     });
     if (out.left) say(`intake: ${out.left} file(s) still waiting`);
     return out;
-  }
-
-  /** New desk items follow sync, serially, beside the inbox drain. */
-  async function runDeskPreparation() {
-    if (offlineHeld() || stopRequested() || updateRequested()) return;
-    try { return await drainDeskPreparation({ env: deps.env, now: deps.now, deps: {
-      ...(deps.deskPrepare || {}), route: routeClass, logRun, say, quotaPause, reserveAdmission,
-      budget: options => deskBudget({ ...options, read: deps.read }),
-      stop: () => stopRequested() || updateRequested(),
-    } }); } catch (error) { say(`desk-prepare: waiting — ${error?.message || error}`); }
   }
 
   /**
@@ -2108,18 +2096,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /** The seams `archive-turn.js` takes: the runner's own file reads, writes and lock. */
   const archiveSeams = (programme) => ({ root, programme, read: deps.read, writeJson, lock });
   /** A failure of the turn, counted under the lock; one that cannot be written is said, never a missing outcome. */
-  function countArchive(programme, { kind = 'failed', reason, log = null, lines = [] }) {
+  function countArchive(programme, { reason, log = null }) {
     const name = archiveName(programme);
     try {
-      const reference = archiveReference(programme);
-      const decided = turnItems().some(item => item.kind === 'archive' && item.reference === reference && item.outcome?.by === 'decision');
-      const failed = recordArchiveFailure({ ...archiveSeams(programme), kind, reason, log, lines, at: stamp(), decided, env: deps.env, write: deps.write, itemDirectory });
+      const failed = recordArchiveFailure({ ...archiveSeams(programme), reason, log, at: stamp(), env: deps.env, write: deps.write, itemDirectory });
       if (failed.item) say(`${name}: desk item ${failed.item.id} (${failed.item.state}) opened — ${reason}`);
       else say(`${name}: ${reason} — failure ${failed.count} of ${FAILURES_TO_ITEM}`);
       return failed;
     } catch (error) { say(`${name}: the failure was not counted — ${error.message || String(error)}`); return null; }
   }
-  /** The archive itself (C3), tried after an OK reading, or again on a kept one: no model, no lane slot. */
+  /** The archive itself (C3), once every goal is finished: no model, no lane slot. */
   async function attemptArchive(programme) {
     const name = archiveName(programme);
     const home = programsHome(deps.env);
@@ -2152,152 +2138,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   async function runArchive(item, { lane }) {
     const { name, programme, archiveTurn: due } = item;
     if (due.mode === 'state') {
-      // The directory moved and the record still reads open: that write alone, no reading and no session.
+      // The directory moved and the record still reads open: that write alone.
       let finished;
       try { finished = finishDestination({ ...archiveSeams(programme), destination: due.destination, write: deps.write }); } catch (error) { finished = { ok: false, reason: error.message || String(error) }; }
       if (finished.ok) { say(`${name}: the record at ${due.destination} reads done`); return 'ran'; }
       countArchive(programme, { reason: finished.reason });
       return 'skipped:state-write';
     }
-    if (due.mode === 'archive') return attemptArchive(programme);
-    const read = await runArchiveReading(item, { lane });
-    return read === 'kept' ? attemptArchive(programme) : read;
+    return attemptArchive(programme);
   }
-  /** The reading: one read-only session under the claim; 'kept' when it ends OK and the OK reading is kept. */
-  async function runArchiveReading(item, { lane }) {
-    const { name, repo: repoName, programme, archiveTurn: due } = item;
-    const dir = join(programsHome(deps.env), programme);
-    const roleName = ARCHIVE_ROLE;
-    const role = deps.role(roleName);
-    if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
-    const route = routeClass('build');
-    if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
-    const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
-    const launch = deps.launch(settings.tool);
-    if (!launch?.ok) { say(`${name}: ${settings.tool} is not available on this machine (${launch?.hint || launch?.reason}), skip`); return 'skipped:tool-missing'; }
-    const slot = await waitForSlot(name, { repo: repoName, lane });
-    if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
-    if (slot !== 'ok') { say(`${name}: UPDATE while waiting for a lane — starting no session, skip`); return 'skipped:update'; }
-    let admission; let scratch; let marker; let result; let set = null; let outcome = 'ran';
-    const currentPath = paths.currentFor(repoName, lane);
-    const readRepos = [];
-    try {
-      const picked = await billingFor(launch, route, settings.model);
-      if (picked.billing === 'unavailable') { return noCapacity(name, picked.why); }
-      admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
-      if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
-      if (offlineHeld()) { say(`${name}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
-      // Read again after admission: a goal made, an item opened or the record changed meanwhile leaves nothing to read.
-      const again = archiveDueNow(programme);
-      if (!again.due || again.mode !== 'read' || again.revision !== due.revision) { say(`${name}: programme changed during admission — reading deferred (${again.reason ?? again.mode})`); return 'skipped:programme-changed'; }
-      // The repositories of the done goals and every repository that declares areas, each at origin/main.
-      const wanted = new Map();
-      for (const repo of repos) if (due.repos.includes(repo.name)) wanted.set(repo.name, repo);
-      for (const repo of areaRepos().repos) wanted.set(repo.name, { name: repo.name, path: repo.path });
-      readRepos.push(...wanted.values());
-      if (!readRepos.length) { countArchive(programme, { reason: 'no repository to read: no done goal names one this machine holds and none declares areas' }); return 'skipped:setup'; }
-      set = setUpReadCheckouts({ git: deps.git, root, programme, repos: readRepos, exists: deps.exists, prefix: ARCHIVE_CHECKOUTS_PREFIX });
-      if (!set.ok) {
-        const refused = set;
-        set = null;
-        // A fetch that fails is the network's, not the programme's: nothing is counted.
-        if (refused.fetch) { say(`${name}: ${refused.reason} — skip`); return 'skipped:fetch'; }
-        if (!retainedSaid.has(refused.reason)) { retainedSaid.add(refused.reason); say(`${name}: no session started — ${refused.reason}`); }
-        countArchive(programme, { reason: refused.reason });
-        return 'skipped:setup';
-      }
-      const shas = {};
-      for (const [repo, path] of Object.entries(set.paths)) {
-        const head = deps.git(path, ['rev-parse', 'HEAD']);
-        shas[repo] = String(head.stdout ?? '').trim();
-        if (!head.ok || !shas[repo]) { countArchive(programme, { reason: `cannot read the commit of the checkout ${path}` }); return 'skipped:setup'; }
-      }
-      const rechecked = await admission.recheck?.();
-      if (rechecked && !rechecked.admitted) return 'skipped:disk';
-      if (stopRequested()) return 'stop';
-      if (updateRequested()) return 'skipped:update';
-      if (due.revision && archiveDueNow(programme).revision !== due.revision) return 'skipped:programme-changed';
-      // A file left by an earlier reading is not this one's.
-      remove(join(dir, WRITE_BACK_FILE));
-      const horizon = due.record.horizon;
-      const prompt = archiveReadPrompt({ programme, dir, horizonDir: horizon ? join(horizonsDir(deps.env), horizon) : null, goals: due.goals, dropped: due.dropped, partiallyLanded: due.partiallyLanded, checkouts: set.paths, archive: archiveDirIn(programsHome(deps.env), programme), revision: due.revision });
-      const instructions = instructionsFor(launch.id, role.overlay);
-      const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
-      const stem = `archive-${programme}-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;
-      const out = join(paths.log, stem);
-      scratch = join(paths.scratch, stem);
-      marker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind: 'plan', stem, started: stamp() };
-      deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
-      const current = { name, step: null, kind: 'plan', variant: null, programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
-        effort: settings.effort, advisor: settings.advisor, billing: picked.billing,
-        check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0, started: stamp(), pid, worktree: dir,
-        ...(due.revision ? { repair_revision: due.revision } : {}),
-        ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
-        role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
-      writeJson(currentPath, current);
-      say(`${name}: archive reading starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · large list: ${route.basis} (${route.why})`);
-      const t0 = deps.now().getTime();
-      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing, runnerAdmission: true });
-      try {
-        const pending = runnerSession(tool, { cwd: dir, logPath: `${out}.jsonl`,
-          onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
-          ...watchFor(launch, settings, { prompt, name, checkInText: archiveCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
-          // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). No MC_GOAL: this session is the programme's, not a goal's.
-          env: { MC_HEADLESS: '1', MC_ROLE: roleName, MC_PROGRAMME: programme, MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch },
-          unsetEnv: ['MC_GOAL', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', ...dropEnv(launch)] });
-        admission.release?.();
-        result = await pending;
-      } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
-      writeSessionLogs(out, result);
-      const refusal = gatewayRefusal(tool, result);
-      if (refusal) {
-        return recordReserveWait(refusal, { name, kind: 'plan', settings, result, t0 });
-      }
-      const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
-      noteWindows({ name, launch }, result.stdout || '');
-      noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
-      recordRefusal({ name, launch, route }, read, picked.billing);
-      refuseProvider(read, launch, picked.billing, settings.model);
-      const seconds = Math.round((deps.now().getTime() - t0) / 1000);
-      // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
-      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
-      const parsed = parseWriteBack(deps.read(join(dir, WRITE_BACK_FILE)), { goals: due.goals, checkouts: shas, horizon, revision: due.revision });
-      let note = `${read.note},${due.goals.length} goal${due.goals.length === 1 ? '' : 's'}`;
-      if (due.revision && archiveDueNow(programme).revision !== due.revision) {
-        note = `${note},repair release changed — write-back not kept`;
-      } else if (!parsed.ok) {
-        if (!providerEnding) {
-          const reason = `archive reading exited ${result.status ?? 1}: ${parsed.problems.join('; ')}`;
-          countArchive(programme, { reason, log: `${out}.jsonl` });
-          note = reason;
-        }
-      } else if (parsed.verdict === 'OK') {
-        try {
-          keepReading({ ...archiveSeams(programme), at: stamp(), goals: due.goals, lines: [], horizon, home: programsHome(deps.env), revision: due.revision });
-          outcome = 'kept';
-          note = `${note},write-back OK`;
-        } catch (error) { say(`${name}: the OK reading was not kept — ${error.message || String(error)}`); }
-      } else {
-        countArchive(programme, { kind: 'not-ok', reason: `write-back NOT OK: ${parsed.lines.join(' | ')}`, log: `${out}.jsonl`, lines: parsed.lines });
-        note = `${note},write-back NOT OK`;
-      }
-      logRun({ ...read, ts: stamp(), name, kind: 'plan', exit: result.status, seconds, pr: '-', note, model: settings.model, cls: 'build', tool: settings.tool, effort: settings.effort, billing: picked.billing });
-      say(`${name}: archive reading done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
-      return outcome;
-    } finally {
-      remove(currentPath);
-      try {
-        if (scratch) { writeJson(join(scratch, SCRATCH_MARKER), { ...marker, ended: stamp(), exit: result?.status ?? null }); await reclaimSessionExports(scratch, name); }
-      } finally {
-        try {
-          if (set?.ok) {
-            const kept = removeReadCheckouts({ git: deps.git, root, programme, repos: readRepos, exists: deps.exists, prefix: ARCHIVE_CHECKOUTS_PREFIX });
-            for (const path of kept) say(`${name}: read checkout ${path} holds work and was kept`);
-          }
-        } finally { admission?.release?.(); dropSlot(); }
-      }
-    }
-  }
+
 
   /* ------------------------------------------------------------ manager turns */
 
@@ -3959,7 +3809,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     await runIntakeDrain();
     try { (deps.syncDeskItems || syncDeskItems)({ env: deps.env || process.env, reportIssue: issue => say(`martin items: source issue ${issue.path}: ${issue.error}`) }); }
     catch (error) { say(`martin items: sync failed — ${error?.message || error}`); }
-    await runDeskPreparation();
     await runLearning();
     askGithub();
     // `askGithub()` has just fetched every repository, mc's own checkout among
@@ -4126,7 +3975,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, deployMendTicket, settleDeployMends, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDeskPreparation, runDepsDaily, runTidyDaily, runNightly, runDeployCheck, runTakeBackFallback, settleFullRuns, fireHandover, fullRunsMeasuring, askGithub, stopRequested, startCapacityTicker,
+    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, deployMendTicket, settleDeployMends, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, runDeployCheck, runTakeBackFallback, settleFullRuns, fireHandover, fullRunsMeasuring, askGithub, stopRequested, startCapacityTicker,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, generation: () => marked?.generation, markRunner, dropPredecessor, clearRunner, retireOwner,
   };
 }

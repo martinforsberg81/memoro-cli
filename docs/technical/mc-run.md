@@ -537,8 +537,8 @@ reserve. The wrapper still checks the switch before opening the grant.
 The runner log names the provider and either says when its reserve is
 eligible again or that its API is off. If there is no eligible route, the
 normal pick reconsiders the work. This applies to goals, decisions, programme
-planning and archival, scheduled manager, both goal-less mends, and
-scheduled desk preparation and learning.
+planning, scheduled manager, both goal-less mends, and
+scheduled learning.
 
 ### Quota scope (`QUOTA_SCOPE`)
 
@@ -567,8 +567,7 @@ optional map per provider, model slug to ISO instant, beside `refusal_until`. A
 file without the map reads as empty, and an instant that has passed holds
 nothing. `chooseCandidate` judges the provider's refusal first and then the
 candidate's own model refusal; a model refusal is never a reason to route to an
-API key. The lane-wide `quotaPause` (the intake drain, the learning pass and
-desk preparation) runs for a plan-scoped quota only. `mc run --billing` names
+API key. The lane-wide `quotaPause` (the learning pass) runs for a plan-scoped quota only. `mc run --billing` names
 the refused model and its reset (`agy 57% (gemini-4-argon-high refused until
 2026-11-22T17:27:21.000Z) plan …`), and `billingRoute` for another model of the
 provider still reads *plan available*.
@@ -754,7 +753,7 @@ never zero.
   names, else for the quota sleep — the model's for a model-scoped quota, the
   provider's otherwise (*Quota scope*) — by one function
   (`plan-refusal.js`) the runner's `refuseProvider`, the helper
-  and manager turns, the learning pass and desk preparation all call; a write
+  and manager turns and the learning pass all call; a write
   that fails is said and the session's result stands.
 - **Both providers are polled independently** at startup when no recent attempt
   exists, then every 15 minutes, outside chores and lanes. Reads do not overlap
@@ -833,21 +832,16 @@ ran and what they used.
 ## What runs beside it
 
 The helper collect runs once per UTC day, on the first chore pass after 05:00Z;
-the inbox drain takes up to three files per pass on its own cadence. Daily
+the inbox drain catalogues up to three app suggestions per pass with jev, no model
+turn ([mc-helper.md](mc-helper.md)). Daily
 dependency readings and tidy use their own recorded rows too.
 
-After intake and the model-free desk item sync, `runDeskPreparation` takes up
-to three new items, oldest first, serially. Each gets a fresh fifteen-minute
-headless turn in its item directory, with `MC_ROLE=desk-prepare`, no goal
-identity and the tool/model/effort from `routeClass('medium')` only. No usable
-candidate means wait. A per-item claim excludes concurrent manual preparation.
-Quota endings pause as intake does. Each started turn writes `kind: desk-prepare`
-in `runs.tsv`, with the item id as `name`, routing/usage and list-price `cost`.
-The off-by-default shared daily desk ceiling is checked before every turn; a
-hold is said once per round. Failed-attempt fallback, manual preparation, role
-authority and the setting are defined in [mc-martin.md](mc-martin.md).
+Nothing prepares desk items unattended (Martin, 2026-11-21: "Desk-prepare är
+ett skämt. Saknar värde. Ta bort trigger."): after the model-free desk item
+sync, a new item waits for the decision lane or the desk as it is.
+`mc martin prepare [<id>]` remains a person's manual entry ([mc-martin.md](mc-martin.md)).
 
-Right after preparation each chores round reconciles legacy goal-linked lessons
+Right after the item sync each chores round reconciles legacy goal-linked lessons
 and outstanding area corrections. Pending PRs are observed independently of
 learning admission: a PR merged into main records the correction, and a
 closed unmerged PR records a failed publication. An unknown observation leaves
@@ -1093,28 +1087,24 @@ It checks the fence after receipt preparation and immediately before shelving.
 The receipt travels with the directory. See
 [archiving a programme](mc-plan.md#archiving-a-programme).
 
-For a repair order the current reconciled release also gates write-back and
-archival. The write-back names the release on its first line, `release:
-<revision>`. The runner retains an OK only for that revision and the same
-landed goals; an old OK cannot authorize archiving a newer release. The
-archive rechecks the release and the retained reading at its fence and
-checks the revision again when recording completion after moving the order.
-An interactive decline with landed work substitutes its own archive-only
-revision for delivery authority. Ordinary dropped-goal cleanup still runs;
-the archive waits until live directories have gone. Any retired goal with a
-confirmed landed PR is judged for what landed, not the remainder. Neither
-this revision nor its write-back authorizes planning, build or merge.
+For a repair order the current reconciled release also gates archival. The
+archive rechecks the release at its fence and checks the revision again when
+recording completion after moving the order. An interactive decline with landed
+work substitutes its own archive-only revision for delivery authority. Ordinary
+dropped-goal cleanup still runs; the archive waits until live directories have
+gone. Neither this revision nor the archive authorizes planning, build or merge.
 
-Martin, 2026-11-15: a programme with a record is bounded. Once every goal is
-done or dropped, the runner checks that what the programme made true is written
-into `docs/technical/` and the area pages, archives the programme and sets its
-record to `done`, with nobody present; a horizon it served then waits for
+Martin, 2026-11-15: a programme with a record is bounded. Martin, 2026-11-21:
+"Program ska arkiveras automatiskt. När alla mål är mergade. Det betyder att
+allt är byggt." Once every goal is done or dropped, the runner archives the
+programme and sets its record to `done`, with nobody present and **no model
+session**: each goal wrote what it made true into `docs/technical/` as it
+landed (the review's `write-back:` line, [mc-goals.md](mc-goals.md#the-verdict)),
+so nothing is read again at the end. A horizon it served then waits for
 Martin's next programme. Only a programme **with a valid record** is touched: one
-without a record, or with an invalid one, is never read or archived by the
+without a record, or with an invalid one, is never archived by the
 runner, and `mc plan <p> --archive` stays that programme's person's act, or interactive
-Martin's at the desk
-([mc-plan.md](mc-plan.md#archiving-a-programme)). The write-back is also judged in
-each goal's own review (`write-back:` line, [mc-goals.md](mc-goals.md#the-verdict)).
+Martin's at the desk ([mc-plan.md](mc-plan.md#archiving-a-programme)).
 
 `archiveDue` (`archive-turn.js`) is model-free and reads at every pick. A programme
 is due when all hold:
@@ -1122,59 +1112,15 @@ is due when all hold:
 - the record is valid and `ready`;
 - `goals/` holds no live goal (dot-entries and `goal_log.md` are archive metadata), and `goals/.archive/` holds at
   least one done goal: a programme whose goals were all dropped made nothing true
-  and is never read or archived;
+  and is never archived here;
+- every archived goal's file reads done or dropped;
 - no desk item of kind `archive` with the reference `archive:<p>` is open;
-- no reading of it runs (the claim `archive:<p>`);
-- no OK reading is kept for exactly the current done goals and horizon (then only the archive
-  is retried, below).
+- no archive of it runs (the claim `archive:<p>`).
 
-**The reading.** One headless read-only session per programme, role
-`archive-reader` ([mc-roles.md](mc-roles.md)), kind `plan`, routed on the `build` list as `large` was, with a
-`runs.tsv` row, the programme directory as its cwd, `MC_HEADLESS=1`,
-`MC_PROGRAMME=<p>` and no `MC_GOAL`; routing, admission, offline holds, STOP and
-UPDATE are those of every session. It commits nothing. The served repositories of
-the done goals and every repository that declares areas are given as read
-checkouts at `runner/work/archive-turn-<p>/<repo>`, detached at origin/main (the
-rules of the *Read checkouts* of the planning turn: fetch failure counts
-nothing, a dirty or unreachable leftover is never touched). The session writes
-`WRITE-BACK.md` in the programme directory: one `read: <repo> <sha>` line per
-checkout (the sha the runner read at the checkout, so a reading is of a known
-tree), one line per done goal (`<goal>: OK — <repo>/docs/technical/<page>.md §
-<section>[, …]`, `<goal>: OK — none — <reason>` or `<goal>: NOT OK — <what is true
-that no page says>`) and a last `verdict: OK` or `verdict: NOT OK`. When the record names a horizon, the
-reader also checks that investigations, references and other material needed
-by later programmes are usable from that horizon's basis or supporting files,
-independently of the active programme directory. The reading must then include
-one `@horizon: OK — <evidence or reason>` or
-`@horizon: NOT OK — <missing material>` line before the verdict.
-A line is
-parsed without a model (`parseWriteBack`); a missing or malformed file, a done
-goal with no line, a wrong sha or `verdict: OK` beside a NOT OK line is a failed
-reading.
+The archive-reader session, its `WRITE-BACK.md` and its read checkouts were
+retired on 2026-11-21 (Martin: "Archive-reader är slöseri").
 
-**What follows a reading.**
-
-- *OK:* the reading is kept in `runner/archive-turn/<p>.json` for the done goals it
-  judged, and the archive follows in the same pass.
-- *NOT OK:* a finding, not a counted failure. It opens one desk item of kind
-  `archive`, reference `archive:<p>`, `prepared`, sort `mechanical`, with a
-  model-free `prepared.md` carrying the NOT OK lines: a decision session writes
-  the missing statement or preserves the material under the recorded horizon and closes it by decision, and the programme is read
-  again. A NOT OK reading after an item was closed by decision opens it
-  `for-martin` (sort `mechanical`, `reversible: false`, with a Swedish `brief.md`).
-- *A failed reading* (malformed file, no file, a session that ended without
-  one) is a failure counted in the state file with its reason and log. The first
-  retries on the next pick; the second since the last item opens the `for-martin`
-  item. Provider endings (quota, offline, refused login), a refusal at admission
-  and a fetch failure count nothing.
-
-No reading, archive or record write starts while an item is open. The item closes
-by source only when the programme directory is gone from the programmes home (and
-no destination named in the state still has a record that does not read `done`)
-or `goals/` holds a live goal, and by decision otherwise ([mc-martin.md](mc-martin.md#durable-desk-items)).
-
-**The archive.** After an OK reading, and again on the next pick when the state
-keeps one (no new reading, no session), the runner:
+**The archive.** When the programme is due, the runner, with no session and no lane slot:
 
 1. refuses when `~/mc/restricted/<p>/` holds entries: deleting data is a person's
    act. It opens one `for-martin` item at once, sort `reserved`, with a Swedish
@@ -1195,28 +1141,24 @@ keeps one (no new reading, no session), the runner:
 
 A state that names a destination whose record still reads `ready` (the move
 happened and the write did not) is due that write alone on the next pick: no
-reading, no session, no second archive. A write that throws (a filesystem
+session, no second archive. A write that throws (a filesystem
 error) is a refusal like any other: the destination stays, the failure is
 counted, and the second opens the `for-martin` item. While that item is open the
 write is not tried, and sync keeps it open although the directory has left the
 programmes home, so a write that keeps failing opens no further item; a record
 that already reads `done` is only cleared from the state. An archive that fails is a counted
-failure like a failed reading, and a retry is made with the kept reading while
-the done goals are the same; a goal that has appeared stops the retry.
+failure: the first retries on the next pick, the second since the last item opens a
+`for-martin` item (sort `mechanical`, with a Swedish `brief.md`); a goal that has appeared stops the retry.
 
 **State and mixed versions.** `runner/archive-turn/<p>.json` holds
 `{schema: 'mc-archive-turn', version, programme, failures, items, reading,
-destination}`. A missing file, and an older version of this schema, read as no
-failures and no kept reading, so a runner of this version reads a programme an
-older one left alone; a file that cannot be read starts no turn, counts nothing
-and is said once in `runner.log`, the desk sync reports it and the item stays
-open. An older runner, which knows no archive turn, starts none, and its decision
-lane may take a prepared `archive` item with its generic prompt: that is safe,
-since it holds no reserved act and closing the item makes the new runner read
-again. A programme an older runner or `mc plan --archive` has already moved is no
-longer in the programmes home and is no candidate. The cases are in
-`tests/mc/run.test.js` (*programme archive: mixed versions*) and
-`tests/mc/archive-turn.test.js`.
+destination}`; `reading`, written by the retired reading, is read and ignored. A
+missing file, and an older version of this schema, read as no failures; a file
+that cannot be read starts no archive, counts nothing and is said once in
+`runner.log`, the desk sync reports it and the item stays open. A programme an
+older runner or `mc plan --archive` has already moved is no longer in the
+programmes home and is no candidate. The cases are in `tests/mc/run.test.js`
+and `tests/mc/archive-turn.test.js`.
 
 ## The manager's turns
 

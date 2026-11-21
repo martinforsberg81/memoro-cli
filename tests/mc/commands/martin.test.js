@@ -607,7 +607,7 @@ describe('mc martin item transitions', () => {
     const f=stored(); const roleEnv={...f.env,MC_ROLE:'decision'}; let result=io();
     const newBytes=readFileSync(join(f.dir,'item.json'),'utf8');
     assert.equal(await run(['item',f.record.id,'prepared','--sort','technical'],{...result,env:roleEnv}),2);
-    assert.match(result.out.stderr,/new.*prepared applies/u);
+    assert.match(result.out.stderr,/new.*prepared, brief or close applies/u);
     assert.equal(readFileSync(join(f.dir,'item.json'),'utf8'),newBytes);
     writeFileSync(join(f.dir,'prepared.md'),'Evidence');
     assert.equal(await run(['item',f.record.id,'prepared','--sort','technical'],{...io(),env:roleEnv}),0);
@@ -675,7 +675,7 @@ describe('mc martin item transitions', () => {
     assert.match(refuse.out.stderr,/closed.*no verb applies/u); assert.equal(readFileSync(closedPath,'utf8'),closedBefore);
     const absent=stored('new'); const absentPath=join(absent.dir,'item.json'); const absentBefore=readFileSync(absentPath,'utf8');
     for (const args of [['item',absent.record.id,'prepared','--sort','mechanical'],['item',absent.record.id,'brief','--sort','product','--reversible','no']]) {
-      const result=io(); assert.equal(await run(args,{...result,env:{...absent.env,MC_ROLE:'decision'}}),2); assert.match(result.out.stderr,/new.*prepared applies/u); assert.equal(readFileSync(absentPath,'utf8'),absentBefore);
+      const result=io(); assert.equal(await run(args,{...result,env:{...absent.env,MC_ROLE:'decision'}}),2); assert.match(result.out.stderr,/new.*prepared, brief or close applies/u); assert.equal(readFileSync(absentPath,'utf8'),absentBefore);
     }
   });
   const refusedCases = [
@@ -683,7 +683,7 @@ describe('mc martin item transitions', () => {
     ['brief requires brief.md', 'prepared', ['brief', '--sort', 'product', '--reversible', 'yes'], [], 'decision'],
     ...['mechanical', 'technical'].map(sort => [`brief refuses ${sort}`, 'prepared', ['brief', '--sort', sort, '--reversible', 'no'], ['brief.md'], 'decision']),
     ...['prepared', 'brief', 'close'].map(verb => [`closed refuses ${verb}`, 'closed', [verb, '--sort', 'product', '--reversible', 'yes', '--by', 'martin', '--summary', 'Done.'], ['prepared.md', 'brief.md'], 'decision']),
-    ...[['new', 'brief'], ['new', 'close'], ['prepared', 'prepared'], ['for-martin', 'prepared'], ['for-martin', 'brief']].map(([state, verb]) => [`${state} refuses ${verb}`, state, [verb, '--sort', 'product', '--reversible', 'yes', '--by', 'martin', '--summary', 'Done.'], ['prepared.md', 'brief.md'], 'decision']),
+    ...[['prepared', 'prepared'], ['for-martin', 'prepared'], ['for-martin', 'brief']].map(([state, verb]) => [`${state} refuses ${verb}`, state, [verb, '--sort', 'product', '--reversible', 'yes', '--by', 'martin', '--summary', 'Done.'], ['prepared.md', 'brief.md'], 'decision']),
     ['unknown id', 'new', ['prepared', '--sort', 'technical'], ['prepared.md'], 'decision', 'unknown'],
     ...['build-session', 'review-session', 'finish-session', 'mend-session', 'plan', 'helper'].map(role => [`refuses role ${role}`, 'new', ['prepared', '--sort', 'technical'], ['prepared.md'], role]),
     ...['brief', 'close'].map(verb => [`desk-prepare refuses ${verb}`, 'prepared', [verb, '--sort', 'product', '--reversible', 'yes', '--by', 'decision', '--summary', 'Done.'], ['brief.md'], 'desk-prepare']),
@@ -698,7 +698,7 @@ describe('mc martin item transitions', () => {
     for (const artifact of artifacts) writeFileSync(join(f.dir, artifact), 'Evidence');
     const before = snapshot(f.env.MC_WORK_ROOT); const result = io();
     assert.equal(await run(['item', id || f.record.id, ...args], { ...result, env: { ...f.env, MC_ROLE: role } }), 2);
-    assert.match(result.out.stderr, id ? /unknown item.*no item state or verb applies/u : new RegExp(`is ${state};.*${state === 'new' ? 'prepared' : state === 'prepared' ? 'brief or close' : state === 'for-martin' ? 'close' : 'no verb'} applies`, 'u'));
+    assert.match(result.out.stderr, id ? /unknown item.*no item state or verb applies/u : new RegExp(`is ${state};.*${state === 'new' ? 'prepared, brief or close' : state === 'prepared' ? 'brief or close' : state === 'for-martin' ? 'close' : 'no verb'} applies`, 'u'));
     assert.deepEqual(snapshot(f.env.MC_WORK_ROOT), before, 'refusal writes no file');
   });
   // A main-red question is answered by `mc repo mend`; a hand close would hide a repair that still waits on Martin.
@@ -759,6 +759,14 @@ describe('mc martin item transitions', () => {
     const summary = join(f.dir, 'summary.md'); writeFileSync(summary, 'Resolved mechanically.\n');
     assert.equal(await run(['item', f.record.id, 'close', '--by', 'decision', '--summary-file', summary], { ...io(), env: { ...f.env, MC_ROLE: 'decision' }, now: () => new Date(f.record.source_at) }), 0);
     assert.deepEqual(JSON.parse(readFileSync(join(f.dir, 'item.json'), 'utf8')), { ...f.record, state: 'closed', sort: 'mechanical', outcome: { by: 'decision', at: new Date(f.record.source_at).toISOString(), summary: 'Resolved mechanically.' } });
+  });
+  it('a new item, which nothing prepares any more, closes or is briefed directly (Martin, 2026-11-21)', async () => {
+    const f = stored('new');
+    assert.equal(await run(['item', f.record.id, 'close', '--by', 'decision', '--summary', 'Settled from the source.'], { ...io(), env: { ...f.env, MC_ROLE: 'decision' }, now: () => new Date(f.record.source_at) }), 0);
+    assert.deepEqual(JSON.parse(readFileSync(join(f.dir, 'item.json'), 'utf8')), { ...f.record, state: 'closed', outcome: { by: 'decision', at: new Date(f.record.source_at).toISOString(), summary: 'Settled from the source.' } });
+    const g = stored('new'); writeFileSync(join(g.dir, 'brief.md'), 'What stops it.');
+    assert.equal(await run(['item', g.record.id, 'brief', '--sort', 'mechanical'], { ...io(), env: { ...g.env, MC_ROLE: 'decision' } }), 0);
+    assert.equal(JSON.parse(readFileSync(join(g.dir, 'item.json'), 'utf8')).state, 'for-martin');
   });
   for (const reversible of ['yes', 'no']) it(`prepared advances to for-martin with reversible ${reversible}, and a reserved act has no due time either way`, async () => {
     const f = stored('prepared'); writeFileSync(join(f.dir, 'brief.md'), 'Recommendation');
