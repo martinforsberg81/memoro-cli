@@ -169,6 +169,20 @@ test('usage and costs retain periods, account groups and quality without sensiti
   assert.doesNotMatch(text+json,/excluded-cost-sentinel|123456789|userId|projected|999/);
 });
 
+test('usage shows the exact account total beyond the safe integer range', async () => {
+  const data = fixtures();
+  const totals = [Number.MAX_SAFE_INTEGER, 2, 0, 0, 0];
+  const groups = data.usage.groups.map(({kind}, i) => ({
+    kind, total:totals[i], activeYesterday:0, activeLastSevenDays:0,
+  }));
+  data.usage.groups = groups;
+  const { model, exitCode } = await collectDashboard({token:'t',clock:fixed,fetch:async url=>response(sourceFor(url,data))});
+  assert.equal(exitCode,0);
+  const lines = renderDashboard(model).split('\n');
+  assert.equal(lines[lines.indexOf('USAGE') + 1], '9007199254740993 accounts in total');
+  assert.deepEqual(JSON.parse(JSON.stringify(model)).sources.usage.data.groups, groups);
+});
+
 test('missing vendor imports remain unknown and invalid or unavailable new sources preserve operations', async () => {
   const data = fixtures();
   data.costs.cards.thisMonth = {...data.costs.cards.thisMonth,usd:0,source:'estimate',vendorRows:0,vendorDays:0,throughDate:null};

@@ -41,8 +41,9 @@ export function renderUsageCosts(usage, costs) {
   if (usage.availability !== 'available') out.push('unknown (usage source unavailable)');
   else {
     const { windows, groups } = usage.data;
-    const total = groups.reduce((sum, group) => sum + group.total, 0);
-    out.push(`${total} ${total === 1 ? 'account' : 'accounts'} in total`);
+    // Individually safe integers can add up to more than a Number can represent exactly.
+    const total = groups.reduce((sum, group) => sum + BigInt(group.total), 0n);
+    out.push(`${total} ${total === 1n ? 'account' : 'accounts'} in total`);
     out.push(`UTC session-recency windows: yesterday [${windows.yesterdayStart}, ${windows.todayStart}), trailing 168 hours [${windows.sevenDaysStart}, ${windows.end})`);
     out.push('Account totals exclude deleted accounts. Admin takes precedence over managed groups.');
     out.push('Session recency counts active accounts with an active session last seen in the window. A return visit or sign-out can change earlier counts.');
