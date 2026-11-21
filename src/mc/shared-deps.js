@@ -211,7 +211,7 @@ export function ensureSharedDeps({ repo, repoName = null, env = process.env, ins
  * `npm ci` was 510 MB) and prints a line saying which way it went. A repository
  * without the script has nothing to attach and is told so.
  *
- * Never throws and never fatal to its caller: `addWorktree`, `mc plan` and
+ * Never throws and never fatal to its caller: `addWorktree` and
  * `mc deps bump` report a failure and go on with the worktree.
  */
 export function attachRepoDeps(worktree, { run = runAttachScript } = {}) {

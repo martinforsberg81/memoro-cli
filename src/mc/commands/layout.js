@@ -1,6 +1,6 @@
 /**
  * `mc layout` — which structure the work root has (ruling 51), and where its
- * planning sessions, step areas and deps areas are.
+ * programme directories, step areas and deps areas are.
  *
  *   mc layout          `layout <1|2>` and the three roots
  *   mc layout --json   the same, as one object
@@ -66,7 +66,7 @@ function showLayout({ root, home, json, stdout }) {
     return 0;
   }
   stdout.write(`layout ${layout}\n`);
-  stdout.write(`  planning sessions  ${tildePath(roots.planAreaRoot, home)}\n`);
+  stdout.write(`  programmes         ${tildePath(roots.planAreaRoot, home)}\n`);
   stdout.write(`  step areas         ${tildePath(roots.stepAreaRoot, home)}\n`);
   stdout.write(`  deps areas         ${tildePath(roots.depsRoot, home)}\n`);
   return 0;

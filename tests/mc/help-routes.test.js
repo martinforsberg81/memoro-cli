@@ -38,7 +38,6 @@ import { parseArgs as parseTidy } from '../../src/mc/commands/tidy.js';
 import { parseArgs as parseLog } from '../../src/mc/commands/log.js';
 import { parseArgs as parseRoles } from '../../src/mc/commands/roles.js';
 import { parseArgs as parseDocker } from '../../src/mc/commands/docker.js';
-import { parseArgs as parsePlan } from '../../src/mc/commands/plan.js';
 import { parsePageArgs } from '../../src/mc/commands/home.js';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../../src');
@@ -98,7 +97,6 @@ const PARSERS = {
   log: (argv) => errorOf(parseLog(argv)),
   roles: (argv) => errorOf(parseRoles(argv)),
   docker: (argv) => errorOf(parseDocker(argv)),
-  plan: (argv) => errorOf(parsePlan(argv)),
   vault: (argv) => (VAULT_VERBS.includes(argv[0]) || argv.length === 0 ? null : `no vault verb ${argv[0]}`),
 };
 
@@ -414,10 +412,10 @@ describe('every name in the help is routed', () => {
     for (const verb of Object.keys(VERB_MODULES)) assert.deepEqual(unknownFlags(verb, commandUsage(verb)), [], verb);
   });
 
-  it('plan and martin offer every tool that declares an interactive driver, and the helper offers none', () => {
+  it('martin offers every tool that declares an interactive driver, and the helper offers none', () => {
     const offered = toolsWith('PERSISTENT_DRIVER').map((id) => `--${toolShortName(id)}`);
     assert.ok(offered.includes('--agy'), 'agy declares an interactive driver');
-    for (const verb of ['plan', 'martin']) {
+    for (const verb of ['martin']) {
       const alternatives = /\[(--[a-z]+(?:\|--[a-z]+)+)\]/u.exec(commandUsage(verb))?.[1];
       assert.deepEqual(alternatives?.split('|').sort(), [...offered].sort(), `${verb} --help writes the tools the registry declares`);
     }

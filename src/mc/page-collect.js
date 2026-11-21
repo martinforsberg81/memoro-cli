@@ -11,8 +11,8 @@ import { suggestionReading } from './helper-suggestions.js';
  * runner     — one lane per repository whether or not it has a step, the
  *              runner process behind them, a pending STOP, the lane files
  *              whose process is gone, what is in production, and the day.
- * sessions   — the two desks, the planning session of each programme, and
- *              everything else somebody has open, oldest first.
+ * sessions   — the two desks, and everything else somebody has open,
+ *              oldest first.
  * merges     — the gate rounds running now, one per lane (`runningMerges`), and the two
  *              queues behind it: what `mc merge` left for the runner's lane,
  *              and what the runner refuses to land at all.
@@ -22,7 +22,7 @@ import { suggestionReading } from './helper-suggestions.js';
  * checks     — per repository, the nightly's last full test and the last
  *              daily `mc deps` reading: when, of which commit, and what each
  *              found. Two file reads each; nothing is run.
- * programmes — one heading per programme with its planning session, and
+ * programmes — one heading per programme, and
  *              under it one numbered row per goal (`goalsOf`): its status, its
  *              sessions, its criteria and its last entry. The number is the
  *              one the menu shows the goal by. What no kind explains is
@@ -478,7 +478,7 @@ export { DESKS, ownerOf };
  * Who is sitting where — everything running that the runner did not start.
  *
  * Every session has an owner, and there are two kinds (goal mc/no-work): a
- * programme — its planning session, or another session in one of its rooms —
+ * programme — a session in one of its rooms —
  * or a desk. The two desks are singletons and get a fixed row each, drawn open
  * or not: there is one helper and one brief, and *"is the helper running?"* is
  * a question an empty row answers as well as a full one. A programme's
@@ -490,7 +490,7 @@ export { DESKS, ownerOf };
  * never gets to remove its own file.
  *
  * What has no owner is a stray, not a session: a register entry no verb
- * explains (a `mc plan` from before programmes, a retired verb's), and a tmux
+ * explains (a `mc plan` session still open, a retired verb's), and a tmux
  * session `mc-<name>` mc did not start for anyone. They are `strays`, drawn
  * beside the directories under `~/mc` that no kind explains.
  *
@@ -517,23 +517,13 @@ export function sessionsSection({
   ]));
   const desks = Object.fromEntries(DESKS.map((verb) => [verb, deskSessions[verb][0] || null]));
 
-  // A planning session belongs to its programme, and PROGRAMMES draws it on
-  // that programme's own heading — which is the whole reason `mc plan` puts
-  // one at `planAreaName` (paths.js). Any other session of the programme is
-  // drawn on the same heading. Keyed by
+  // A programme's session is drawn on that programme's own heading. Keyed by
   // programme here, so the section that owns programmes never has to know how
   // a session's area is spelled.
-  const planning = {};
-  const planningSessions = {};
   const programmeSessions = {};
   for (const item of open) {
     if (item.owner?.kind !== 'programme') continue;
-    if (item.verb === 'plan') {
-      planning[item.owner.name] = item;
-      (planningSessions[item.owner.name] ||= []).push(item);
-    } else {
-      (programmeSessions[item.owner.name] ||= []).push(item);
-    }
+    (programmeSessions[item.owner.name] ||= []).push(item);
   }
 
   // Oldest first: the one that has been open longest is the one most likely
@@ -555,8 +545,6 @@ export function sessionsSection({
   return {
     desks,
     desk_sessions: deskSessions,
-    planning,
-    planning_sessions: planningSessions,
     programme_sessions: programmeSessions,
     strays,
     count: owned.length,
@@ -1243,33 +1231,23 @@ function statedPhaseSection(goals, order) {
 /**
  * Programme → phases → goals. Flat goals retain their stable menu numbers
  * (programme then name); phase groups reference those same goal objects.
- * Plans and otherwise unexplained sessions remain programme facts; proposals are the areas'.
+ * Otherwise unexplained sessions remain programme facts; proposals are the areas'.
  */
 export function programmesSection({
-  planning = {}, planningSessions = {}, programmeSessions = {}, goalRows = [], programmes = [],
-  strays = [], sessionStrays = [], runnerSessions = [], priority = () => 0, order = () => SEQUENTIAL,
+  programmeSessions = {}, goalRows = [], programmes = [],
+  strays = [], sessionStrays = [], priority = () => 0, order = () => SEQUENTIAL,
 } = {}) {
 
-  const runnerPlanning = {};
-  for (const session of runnerSessions) {
-    // Programme turns have a plan: identity; goal recovery keeps its goal identity.
-    if (session.kind !== 'plan' || !session.name?.startsWith('plan:')) continue;
-    const programme = session.programme || session.name.slice('plan:'.length);
-    if (programme) (runnerPlanning[programme] ||= []).push(session);
-  }
   const goalList = goalRows.map((goal) => ({ ...goal }))
     .sort((a, b) => String(a.programme).localeCompare(String(b.programme)) || a.name.localeCompare(b.name));
   let number = 0;
   for (const goal of goalList) { number += 1; goal.number = number; }
-  // Every programme that has a goal, plus every one that exists only as an
-  // open planning session or as a directory with nothing under it yet.
+  // Every programme that has a goal, plus every one that exists only as a
+  // session's or as a directory with nothing under it yet.
   // `programmes` is the tree's own answer (`listProgrammes`), which is what
   // keeps a programme whose work has all been archived on the page — that is
   // exactly the heading the next piece of its work belongs under.
   const names = [...new Set([
-    ...Object.keys(planning),
-    ...Object.keys(planningSessions),
-    ...Object.keys(runnerPlanning),
     ...Object.keys(programmeSessions),
     ...goalList.map((goal) => goal.programme),
     ...programmes,
@@ -1280,8 +1258,7 @@ export function programmesSection({
     return {
       programme: name,
       priority: priority(name),
-      // A programme with no goal of any status. An open plan session does not
-      // make it active: nothing is on it yet. The renderer folds these into
+      // A programme with no goal of any status. The renderer folds these into
       // one line (Martin, 2026-11-02).
       dormant: goals.length === 0,
       // How many of its goals are finished (done or dropped) and still under `goals/`: the count `a` shows.
@@ -1289,8 +1266,6 @@ export function programmesSection({
       goals,
       ...phaseSection(goals, order(name)),
       repos: [...new Set(goals.flatMap((goal) => goal.repos || []))].sort(),
-      planning: planning[name] || null,
-      planning_sessions: [...(planningSessions[name] || (planning[name] ? [planning[name]] : [])), ...(runnerPlanning[name] || [])],
       // The programme's other sessions, somebody's open in one of its rooms.
       sessions: programmeSessions[name] || [],
       statuses: statusesOf(goals),
@@ -1304,7 +1279,6 @@ export function programmesSection({
     active: groups.length - dormant,
     dormant,
     statuses: statusesOf(goalList),
-    planning: groups.filter((group) => group.planning).length,
     running: goalList.filter((goal) => goal.running).length,
     // What no kind explains, drawn under `not an area mc knows`: the
     // directories under `~/mc` that are no area (`listStrays`), then the
@@ -1602,7 +1576,7 @@ function localProgrammes(home) {
 
 /**
  * PROGRAMMES alone, from the sources `collectPage` reads it from — the goals,
- * the open plan sessions and the tree's own programmes (`listProgrammes`) — and through the same `programmesSection`, so
+ * the tree's own programmes (`listProgrammes`) — and through the same `programmesSection`, so
  * `mc programs list` and the page cannot give a programme two verdicts. No
  * fetch, no GitHub, no tmux: none of those decide whether a programme is
  * active, and the verb answers in the time it takes to read files.
@@ -1628,9 +1602,6 @@ export function readProgrammes({
   }
   const order = orderReader(env);
   const section = programmesSection({
-    planning: sessions.planning,
-    planningSessions: sessions.planning_sessions,
-    runnerSessions: runnerSection({ currents, now, alive }).sessions,
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive, order }),
     programmes: [...Object.keys(homes), ...localProgrammes(programsHome(env))],
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
@@ -1813,10 +1784,7 @@ export async function collectPage({
     if (!shelvedMembership(name, repo, { env, git: runGit })) repositoryNames.add(name);
   }
   const programmes = programmesSection({
-    planning: sessions.planning,
-    planningSessions: sessions.planning_sessions,
     programmeSessions: sessions.programme_sessions,
-    runnerSessions: runner.sessions,
     sessionStrays: sessions.strays,
     goalRows: goalsOf({ goals, currents, alive, order, deskItem: goal => readGoalDeskItem(goal, { env }) }),
     programmes: [...repositoryNames, ...localProgrammes(programsHome(env))],

@@ -184,7 +184,8 @@ describe('bare mc', () => {
       ]);
       assert.deepEqual(page.sessions.desks.manager.owner, { kind: 'desk', name: 'manager' });
       const all = [...page.runner.sessions, ...Object.values(page.sessions.desks).filter(Boolean),
-        ...Object.values(page.sessions.planning_sessions).flat(), ...Object.values(page.sessions.programme_sessions).flat()];
+        ...Object.values(page.sessions.programme_sessions).flat()];
+      assert.equal('planning_sessions' in page.sessions, false, 'no plan session is collected: the entrance is gone');
       assert.equal(all.length, 3);
       for (const session of all) assert.ok(['programme', 'desk'].includes(session.owner?.kind) && session.owner.name, JSON.stringify(session));
     } finally { fx.cleanup(); }
@@ -215,7 +216,7 @@ describe('the workarea verbs are gone', () => {
         assert.equal(result.status, 2, what);
         assert.equal(result.stdout, '', what);
         assert.match(result.stderr, new RegExp(`^mc: mc ${args[0]} is gone — every session belongs to a programme or a desk$`, 'mu'), what);
-        assert.match(result.stderr, /mc plan <programme>/u, what);
+        assert.doesNotMatch(result.stderr, /mc plan/u, what);
         assert.match(result.stderr, /mc martin {13}the desk/u, what);
         assert.doesNotMatch(result.stderr, /mc helper/u, what);
       }
@@ -489,15 +490,14 @@ describe('the menu under the page', () => {
     assert.match(text, /nothing here called "n"/u, 'n starts nothing any more');
   });
 
-  it('offers a, b and p beside the numbers, and no project, watch or new', async () => {
+  it('offers a and the desk beside the numbers, and no plan, project, watch or new', async () => {
     const shown = drive(['q']);
     await shown.run();
     const keys = shown.written.join('');
-    // `p` takes no name: `mc plan` asks which programme when it is not told,
-    // and the page is where being shown the list beats remembering a name.
-    for (const key of ['<n>  show a goal', 'a  all / collapse', 'h  home', 'd  desk', 'p  plan a programme', 'q  quit']) {
+    for (const key of ['<n>  show a goal', 'a  all / collapse', 'h  home', 'd  desk', 'q  quit']) {
       assert.ok(keys.includes(key), `${key} is not offered: ${keys}`);
     }
+    assert.ok(!keys.includes('plan a programme'), 'mc plan is gone, and so is the key that opened it');
     assert.ok(!keys.includes('m  manager'), 'the interactive manager is gone (D10)');
     assert.ok(!keys.includes('s <name>'), 'the menu offers no project');
     assert.ok(!keys.includes('watch'), 'the menu offers no watch');

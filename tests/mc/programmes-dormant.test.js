@@ -46,9 +46,10 @@ function programmesOf(lines) {
 }
 
 /**
- * Five programmes: `mc` with an open goal, `done-only` whose one goal is done,
- * `goal-only` with a blocked goal, `planned` with nothing but an open plan
- * session, and `empty` with nothing at all — a directory on main.
+ * Four programmes: `mc` with an open goal, `done-only` whose one goal is done,
+ * `goal-only` with a blocked goal, and `empty` with nothing at all — a directory on main.
+ * A fifth, `planned`, with nothing but an open plan session, went with `mc plan` (2026-11-21):
+ * it protected that an open plan session alone left a programme dormant, and that the session was drawn and listed.
  */
 const goalRow = (name, programme, repo, status) => ({
   name, programme, repos: [repo], stage: status === 'done' ? 'done' : 'build',
@@ -60,11 +61,8 @@ const GOALS = [
   goalRow('finished', 'done-only', 'memoro', 'done'),
   goalRow('rollout', 'goal-only', 'memoro', 'blocked'),
 ];
-const SESSION = { verb: 'plan', area: 'plan/planned', tool: 'claude-code', pid: 1 };
 const section = () => programmesSection({
   goalRows: GOALS,
-  planning: { planned: SESSION },
-  planningSessions: { planned: [SESSION] },
   programmes: ['empty', 'mc'],
 });
 
@@ -77,10 +75,9 @@ describe('dormant programmes in the collector', () => {
       empty: true,
       'goal-only': false, // a blocked goal
       mc: false,
-      planned: true, // only a plan session: nothing is on it yet
     });
     assert.equal(programmes.active, 3);
-    assert.equal(programmes.dormant, 2);
+    assert.equal(programmes.dormant, 1);
     assert.equal(programmes.active + programmes.dormant, programmes.programmes.length);
   });
 });
@@ -91,13 +88,12 @@ const hasHeading = (lines, name) => lines.some((line) => new RegExp(`^ {6}${name
 describe('programmes with nothing under way on the page', () => {
   it('draws all programmes in name order on first render', () => {
     const lines = programmesOf(renderPageLines(pageData({ programmes: section() }), { columns: 120, now: NOW }));
-    const names = ['done-only', 'empty', 'goal-only', 'mc', 'planned'];
+    const names = ['done-only', 'empty', 'goal-only', 'mc'];
     const positions = names.map((name) => lines.findIndex((line) => new RegExp(`^ {6}${name}(?: |$)`, 'u').test(line)));
     assert.ok(positions.every((at) => at >= 0));
     assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
     assert.equal(positions[1], positions[0] + 1, 'programmes without details are consecutive');
     assert.equal(lines[positions[3] - 1], '', 'a programme with details starts after a gap');
-    assert.ok(lines.some((line) => line.includes('PLAN')));
     assert.ok(!lines.some((line) => /nothing under way/u.test(line)));
   });
 
@@ -105,10 +101,8 @@ describe('programmes with nothing under way on the page', () => {
     const programmes = programmesSection({
       goalRows: GOALS.slice(0, 1),
       programmes: ['empty', 'mc'],
-      planningSessions: { mc: [{ ...SESSION, tool: 'codex' }] },
     });
     const wide = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW, expand: true }));
-    assert.ok(wide.some((line) => /PLAN.*codex/u.test(line)));
     for (const name of ['mc', 'empty']) assert.doesNotMatch(wide.find((line) => line.startsWith(`      ${name} `)), /proposal/u, name);
   });
 
@@ -132,7 +126,7 @@ describe('programmes with nothing under way on the page', () => {
   it('expanded, draws every programme and keeps the numbers', () => {
     const data = pageData({ programmes: section() });
     const lines = programmesOf(renderPageLines(data, { columns: 120, now: NOW, expand: true }));
-    for (const name of ['done-only', 'empty', 'goal-only', 'mc', 'planned']) assert.ok(hasHeading(lines, name), name);
+    for (const name of ['done-only', 'empty', 'goal-only', 'mc']) assert.ok(hasHeading(lines, name), name);
     assert.ok(lines.some((line) => /^ {6}empty {2}0 goals/u.test(line)));
     assert.ok(!lines.some((line) => /nothing under way/u.test(line)));
     const numbers = data.programmes.programmes.flatMap((group) => group.goals).map((row) => row.number);
@@ -155,9 +149,9 @@ describe('mc programs', () => {
   it('lists every programme, sorted by name, with the collector’s verdict', () => {
     const listing = programmesListing(read());
     assert.equal(listing.active, 3);
-    assert.equal(listing.dormant, 2);
+    assert.equal(listing.dormant, 1);
     assert.deepEqual(listing.programmes.map((item) => [item.name, item.state]), [
-      ['done-only', 'active'], ['empty', 'dormant'], ['goal-only', 'active'], ['mc', 'active'], ['planned', 'dormant'],
+      ['done-only', 'active'], ['empty', 'dormant'], ['goal-only', 'active'], ['mc', 'active'],
     ]);
     const byName = Object.fromEntries(listing.programmes.map((item) => [item.name, item]));
     assert.deepEqual(byName.empty.repos, ['memoro'], 'a dormant programme says where it lives');
@@ -165,18 +159,17 @@ describe('mc programs', () => {
     assert.deepEqual(byName['done-only'].statuses, { ready: 1 });
     assert.ok(!('projects' in byName.mc), 'no project count');
     assert.equal(byName['goal-only'].goals, 1);
-    assert.deepEqual(byName.planned.plan_sessions, { claude: 1 });
+    assert.ok(!('plan_sessions' in byName.mc), 'no plan session count: the entrance is gone');
     assert.ok(!('proposals' in byName.mc), 'no proposal count: proposals are the areas\'');
   });
 
   it('says it in the page’s words, one line each', () => {
     const lines = listingText(programmesListing(read())).trimEnd().split('\n');
-    assert.equal(lines[0], 'programmes — 3 active · 2 dormant');
-    assert.equal(lines.length, 6);
-    assert.match(lines[1], /^ {2}done-only +active +priority 0 +memoro +1 goal · ready 1 +no plan session$/u);
-    assert.match(lines[2], /^ {2}empty +dormant +priority 0 +memoro +no goal +no plan session$/u);
-    assert.match(lines[3], /^ {2}goal-only +active +priority 0 +memoro +1 goal · blocked 1 +no plan session$/u);
-    assert.match(lines[5], /^ {2}planned +dormant +priority 0 +— +no goal +plan claude 1$/u);
+    assert.equal(lines[0], 'programmes — 3 active · 1 dormant');
+    assert.equal(lines.length, 5);
+    assert.match(lines[1], /^ {2}done-only +active +priority 0 +memoro +1 goal · ready 1$/u);
+    assert.match(lines[2], /^ {2}empty +dormant +priority 0 +memoro +no goal$/u);
+    assert.match(lines[3], /^ {2}goal-only +active +priority 0 +memoro +1 goal · blocked 1$/u);
   });
 
   it('prints the list, or the same as data with --json', async () => {
@@ -195,13 +188,13 @@ describe('mc programs', () => {
     const deps = { stdout: { write: (text) => { out += text; } }, stderr: { write: (text) => { err += text; } }, read };
     assert.equal(await programs([], deps), 0);
     assert.match(out, /^usage — mc programs list \[--json\]/u);
-    assert.equal(await programs(['archive'], deps), 2);
-    assert.match(err, /mc programs has no archive/u);
+    assert.equal(await programs(['shelve'], deps), 2);
+    assert.match(err, /mc programs has no shelve/u);
     assert.equal(await programs(['list', 'extra'], deps), 2);
     assert.equal(await programs(['list', '--all'], deps), 2);
   });
 
-  it('reads the page’s sources: the tree’s programmes, the goals and the plan sessions', () => {
+  it('reads the page’s sources: the tree’s programmes, the goals and the programme directories', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-programs-'));
     try {
       const goal = join(root, 'programs', 'goal-only', 'goals', 'rollout');
@@ -209,8 +202,6 @@ describe('mc programs', () => {
       writeFileSync(join(goal, 'GOAL.json'), goalJson({ status: 'open', repos: ['memoro'], created: '2026-11-02T00:00:00Z', title: 'Rollout' }));
       writeFileSync(join(goal, 'LOG.md'), '');
       mkdirSync(join(root, 'programs', 'planned'), { recursive: true });
-      mkdirSync(join(root, 'runner', 'foreground'), { recursive: true });
-      writeFileSync(join(root, 'runner', 'foreground', '1.json'), JSON.stringify({ ...SESSION, pid: process.pid }));
       const repo = { name: 'memoro', git: root, path: root };
       const { section: read, homes } = readProgrammes({
         env: { MC_WORK_ROOT: root, MC_HOME: join(root, 'home') },

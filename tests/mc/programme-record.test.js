@@ -11,7 +11,6 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { run as goal } from '../../src/mc/commands/goal.js';
-import { run as plan } from '../../src/mc/commands/plan.js';
 import { listingText, programmesListing, recordWriter, run as programs } from '../../src/mc/commands/programs.js';
 import { readProgrammes } from '../../src/mc/page-collect.js';
 import { changePhases, newRecord, normalized, readRecord, recordedProgrammes, recordPage, recordPageTemplate, RECORD_FILE, setRecordState, validateRecord, writeRecord } from '../../src/mc/programme-record.js';
@@ -419,7 +418,8 @@ describe('the list and the page', () => {
     } finally { a.done(); }
   });
 
-  it('leaves a programme without a record as it was: six cells and record null, beside one with a record', () => {
+  // Five cells since the plan session cell went with `mc plan` (2026-11-21).
+  it('leaves a programme without a record as it was: five cells and record null, beside one with a record', () => {
     const group = (programme) => ({ programme, goals: [], dormant: true, statuses: {}, priority: 0 });
     const view = { horizon: null, end: 'e', state: 'ready', created: '2026-11-14T10:20:30Z', created_by: 'person' };
     const listing = programmesListing({ section: { programmes: [group('with'), group('without')] } }, { record: (name) => (name === 'with' ? view : null) });
@@ -427,11 +427,11 @@ describe('the list and the page', () => {
     assert.deepEqual(withRecord.record, view);
     assert.equal(without.record, null);
     const [, first, second] = listingText(listing).split('\n');
-    assert.equal(first.trim().split(/ {2,}/u).length, 7, 'the programme with a record has one cell more');
+    assert.equal(first.trim().split(/ {2,}/u).length, 6, 'the programme with a record has one cell more');
     assert.match(first, /record ready · no horizon$/u);
-    assert.equal(second.trim().split(/ {2,}/u).length, 6);
+    assert.equal(second.trim().split(/ {2,}/u).length, 5);
     assert.doesNotMatch(second, /record/u);
-    assert.deepEqual(Object.keys(without).slice(0, -1), ['name', 'priority', 'state', 'dormant', 'repos', 'goals', 'statuses', 'plan_sessions']);
+    assert.deepEqual(Object.keys(without).slice(0, -1), ['name', 'priority', 'state', 'dormant', 'repos', 'goals', 'statuses']);
   });
 });
 
@@ -877,7 +877,7 @@ describe('internal repair order drafting', () => {
     } finally { a.done(); }
   });
 
-  it('refuses ordinary ready, plan and goal creation on repair-owned orders without changing the desk route', async () => {
+  it('refuses ordinary ready, archiving by hand and goal creation on repair-owned orders without changing the desk route', async () => {
     const a = area();
     try {
       const p = proposal(a, 'restricted', 'A defect to draft.');
@@ -897,7 +897,8 @@ describe('internal repair order drafting', () => {
       const deps = { env: a.env, cwd: a.root, known: AREA_DEPS.known, git: () => ({ ok: true, stdout: '', stderr: '' }),
         stderr: { write: text => err.push(text) } };
       assert.equal(await goal(['new', 'internal-repair/restore', '--repo', 'memoro-cli', '--title', 'Restore'], deps), 1);
-      assert.equal(await plan(['internal-repair'], { ...deps, repos: [], ensure: unexpected }), 1);
+      // `mc plan internal-repair` was refused here until the entrance went (2026-11-21); the archive by hand reads the same guard.
+      assert.equal(await programs(['archive', 'internal-repair'], { ...deps, repos: [] }), 1);
       assert.equal(err.filter(text => /repair programme internal-repair needs review/u.test(text)).length, 2);
       assert.deepEqual(readdirSync(join(dir, 'goals')), []);
       assert.equal((await call(['create', 'desk-repair', '--end', 'Update the text.', '--area', 'memoro-cli/operations', '--from-proposal', ordinary], desk, AREA_DEPS)).code, 0);

@@ -109,12 +109,12 @@ test('archive turn: the first failure is kept for the next pass, the second sinc
   assert.equal(fail(s, '2026-11-15T11:00:00Z').item, null, 'one failure since the item opens nothing');
 });
 
-test('archive turn: a programme with restricted data opens a reserved item at once, Swedish, naming mc plan --archive', () => {
+test('archive turn: a programme with restricted data opens a reserved item at once, Swedish, naming mc programs archive', () => {
   const s = finished();
   const { item } = openRestrictedItem({ entries: ['export.csv'], at: '2026-11-15T10:00:00Z', env: ENV, write: s.write, itemDirectory, ...seams(s) });
   assert.deepEqual([item.kind, item.reference, item.state, item.sort, item.reversible], ['archive', 'archive:prog', 'for-martin', 'reserved', false]);
   const brief = s.files[`${itemDirectory(item, ENV)}/brief.md`];
-  assert.match(brief, /mc plan prog --archive/u);
+  assert.match(brief, /mc programs archive prog/u);
   assert.match(brief, /export\.csv/u);
   assert.match(brief, /^## Vad det gäller\n/u);
 });

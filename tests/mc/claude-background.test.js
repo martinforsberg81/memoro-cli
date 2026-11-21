@@ -435,7 +435,7 @@ test('a refused background launch names workspace trust without registering a no
 
 
 test('background argv preserves the single launch plan including role, model, effort, tools, access and opening prompt', async () => {
-  const plan = await interactiveLaunchPlan({ ...base, verb: 'plan', roleName: 'plan', programme: 'example',
+  const plan = await interactiveLaunchPlan({ ...base, verb: 'martin', roleName: 'martin', programme: 'example',
     model: 'haiku', overlay: 'Keep this launch instruction.', prompt: 'Opening words.' });
   const document = backgroundSettings(plan.args, plan.identity, env);
   const f = holderFixture();

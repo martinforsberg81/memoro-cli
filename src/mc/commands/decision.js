@@ -3,14 +3,14 @@ import { commandUsage } from '../command-help.js';
 import { listDeskItems, readDeskItem } from '../desk-items.js';
 import { decisionEligible } from '../desk-decision.js';
 import { createRunner, realDeps } from '../run.js';
-import { planSessionRefusal } from '../session-role.js';
+import { personCommandRefusal } from '../session-role.js';
 
 const ROUTE = { check: ({ positional }) => positional.length > 1 ? 'decision takes at most one item id' : null };
 export const ROUTES = { '': ROUTE, '*': ROUTE };
 export function usage() { return commandUsage('decision'); }
 export async function run(argv, deps = {}) {
   const env = deps.env || process.env, stdout = deps.stdout || process.stdout, stderr = deps.stderr || process.stderr;
-  if (env.MC_HEADLESS === '1' || planSessionRefusal({ env, cwd: deps.cwd || process.cwd() })) {
+  if (env.MC_HEADLESS === '1' || personCommandRefusal('mc decision', { env, cwd: deps.cwd || process.cwd() })) {
     stderr.write('mc: decision is for a person; do not start it inside a session\n'); return 2;
   }
   if (argv.length > 1 || argv.some(x => x.startsWith('-'))) { stderr.write(usage()); return 2; }

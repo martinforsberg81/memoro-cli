@@ -13,7 +13,7 @@
  * its own file reads, lock and git, so a fixture drives all of it in memory.
  *
  * A programme without a record is never archived here: for it
- * `mc plan <programme> --archive` stays a person's act.
+ * `mc programs archive <programme>` stays a person's act.
  */
 import { basename, join } from 'node:path';
 import { deskItemId } from './desk-items.js';
@@ -248,7 +248,7 @@ export function recordArchiveFailure({ reason, log = null, at, env, write, itemD
 
 /**
  * The programme holds restricted data (`~/mc/restricted/<programme>/`): deleting it stays a person's act, so the item is
- * opened at once, `for-martin`, sort reserved, with a Swedish brief naming `mc plan <programme> --archive`.
+ * opened at once, `for-martin`, sort reserved, with a Swedish brief naming `mc programs archive <programme>`.
  */
 export function openRestrictedItem({ entries, at, env, write, itemDirectory, ...seams }) {
   return withState(seams, (state) => {
@@ -276,8 +276,8 @@ function briefText({ programme, failures }) {
 /** The brief of the restricted-data item. Swedish. */
 function restrictedBrief({ programme, entries }) {
   return `## Vad det gäller\nProgrammet ${programme} är färdigt, men ~/mc/restricted/${programme}/ innehåller uppgifter (${entries.join(', ')}). Att radera dem är ditt beslut, så systemet arkiverar inte programmet.\n\n`
-    + `## Alternativ och konsekvenser\n- Arkivera själv med \`mc plan ${programme} --archive\`: uppgifterna tas bort och varje README.md sparas i programmets evidence/.\n- Låt programmet vänta: det förblir öppet och uppgifterna ligger kvar.\n\n`
-    + `## Rekommendation och skäl\nKör \`mc plan ${programme} --archive\` när uppgifterna inte behövs längre; programmet är i övrigt klart.\n\n`
+    + `## Alternativ och konsekvenser\n- Arkivera själv med \`mc programs archive ${programme}\`: uppgifterna tas bort och varje README.md sparas i programmets evidence/.\n- Låt programmet vänta: det förblir öppet och uppgifterna ligger kvar.\n\n`
+    + `## Rekommendation och skäl\nKör \`mc programs archive ${programme}\` när uppgifterna inte behövs längre; programmet är i övrigt klart.\n\n`
     + `## Vad som står still\nProgrammet ${programme} väntar på att du arkiverar det.\n\n`
     + `## Kan valet ändras efteråt?\nNej: raderade uppgifter kan inte återskapas.\n`;
 }

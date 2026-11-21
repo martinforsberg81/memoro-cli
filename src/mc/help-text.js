@@ -15,7 +15,6 @@ PLAN AND FOLLOW
   mc repair                       Prepare a bounded repair
   mc martin [brief [--json]]       Person: the desk; brief prints its opening
   mc martin get [--json]             Read the live decision queue
-  mc plan [<programme>]            Person: open or resume a plan session
   mc goal list [<programme>]       Goals and their last session's next action
   mc ask [<programme>/<goal>]  Ask jev
   mc programs list [--json]        Every programme and its priority
@@ -46,9 +45,9 @@ WORKSPACES
 
 IN FULL
 WHO USES THE VERBS
-  Person: mc plan and mc martin open interactive sessions;
+  Person: mc martin opens the desk, an interactive session;
           mc run start|stop controls the headless runner. A session never
-          starts itself with these verbs. mc plan refuses inside a session.
+          starts itself with these verbs.
   Session: mc goal new / set / criterion add writes goals; mc goal log
            records progress; mc gate, mc shot and mc publish do the work.
   Headless sessions (MC_HEADLESS=1, set by the runner) are refused mc deploy,
@@ -134,8 +133,6 @@ ${commandReference('learning')}
 ${commandReference('repair')}
 
 ${commandReference('brief')}
-
-${commandReference('plan')}
 
 ${commandReference('helper')}
 

@@ -9,6 +9,7 @@
  *   mc programs review <programme>    one independent advisory reading of the current document
  *   mc programs after <programme> <phase> <phase>… | --none    what a phase of a stated programme waits for
  *   mc programs show <programme> [--json]    one programme's record
+ *   mc programs archive <programme>    a programme that is over, off main and off this machine (a person, or Martin at the desk)
  *
  * The page draws only the programmes with work on them and folds the dormant
  * ones — no goal — into one line that points here. This is the
@@ -16,26 +17,30 @@
  * (`readProgrammes`, page-collect.js), so a programme is active or dormant
  * here exactly when it is on the page. `mc programs` alone prints the usage.
  */
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { areasHome } from '../area-proposals.js';
-import { programsHome, workRoot } from '../paths.js';
+import { planAreaName, programsHome, workRoot } from '../paths.js';
 import { wakeRunner } from '../run-control.js';
 import { deskProposalOwner } from '../repair-draft.js';
 import { readAreas } from '../areas.js';
 import { run as runGit } from '../git.js';
 import { repoNameOf } from '../repos.js';
-import { knownRepositories } from '../work-area.js';
+import { knownRepositories, releaseWorkArea } from '../work-area.js';
+import { archiveProgramme } from '../archive-programme.js';
+import { defaultRepos } from '../brief-collect.js';
+import { runDocsMerge } from '../docs-merge.js';
 import { setProgrammePriorities, validPriority } from '../programme-priority.js';
 import {
   AREA_RE, RECORD_FILE, changePhases, createProgramme, cycleOf, newRecord, readRecord, recordPage, recordPageTemplate, recordView, setRecordState, writeRecord,
 } from '../programme-record.js';
-import { GOAL_FILE, HOLD_FILE, PLAN_ROLE, appendEntry, listDirsOf, logStamp, parseGoal, programsGoals, readHold, readTextOrNull } from '../goals.js';
+import { GOAL_FILE, HOLD_FILE, appendEntry, listDirsOf, logStamp, parseGoal, programsGoals, readHold, readTextOrNull } from '../goals.js';
 import { NAME_RE } from '../plan-schema.js';
 import { reservedRoleHint, reservedRoleName } from '../roles.js';
-import { normalizeSessionRole } from '../session-role.js';
+import { normalizeSessionRole, personCommandRefusal } from '../session-role.js';
 import { readProgrammes } from '../page-collect.js';
-import { planProviders, statusRollup } from '../page-render.js';
+import { statusRollup } from '../page-render.js';
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
 import { writeFileAtomic } from '../atomic-write.js';
@@ -76,10 +81,14 @@ export const ROUTES = {
     positional.length !== 1 ? 'mc programs show needs one programme'
       : NAME_RE.test(positional[0]) ? null : `"${positional[0]}" is not a programme name: lower-case letters, digits and hyphens, at most 64, starting with a letter or digit`
   ) },
+  archive: { check: ({ positional }) => (
+    !positional.length ? 'archive which programme? mc programs archive <programme>'
+      : positional.length > 1 ? `unexpected argument ${positional[1]}` : null
+  ) },
   '*': { booleans: ['--json'], check: ({ positional }) => `mc programs has no ${positional[0]}` },
 };
 
-const VERBS = ['list', 'priority', 'create', 'record', 'state', 'after', 'show', 'review', 'release', 'repair-stop', 'disposition'];
+const VERBS = ['list', 'priority', 'create', 'record', 'state', 'after', 'show', 'review', 'release', 'repair-stop', 'disposition', 'archive'];
 
 function stateCheck(positional) {
   if (positional.length !== 2) return 'mc programs state needs <programme> draft|ready';
@@ -147,19 +156,18 @@ export function recordWriter(env) {
 
 /**
  * Who states what a phase waits for, from the environment alone, as the
- * record's own verbs read it: a person, the interactive Martin role, the
- * manager and the plan role (the order of work is the plan's), the last two
- * also headless. Every other role is refused, and so is a caller with
+ * record's own verbs read it: a person, the interactive Martin role and the
+ * manager, the last also headless. Every other role is refused, and so is a caller with
  * `MC_GOAL` and no `MC_ROLE`.
  */
 export function afterWriter(env) {
   const role = env.MC_ROLE ? normalizeSessionRole(env.MC_ROLE) : null;
-  if (role === 'manager' || role === PLAN_ROLE) return { by: role };
+  if (role === 'manager') return { by: role };
   const writer = recordWriter(env);
   if (!writer.refusal) return writer;
   if (role === 'martin') return { refusal: 'the Martin role is interactive-only; unattended sessions cannot state what a phase waits for' };
   const named = role || 'build-session:goal';
-  return { refusal: `the ${named} role cannot state what a phase waits for — the plan states it (mc plan), and the manager, interactive Martin and a person may` };
+  return { refusal: `the ${named} role cannot state what a phase waits for — the manager, interactive Martin and a person may` };
 }
 
 export async function run(argv, deps = {}) {
@@ -183,6 +191,7 @@ export async function run(argv, deps = {}) {
   if (verb === 'disposition') return dispositionVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'after') return afterVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'show') return showVerb(scanned, { env, stdout, stderr });
+  if (verb === 'archive') return archiveVerb(scanned, { ...deps, env, stdout, stderr });
 
   const read = deps.read || (() => readProgrammes({ env }));
   const home = programsHome(env);
@@ -227,7 +236,6 @@ export function programmesListing({ section, homes = {} }, { record = () => null
     ].filter(Boolean))].sort(),
     goals: (group.goals || []).length,
     statuses: Object.fromEntries(statusRollup(group.statuses)),
-    plan_sessions: planProviders(group),
     record: record(group.programme),
   })).sort((a, b) => a.name.localeCompare(b.name));
   const dormant = programmes.filter((item) => item.dormant).length;
@@ -247,15 +255,12 @@ function recordCell(record, name) {
 /** The cells of one programme's line, in the page's words. */
 function cells(item) {
   const rollup = statusRollup(item.statuses).map(([status, n]) => `${status} ${n}`).join(' · ');
-  // planSessionWords' words, from the counts it was made of.
-  const meta = Object.entries(item.plan_sessions).map(([provider, n]) => `${provider} ${n}`).join(' · ');
   return [
     item.name,
     item.state,
     `priority ${item.priority}`,
     item.repos.join(',') || '—',
     item.goals ? `${plural(item.goals, 'goal')}${rollup ? ` · ${rollup}` : ''}` : 'no goal',
-    meta ? `plan ${meta}` : 'no plan session',
     ...(item.record ? [recordCell(item.record, item.name)] : []),
   ];
 }
@@ -395,7 +400,7 @@ function stateVerb({ positional }, { env, stdout, stderr, lock, now = new Date()
     const found = readRecord(dir).record;
     // A part of an order waits for the part before it unless it says it runs in parallel with it: ready writes the
     // record's dependencies from that in the same write. A repair-owned order is released by its own verbs and is not read here,
-    // and a programme whose goals a plan session wrote keeps the dependencies that session stated for its phases.
+    // and a programme whose goals were written in the old form keeps the dependencies stated for its phases.
     const written = goalParts({ home, programme: name, list: listDirsOf, read: readTextOrNull });
     const oldForm = written.some(({ named }) => named.size > 0) && !written.some(({ goal }) => cutFromOrder(goal));
     const given = targetState === 'ready' && found && !found.repair && !oldForm ? partsOrder(readTextOrNull(join(dir, 'README.md')) ?? '') : null;
@@ -511,6 +516,49 @@ function afterVerb({ positional, flags }, { env, stdout, stderr, read, lock }) {
   if (!outcome.ok) return refuse(`could not change ${name}'s record: ${outcome.problems.join('; ')}`);
   stdout.write(`mc: ${name} · phase ${waiting} · ${named.length ? `after ${phaseWords(named)}` : 'waits for no phase'}\n`);
   return 0;
+}
+
+/** The names the tree's programmes have had: looser than `NAME_RE`, so an old programme can still be archived. */
+const ARCHIVE_NAME = /^[A-Za-z0-9._-]{1,64}$/u;
+
+function sh(cmd, args, { cwd } = {}) {
+  const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20 });
+  return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+/** `git -C <cwd> <args>` with room for a whole tree's listing, as `{ ok, stdout, stderr }`. */
+function gitWide(cwd, args) {
+  const r = runGit(undefined, ['-C', cwd, ...args], { maxBuffer: 64 << 20 });
+  return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+/**
+ * `archive`: a programme that is over, off main in both repositories and its directory released
+ * (archive-programme.js). Never triggered, only typed. It opens no session, so a person may run it and Martin at
+ * the desk on his word; every other session, and the headless Martin role, is refused.
+ */
+function archiveVerb({ positional: [programme] }, deps) {
+  const { env, stdout, stderr } = deps;
+  const deskArchive = env.MC_ROLE === 'martin' && env.MC_HEADLESS !== '1';
+  const refusal = deskArchive ? null : personCommandRefusal('mc programs archive', { cwd: deps.cwd || process.cwd(), env });
+  if (refusal) { stderr.write(`mc: ${refusal}\n`); return 1; }
+  const repos = deps.repos || defaultRepos(env);
+  if (!ARCHIVE_NAME.test(programme)) { stderr.write(`mc: not a valid programme name: ${programme}\n`); return 1; }
+  if (reservedRoleName(programme)) { stderr.write(`mc: ${reservedRoleHint(programme)}\n`); return 1; }
+  const programmeDir = join(programsHome(env), programme);
+  const repair = repairReleaseState(programmeDir, readRecord(programmeDir).record);
+  const repairRefusal = repair?.problems?.[0] ?? (repair ? 'repair orders use ordinary runner archival after current write-back' : null);
+  if (repairRefusal) { stderr.write(`mc: ${repairRefusal}\n`); return 1; }
+  const areaName = planAreaName(programme, { root: workRoot(env) });
+  return archiveProgramme(programme, {
+    repos, env, areaName, areaPath: join(workRoot(env), areaName), stdout, stderr,
+    deps: {
+      git: deps.git || gitWide,
+      gh: deps.gh || ((cwd, args) => sh('gh', args, { cwd })),
+      docsMerge: deps.docsMerge || runDocsMerge,
+      release: deps.release || releaseWorkArea,
+    },
+  });
 }
 
 /** Only Martin at the desk commissions a programme reading: no headless role, the manager included, and no other session. */

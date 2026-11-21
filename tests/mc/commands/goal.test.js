@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
 import { jevContext, refusedMove, run, usage } from '../../../src/mc/commands/goal.js';
-import { addGoalWorktree, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, renderGoal, renderGoalText, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
+import { addGoalWorktree, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog, renderGoal, renderGoalText, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
 import { BUILD_ROLES, tsvHeader, tsvRow } from '../../../src/mc/run-plan.js';
 import { seenAreas } from '../../../src/mc/review-verdict.js';
 import { runModule } from '../../../src/mc-verbs.js';
@@ -584,7 +584,8 @@ test('mc goal stage build remakes a branch with no commits of its own from origi
 const SESSION = { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_MODEL: 'opus' };
 const BUILD = { ...SESSION, MC_ROLE: BUILD_ROLES.goal };
 const REVIEW = { ...SESSION, MC_ROLE: REVIEW_ROLE, MC_REVIEW_HEAD: 'abc1234def' };
-const PLAN = { ...SESSION, MC_ROLE: PLAN_ROLE };
+// The desk's role in a session: what the plan role did with these verbs until it went with `mc plan` (2026-11-21), a person and interactive Martin still do.
+const DESK = { ...SESSION, MC_ROLE: 'martin' };
 const MET = [{ criterion: 'it works', check: 'a test', met: true }];
 /** A goal in `stage`, with its one criterion met. */
 const inStage = (stage, status = 'ready', extra = {}) => seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage, status, success_criteria: MET }), ...extra });
@@ -685,8 +686,8 @@ const withLog = (before) => ({ [`${DIR}/LOG.md`]: `${LOG_TEXT}\n## 2026-11-01T23
 
 test('stage moves by their owners, including recovery from historical finish', async () => {
   const moves = [
-    ['draft', 'build', PLAN], ['build', 'review', BUILD], ['review', 'merge', REVIEW],
-    ['finish', 'merge', PLAN], ['merge', 'done', {}], ['draft', 'review', PLAN], ['finish', 'dropped', PLAN], ['build', 'dropped', PLAN],
+    ['draft', 'build', DESK], ['build', 'review', BUILD], ['review', 'merge', REVIEW],
+    ['finish', 'merge', DESK], ['merge', 'done', {}], ['draft', 'review', DESK], ['finish', 'dropped', DESK], ['build', 'dropped', DESK],
   ];
   for (const [from, to, env] of moves) {
     const reading = {};
@@ -704,7 +705,7 @@ test('stage moves by their owners, including recovery from historical finish', a
 });
 
 test('a session\'s backward move is refused naming both stages, whatever its role; a person\'s is made and logged', async () => {
-  for (const [from, to, env] of [['review', 'build', PLAN], ['merge', 'review', PLAN], ['finish', 'build', REVIEW], ['review', 'build', BUILD], ['done', 'merge', PLAN], ['finish', 'draft', SESSION]]) {
+  for (const [from, to, env] of [['review', 'build', SESSION], ['merge', 'review', SESSION], ['finish', 'build', REVIEW], ['review', 'build', BUILD], ['done', 'merge', SESSION], ['finish', 'draft', SESSION]]) {
     const f = fixture({ files: inStage(from), env });
     assert.equal(await run(['stage', to], f.deps), 2, `${from} → ${to}`);
     assert.equal(f.err(), `mc: a session does not move a goal back — ${from} → ${to}; only a person does (mc goal stage <programme>/<goal> ${to}, MC_TOOL=person)\n`);
@@ -745,11 +746,11 @@ test('interactive Martin can return, move backward/forward and drop with attribu
   assert.equal(await run(['stage', 'review'], unattended.deps), 2); assert.match(unattended.err(), /interactive-only/u);
 });
 
-test('mc goal log and new name the session that wrote the entry by its role in the heading: build, review, plan; a person, or no role, writes none', async () => {
+test('mc goal log and new name the session that wrote the entry by its role in the heading: build, review, martin; a person, or no role, writes none', async () => {
   const cases = [
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: BUILD_ROLES.goal }, ['--stage', 'review', '--done', 'x'], '· claude · review · ready · by build', 'review', 'build'],
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: REVIEW_ROLE }, ['--done', 'x'], '· claude · build · ready · by review', 'build', 'review'],
-    [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: PLAN_ROLE }, ['--done', 'x'], '· claude · build · ready · by plan', 'build', 'plan'],
+    [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'martin' }, ['--done', 'x'], '· claude · build · ready · by martin', 'build', 'martin'],
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'person', MC_ROLE: BUILD_ROLES.goal }, ['--done', 'x'], '· person · build · ready · by build', 'build', 'build'],
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude' }, ['--done', 'x'], '· claude · build · ready', 'build', null],
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'odd role:x' }, ['--done', 'x'], '· claude · build · ready', 'build', null],
@@ -769,9 +770,9 @@ test('mc goal log and new name the session that wrote the entry by its role in t
     const last = f.store[`${DIR}/LOG.md`].match(/^## .*$/gmu).at(-1);
     assert.equal(last, `## 2026-11-01T20:00Z ${heading}`, JSON.stringify(env));
   }
-  const created = fixture({ env: { MC_TOOL: 'claude', MC_ROLE: PLAN_ROLE } });
+  const created = fixture({ env: { MC_TOOL: 'claude', MC_ROLE: 'martin' } });
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--title', 'T'], created.deps), 0, created.err());
-  assert.equal(created.store[`${DIR}/LOG.md`], '## 2026-11-01T20:00Z · claude · draft · ready · by plan\n\nDone: created\nComment: held from creation: draft being written by its author\n');
+  assert.equal(created.store[`${DIR}/LOG.md`], '## 2026-11-01T20:00Z · claude · draft · ready · by martin\n\nDone: created\nComment: held from creation: draft being written by its author\n');
 });
 
 test('a build session moves build to review or sets blocked, and nothing else', async () => {
@@ -780,7 +781,7 @@ test('a build session moves build to review or sets blocked, and nothing else', 
   assert.equal(stateOf(blocked), 'build · blocked');
   for (const [from, argv, said] of [
     ['build', ['stage', 'done'], /a session does not set done — move it to review; the merger sets done/u],
-    ['build', ['drop', '--reason', 'x'], /only plan or a person drops a goal/u],
+    ['build', ['drop', '--reason', 'x'], /only a person drops a goal/u],
     ['build', ['stage', 'merge'], /a build session moves a goal only from build to review, not build → merge/u],
     ['draft', ['stage', 'build'], /a build session moves a goal only from build to review, not draft → build/u],
     ['build', ['ready'], /a build session does not set a goal ready — a person does/u],
@@ -805,15 +806,13 @@ test('a build session cannot move to review while a criterion is not met: the re
   assert.equal(await run(['stage', 'review'], none.deps), 1);
   assert.match(none.err(), /mc\/plain has no criterion — mc goal criterion add/u);
 
-  // Once it is met the same call goes through; a plan session or a person is not refused.
+  // Once it is met the same call goes through; a person is not refused. (The plan role was not either, until it went.)
   // A build session marks from its worktree and moves with every mark recorded at its head (mc/evidence-at-current-head).
   const met = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: two, ...criterionRecords(['a']) }), env: BUILD, git: worktreeGit() });
   assert.equal(await run(['criterion', 'met', '2'], met.deps), 0, met.err());
   assert.equal(await run(['stage', 'review', '--reason', 'built'], met.deps), 0, met.err());
-  for (const env of [PLAN, {}]) {
-    const f = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: two }), env });
-    assert.equal(await run(['stage', 'mc/plain', 'review'], f.deps), 0, f.err());
-  }
+  const person = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: two }), env: {} });
+  assert.equal(await run(['stage', 'mc/plain', 'review'], person.deps), 0, person.err());
 });
 
 /* ------------------------------------------------- evidence at the current head: the marks (mc/evidence-at-current-head C1) */
@@ -874,14 +873,15 @@ test('a build session\'s mark is refused on a dirty worktree and on an absent on
   assert.equal(parseGoal(bare.store[`${DIR}/GOAL.json`]).success_criteria[0].met, false);
 });
 
-test('a version 1 goal is marked without evidence, with the heads recorded; a person and plan mark with no worktree and get none to record', async () => {
+test('a version 1 goal is marked without evidence, with the heads recorded; a person marks with no worktree and gets none to record', async () => {
   const v1 = await callWith(['criterion', 'met', '1'], seededGoal(), { git: worktreeGit() });
   assert.equal(v1.code, 0, v1.err());
   assert.deepEqual(evidenceOf(v1)['criterion 1'], { at: '2026-11-01T20:00Z', tool: 'claude', model: 'opus', role: 'build', heads: HEADS, text: '', criterion: 'it works' });
   const dirty = await callWith(['criterion', 'met', '1'], seededGoal(), { git: worktreeGit({ dirty: ['memoro-cli'] }) });
   assert.equal(dirty.code, 2, 'a version 1 goal still needs a clean worktree');
   assert.match(dirty.err(), /memoro-cli has uncommitted changes/u);
-  for (const env of [{}, PLAN]) {
+  // The plan role marked the same way until it went with `mc plan` (2026-11-21).
+  for (const env of [{}]) {
     const f = await callWith(['criterion', 'met', 'mc/plain', '1'], v2Files({}, { success_criteria: [{ criterion: 'first', check: 'x', met: false }] }), { env, absent: [`${DIR}/memoro-cli`, `${DIR}/memoro`] });
     assert.equal(f.code, 0, `${JSON.stringify(env)}: ${f.err()}`);
     assert.equal(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria[0].met, true);
@@ -897,7 +897,7 @@ test('criterion unmet and criterion set remove the criterion\'s record, and noth
   const unmet = await callWith(['criterion', 'unmet', 'mc/plain', '1'], v2Files(fullEvidence()), { env: {} });
   assert.equal(unmet.code, 0, unmet.err());
   assert.deepEqual(Object.keys(evidenceOf(unmet)), ['criterion 2', 'V1', 'obligation Documentation']);
-  const set = await callWith(['criterion', 'set', 'mc/plain', '2', '--criterion', 'second, reworded'], v2Files(fullEvidence()), { env: PLAN });
+  const set = await callWith(['criterion', 'set', 'mc/plain', '2', '--criterion', 'second, reworded'], v2Files(fullEvidence()), { env: DESK });
   assert.equal(set.code, 0, set.err());
   assert.deepEqual(Object.keys(evidenceOf(set)), ['criterion 1', 'V1', 'obligation Documentation']);
   assert.deepEqual(evidenceOf(set).V1, items.V1);
@@ -948,10 +948,10 @@ test('mc goal evidence records a preserve item or a touched obligation without a
   }
 });
 
-test('mc goal evidence is the build, a person, plan, the decision and interactive Martin\'s; a review, mend, desk-prepare and learning session is refused and writes nothing', async () => {
+test('mc goal evidence is the build, a person, the decision and interactive Martin\'s; a review, mend, desk-prepare and learning session is refused and writes nothing', async () => {
   const MARTIN = { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'martin' };
   const DECISION = { MC_ROLE: 'decision', MC_HEADLESS: '1', MC_TOOL: 'codex', MC_GOAL: 'mc/plain' };
-  for (const env of [BUILD, {}, PLAN, MARTIN, DECISION]) {
+  for (const env of [BUILD, {}, MARTIN, DECISION]) {
     const f = await callWith(['evidence', 'mc/plain', 'V1', '--text', 'read it'], v2Files(), { env });
     assert.equal(f.code, 0, `${JSON.stringify(env)}: ${f.err()}`);
     assert.equal(evidenceOf(f).V1.text, 'read it');
@@ -1178,11 +1178,11 @@ test('a review session\'s move back removes the records of the NOT OK ids criter
   assert.deepEqual(Object.keys(evidenceOf(third)), ['criterion 2', 'obligation Documentation'], 'the held verdict also clears only the rejected evidence');
 });
 
-test('a person and the plan role move a goal to review as they did, with no record and no worktree; martin and decision too, and all are still refused with a criterion not met', async () => {
+test('a person moves a goal to review as before, with no record and no worktree; martin and decision too, and they are still refused with a criterion not met', async () => {
   const MARTIN = { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'martin' };
   const DECISION = { MC_ROLE: 'decision', MC_HEADLESS: '1', MC_TOOL: 'codex', MC_GOAL: 'mc/plain' };
   const unmet = [TWO_CRITERIA[0], { criterion: 'second', check: 'y', met: false }];
-  for (const env of [{}, PLAN, MARTIN, DECISION]) {
+  for (const env of [{}, MARTIN, DECISION]) {
     const f = await callWith(['stage', 'mc/plain', 'review', '--reason', 'built'], v2Files(), { env, absent: [`${DIR}/memoro-cli`, `${DIR}/memoro`] });
     assert.equal(f.code, 0, `${JSON.stringify(env)}: ${f.err()}`);
     assert.equal(stateOf(f), 'review · ready');
@@ -1236,9 +1236,9 @@ test('mc goal show prints the EVIDENCE part with each record, and stale beside a
   assert.equal(none.calls.some((call) => call.args[0] === 'rev-parse'), false, 'and no worktree is asked for a head');
 });
 
-test('review and plan execute merge for every registered PR, reading only each PR\'s state; plan from historical finish needs no REVIEW.md', async () => {
-  for (const env of [REVIEW, PLAN]) {
-    const files = env.MC_ROLE === PLAN_ROLE ? inStage('finish') : inReview(verdictText({ ids: [], repos: ['memoro-cli', 'memoro'] }));
+test('review and interactive Martin execute merge for every registered PR, reading only each PR\'s state; Martin from historical finish needs no REVIEW.md', async () => {
+  for (const env of [REVIEW, DESK]) {
+    const files = env.MC_ROLE === 'martin' ? inStage('finish') : inReview(verdictText({ ids: [], repos: ['memoro-cli', 'memoro'] }));
     files[`${DIR}/GOAL.json`] = withGoal(files[`${DIR}/GOAL.json`], {
       repos: ['memoro-cli', 'memoro'], prs: ['memoro-cli#31', 'memoro#14804'], success_criteria: [],
     });
@@ -1261,7 +1261,7 @@ test('a queue failure preserves the merge decision so it can be retried', async 
   assert.equal(stateOf(f), 'merge · ready');
   assert.match(f.err(), /memoro-cli#31 could not be queued/u);
   f.deps.queue = (job) => { f.queued.push(job); };
-  assert.equal(await run(['stage', 'merge'], { ...f.deps, env: PLAN }), 0, f.err());
+  assert.equal(await run(['stage', 'merge'], { ...f.deps, env: DESK }), 0, f.err());
   assert.deepEqual(f.queued.map((job) => [job.repo, job.pr]), [['memoro-cli', 31]]);
 });
 
@@ -1384,10 +1384,12 @@ test('a review sets no status and moves only a goal in review', async () => {
   }
 });
 
-test('refusedMove: a person may make other moves; a plan session other forward ones; nobody else more than their own', () => {
+test('refusedMove: a person may make other moves; interactive Martin any but done; the plan role and nobody else more than their own', () => {
   for (const to of STAGES.filter(x => x !== 'finish')) assert.equal(refusedMove({ from: 'merge', to, env: {} }), null, `a person to ${to}`);
-  for (const to of ['build', 'review', 'merge', 'done', 'dropped']) assert.equal(refusedMove({ from: 'draft', to, env: PLAN }), null, `draft to ${to}`);
-  assert.equal(refusedMove({ from: 'build', status: 'blocked', env: PLAN }), null);
+  for (const to of ['build', 'review', 'merge', 'dropped']) assert.equal(refusedMove({ from: 'draft', to, env: DESK }), null, `draft to ${to}`);
+  // The plan role made any forward move until it went with `mc plan` (2026-11-21): a session still carrying it is held to a build session's moves.
+  for (const to of ['build', 'merge', 'dropped']) assert.notEqual(refusedMove({ from: 'draft', to, env: { ...SESSION, MC_ROLE: 'plan' } }), null, `the plan role, draft to ${to}`);
+  assert.equal(refusedMove({ from: 'build', status: 'blocked', env: DESK }), null);
   assert.equal(refusedMove({ from: 'build', to: 'review', env: BUILD }), null);
   assert.equal(refusedMove({ from: 'review', to: 'merge', env: REVIEW }), null);
   assert.equal(refusedMove({ from: 'review', to: 'build', env: REVIEW }), null, 'a review rejects: review → build is its move');
@@ -1805,8 +1807,8 @@ test('mc goal areas prints a seen: line for an area that declares seen, for a re
   assert.match(goal.out(), /memoro-cli\/documentation — The documentation\n  stand: touched[^\n]*\n  covers: [^\n]*\n  seen: /u);
 });
 
-test('only a review session in review is held to REVIEW.md: plan and a person move merge without one', async () => {
-  for (const env of [PLAN, {}]) {
+test('only a review session in review is held to REVIEW.md: interactive Martin and a person move merge without one', async () => {
+  for (const env of [DESK, {}]) {
     const f = reviewed({ files: reviewFiles(null), env });
     assert.equal(await run(['stage', ...(env.MC_GOAL ? [] : ['mc/plain']), 'merge'], f.deps), 0, f.err());
     assert.equal(stateOf(f), 'merge · ready');
@@ -1815,7 +1817,7 @@ test('only a review session in review is held to REVIEW.md: plan and a person mo
 });
 
 test('no caller can move a goal to finish', async () => {
-  for (const env of [{}, PLAN, { ...SESSION, MC_ROLE: 'martin' }, REVIEW, BUILD]) {
+  for (const env of [{}, DESK, REVIEW, BUILD]) {
     const f = fixture({ files: inStage('review'), env });
     assert.equal(await run(['stage', 'mc/plain', 'finish'], f.deps), 2, env.MC_ROLE || 'person');
     assert.match(f.err(), /mc goal stage build/u);
@@ -1924,7 +1926,7 @@ test('mc goal criterion set refuses no flag, a blank text, a criterion that is n
   assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'no entry either');
 });
 
-test('mc goal criterion set is refused for a build session and a review session, with or without MC_TOOL, and a plan session may rewrite', async () => {
+test('mc goal criterion set is refused for a build session and a review session, with or without MC_TOOL, and interactive Martin may rewrite', async () => {
   for (const [env, word] of [[BUILD, 'build'], [REVIEW, 'review']]) {
     const f = fixture({ files: twoCriteria(), env });
     const before = f.store[`${DIR}/GOAL.json`];
@@ -1939,7 +1941,7 @@ test('mc goal criterion set is refused for a build session and a review session,
   assert.match(halfSet.err(), /a build session does not rewrite a criterion/u);
   assert.equal(halfSet.store[`${DIR}/GOAL.json`], before, 'without MC_TOOL: GOAL.json byte-identical');
   assert.equal(halfSet.store[`${DIR}/LOG.md`], LOG_TEXT, 'without MC_TOOL: no entry');
-  const plan = fixture({ files: twoCriteria(), env: PLAN });
+  const plan = fixture({ files: twoCriteria(), env: DESK });
   assert.equal(await run(['criterion', 'set', 'mc/plain', '1', '--check', 'x'], plan.deps), 0, plan.err());
   const martin = fixture({ files: twoCriteria(), env: { MC_ROLE: 'martin', MC_TOOL: 'claude' } });
   assert.equal(await run(['set', 'mc/plain', 'contract', '--text', 'A general rule.'], martin.deps), 0, martin.err());
@@ -2001,11 +2003,11 @@ test('mc goal criterion remove refuses the only criterion, naming its replacemen
   assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'no entry');
 });
 
-test('mc goal criterion remove by a plan session removes the criterion and logs it with the plan role', async () => {
-  const f = fixture({ files: threeCriteria(), env: PLAN });
+test('mc goal criterion remove by interactive Martin removes the criterion and logs it with the role', async () => {
+  const f = fixture({ files: threeCriteria(), env: DESK });
   assert.equal(await run(['criterion', 'remove', 'mc/plain', '1', '--reason', 'superseded'], f.deps), 0, f.err());
   assert.deepEqual(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria.map((c) => c.criterion), ['second', 'third']);
-  assert.ok(f.store[`${DIR}/LOG.md`].endsWith('## 2026-11-01T20:00Z · claude opus · build · ready · by plan\n\nComment: criterion 1 removed — "first", check "a test", was met; reason: superseded\n'), f.store[`${DIR}/LOG.md`]);
+  assert.ok(f.store[`${DIR}/LOG.md`].endsWith('## 2026-11-01T20:00Z · claude opus · build · ready · by martin\n\nComment: criterion 1 removed — "first", check "a test", was met; reason: superseded\n'), f.store[`${DIR}/LOG.md`]);
 });
 
 /** `git cat-file -e origin/main:<path>` answers for `ON_MAIN` only; any other path gets git's own "does not exist in"; `gitFails` makes every answer a git failure. */
@@ -2108,7 +2110,7 @@ test('mc goal list says criteria 1/2 for a goal with one of two met, and a goal 
 /* ------------------------------------------------- hold and release */
 
 const HOLD_REASON = 'the fix is taken over here';
-/** The hold file `mc goal hold` writes, as an earlier takeover left it. */
+/** The hold file `mc goal hold` writes, as an earlier takeover left it: by a plan session, before `mc plan` went. */
 const HELD = JSON.stringify({ by: 'plan', tool: 'claude', at: '2026-11-01T19:00Z', reason: HOLD_REASON });
 const heldGoal = (extra = {}) => seededGoal({ [`${DIR}/.hold.json`]: HELD, ...extra });
 /** Two repositories: one with three changes and two commits past origin/main, one without a worktree. */
@@ -2122,24 +2124,24 @@ const gitState = (cwd, args) => {
 const RELEASE_REPOS = withGoal(GOAL_TEXT, { repos: ['memoro-cli', 'memoro'], success_criteria: MET });
 
 test('mc goal hold writes .hold.json and one log entry, and leaves the stage and status as they are', async () => {
-  const f = fixture({ files: inStage('build'), env: PLAN });
+  const f = fixture({ files: inStage('build'), env: DESK });
   assert.equal(await run(['hold', 'mc/plain', '--reason', HOLD_REASON], f.deps), 0, f.err());
-  assert.deepEqual(JSON.parse(f.store[`${DIR}/.hold.json`]), { by: 'plan', tool: 'claude', at: '2026-11-01T20:00Z', reason: HOLD_REASON });
+  assert.deepEqual(JSON.parse(f.store[`${DIR}/.hold.json`]), { by: 'martin', tool: 'claude', at: '2026-11-01T20:00Z', reason: HOLD_REASON });
   assert.equal(stateOf(f), 'build · ready');
   const entries = parseLog(f.store[`${DIR}/LOG.md`]);
   assert.equal(entries.length, 5, 'one entry added to the four the goal had');
-  assert.deepEqual([entries.at(-1).stage, entries.at(-1).status, entries.at(-1).role], ['build', 'ready', 'plan']);
+  assert.deepEqual([entries.at(-1).stage, entries.at(-1).status, entries.at(-1).role], ['build', 'ready', 'martin']);
   assert.equal(entries.at(-1).comment, `held: ${HOLD_REASON}`);
   assert.match(f.out(), /^mc: mc\/plain held — the runner starts no session on it until mc goal release mc\/plain\n$/u);
 });
 
 test('mc goal hold refuses a headless caller, another goal\'s session, no reason, a finished goal, and a goal already held, and writes nothing', async () => {
   const cases = [
-    ['a headless session', { ...PLAN, MC_HEADLESS: '1' }, ['hold', 'mc/plain', '--reason', HOLD_REASON], inStage('build'), /a hold is set by a person or an interactive session/u],
+    ['a headless session', { ...DESK, MC_HEADLESS: '1' }, ['hold', 'mc/plain', '--reason', HOLD_REASON], inStage('build'), /a hold is set by a person or an interactive session/u],
     ['another goal\'s session', { ...BUILD, MC_GOAL: 'mc/other' }, ['hold', 'mc/plain', '--reason', HOLD_REASON], inStage('build'), /goal session mc\/other cannot change mc\/plain/u],
-    ['no reason', PLAN, ['hold', 'mc/plain'], inStage('build'), /hold needs --reason/u],
-    ['a finished goal', PLAN, ['hold', 'mc/plain', '--reason', HOLD_REASON], inStage('done'), /mc\/plain is done — a finished goal is not held/u],
-    ['a goal already held', PLAN, ['hold', 'mc/plain', '--reason', HOLD_REASON], heldGoal(), /mc\/plain is already held by plan since 2026-11-01T19:00Z/u],
+    ['no reason', DESK, ['hold', 'mc/plain'], inStage('build'), /hold needs --reason/u],
+    ['a finished goal', DESK, ['hold', 'mc/plain', '--reason', HOLD_REASON], inStage('done'), /mc\/plain is done — a finished goal is not held/u],
+    ['a goal already held', DESK, ['hold', 'mc/plain', '--reason', HOLD_REASON], heldGoal(), /mc\/plain is already held by plan since 2026-11-01T19:00Z/u],
   ];
   for (const [why, env, argv, files, message] of cases) {
     const f = fixture({ files, env });
@@ -2151,7 +2153,7 @@ test('mc goal hold refuses a headless caller, another goal\'s session, no reason
 });
 
 test('mc goal release removes the hold, and logs who held it, since when, and each worktree\'s state', async () => {
-  const f = fixture({ files: heldGoal({ [`${DIR}/GOAL.json`]: RELEASE_REPOS }), env: PLAN, git: gitState });
+  const f = fixture({ files: heldGoal({ [`${DIR}/GOAL.json`]: RELEASE_REPOS }), env: DESK, git: gitState });
   f.deps.remove = (path) => { delete f.store[path]; };
   const before = parseLog(f.store[`${DIR}/LOG.md`]).length;
   assert.equal(await run(['release', 'mc/plain'], f.deps), 0, f.err());
@@ -2160,7 +2162,7 @@ test('mc goal release removes the hold, and logs who held it, since when, and ea
   const entries = parseLog(f.store[`${DIR}/LOG.md`]);
   assert.equal(entries.length, before + 1, 'exactly one entry added');
   const last = entries.at(-1);
-  assert.equal(last.role, 'plan');
+  assert.equal(last.role, 'martin');
   assert.equal(last.comment, [
     `released: held by plan since 2026-11-01T19:00Z (${HOLD_REASON})`,
     'memoro-cli: 3 changed · 2 commits past origin/main · last commit 2026-11-01T21:00:00+01:00',
@@ -2171,8 +2173,8 @@ test('mc goal release removes the hold, and logs who held it, since when, and ea
 
 test('mc goal release refuses a goal that is not held, and a headless caller, and removes nothing', async () => {
   const cases = [
-    ['a goal not held', PLAN, inStage('build'), /mc\/plain is not held/u],
-    ['a headless session', { ...PLAN, MC_HEADLESS: '1' }, heldGoal(), /a hold is set by a person or an interactive session/u],
+    ['a goal not held', DESK, inStage('build'), /mc\/plain is not held/u],
+    ['a headless session', { ...DESK, MC_HEADLESS: '1' }, heldGoal(), /a hold is set by a person or an interactive session/u],
   ];
   for (const [why, env, files, message] of cases) {
     const f = fixture({ files, env });
@@ -2247,7 +2249,8 @@ test('a takeover hold, not made by new, survives a stage move out of draft, and 
 });
 
 test('a headless stage move keeps a creation hold: only a caller without MC_HEADLESS frees one', async () => {
-  const f = fixture({ files: draftFiles(CREATION), env: { ...PLAN, MC_HEADLESS: '1' }, git: behindMain });
+  // The decision role is the headless caller that may move a goal out of draft; the headless plan session did until it went.
+  const f = fixture({ files: draftFiles(CREATION), env: { ...SESSION, MC_ROLE: 'decision', MC_HEADLESS: '1' }, git: behindMain });
   f.deps.remove = () => { throw new Error('a headless move removes nothing'); };
   assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 0, f.err());
   assert.equal(f.store[`${DIR}/.hold.json`], CREATION);
@@ -2255,7 +2258,7 @@ test('a headless stage move keeps a creation hold: only a caller without MC_HEAD
 });
 
 test('mc goal release removes a creation hold and logs it as released, as it does any hold', async () => {
-  const f = fixture({ files: draftFiles(CREATION), env: PLAN, git: gitState });
+  const f = fixture({ files: draftFiles(CREATION), env: DESK, git: gitState });
   f.deps.remove = (path) => { delete f.store[path]; };
   assert.equal(await run(['release', 'mc/plain'], f.deps), 0, f.err());
   assert.equal(f.store[`${DIR}/.hold.json`], undefined, 'the hold file is gone');
@@ -2266,7 +2269,7 @@ test('mc goal release removes a creation hold and logs it as released, as it doe
 test('a held goal shows its hold on the list line and in show, and a hold on a goal with a session running says the hold does not stop it', async () => {
   const running = fixture({
     files: { ...inStage('build'), '/w/runner/current-x.json': JSON.stringify({ name: 'mc/plain', pid: 4242 }) },
-    env: { ...PLAN, MC_WORK_ROOT: '/w' },
+    env: { ...DESK, MC_WORK_ROOT: '/w' },
     alive: () => true,
   });
   assert.equal(await run(['hold', 'mc/plain', '--reason', HOLD_REASON], running.deps), 0, running.err());
@@ -2614,16 +2617,9 @@ test('mc goal convert gives every goal written with one status its stage: open i
 });
 
 
-test('plan without MC_GOAL has session authority: it retries merge but cannot move stages backward', async () => {
-  const env = { MC_ROLE: 'plan', MC_TOOL: 'codex', MC_PROGRAMME: 'mc' };
-  const f = fixture({ files: { ...inStage('merge'), [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'merge', status: 'blocked' }) }, env });
-  assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 2);
-  assert.match(f.err(), /a session does not move a goal back/u);
-  assert.equal(await run(['stage', 'mc/plain', 'merge'], f.deps), 0, f.err());
-  assert.equal(stateOf(f), 'merge · ready');
-  assert.equal(await run(martinCall('choose scope; recommend keeping it', 'mc/plain'), f.deps), 2, f.err());
-  assert.equal(stateOf(f), 'merge · ready', 'mc goal martin is gone: it moves nothing');
-});
+// Retired with `mc plan` (2026-11-21): 'plan without MC_GOAL has session authority: it retries merge but cannot
+// move stages backward' protected that an interactive plan session with no MC_GOAL was still held to a session's
+// moves. No session has that role; a session's backward move is covered above, whatever its role.
 
 /**
  * The headless mend role (Martin, 2026-11-07): a mend session sets a status and
@@ -2685,8 +2681,8 @@ test('goal defect: a build and a review session report the goal in their own sta
   }
 });
 
-test('goal defect: a person, and the plan role, may report any unfinished goal by name', async () => {
-  for (const env of [{}, PLAN]) {
+test('goal defect: a person, and interactive Martin, may report any unfinished goal by name', async () => {
+  for (const env of [{}, DESK]) {
     const f = fixture({ files: inStage('review'), env });
     assert.equal(await run(['defect', 'mc/plain', ...DEFECT.slice(1)], f.deps), 0, f.err());
     assert.equal(stateOf(f), 'review · Martin');
@@ -3362,7 +3358,7 @@ test('a version 2 goal is refused out of draft for each lack the parts check nam
   }
 });
 
-test('several lacks are one refusal, in the order of the parts; the same through log --stage build and the plan role\'s stage review', async () => {
+test('several lacks are one refusal, in the order of the parts; the same through log --stage build and interactive Martin\'s stage review', async () => {
   const text = DRAFT_V2({ outcome: [], change: [], success_criteria: [] });
   const f = gateFixture({ text });
   assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 1);
@@ -3377,14 +3373,14 @@ test('several lacks are one refusal, in the order of the parts; the same through
   assert.match(log.err(), /3 things to repair/u);
   assert.deepEqual(filesOf(log), before);
 
-  const plan = gateFixture({ text, env: PLAN });
+  const plan = gateFixture({ text, env: DESK });
   assert.equal(await run(['stage', 'mc/plain', 'review'], plan.deps), 1, 'a move to review is held too');
   assert.match(plan.err(), /3 things to repair/u);
   assert.equal(stateOf(plan), 'draft · ready');
 });
 
 test('draft → dropped is not checked; a build session still gets refusedMove\'s exit 2; a version 1 goal is asked for neither parts nor a reading', async () => {
-  const dropped = dropFixture(gateFixture({ text: DRAFT_V2({ outcome: [], change: [], success_criteria: [] }), env: PLAN }));
+  const dropped = dropFixture(gateFixture({ text: DRAFT_V2({ outcome: [], change: [], success_criteria: [] }), env: DESK }));
   assert.equal(await run(['stage', 'mc/plain', 'dropped'], dropped.deps), 0, dropped.err());
   assert.deepEqual(dropped.calls.filter((call) => ['show', 'cat-file'].includes(call.args[0])), [], 'no question was asked');
 
@@ -3443,7 +3439,7 @@ test('a person\'s move back to draft moves the stage; a goal in build is not ask
   assert.equal(stateOf(f), 'draft · ready');
   assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 0, f.err());
 
-  const building = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'build', success_criteria: MET }) }), env: PLAN });
+  const building = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'build', success_criteria: MET }) }), env: DESK });
   assert.equal(await run(['stage', 'mc/plain', 'review'], building.deps), 0, building.err());
 });
 
@@ -3570,7 +3566,7 @@ test('one way to ask: mc goal martin is gone — exit 2, the mc ask call to make
 });
 
 test('one way to ask: mc goal martin names --reserved when it was given, by flag name only, in every role', async () => {
-  for (const env of [{}, PLAN, BUILD, REVIEW, { ...SESSION, MC_ROLE: 'martin', MC_HEADLESS: '1' }, { MC_ROLE: 'desk-prepare', MC_TOOL: 'person' }]) {
+  for (const env of [{}, DESK, BUILD, REVIEW, { ...SESSION, MC_ROLE: 'martin', MC_HEADLESS: '1' }, { MC_ROLE: 'desk-prepare', MC_TOOL: 'person' }]) {
     const f = fixture({ files: inStage('build'), env });
     assert.equal(await run(['martin', '--kind', 'technical', '--reserved', 'deploy', '--reason', 'r'], f.deps), 2, env.MC_ROLE || 'person');
     assert.match(f.err(), /gone — ask with: mc ask <p>\/<g> .* --recommend <key> --reserved <act>\n$/u);
@@ -3614,7 +3610,7 @@ const newArgv = ['new', 'mc/fresh', '--repo', 'memoro-cli', '--title', 'A signed
 
 test('goal new refuses draft programmes before any fetch or goal write', async () => {
   for (const state of ['draft']) {
-    for (const env of [{}, { MC_ROLE: 'plan', MC_HEADLESS: '1', MC_PROGRAMME: 'mc' }]) {
+    for (const env of [{}, { MC_ROLE: 'manager', MC_HEADLESS: '1', MC_PROGRAMME: 'mc' }]) {
       const f = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: JSON.stringify(unsignedRecord(state)) }, env });
       const before = { ...f.store };
       assert.equal(await run(newArgv, f.deps), 1, state);
@@ -3646,7 +3642,7 @@ test('a goal moves to build whether or not it is cut from a part of a signed pro
 });
 
 test('goal new refuses headless recordless creation but admits signed, legacy, area and interactive recordless paths', async () => {
-  const denied = fixture({ env: { MC_ROLE: 'plan', MC_HEADLESS: '1', MC_PROGRAMME: 'mc' } });
+  const denied = fixture({ env: { MC_ROLE: 'manager', MC_HEADLESS: '1', MC_PROGRAMME: 'mc' } });
   const before = { ...denied.store };
   assert.equal(await run(newArgv, denied.deps), 1);
   assert.equal(denied.err(), 'mc: mc has no record — a goal here is made at the desk\n');
@@ -3654,7 +3650,7 @@ test('goal new refuses headless recordless creation but admits signed, legacy, a
   assert.deepEqual(denied.calls, []);
   const signature = { signed_at: '2026-11-01T20:00:00Z', signed_by: 'martin', signed_text: 'a'.repeat(64) };
   for (const record of [legacyRecord(), JSON.stringify({ ...unsignedRecord('open'), ...signature }), JSON.stringify({ ...unsignedRecord('open'), area: 'memoro-cli/operations' })]) {
-    const f = fixture({ env: { MC_ROLE: 'plan', MC_HEADLESS: '1', MC_PROGRAMME: 'mc' }, files: { [`${HOME}/mc/PROGRAMME.json`]: record } });
+    const f = fixture({ env: { MC_ROLE: 'manager', MC_HEADLESS: '1', MC_PROGRAMME: 'mc' }, files: { [`${HOME}/mc/PROGRAMME.json`]: record } });
     assert.equal(await run(newArgv, f.deps), 0, f.err());
     assert.equal(parseGoal(f.store[`${HOME}/mc/goals/fresh/GOAL.json`]).stage, 'draft');
     assert.ok(f.calls.some(({ args }) => args[0] === 'fetch'));

@@ -2,7 +2,7 @@
  * Who holds a dev server: the session that took it, written when it is taken.
  *
  * The page's DEV section (goal mc/dev-section) names the session behind every
- * server — `BUILD mc/no-work`, `REVIEW email-compose`, `plan mc`, `brief`, or
+ * server — `BUILD mc/no-work`, `REVIEW email-compose`, `brief`, or
  * `shot` for a short `mc shot` that no session ran. Guessing that from the
  * worktree path would name the worktree's goal, not whoever is using it: a
  * review session and a build session on the same goal share a worktree, and
@@ -13,12 +13,12 @@
  *
  * A holder is `{ kind, owner, name, pid }`:
  *
- * - `kind` is the session's kind — `build`, `review`, `plan`, a desk (`brief`,
+ * - `kind` is the session's kind — `build`, `review`, a desk (`brief`,
  *   `helper`, `intake`), `gate` for a gate round — or, with no session at all,
  *   the verb itself (`shot`, `test`, `open`).
  * - `owner` is the programme the session works for, or the desk's name.
  * - `name` is what the session works on: the goal (`mc/no-work`) for a build
- *   or a review, the programme for a plan, null for a desk or a bare verb.
+ *   or a review, null for a desk or a bare verb.
  * - `pid` is the session's own process — the coding agent's, found by walking
  *   up from the verb — so a holder whose session has ended can be told from
  *   one that is still at work. The verb's own pid would be dead a second after
@@ -27,10 +27,13 @@
 import { execFileSync } from 'node:child_process';
 
 import { processNames } from '../adapters/index.js';
-import { MEND_ROLE, PLAN_ROLE, REVIEW_ROLE } from './goals.js';
+import { MEND_ROLE, REVIEW_ROLE } from './goals.js';
 import { BUILD_ROLES } from './run-plan.js';
 
-/** The session kinds whose ending a page should say: a holder of these whose pid is gone is `holder gone`. */
+/**
+ * The session kinds whose ending a page should say: a holder of these whose pid is gone is `holder gone`.
+ * `plan` is read for a lease a plan session took before `mc plan` went (2026-11-21); no holder is made with it.
+ */
 export const SESSION_HOLDERS = Object.freeze(['build', 'review', 'finish', 'mend', 'plan', 'brief', 'helper', 'intake', 'gate', 'session']);
 
 /** The command names a coding agent's process has. */
@@ -96,9 +99,6 @@ export function leaseHolder({ env = process.env, verb = 'mc', pid = process.pid,
   } else if (role === MEND_ROLE) {
     kind = 'mend';
     name = goal;
-  } else if ([PLAN_ROLE, 'plan-session'].includes(role)) {
-    kind = 'plan';
-    name = programme;
   } else if (role && ['brief', 'helper', 'intake'].includes(role)) {
     kind = role;
     owner = role;
@@ -121,7 +121,7 @@ export function isSessionHolder(holder) {
 
 /**
  * The holder as a row names it: `BUILD mc/no-work`, `REVIEW email-compose`,
- * `plan mc`, `brief`, `shot`. The runner's two working kinds are in capitals,
+ * `brief`, `shot`. The runner's two working kinds are in capitals,
  * as SESSIONS writes them; everything else is a word.
  */
 export function holderLabel(holder) {

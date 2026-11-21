@@ -24,7 +24,7 @@ const MC_PID = 777;
 const thread = (id, fields = {}) => ({ id, ephemeral: false, parentThreadId: null, preview: 'a first turn', updatedAt: 1,
   status: { type: 'idle' }, ...fields });
 
-/** A desk, a Codex plan for it, and a driver whose every boundary is a recording stub. */
+/** A desk (the desk's role, with a programme named so the session's identity carries one), a Codex launch plan for it, and a driver whose every boundary is a recording stub. */
 async function world({ billing = 'plan', why = 'no key', settings = {}, deps = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-codex-sessions-'));
   const worktree = join(root, 'work', 'programs', 'example');
@@ -34,9 +34,9 @@ async function world({ billing = 'plan', why = 'no key', settings = {}, deps = {
     MC_GOAL: 'example/goal', MC_HEADLESS: '1', OPENAI_API_KEY: 'sk-test-key', MC_TEST_SECRET: 'runtime-secret' };
   rememberRuntimeSecretNames(['MC_TEST_SECRET'], env);
   const lines = [];
-  const base = { areaRoot: worktree, worktree: { path: worktree, is_git: false }, env, verb: 'plan', roleName: 'plan',
+  const base = { areaRoot: worktree, worktree: { path: worktree, is_git: false }, env, verb: 'martin', roleName: 'martin',
     programme: 'example', areaName: 'programs/example', tool: 'codex', overlay: 'ROLE TEXT', isInteractive: () => true,
-    conversations: () => [], identify: () => ({ role: 'plan', programme: 'example' }),
+    conversations: () => [], identify: () => ({ role: 'martin', programme: 'example' }),
     billingRoute: () => ({ billing, why }), stdout: { write() {} }, stderr: { write: line => lines.push(line) }, ...settings };
   const plan = await interactiveLaunchPlan(base);
   assert.equal(plan.ok, true, plan.reason);
@@ -73,9 +73,10 @@ async function world({ billing = 'plan', why = 'no key', settings = {}, deps = {
 const configOf = args => args.slice(0, args.indexOf('app-server')).filter((_, index) => index % 2 === 1);
 
 test('server argv: root-level configuration, app-server listening on the session socket, started in the worktree', async () => {
-  const w = await world({ settings: { prompt: 'hello' } });
+  // The model is the one asked for. Plan's own model and medium effort went with `mc plan` (2026-11-21).
+  const w = await world({ settings: { prompt: 'hello', model: 'gpt-6.2-sol' } });
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     const { bin, args, opts } = w.spawn.calls[0];
     assert.equal(bin, w.plan.launch.spec.bin);
     const at = args.indexOf('app-server');
@@ -83,7 +84,7 @@ test('server argv: root-level configuration, app-server listening on the session
     assert.ok(args.slice(0, at).every((arg, index) => index % 2 === 1 || arg === '-c'), 'configuration pairs only');
     const config = configOf(args);
     assert.ok(config.some(entry => entry.startsWith('developer_instructions=') && entry.includes('ROLE TEXT')));
-    for (const entry of ['model="gpt-6.2-sol"', 'sandbox_mode="danger-full-access"', 'model_reasoning_effort=medium',
+    for (const entry of ['model="gpt-6.2-sol"', 'sandbox_mode="danger-full-access"',
       'project_doc_max_bytes=0', 'features.multi_agent=true']) assert.ok(config.includes(entry), entry);
     assert.equal(args.includes('hello'), false, 'the first words are the client\'s');
     assert.equal(opts.cwd, w.worktree);
@@ -95,9 +96,9 @@ test('server argv: root-level configuration, app-server listening on the session
 test('server environment keeps the role identity and drops the goal, headless mark, provider key and runtime secret', async () => {
   const w = await world();
   try {
-    await w.driver.start(w.options, w.plan, 'mc plan example');
+    await w.driver.start(w.options, w.plan, 'mc martin example');
     const { env } = w.spawn.calls[0].opts;
-    assert.equal(env.MC_ROLE, 'plan');
+    assert.equal(env.MC_ROLE, 'martin');
     assert.equal(env.MC_PROGRAMME, 'example');
     for (const name of ['MC_GOAL', 'MC_HEADLESS', 'OPENAI_API_KEY', 'MC_TEST_SECRET']) assert.equal(name in env, false, name);
     assert.equal(env.CODEX_HOME, w.env.CODEX_HOME);
@@ -107,7 +108,7 @@ test('server environment keeps the role identity and drops the goal, headless ma
 test('the session directory is private, user-owned and holds the socket, the log and the session record', async () => {
   const w = await world();
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     const directory = dirname(session.socket);
     const stat = statSync(directory);
     assert.equal(stat.mode & 0o777, 0o700);
@@ -122,9 +123,9 @@ test('plan billing starts the server directly; credits start it behind the gatew
   const plain = await world();
   const credits = await world({ billing: 'credits' });
   try {
-    await plain.driver.start(plain.options, plain.plan, 'mc plan example');
+    await plain.driver.start(plain.options, plain.plan, 'mc martin example');
     assert.equal(plain.spawn.calls[0].bin, plain.plan.launch.spec.bin);
-    const { session } = await credits.driver.start(credits.options, credits.plan, 'mc plan example');
+    const { session } = await credits.driver.start(credits.options, credits.plan, 'mc martin example');
     const call = credits.spawn.calls[0];
     assert.equal(call.bin, process.execPath);
     assert.deepEqual(call.args.slice(1, 6), ['--session-directory', dirname(session.socket), 'codex', '*', credits.plan.launch.spec.bin]);
@@ -137,7 +138,7 @@ test('plan billing starts the server directly; credits start it behind the gatew
 test('unavailable billing is refused with its reason before anything is created or started', async () => {
   const w = await world({ billing: 'unavailable', why: 'credits exhausted' });
   try {
-    const result = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const result = await w.driver.start(w.options, w.plan, 'mc martin example');
     assert.deepEqual(result, { ok: false, reason: 'Codex billing unavailable: credits exhausted' });
     assert.equal(w.spawn.calls.length, 0);
     assert.equal(existsSync(join(w.env.MC_WORK_ROOT, 'runner', 'codex-sessions')), false);
@@ -148,10 +149,10 @@ test('client access: new threads carry exactly plan access and remote; resume ca
   const w = await world({ settings: { prompt: 'hello' } });
   const resumed = await world({ settings: { conversations: () => [{ id: 'conv-1', tool: 'codex', updated_ms: 1 }] } });
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     await w.driver.join(w.options, session);
     assert.deepEqual(w.run.calls[0].args, ['--sandbox', 'danger-full-access', '--remote', `unix://${session.socket}`, 'hello']);
-    const second = await resumed.driver.start(resumed.options, resumed.plan, 'mc plan example');
+    const second = await resumed.driver.start(resumed.options, resumed.plan, 'mc martin example');
     await resumed.driver.join(resumed.options, second.session);
     const argv = resumed.run.calls[0].args;
     assert.deepEqual(argv, ['resume', 'conv-1', '--remote', `unix://${second.session.socket}`]);
@@ -201,7 +202,7 @@ test('a server that dies, never answers or cannot be spawned is cleared away and
   ]) {
     const w = await world({ deps });
     try {
-      const result = await w.driver.start(w.options, w.plan, 'mc plan example');
+      const result = await w.driver.start(w.options, w.plan, 'mc martin example');
       assert.equal(result.ok, false, name);
       assert.match(result.reason, pattern, name);
       assert.deepEqual(w.registered, [], name);
@@ -214,7 +215,7 @@ test('a server that is slow to answer is polled until it does, then registered o
   let refusals = 3;
   const w = await world({ deps: { threads: async () => { if (refusals-- > 0) throw new CodexServerError('unreachable', 'ENOENT'); return []; } } });
   try {
-    const result = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const result = await w.driver.start(w.options, w.plan, 'mc martin example');
     assert.equal(result.ok, true);
     assert.deepEqual(w.registered.map(entry => entry.pid), [SERVER_PID]);
   } finally { w.cleanup(); }
@@ -229,7 +230,7 @@ test('a desk with no session starts one, registers the server pid and leaves it 
     const result = await prepared.start(w.plan);
     assert.equal(result.ok, true);
     assert.equal(w.spawn.calls.length, 1);
-    assert.deepEqual(w.registered.map(entry => [entry.pid, entry.verb, entry.programme]), [[SERVER_PID, 'plan', 'example']]);
+    assert.deepEqual(w.registered.map(entry => [entry.pid, entry.verb, entry.programme]), [[SERVER_PID, 'martin', 'example']]);
     assert.notEqual(w.registered[0].pid, process.pid, 'the register names the server, not the launcher');
     assert.equal(result.running, true);
     assert.deepEqual(w.killed, []);
@@ -243,7 +244,7 @@ test('an existing session is offered next to a new one; joining attaches without
     await (await w.entrance()).start(w.plan);
     const offered = [];
     const prepared = await w.entrance({}, { choose: (title, items) => { offered.push(items.map(item => item.label)); return items[0].value; } });
-    assert.deepEqual(offered, [[`mc plan example  started ${STARTED}`, 'start a new one']]);
+    assert.deepEqual(offered, [[`mc martin example  started ${STARTED}`, 'start a new one']]);
     assert.equal(prepared.result.ok, true);
     assert.equal(prepared.result.running, true);
     assert.equal(w.spawn.calls.length, 1);
@@ -260,14 +261,14 @@ test('--new starts another server named with the lowest free suffix, without ask
     assert.equal(w.spawn.calls.length, 2);
     const names = readdirSync(join(w.env.MC_WORK_ROOT, 'runner', 'codex-sessions'))
       .map(name => JSON.parse(readFileSync(join(w.env.MC_WORK_ROOT, 'runner', 'codex-sessions', name, 'session.json'), 'utf8')).name);
-    assert.deepEqual(names.sort(), ['mc plan example', 'mc plan example 2']);
+    assert.deepEqual(names.sort(), ['mc martin example', 'mc martin example 2']);
   } finally { w.cleanup(); }
 });
 
 test('--resume of a held conversation joins the server that holds it', async () => {
   const w = await world();
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     w.held.set(session.socket, [thread('conv-1')]);
     const prepared = await w.entrance({ chosen: { id: 'conv-1' }, pick: 'conv-1' });
     assert.equal(prepared.result.ok, true);
@@ -279,7 +280,7 @@ test('--resume of a held conversation joins the server that holds it', async () 
 test('joining refuses --model and a different --tool and starts or stops nothing', async () => {
   const w = await world();
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     w.held.set(session.socket, [thread('conv-1')]);
     for (const flags of [{ model: 'other' }, { resumeTool: 'claude' }]) {
       const prepared = await w.entrance({ chosen: { id: 'conv-1' }, ...flags });
@@ -295,7 +296,7 @@ test('joining refuses --model and a different --tool and starts or stops nothing
 test('a conversation held by a server nobody registered refuses a second server for it', async () => {
   const w = await world();
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     w.held.set(session.socket, [thread('conv-1')]);
     w.registered.length = 0;
     const prepared = await w.entrance({ chosen: { id: 'conv-1' }, pick: 'conv-1' });
@@ -306,7 +307,7 @@ test('a conversation held by a server nobody registered refuses a second server 
 test('a server reporting two thread ids is its title helper and its conversation: the conversation is the session', async () => {
   const w = await world();
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     w.held.set(session.socket, [thread('title-helper', { ephemeral: true, preview: '', updatedAt: 9 }), thread('conv-1')]);
     const [row] = await w.driver.list(w.options);
     assert.equal(row.sessionId, 'conv-1');
@@ -318,7 +319,7 @@ test('a server reporting two thread ids is its title helper and its conversation
 test('a session whose conversation has had no turn is joined plainly, not resumed', async () => {
   const w = await world();
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     w.held.set(session.socket, [thread('conv-1', { preview: '' })]);
     const [row] = await w.driver.list(w.options);
     assert.deepEqual([row.sessionId, row.resume], ['conv-1', null]);
@@ -330,8 +331,8 @@ test('a session whose conversation has had no turn is joined plainly, not resume
 test('a thread belongs to the server that reported it: another server\'s thread is never the session\'s', async () => {
   const w = await world();
   try {
-    const first = (await w.driver.start(w.options, w.plan, 'mc plan example')).session;
-    const second = (await w.driver.start(w.options, w.plan, 'mc plan example 2')).session;
+    const first = (await w.driver.start(w.options, w.plan, 'mc martin example')).session;
+    const second = (await w.driver.start(w.options, w.plan, 'mc martin example 2')).session;
     w.held.set(first.socket, [thread('conv-A')]);
     w.held.set(second.socket, [thread('conv-B')]);
     const rows = await w.driver.list(w.options);
@@ -352,7 +353,7 @@ test('a running server that does not answer refuses the entrance with what was m
     return [];
   } } });
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     silent = true;
     await assert.rejects(w.driver.list(w.options), new RegExp(`pid ${SERVER_PID}\\) is running but server not answering on its socket .*within 20000 ms.*kill ${SERVER_PID}`, 'u'));
     assert.equal(existsSync(dirname(session.socket)), true);
@@ -362,7 +363,7 @@ test('a running server that does not answer refuses the entrance with what was m
 test('an unreachable socket with a live reused pid is forgotten as server gone, never offered or signalled', async () => {
   const w = await world();
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     w.down.add(session.socket);
     const registerFile = join(foregroundDir(w.env), `${SERVER_PID}.json`);
     mkdirSync(dirname(registerFile), { recursive: true });
@@ -380,7 +381,7 @@ test('an unreachable socket with a live reused pid is forgotten as server gone, 
 test('credits expiry: at expiresAt the wrapper stops the server, clears directory and register, and the next entrance names expiry instead of offering join', async () => {
   const w = await world({ billing: 'credits' });
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     const registerFile = join(foregroundDir(w.env), `${session.pid}.json`);
     mkdirSync(dirname(registerFile), { recursive: true });
     writeFileSync(registerFile, '{}');
@@ -430,7 +431,7 @@ test('expiry while attached: a client returning after wrapper cleanup never sign
     return { status: 0, signal: null };
   } } });
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     directory = dirname(session.socket);
     await w.driver.join(w.options, session);
     assert.deepEqual(w.killed, []);
@@ -443,7 +444,7 @@ test('expiry while attached: a client returning after wrapper cleanup never sign
 test('plan billing has no grant clock: arbitrary elapsed time never ends the session', async () => {
   const w = await world();
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     assert.equal(w.spawn.calls[0].args.includes('--session-directory'), false);
     // The injected driver clock advances far beyond a grant lifetime, without a real wait.
     const later = codexSessionDriver({ now: () => 100 * 86400_000, alive: pid => w.live.has(pid), threads: async () => [thread('conv-1')] });
@@ -456,7 +457,7 @@ test('plan billing has no grant clock: arbitrary elapsed time never ends the ses
 test('a session whose server has ended is cleared from the work root and the register', async () => {
   const w = await world();
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     const registerFile = join(foregroundDir(w.env), `${SERVER_PID}.json`);
     mkdirSync(dirname(registerFile), { recursive: true });
     writeFileSync(registerFile, '{}');
@@ -470,7 +471,7 @@ test('a session whose server has ended is cleared from the work root and the reg
 // The end rule: the session ends only when its person left it.
 
 async function attached(w, { result, held = [thread('conv-1')], clients = [] } = {}) {
-  const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+  const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
   const directory = dirname(session.socket);
   const registerFile = join(foregroundDir(w.env), `${session.pid}.json`);
   mkdirSync(dirname(registerFile), { recursive: true });
@@ -540,7 +541,7 @@ test('end rule: a running turn leaves the server even on exit 0', async () => {
 test('end rule: a server that cannot be asked is left, not stopped on a guess', async () => {
   const w = await world();
   try {
-    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const { session } = await w.driver.start(w.options, w.plan, 'mc martin example');
     w.down.add(session.socket);
     w.run.result = { status: 0, signal: null };
     await w.driver.join(w.options, session);
@@ -568,7 +569,7 @@ test('end rule: a client that never started, or another attached terminal, leave
 test('end rule: stopping one session never touches another desk session', async () => {
   const w = await world();
   try {
-    const other = (await w.driver.start(w.options, w.plan, 'mc plan example')).session;
+    const other = (await w.driver.start(w.options, w.plan, 'mc martin example')).session;
     const end = await attached(w, { result: { status: 0, signal: null } });
     assert.deepEqual(w.killed, [[end.session.pid, 'SIGTERM']]);
     assert.equal(existsSync(dirname(other.socket)), true);

@@ -32,8 +32,8 @@
  *     planning session of their programme is running (a foreground `mc plan`, or
  *     a process standing in the programme's directory) and they have been
  *     untouched for 72 hours (younger only in pressure), judged as (X) judges an
- *     extra worktree: nothing uncommitted and nothing main lacks. `mc plan` adds
- *     them back.
+ *     extra worktree: nothing uncommitted and nothing main lacks. Nothing adds
+ *     them back: `mc plan`, which made them, is gone.
  *   - (P) A clean inactive registered goal checkout may go after 72 hours
  *     (younger only in pressure) when its goal cannot start a build or review
  *     session now: in `stage: draft`, or with `status: Martin`, or in a phase
@@ -1104,8 +1104,8 @@ function gatherAgyGenerated(facts, { roots, now, filesOpen }) {
 }
 
 /**
- * The planning sessions running now, by programme: a foreground `mc plan` whose
- * process lives (`runner/foreground/<pid>.json`). The runner starts no plan
+ * The planning sessions running now, by programme: a foreground `mc plan`, opened before
+ * the entrance went, whose process lives (`runner/foreground/<pid>.json`). The runner starts no plan
  * session (2026-11-07), so a lane file never holds a planning checkout. A
  * record of a dead process is nothing.
  */
@@ -1326,8 +1326,8 @@ export function idlePlanCheckout(item, { now, pressure = false } = {}) {
   if (typeof item.activity !== 'number') throw new Error('could not tell when it was last touched');
   if (!pressure && item.activity >= now - GENERATED_KEEP_MS) return { target: false, why: 'touched within the last 72 hours' };
   return { target: true, why: pressure
-    ? 'no planning session of its programme is running (pressure pass; age exception); mc plan adds it back'
-    : 'no planning session of its programme is running, untouched for 72 hours; mc plan adds it back' };
+    ? 'no planning session of its programme is running (pressure pass; age exception)'
+    : 'no planning session of its programme is running, untouched for 72 hours' };
 }
 
 /**

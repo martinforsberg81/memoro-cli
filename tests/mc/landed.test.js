@@ -104,7 +104,6 @@ describe('the pipeline', () => {
       programmes: { programmes: [{ proposals: 2, goals: [
         { stage: 'draft', status: 'ready' }, { stage: 'build', status: 'Martin' }, { stage: 'build', status: 'blocked' },
       ] }] },
-      sessions: { planning_sessions: { mc: [{}], photos: [{}] } },
       runner: { sessions: [{ kind: 'plan' }, { kind: 'build' }, { kind: 'build' }, { kind: 'mend' }] },
       merges: { repos: [{ landings: [{}] }] },
     });
@@ -112,7 +111,8 @@ describe('the pipeline', () => {
     assert.deepEqual(stages.map((stage) => stage.stage), ['proposals', 'draft', 'build', 'review', 'finish', 'merge']);
     assert.equal(by.proposals.count, 3);
     assert.deepEqual(by.proposals.marks, [], 'proposals carries no session marks');
-    assert.equal(by.draft.marks[0].count, 3, 'every plan session, interactive (2) and headless (1), is a mark on draft');
+    // The interactive plan sessions were marks on draft too until `mc plan` went (2026-11-21).
+    assert.equal(by.draft.marks[0].count, 1, 'a plan lane file of an older runner is a mark on draft');
     assert.deepEqual([by.build.count, by.build.martin, by.build.blocked, by.build.marks[0].count], [2, 1, 1, 2]);
     assert.deepEqual(by.merge.marks.map((mark) => mark.count), [1, 1], 'a gate round and a mend');
   });
@@ -140,7 +140,6 @@ const MOCK = {
   programmes: { programmes: [{ goals: [
     ...goalsIn('draft', 21), ...goalsIn('build', 48), ...goalsIn('build', 3, 'Martin'), ...goalsIn('review', 1),
   ] }] },
-  sessions: { planning_sessions: { mc: [{}, {}] } },
   runner: { sessions: [{ kind: 'plan' }, ...Array.from({ length: 8 }, () => ({ kind: 'build' })), { kind: 'review' }] },
   merges: { repos: [] },
 };
@@ -160,7 +159,7 @@ describe('the pipeline drawn', () => {
     assert.deepEqual(pipelineOf(at(160), 4), [
       '    ┌─ proposals ─┐     ┌─ draft ─┐     ┌─ build ──┐     ┌─ review ─┐     ┌─ finish ─┐     ┌─ merge ─┐',
       '    │     148     │ ──▶ │   21    │ ──▶ │  51 ⚑3   │ ──▶ │    1     │ ──▶ │    0     │ ──▶ │    0    │',
-      '    │             │     │   ●●●   │     │ ●●●●●●●● │     │    ●     │     │          │     │         │',
+      '    │             │     │    ●    │     │ ●●●●●●●● │     │    ●     │     │          │     │         │',
       '    └─────────────┘     └─────────┘     └──────────┘     └──────────┘     └──────────┘     └─────────┘',
     ]);
   });
@@ -169,7 +168,7 @@ describe('the pipeline drawn', () => {
     assert.deepEqual(pipelineOf(at(100), 4), [
       '    ┌─ proposals ─┐   ┌─ draft ─┐   ┌─ build ──┐   ┌─ review ─┐   ┌─ finish ─┐   ┌─ merge ─┐',
       '    │     148     │ ▶ │   21    │ ▶ │  51 ⚑3   │ ▶ │    1     │ ▶ │    0     │ ▶ │    0    │',
-      '    │             │   │   ●●●   │   │ ●●●●●●●● │   │    ●     │   │          │   │         │',
+      '    │             │   │    ●    │   │ ●●●●●●●● │   │    ●     │   │          │   │         │',
       '    └─────────────┘   └─────────┘   └──────────┘   └──────────┘   └──────────┘   └─────────┘',
     ]);
   });
@@ -178,7 +177,7 @@ describe('the pipeline drawn', () => {
     assert.deepEqual(pipelineOf(at(72), 8), [
       '    ┌─ proposals ─┐     ┌─ draft ─┐     ┌─ build ──┐',
       '    │     148     │ ──▶ │   21    │ ──▶ │  51 ⚑3   │',
-      '    │             │     │   ●●●   │     │ ●●●●●●●● │',
+      '    │             │     │    ●    │     │ ●●●●●●●● │',
       '    └─────────────┘     └─────────┘     └──────────┘',
       '    ┌─ review ─┐     ┌─ finish ─┐     ┌─ merge ─┐',
       '    │    1     │ ──▶ │    0     │ ──▶ │    0    │',
@@ -217,8 +216,7 @@ describe('the pipeline drawn', () => {
       programmes: { programmes: [{ goals: [
         { stage: 'draft', status: 'ready' }, { stage: 'build', status: 'blocked' }, { stage: 'build', status: 'ready' },
       ] }] },
-      sessions: { planning_sessions: { mc: [{}] } },
-      runner: { sessions: [{ kind: 'review' }, { kind: 'mend' }] },
+      runner: { sessions: [{ kind: 'plan' }, { kind: 'review' }, { kind: 'mend' }] },
       merges: { repos: [{ landings: [{}] }] },
     };
     const painted = renderPageLines(data, { columns: 160, now: NOW, colour: true });

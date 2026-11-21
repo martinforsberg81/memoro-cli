@@ -2,7 +2,7 @@
  * The foreground register — `~/mc/runner/foreground/<pid>.json`.
  *
  * The runner writes `current-<repo>.json` while a lane's step is in flight,
- * so NOW can name it. A session somebody opens themselves — `mc brief`, `mc plan <name>`,
+ * so NOW can name it. A session somebody opens themselves —
  * `mc martin`, a project opened from the page — leaves no such
  * trace: it is a child of mc holding the terminal, and nothing on disk says it
  * exists. NOW would then say "nothing is running" while the machine is busy,
@@ -54,8 +54,8 @@ export function foregroundDir(env = process.env) {
 export function registerForeground({
   verb,
   area = null,
-  // The programme a session belongs to, when the verb knows it: `mc plan`'s,
-  // or a project's opened from the page. A desk has none.
+  // The programme a session belongs to, when the verb knows it:
+  // a project's opened from the page. A desk has none.
   programme = null,
   tool = null,
   model = null,

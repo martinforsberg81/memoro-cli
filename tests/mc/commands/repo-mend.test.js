@@ -181,7 +181,8 @@ describe('mc repo mend refusals', () => {
     it(`refuses MC_ROLE=${role}`, async () => { await refusedAs({ MC_ROLE: role }); });
   }
   it('refuses a coding-agent session with no role (MC_TOOL set)', async () => { await refusedAs({ MC_TOOL: 'claude' }); });
-  for (const place of ['manager', 'programs/mc', 'plan/mc', 'helper', 'intake']) {
+  // A programme's directory (`programs/mc`, `plan/mc`) named the plan session until `mc plan` went (2026-11-21); it names no session now.
+  for (const place of ['manager', 'helper', 'intake']) {
     it(`refuses a session by where it stands (${place})`, async () => { await refusedAs({ MC_TOOL: 'person', cwd: `${ROOT}/${place}` }); });
   }
   it('refuses the martin role unattended (MC_HEADLESS=1)', async () => { await refusedAs({ MC_ROLE: 'martin', MC_HEADLESS: '1' }); });

@@ -27,7 +27,6 @@ export function programmeFacts(group, sessions = []) {
   const prs = (group.prs?.length || 0) + goals.reduce((sum, goal) => sum + (goal.prs?.length || 0), 0);
   const kinds = new Map();
   const mark = (kind, n = 1) => { if (n) kinds.set(kind, (kinds.get(kind) || 0) + n); };
-  mark('plan', group.planning_sessions?.length || 0);
   for (const session of group.sessions || []) mark(session.kind || 'programme');
   for (const session of onGoals(group, sessions)) mark(session.kind || 'build');
   const sessionCount = [...kinds.values()].reduce((sum, n) => sum + n, 0);

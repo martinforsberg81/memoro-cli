@@ -44,7 +44,6 @@
  * Lines rather than one string, so a test can look
  * at a row without splitting a page apart again.
  */
-import { toolShortName } from '../adapters/index.js';
 import { activityLines, sessionGoal } from './page-activity.js';
 import { deployLines, devLines, detail, frameEnd, frameTop, mergesLines, panelHeading, panelEnd } from './page-operations.js';
 import { programmeTreeLines } from './page-programmes.js';
@@ -312,7 +311,7 @@ const ageTone = (seconds) => (seconds != null && seconds >= STALE_SESSION_S ? ['
  *
  * A goal's pull requests are on its row in PROGRAMMES, and the merger's are in
  * MERGES. What is left is what the page could not
- * see at all before: a plan session's, one opened from a terminal, and one
+ * see at all before: one on a plan branch, one opened from a terminal, and one
  * nobody holds any more — the last with the waiting mark in yellow, because it
  * is a person's and nobody knows it (Martin, 2026-10-09). The summary counts
  * only this group; the standalone `mc prs` still lists every open PR.
@@ -355,7 +354,7 @@ function prRow(c, wide, pr, whose) {
 
 /**
  * `mc prs` — every open pull request, grouped by whose it is: a plan
- * session's, a workarea's, a folder elsewhere, or nobody's. The page draws
+ * branch's, a workarea's, a folder elsewhere, or nobody's. The page draws
  * only what PROGRAMMES and MERGES do not; this draws all of them.
  */
 export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
@@ -366,7 +365,7 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
   const lines = [''];
   const items = prs?.items || [];
   const groups = [
-    ['PLAN SESSIONS', (pr) => pr.owner.kind === 'plan', (pr) => ownerWords(pr.owner)],
+    ['PLAN BRANCHES', (pr) => pr.owner.kind === 'plan', (pr) => ownerWords(pr.owner)],
     ['WORKAREAS', (pr) => pr.owner.kind === 'workarea', (pr) => ownerWords(pr.owner)],
     ['ELSEWHERE', (pr) => pr.owner.kind === 'worktree', (pr) => ownerWords(pr.owner)],
     ['NOBODY\'S', (pr) => pr.owner.kind === 'none', () => 'no worktree holds it'],
@@ -403,35 +402,15 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
   return lines;
 }
 
-/**
- * A programme's open plan sessions by provider, `claude 1 · codex 2`, or ''
- * when it has none. The heading draws it after `plan`; `mc programs list`
- * says it in the same words.
- */
-export function planSessionWords(group) {
-  return Object.entries(planProviders(group)).map(([provider, n]) => `${provider} ${n}`).join(' · ');
-}
-
-/** The same as data: `{ claude: 1, codex: 2 }`, providers by name. */
-export function planProviders(group) {
-  const providers = {};
-  for (const item of group.planning_sessions || (group.planning ? [group.planning] : [])) {
-    const provider = toolShortName(item.tool) || item.tool || 'unknown';
-    providers[provider] = (providers[provider] || 0) + 1;
-  }
-  return Object.fromEntries(Object.entries(providers).sort(([a], [b]) => a.localeCompare(b)));
-}
-
 /** `done 13 · blocked 5` — states by count, biggest first, as the PROGRAMMES heading draws them. */
 export function statusRollup(statuses = {}) {
   return Object.entries(statuses).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
-/** What a programme's block holds under its heading: its plan and programme sessions, then its goals by phase. */
+/** What a programme's block holds under its heading: its programme sessions, then its goals by phase. */
 function programmeBody(c, wide, group, runnerSessions) {
   const sessionOptions = { indent: 2, expand: true };
   return [
-    ...(group.planning_sessions || []).flatMap((session) => activityLines(c, wide, { ...session, kind: 'plan' }, sessionOptions)),
     ...(group.sessions || []).flatMap((session) => activityLines(c, wide, session, sessionOptions)),
     ...programmeTreeLines(c, wide, group, { sessions: runnerSessions }),
   ];
@@ -635,7 +614,7 @@ function deskNote(desk) {
 /**
  * Where work stands now, one entry per stage: its count, the goals waiting on
  * Martin (`martin`) and blocked (`blocked`) in it, and its marks — one per
- * session working there. Every plan session, interactive or headless, is a mark
+ * session working there. A runner session of kind `plan`, which only an older lane file names, is a mark
  * on draft; proposals carries none.
  */
 export function pipelineStages(data) {
@@ -644,17 +623,16 @@ export function pipelineStages(data) {
   const sessions = data.runner?.sessions || [];
   // Every proposal waiting in an area (`~/mc/areas/<repo>/<area>/proposals/`), as the intake section counts them.
   const proposals = data.intake?.proposals || 0;
-  const interactive = Object.values(data.sessions?.planning_sessions || {}).reduce((n, list) => n + (list?.length || 0), 0);
   const ofKind = (kind) => sessions.filter(session => session.kind === kind).length;
   const rounds = (data.merges?.repos || []).reduce((n, repo) => n + (repo.landings?.length || 0), 0);
   return PIPELINE.map((stage) => {
     const here = goals.filter(goal => (goal.stage || 'unknown') === stage);
-    // Every plan session, interactive or headless, is a mark on draft; proposals has none.
+    // A `plan` lane file from an older runner is a mark on draft; proposals has none.
     // A build and a repair (a build after a rejection) are both marks on build, the repair in its own blue.
     // A session's mark takes its stage's colour; a mend, which has no box, is yellow.
     const tone = STAGE_TONE[stage];
     const marks = stage === 'proposals' ? []
-      : stage === 'draft' ? [{ mark: '●', count: interactive + ofKind('plan'), styles: tone }]
+      : stage === 'draft' ? [{ mark: '●', count: ofKind('plan'), styles: tone }]
         : stage === 'merge' ? [{ mark: '◎', count: rounds, styles: tone }, { mark: '↺', count: ofKind('mend'), styles: kindTone('mend') }]
           : stage === 'build' ? [{ mark: '●', count: ofKind('build'), styles: tone }, { mark: '●', count: ofKind('repair'), styles: kindTone('repair') }]
             : [{ mark: '●', count: ofKind(stage), styles: tone }];

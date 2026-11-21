@@ -157,16 +157,18 @@ describe('help names the caller, not only the operation', () => {
     // Binary routing is covered above; inspect the shared help and actual
     // command-help path here without starting two more Node processes.
     assert.equal(HELP_TEXT.split('WHO USES THE VERBS\n').length - 1, 1, 'role guidance must not be duplicated during a merge');
-    assert.match(HELP_TEXT, /Person: mc plan and mc martin open interactive sessions/u);
+    assert.match(HELP_TEXT, /Person: mc martin opens the desk, an interactive session/u);
+    assert.doesNotMatch(HELP_TEXT, /mc plan\b/u);
     assert.match(HELP_TEXT, /mc run start\|stop controls the headless runner/u);
     assert.match(HELP_TEXT, /Session: mc goal new \/ set \/ criterion add writes goals/u);
-    let plan = '';
-    const status = await runModule(VERB_MODULES.plan, ['--help'], {
-      env: { MC_ROLE: 'plan', MC_PROGRAMME: 'mc' },
-      stdout: { write: text => { plan += text; } },
-    });
-    assert.equal(status, 0);
-    assert.match(plan, /Person only: opens or resumes an interactive plan session/u);
-    assert.match(plan, /Never run inside a session/u);
+  });
+
+  // `mc plan` went on 2026-11-21: no route, no usage and no refusal of its own, with or without a programme.
+  it('answers mc plan as an unknown command', () => {
+    assert.equal(VERB_MODULES.plan, undefined);
+    const result = runMc(['plan', 'example']);
+    assert.equal(result.status, 2);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, 'mc: unknown command "plan". Run `mc --help` for the command list.\n');
   });
 });
