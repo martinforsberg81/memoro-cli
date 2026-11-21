@@ -25,7 +25,7 @@ export const COMMAND_USAGE = Object.freeze({
     "\n",
     "The runner runs headless goal sessions: build, review and mend (merge failures or goal-less main-red requests).\n",
     "A free lane takes merge-failure and main-red mend, then decision, a repair build (after a review found the goal not OK), review, build, the programme archive and the manager's turns; legacy pre-merge blocked work waits on Martin without a diagnostic session.\n",
-    "A ready programme is cut by the runner itself, with no session: one goal in build for each part of its README.md that has none, built from the part as it stands. No session is started on a draft; proposal turns remain disabled.\n",
+    "A ready programme is cut by the runner itself, with no session: one goal in build for each part of its README.md that has none, built from the part as it stands, and one more, last, that writes docs/technical/. No session is started on a draft; proposal turns remain disabled.\n",
     "The daily digest runs after 05:00Z; inbox turns have their own chore cadence.\n",
     "--once runs one session and skips chores; --no-merge leaves pull requests open.\n",
     "--idle-sleep is the idle wait in seconds (600 by default); --no-caffeinate allows sleep.\n",

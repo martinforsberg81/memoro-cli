@@ -83,7 +83,7 @@ import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
 import { readGoalDeskItem } from '../desk-items.js';
 import { addPr, backward, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, goalReferences, inStage, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, partProgramme, phaseOpen, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
-import { addItem, ITEM_PARTS, ITEM_WORDS, moveGate, partsLacks, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
+import { addItem, cutFromOrder, ITEM_PARTS, ITEM_WORDS, moveGate, partsLacks, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { buildWaitsForMain } from '../main-repair.js';
 import { queueMerge } from '../merger.js';
@@ -98,7 +98,7 @@ import { deskRepairDraft, repairReleaseState } from '../repair-release.js';
 import { repairGoalAdmission, repairPlanRevision } from '../repair-reconcile.js';
 import { REPAIR_HANDOFF, repairHandoff } from '../repair-delivery.js';
 import { programsHome } from '../paths.js';
-import { orderText, partBrief, partLeftWords, partOfOrder } from '../programme-turn.js';
+import { orderBrief, orderText, partLeftWords, partOfOrder } from '../programme-turn.js';
 import { repoNameOf } from '../repos.js';
 import { MERGE_HANDOFF_FILE } from '../session-role.js';
 import { documentPath, LOG_ENTRIES, redactText, returnInstruction, secretsOf } from '../jev.js';
@@ -628,12 +628,12 @@ function retiredMartin(argv, stderr) {
 export function reportDefect(args, flags, ctx) {
   const { stderr, env, read, write } = ctx;
   if (args.length > 1) { stderr.write(usage()); return 2; }
-  // A goal that is a part of an order has no text of its own to be wrong: its build session reads the part, writes
+  // A goal cut from an order has no text of its own to be wrong: its build session reads the part, writes
   // its reading in the log and builds on it. Refused before anything else is asked of the call, and nothing is written.
   if (isSession(env) && writerRole(env) === 'build') {
     const asked = goalNamed(args[0], ctx);
     const text = asked.error ? null : read(join(asked.dir, GOAL_FILE));
-    if (text !== null && parseGoal(text).part !== undefined) {
+    if (text !== null && cutFromOrder(parseGoal(text))) {
       stderr.write('mc: a build session reports no goal defect — write your reading in the log and build on it: mc goal log --comment "Read as: …"\n');
       return 2;
     }
@@ -1667,7 +1667,8 @@ function worktreeWords(state) {
  * (`renderGoalText`: goal, contract, out of scope, documents, each criterion
  * with ✓/✗ and its check; for a goal that is a part of an order, the line
  * `PART <n> — <name>, as README.md has it now`, the part and the order's shared
- * sections instead), the last three log entries, and for each repository's worktree its changed
+ * sections instead, and for the order's last goal the documentation text and
+ * the order whole), the last three log entries, and for each repository's worktree its changed
  * files, its commits past origin/main and its last commit's date.
  */
 function showGoal(args, ctx) {
@@ -1689,10 +1690,10 @@ function showGoal(args, ctx) {
   // The records are in a file of their own (`goal-evidence.js`): the goal's text is the same with or without them,
   // and a met criterion whose record is at another head than the worktrees' has `stale` written beside it.
   const evidence = evidenceLines({ goal, dir: target.dir, git: ctx.git, exists: ctx.exists, read });
-  if (goal.part !== undefined) {
-    // A goal that is a part of an order holds no text: what is shown is the part and the order's shared sections as the document has them now.
-    const part = partOfOrder(orderText({ home, programme: target.programme, read }), goal.part);
-    stdout.write(part ? `\n${partBrief(part)}` : `\n${partLeftWords(goal.part)}\n`);
+  if (cutFromOrder(goal)) {
+    // A goal cut from an order holds no text: what is shown is what its sessions are given, as the document has it now.
+    const given = orderBrief({ goal, programme: target.programme, home, text: orderText({ home, programme: target.programme, read }) });
+    stdout.write(given ? `\n${given}` : goal.part !== undefined ? `\n${partLeftWords(goal.part)}\n` : '');
   } else stdout.write(`\n${markStale(renderGoalText(goal), evidence.stale)}`);
   if (evidence.lines.length) stdout.write(`\nEVIDENCE\n${evidence.lines.join('\n')}\n`);
 

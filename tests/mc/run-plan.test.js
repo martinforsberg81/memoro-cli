@@ -844,6 +844,11 @@ test('the review prompt of a goal that is a part names the role\'s section for i
   const later = goalReviewPrompt({ ...args, ...asked, brief, part: 2, verdict: 'head: repo abc123\npart: NOT OK — the refusal is not printed; src/a.js\n' });
   assert.ok(later.includes('does not.\n\nThe previous review judged:\nhead: repo abc123\nIts NOT OK items:\npart: NOT OK — the refusal is not printed; src/a.js\n\nThe goal is Part 2'), later);
   assert.doesNotMatch(later, /write-back: OK|untouched <area>|shots\//u);
+  // The order's last goal, Documentation, is reviewed the same way: its role section named, no write-back line asked.
+  const task = 'DOCUMENTATION — the last goal of programme p\n\nEvery part of the order has landed.\n\n# p\n';
+  const last = goalReviewPrompt({ ...args, ...asked, brief: task, documentation: true });
+  assert.ok(last.includes('Your role says the rest. The goal is the last goal of an order, Documentation: the section "A goal that is a part" of your role applies, and what the role says about criteria, obligations, areas, seen and write-back lines does not.\n\nThe goal is the last goal of its programme\'s order, Documentation, and holds no text of its own. This is its task, and after it the order as README.md has it now:\n\nDOCUMENTATION — the last goal of programme p'), last);
+  assert.doesNotMatch(last, /`write-back`|write-back: |untouched <area>|shots\//u);
   const other = goalReviewPrompt({ ...args, ...asked, brief: '# Title\n' });
   for (const text of ['write an `untouched <area>` line for each:\nrepo/system: src/a.js', 'seen repo/app: OK — shots/<name>.png', 'REVIEW.md also holds one `write-back` line', 'The goal, as `mc goal show` renders it:']) assert.ok(other.includes(text), text);
   assert.equal(other.includes('A goal that is a part'), false);

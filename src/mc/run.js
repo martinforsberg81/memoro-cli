@@ -115,7 +115,7 @@ import { archiveProgramme } from './archive-programme.js';
 import { AREAS_HOME, FALLBACK_AREAS, keyProposalsDir, pageAreaOf } from './area-proposals.js';
 import { runDocsMerge } from './docs-merge.js';
 import { releaseWorkArea } from './work-area.js';
-import { cutParts, orderText, partBrief, partLeftWords, partOfOrder, programmeDirs, programmeDue, readTurnState, recordTurnFailure, turnName } from './programme-turn.js';
+import { cutParts, orderBrief, orderText, partLeftWords, partOfOrder, programmeDirs, programmeDue, readTurnState, recordTurnFailure, turnName } from './programme-turn.js';
 import { runLearningPass } from './desk-learning.js';
 import { reconcileLessons } from './desk-lessons.js';
 import { reconcileAreaLearning } from './learning-publication.js';
@@ -1882,8 +1882,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } catch (error) { say(`${turnName(programme)}: the failure was not counted — ${error.message || String(error)}`); return null; }
   }
   /**
-   * Every ready order with a part no goal names is cut here, by code: one goal per such part, in `build · ready`
-   * (`cutParts`, programme-turn.js). No session, no model, no lane and no `runs.tsv` row: the pick that follows reads
+   * Every ready order with a part no goal names is cut here, by code: one goal per such part and one more, last, for
+   * the documentation, in `build · ready` (`cutParts`, programme-turn.js). No session, no model, no lane and no `runs.tsv` row: the pick that follows reads
    * the new goals with every other goal. The cut is made under the runner lock, on a second reading of what is due.
    */
   function cutOrders() {
@@ -1911,7 +1911,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         say(`${name}: ${reason}`);
         countTurnFailure(programme, reason);
       } else if (outcome.made.length) {
-        say(`${name}: cut — ${outcome.made.map((goal) => `Part ${goal.part} is ${programme}/${goal.name}`).join(', ')}, in build · ready`);
+        say(`${name}: cut — ${outcome.made.map((goal) => `${goal.part ? `Part ${goal.part}` : 'Documentation'} is ${programme}/${goal.name}`).join(', ')}, in build · ready`);
       }
     }
   }
@@ -3211,13 +3211,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const writeBack = review && !cut && goal.version === 2 && readRecord(join(programsHome(deps.env), goal.programme), { read: (path) => deps.read(path) }).status === 'valid';
       const attached = await deps.attachDeps(worktree);
       if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
-      // The brief is the goal as `mc goal show` renders it; a record from a test without one has none. A goal that is a
-      // part of an order holds no text: its brief is the part and the order's shared sections as the document has them
-      // at this moment (the released snapshot of a repair programme, else README.md), read anew for every session.
-      const part = goal.part === undefined ? null : partOfOrder(release?.snapshot ? release.snapshot.text : orderText({ home: programsHome(deps.env), programme: goal.programme, read: deps.read }), goal.part);
-      if (goal.part !== undefined && !part) return 'skipped:held';
-      const brief = part ? partBrief(part) : goal.title ? renderGoalText(goalOfRecord(goal)) : null;
-      const told = { name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief, part: part?.number ?? null };
+      // The brief is the goal as `mc goal show` renders it; a record from a test without one has none. A goal cut from
+      // an order holds no text: its brief is its part and the order's shared sections, or for the last goal the
+      // documentation text and the order whole, as the document has them at this moment (the released snapshot of a
+      // repair programme, else README.md), read anew for every session.
+      const given = cut ? orderBrief({ goal, programme: goal.programme, home: programsHome(deps.env), text: release?.snapshot ? release.snapshot.text : orderText({ home: programsHome(deps.env), programme: goal.programme, read: deps.read }) }) : null;
+      if (cut && !given) return 'skipped:held';
+      const brief = given ?? (goal.title ? renderGoalText(goalOfRecord(goal)) : null);
+      const told = { name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief, part: cut ? goal.part ?? null : null, documentation: goal.documentation === true };
       const prompt = review
         ? goalReviewPrompt({ ...told, pr: pr.number, head: pr.head, verdict: goal.verdict, tripped: found.tripped ?? [], trippedError: found.error ?? null, seen: judged.seen ?? [], seenError: judged.error ?? null, writeBack })
         : repair

@@ -300,27 +300,32 @@ export function intakeNote(turn) {
  * prompt: the brief every session on a goal is given. For a goal that is a
  * part of an order (`part`, its number) the brief is the part and the order's
  * shared sections as README.md has them when the session starts (`partBrief`,
- * programme-turn.js), and the prompt says so.
+ * programme-turn.js), for the order's last goal (`documentation`) its task and
+ * the order whole (`documentationBrief`), and the prompt says so.
  */
-function withBrief(prompt, brief, part = null) {
+function withBrief(prompt, brief, part = null, documentation = false) {
   if (!brief) return prompt;
+  if (documentation) return `${prompt}\n\nThe goal is the last goal of its programme's order, Documentation, and holds no text of its own. This is its task, and after it the order as README.md has it now:\n\n${brief.trimEnd()}`;
   if (part) return `${prompt}\n\nThe goal is Part ${part} of its programme's order and holds no text of its own. This is the part, and after it the order's sections outside its parts, as README.md has them now:\n\n${brief.trimEnd()}`;
   return `${prompt}\n\nThe goal, as \`mc goal show\` renders it:\n\n${brief.trimEnd()}`;
 }
 
-/** What a build session on a goal that is a part is told about its role: which section of it applies, and what does not. */
-const PART_GOAL_ROLE_LINE = 'Your goal is a part of an order: the section "A goal that is a part" of your role applies, and what the role says about criteria, obligations, evidence records and goal defects does not.';
+/** What a goal cut from an order is called in the line that names the role's section for it. */
+const cutWords = (documentation) => (documentation ? 'the last goal of an order, Documentation' : 'a part of an order');
+
+/** What a build session on a goal cut from an order is told about its role: which section of it applies, and what does not. */
+const cutBuildLine = (documentation) => `Your goal is ${cutWords(documentation)}: the section "A goal that is a part" of your role applies, and what the role says about criteria, obligations, evidence records and goal defects does not.`;
 
 /** The same for its review session: one question, and none of the lines a goal of the old form is judged by. */
-const PART_GOAL_REVIEW_LINE = 'The goal is a part of an order: the section "A goal that is a part" of your role applies, and what the role says about criteria, obligations, areas, seen and write-back lines does not.';
+const cutReviewLine = (documentation) => `The goal is ${cutWords(documentation)}: the section "A goal that is a part" of your role applies, and what the role says about criteria, obligations, areas, seen and write-back lines does not.`;
 
 /**
  * What a goal session is told: where the goal is and where it works, and the
  * goal itself (`brief`). The rest is the build role's
  * (`canon/roles/build-session.md`, its `goal` part).
  */
-export function goalPrompt({ name, dir, worktree, branch, brief = null, part = null }) {
-  return withBrief(`You are a session on the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; your worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.${part ? ` ${PART_GOAL_ROLE_LINE}` : ''}`, brief, part);
+export function goalPrompt({ name, dir, worktree, branch, brief = null, part = null, documentation = false }) {
+  return withBrief(`You are a session on the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; your worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.${part || documentation ? ` ${cutBuildLine(documentation)}` : ''}`, brief, part, documentation);
 }
 
 /** The fixed-form lines relevant to a repair and its next review; old free-form reviews have no heads. */
@@ -341,14 +346,15 @@ export function goalRepairPrompt({ verdict, ...args }) {
 /**
  * What a goal's review session is told: the goal, its worktree, and the pull
  * request with the head it is to judge. The rest is `canon/roles/review-session.md`'s
- * (its `goal` part). For a goal that is a part of an order (`part`) the prompt names the role's section for it and
- * asks for no `untouched`, `seen` or `write-back` line; a later round still names the previous heads and its NOT OK line.
+ * (its `goal` part). For a goal cut from an order (`part` or `documentation`) the prompt names the role's section for
+ * it and asks for no `untouched`, `seen` or `write-back` line; a later round still names the previous heads and its
+ * NOT OK line.
  */
-export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief = null, part = null, verdict = null, tripped = [], trippedError = null, seen = [], seenError = null, writeBack = false }) {
+export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief = null, part = null, documentation = false, verdict = null, tripped = [], trippedError = null, seen = [], seenError = null, writeBack = false }) {
   const { heads, failed } = priorVerdict(verdict);
   const prior = heads.length ? `\n\nThe previous review judged:\n${heads.join('\n')}\nIts NOT OK items:\n${failed.join('\n') || '(none)'}` : '';
   const lead = `You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.`;
-  if (part) return withBrief(`${lead} ${PART_GOAL_REVIEW_LINE}${prior}`, brief, part);
+  if (part || documentation) return withBrief(`${lead} ${cutReviewLine(documentation)}${prior}`, brief, part, documentation);
   const areas = tripped.length
     ? `\n\nThese areas the goal stands untouched on were changed by its branch; write an \`untouched <area>\` line for each:\n${tripped.map((one) => `${one.area}: ${one.files.join(', ')}`).join('\n')}`
     : '';
@@ -374,13 +380,13 @@ function lastWord(why) {
  * word on it, and where its worktree is. The rest is
  * `canon/roles/mend-session.md`'s.
  */
-export function goalMendPrompt({ name, dir, worktree, branch, stage, status = 'blocked', why = null, brief = null, part = null }) {
+export function goalMendPrompt({ name, dir, worktree, branch, stage, status = 'blocked', why = null, brief = null, part = null, documentation = false }) {
   const reason = lastWord(why);
   const task = `it is in merge${status === 'blocked' ? ' · blocked' : ''} and the merger did not land it: read LOG.md and the merger's red, resolve it in its worktree, gate, publish, and queue it again with mc goal stage merge`;
   return withBrief([
     `You mend the goal ${name}, headless — ${task}.${reason ? ` The last word on it: ${reason}.` : ''}`,
     `Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,
-  ].join('\n'), brief, part);
+  ].join('\n'), brief, part, documentation);
 }
 
 /** `checkInPrompt` for a goal's mend session. */

@@ -106,5 +106,5 @@ is worked through with Martin. The build runs from ready to done on the order
 and its checks ([writing a programme document](../writing-a-programme-document.md)).
 
 `## Decisions` is optional and belongs to the working README.
-When a goal lands, its functionality goes to `docs/technical/` and its section
-leaves README.
+The last goal writes what landed to `docs/technical/`; landed sections leave
+README.

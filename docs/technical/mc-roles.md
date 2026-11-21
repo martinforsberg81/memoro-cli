@@ -269,7 +269,9 @@ obligations, evidence records and goal defects does not (`goalPrompt`,
 name: one question, does the build do what the part says, and a `REVIEW.md` of
 the head lines and one `part` line; its prompt says that what the role says
 about criteria, obligations, areas, seen and write-back lines does not apply
-(`goalReviewPrompt`).
+(`goalReviewPrompt`). Both sections also serve the order's last goal,
+Documentation: a build on a part writes no `docs/technical/` page, that goal
+does, and its review asks whether the pages describe what the programme built.
 
 Planning aims for a goal a build session can reasonably hand to independent
 review in one turn, not a new limit. When a build continues, its goal log records

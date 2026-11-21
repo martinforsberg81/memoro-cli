@@ -36,6 +36,12 @@ test('the verdict on a goal that is a part is the head line and the one part lin
   const oldLines = `${HEAD}\ncriterion 1: OK\nchange: NOT OK — too wide\nbugs: OK\n`;
   assert.deepEqual(check(PART_GOAL, oldLines), { problems: ['no line for part'], failed: [] });
   assert.deepEqual(check(PART_GOAL, `${oldLines}part: OK\n`), { problems: [], failed: [] });
+
+  // The order's last goal, Documentation, is judged by the same one line: do the pages describe what the programme built.
+  const last = parseGoal(renderGoal({ ...PART_GOAL, part: undefined, documentation: true, title: 'Documentation' }));
+  assert.deepEqual(requiredIds(last, [], [], true), ['part']);
+  assert.deepEqual(check(last, `${HEAD}\npart: NOT OK — mc-run.md still names the plan session; § Pick\n`, { writeBack: true }), { problems: [], failed: [{ id: 'part', reason: 'mc-run.md still names the plan session; § Pick' }] });
+  assert.deepEqual(check(last, `${HEAD}\nwrite-back: OK — none — nothing\n`, { writeBack: true }).problems, ['no line for part']);
 });
 
 test('a goal of the old form still requires its own lines, and a part line is none of them', () => {

@@ -42,8 +42,8 @@ Use the supported manual route without a record, or the valid-record route when 
 
 ## When a goal lands
 
-Write landed functionality to `docs/technical/`. Each goal writes what it made true as it
-lands. The runner archives a programme with a valid record once every goal is
+The programme's last goal, Documentation, writes landed functionality to
+`docs/technical/`. The runner archives a programme with a valid record once every goal is
 merged or dropped; otherwise use the supported manual archive route.
 Landed sections leave the README.
 

@@ -54,20 +54,21 @@ const PART_OF_LETTER = Object.freeze(Object.fromEntries(Object.values(ITEM_PARTS
 export const ID_LETTERS = Object.freeze(['B', 'P', 'D', 'C', 'V', 'R', 'X']);
 /**
  * Whether a goal was cut from its programme's order by code (`cutParts`, programme-turn.js): it carries `part`, the
- * number of the part it is. Such a goal holds no text of its own: it starts, goes to review and lands with no
- * criterion, and its review writes one line, `part`.
+ * number of the part it is, or `documentation`, the programme's last goal. Such a goal holds no text of its own: it
+ * starts, goes to review and lands with no criterion, and its review writes one line, `part`.
  */
-export const cutFromOrder = (goal) => goal?.part !== undefined;
+export const cutFromOrder = (goal) => goal?.part !== undefined || goal?.documentation === true;
 
 /** The keys of an obligation. */
 export const OBLIGATION_KEYS = Object.freeze(['area', 'stand', 'text', 'standard']);
 
 /**
  * A version 2 GOAL.json's keys, in the order it is written. `part` is there only on a goal that is a part of its
- * programme's order (`programme-turn.js`, `cutParts`): the part's number. Such a goal holds no text of its own.
+ * programme's order (`programme-turn.js`, `cutParts`): the part's number. `documentation` (`true`) is there only on
+ * the last goal of such a programme, the one that writes `docs/technical/`. Such a goal holds no text of its own.
  */
 export const GOAL_KEYS_V2 = Object.freeze([
-  'schema', 'version', 'stage', 'status', 'phase', 'part', 'repos', 'created', 'prs',
+  'schema', 'version', 'stage', 'status', 'phase', 'part', 'documentation', 'repos', 'created', 'prs',
   'title', 'aim', 'outcome', 'problem', 'premises', 'decisions', 'change', 'latitude', 'preserve', 'obligations', 'risks',
   'success_criteria', 'protection', 'out_of_scope', 'documents', 'ids',
 ]);

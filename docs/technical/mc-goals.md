@@ -180,6 +180,9 @@ written, and a write that would make one is refused with the field named.
   programme's order: the part's number, a whole number from 1, written after
   `phase` (*A goal that is a part*). A goal without the key behaves as it
   always did.
+- `documentation` — version 2 only, `true`, and only on the last goal the cut
+  of an order makes, the one that writes `docs/technical/`; it carries no
+  `part` and is written where `part` would be. Any other value is a problem.
 
 **Version 2.** A GOAL.json of `"version": 2` is what `mc goal new` writes;
 version 1 is what `mc goal new --structure 1` and the converters write, and what
@@ -1554,6 +1557,18 @@ land. A goal without `part` keeps every rule on this page.
   (`requiredIds`, `checkVerdict`). No other id is asked, and any other line is
   free text. No area is read for it and `MC_REVIEW_WRITE_BACK` is not set.
   The repair loop, its limit and the decision session are unchanged.
+- **The last goal.** The cut adds one more goal after the parts,
+  `<programme>-documentation`, titled `Documentation`, with
+  `"documentation": true` in place of `part`, in the phase after the highest
+  part ([mc-run.md](mc-run.md#the-cut-of-a-ready-order)). `cutFromOrder`
+  (`goal-parts.js`) is true for it and for a goal with `part`, and every rule
+  of this section reads that one predicate: it starts and moves to review
+  with no criterion, takes no goal defect from a build session, and is
+  reviewed by the one `part` line, where the question is whether the pages
+  describe what the programme built. `mc goal show` prints its fixed text,
+  `DOCUMENTATION — the last goal of programme <programme>`, and then the
+  order whole. A build session on a part writes no `docs/technical/` page;
+  this goal writes them, so that they describe what now runs.
 
 ## Drafts
 

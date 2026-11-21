@@ -225,7 +225,9 @@ rest of the role applies as written.
 
 You ask one question: does the build do what the part says? Read the part, the
 diff and `LOG.md` with its `Read as:` lines. Run what Proved by names yourself.
-Where the part has pictures or text blocks, shoot and compare.
+Where the part has pictures or text blocks, shoot and compare. For the
+programme's last goal, Documentation, the question is whether the pages
+describe what the programme built.
 
 Write `REVIEW.md` as the `head: <repo> <sha>` line for each repository of the
 goal and one line: `part: OK`, or `part: NOT OK — <what the part says that the

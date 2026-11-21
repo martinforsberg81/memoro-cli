@@ -157,6 +157,11 @@ Closes, Solution and Design describe, write it in the log as a line beginning
 `Read as:`, and build on it. You report no goal defect: mc refuses `mc goal
 defect` from a build session on such a goal.
 
+A build on a part writes no `docs/technical/` page: the programme's last goal,
+Documentation, does, and its prompt gives its task and the order whole in
+place of a part. A test that reads a page and turns red in your change is
+repaired there, as any red test.
+
 Build until the part is done. Then commit everything, run what Proved by names
 once at the head you publish, publish with `mc publish --no-merge`, and write
 the handover entry with `mc goal log … --stage review`, which moves the goal

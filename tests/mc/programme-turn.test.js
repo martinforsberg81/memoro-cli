@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { itemDirectory } from '../../src/mc/desk-items.js';
-import { parseGoal, parseLog } from '../../src/mc/goals.js';
-import { cutParts, cutProblems, cuttable, goalSlug, goalsNamingNoPart, partBrief, partOfOrder, partsCut, partsNamed, programmeDue, readTurnState, recordTurnFailure, documentParts, partsOrder, turnName, turnStatePath } from '../../src/mc/programme-turn.js';
-import { goalJson } from './_helpers/goal-file.js';
+import { goalSession, parseGoal, parseLog, phaseOpen, programmeOrder, programsGoals } from '../../src/mc/goals.js';
+import { cutParts, cutProblems, cuttable, documentationBrief, goalSlug, goalsNamingNoPart, partBrief, partOfOrder, partsCut, partsNamed, programmeDue, readTurnState, recordTurnFailure, documentParts, partsOrder, turnName, turnStatePath } from '../../src/mc/programme-turn.js';
+import { goalJson, withGoal } from './_helpers/goal-file.js';
 
 /**
  * The cut of a ready order, model-free (docs/technical/mc-run.md, "The cut of a ready order"): what is due, what a
@@ -15,7 +15,7 @@ const HOME = '/p';
 const ROOT = '/w';
 const README_MD = '# prog\n\nRepositories: memoro.\n\n## Parts\n\n### Part 1 — One\n\n### Part 2 — Two\n';
 const README_AT = `${HOME}/prog/README.md`;
-const BASE = { schema: 'mc-programme', version: 2, horizon: null, end: 'Done when it holds.', state: 'ready', created: '2026-11-14T10:20:30Z', created_by: 'person', phases: { order: 'stated', after: { 2: [1] } } };
+const BASE = { schema: 'mc-programme', version: 2, horizon: null, end: 'Done when it holds.', state: 'ready', created: '2026-11-14T10:20:30Z', created_by: 'person', phases: { order: 'stated', after: { 2: [1], 3: [2] } } };
 const RECORD = JSON.stringify(BASE);
 const RECORD_AT = `${HOME}/prog/PROGRAMME.json`;
 const recordOf = (changes) => JSON.stringify({ ...BASE, ...changes });
@@ -45,13 +45,13 @@ test('the cut: a ready programme is due while its parts are not all cut, whateve
 
 test('the cut: an order whose record does not state the order its parts give is not cut and says what the desk does', () => {
   const said = 'prog: its record does not state the order its parts give — the desk sets it ready again';
-  for (const [kind, record] of [['a record that states no phases', recordOf({ phases: undefined })], ['a record that states no dependency', recordOf({ phases: { order: 'stated' } })], ['a record stated for other parts', recordOf({ phases: { order: 'stated', after: { 2: [1], 3: [2] } } })]]) {
+  for (const [kind, record] of [['a record that states no phases', recordOf({ phases: undefined })], ['a record that states no dependency', recordOf({ phases: { order: 'stated' } })], ['a record stated for the parts and not for the last goal', recordOf({ phases: { order: 'stated', after: { 2: [1] } } })]]) {
     assert.deepEqual(due(programmeStore({ [RECORD_AT]: record })), { due: false, reason: 'its record does not state the order its parts give', notice: said }, kind);
   }
   // A line added to a part since the order was set ready changes what the parts give.
   const parallel = programmeStore({ [README_AT]: README_MD.replace('### Part 2 — Two\n', '### Part 2 — Two\n\nIn parallel with the previous part.\n') });
   assert.deepEqual([due(parallel).due, due(parallel).notice], [false, said]);
-  assert.equal(due(programmeStore({ [README_AT]: parallel.files[README_AT], [RECORD_AT]: recordOf({ phases: { order: 'stated' } }) })).due, true);
+  assert.equal(due(programmeStore({ [README_AT]: parallel.files[README_AT], [RECORD_AT]: recordOf({ phases: { order: 'stated', after: { 3: [1, 2] } } }) })).due, true);
   // Every part of such an order that has a goal already goes on: only the cut waits.
   const covered = programmeStore({ [RECORD_AT]: recordOf({ phases: undefined }), ...goalAt('both', goalNaming('Part 1; Part 2')) });
   assert.deepEqual([due(covered).due, due(covered).reason, due(covered).notice], [false, 'its goals are already cut', null]);
@@ -177,41 +177,108 @@ const repositories = (text) => {
 const cut = (s) => cutParts({ programme: 'prog', home: HOME, list: s.list, read: s.read, write: s.write, repositories, now: new Date('2026-11-21T16:00:30.000Z') });
 const goalOf = (s, name) => parseGoal(s.files[goalFile(name)]);
 
-test('what a part waits for: the part before it, or with the line "In parallel with the previous part." what that part waits for', () => {
+test('what a part waits for: the part before it, or with the line "In parallel with the previous part." what that part waits for; the last goal waits for the last group', () => {
   const order = (...lines) => `## Parts\n\n${lines.map((line, at) => `### Part ${at + 1} — P${at + 1}\n\n${line}\n`).join('\n')}`;
   const LINE = 'In parallel with the previous part.';
-  assert.deepEqual(partsOrder(order('Closes: a.', 'Closes: b.', LINE, 'Closes: d.')), { after: { 2: [1], 3: [1], 4: [2, 3] } }, 'a parallel part joins the group of the part before it, and the next part waits for the whole group');
-  assert.deepEqual(partsOrder(README_MD), { after: { 2: [1] } }, 'no line: each part waits for the part before it');
-  assert.deepEqual(partsOrder(order(LINE, LINE, LINE)), { after: {} }, 'the first part waits for nothing even with the line, and parts beside it wait for nothing');
-  assert.deepEqual(partsOrder(THREE), { after: { 2: [1], 3: [1] } }, 'surrounding spaces, letter case and a missing full stop are read; a fenced example is no line');
-  assert.deepEqual(partsOrder(order('Closes: a.', `Runs ${LINE}`, 'Closes: in parallel with the previous part, mostly.')), { after: { 2: [1], 3: [2] } }, 'the line is a line of its own: the words inside another sentence are not it');
-  assert.deepEqual(partsOrder('## Parts\n\n### Part 1 — One\n'), { after: {} });
+  assert.deepEqual(partsOrder(order('Closes: a.', 'Closes: b.', LINE, 'Closes: d.')), { after: { 2: [1], 3: [1], 4: [2, 3], 5: [4] } }, 'a parallel part joins the group of the part before it, the next part waits for the whole group, and phase 5 is the documentation goal\'s');
+  assert.deepEqual(partsOrder(README_MD), { after: { 2: [1], 3: [2] } }, 'no line: each part waits for the part before it');
+  assert.deepEqual(partsOrder(order(LINE, LINE, LINE)), { after: { 4: [1, 2, 3] } }, 'the first part waits for nothing even with the line, and parts beside it wait for nothing');
+  assert.deepEqual(partsOrder(THREE), { after: { 2: [1], 3: [1], 4: [2, 3] } }, 'surrounding spaces, letter case and a missing full stop are read; a fenced example is no line');
+  assert.deepEqual(partsOrder(order('Closes: a.', `Runs ${LINE}`, 'Closes: in parallel with the previous part, mostly.')), { after: { 2: [1], 3: [2], 4: [3] } }, 'the line is a line of its own: the words inside another sentence are not it');
+  assert.deepEqual(partsOrder('## Parts\n\n### Part 1 — One\n'), { after: { 2: [1] } });
   assert.equal(partsOrder('# no parts\n'), null, 'a document with no part gives no order');
 });
 
-test('the cut: one goal per part with none, in build · ready, named from its heading, holding the part number and no text of its own', () => {
+// Order mc-parts-are-goals, Part 3. Fault replayed: `cutParts` made to cut without the last goal (its block removed):
+// the four goals asserted here are then three, and the first assertion on `cut(s)` fails.
+test('the cut: one goal per part with none and one more, last, for the documentation; each in build · ready, named, holding its mark and no text of its own', () => {
   const s = store({ [README_AT]: THREE, [`${HOME}/other/goals/a-part-is-a-goal/LOG.md`]: '' });
-  assert.deepEqual(cut(s), [{ name: 'a-part-is-a-goal-2', part: 1 }, { name: 'the-build-session-reads-decides-hands-over', part: 2 }, { name: 'ater-i-mal', part: 3 }]);
+  assert.deepEqual(cut(s), [{ name: 'a-part-is-a-goal-2', part: 1 }, { name: 'the-build-session-reads-decides-hands-over', part: 2 }, { name: 'ater-i-mal', part: 3 }, { name: 'prog-documentation', documentation: true }]);
   const two = goalOf(s, 'the-build-session-reads-decides-hands-over');
   assert.deepEqual([two.version, two.stage, two.status, two.phase, two.part, two.title, two.repos, two.created],
     [2, 'build', 'ready', 2, 2, 'The build session reads, decides & hands over', ['memoro', 'memoro-cli'], '2026-11-21T16:00:30Z']);
   assert.deepEqual(two.documents, [{ label: 'Part 2', path: README_AT }], 'it names its part by the document, as every goal cut from an order does');
   assert.deepEqual([two.success_criteria, two.outcome, two.change, two.obligations, two.prs], [[], [], [], [], []], 'no authored text');
+  assert.equal('documentation' in two, false);
   const [entry, ...more] = parseLog(s.files[`${HOME}/prog/goals/ater-i-mal/LOG.md`]);
   assert.deepEqual([more.length, entry.tool, entry.stage, entry.status, entry.done, entry.at], [0, 'runner', 'build', 'ready', 'cut from Part 3 of README.md', '2026-11-21T16:00Z']);
+  // The last goal: in the phase after the highest part, marked `documentation` and no part.
+  const last = goalOf(s, 'prog-documentation');
+  assert.deepEqual([last.version, last.stage, last.status, last.phase, last.part, last.documentation, last.title, last.repos, last.success_criteria],
+    [2, 'build', 'ready', 4, undefined, true, 'Documentation', ['memoro', 'memoro-cli'], []]);
+  assert.deepEqual(Object.keys(JSON.parse(s.files[goalFile('prog-documentation')])).slice(4, 7), ['phase', 'documentation', 'repos'], 'the mark is written after the phase');
+  assert.deepEqual(parseLog(s.files[`${HOME}/prog/goals/prog-documentation/LOG.md`]).map((one) => [one.tool, one.stage, one.status, one.done]), [['runner', 'build', 'ready', 'cut as the last goal of README.md']]);
   assert.deepEqual([...partsCut({ home: HOME, programme: 'prog', list: s.list, read: s.read })].sort(), [1, 2, 3]);
+  assert.deepEqual(goalsNamingNoPart({ home: HOME, programme: 'prog', list: s.list, read: s.read }), [], 'the last goal is cut from the order: the programme is not one written by hand');
   assert.deepEqual(cut(s), [], 'a second cut makes nothing');
 
-  // A part whose goal exists, landed and archived too, gets no second goal, however the part reads now.
+  // A part whose goal exists, landed and archived too, gets no second goal, however the part reads now; nor does the last goal.
   const partial = store({ [README_AT]: THREE.replace('Closes: the rewriting.', 'Closes: something else entirely.'),
-    ...goalAt('landed', goalJson({ stage: 'done', documents: [{ label: 'Part 1', path: README_AT }] }), true) });
-  assert.deepEqual(cut(partial).map((goal) => goal.part), [2, 3]);
+    ...goalAt('landed', goalJson({ stage: 'done', documents: [{ label: 'Part 1', path: README_AT }] }), true),
+    ...goalAt('prog-documentation', s.files[goalFile('prog-documentation')], true) });
+  assert.deepEqual(cut(partial), [{ name: 'the-build-session-reads-decides-hands-over', part: 2 }, { name: 'ater-i-mal', part: 3 }]);
+  // Its name is made unique as the others are.
+  const takenName = store({ [README_AT]: README_MD, [`${HOME}/other/goals/prog-documentation/LOG.md`]: '' });
+  assert.deepEqual(cut(takenName).map((goal) => goal.name), ['one', 'two', 'prog-documentation-2']);
 
   assert.equal(goalSlug('—', 4), 'part-4', 'a heading with no letter or digit');
   assert.equal(goalSlug('One', 1, new Set(['one', 'one-2'])), 'one-3');
   assert.match(goalSlug('x'.repeat(90), 1), /^x{56}$/u);
   assert.throws(() => cut(store({ [README_AT]: THREE.replace('Repositories: memoro, memoro-cli.', '') })), /README\.md needs a nonempty Repositories: line/u, 'no repository to read: the cut cannot be made');
   assert.throws(() => cut(store({})), /README\.md is missing/u);
+});
+
+test('the cut of a three-part order makes four goals, and the fourth starts only when the three are done', () => {
+  // The record as `mc programs state prog ready` writes it: Part 3 runs in parallel with Part 2, and the last goal waits for both.
+  const s = store({ [README_AT]: THREE, [RECORD_AT]: recordOf({ phases: { order: 'stated', after: partsOrder(THREE).after } }) });
+  assert.deepEqual(cut(s).map((goal) => goal.name), ['a-part-is-a-goal', 'the-build-session-reads-decides-hands-over', 'ater-i-mal', 'prog-documentation']);
+  /** The goals the runner may start a build on now: unfinished, with a session to start, in an open phase. */
+  const startable = () => {
+    const goals = programsGoals({ home: HOME, list: s.list, read: s.read });
+    const order = programmeOrder('prog', { home: HOME, read: s.read });
+    return goals.filter((goal) => goalSession(goal) === 'build' && phaseOpen(goal, goals, order)).map((goal) => goal.goal).sort();
+  };
+  const done = (name) => { s.files[goalFile(name)] = withGoal(s.files[goalFile(name)], { stage: 'done' }); };
+  assert.deepEqual(startable(), ['a-part-is-a-goal']);
+  done('a-part-is-a-goal');
+  assert.deepEqual(startable(), ['ater-i-mal', 'the-build-session-reads-decides-hands-over'], 'Parts 2 and 3 side by side, and not the last goal');
+  done('the-build-session-reads-decides-hands-over');
+  assert.deepEqual(startable(), ['ater-i-mal'], 'one part of the last group is still to finish');
+  done('ater-i-mal');
+  assert.deepEqual(startable(), ['prog-documentation'], 'every part done: the last goal starts, with no criterion');
+});
+
+test('the cut: a programme is already cut only when every part has a goal and it has its last goal; a programme whose goals are all of the old form gets none', () => {
+  const s = programmeStore();
+  cut(s);
+  assert.deepEqual([due(s).due, due(s).reason], [false, 'its goals are already cut']);
+  // The last goal gone (cut without it, or its directory removed): the programme is due again, and the cut adds it alone.
+  const without = programmeStore(Object.fromEntries(Object.entries(s.files).filter(([path]) => !path.includes('/prog-documentation/'))));
+  assert.equal(due(without).due, true);
+  assert.deepEqual(cut(without), [{ name: 'prog-documentation', documentation: true }]);
+  assert.deepEqual([due(without).due, due(without).reason], [false, 'its goals are already cut']);
+  // Archived, it still counts.
+  const archived = programmeStore({ ...goalAt('both', goalNaming('Part 1; Part 2')), ...goalAt('one', s.files[goalFile('one')], true), ...goalAt('prog-documentation', s.files[goalFile('prog-documentation')], true) });
+  assert.deepEqual([due(archived).due, due(archived).reason], [false, 'its goals are already cut']);
+  // A goal of the old form beside a part's goal: the programme is cut by code, so it owes its last goal.
+  const mixed = programmeStore({ ...goalAt('first', goalNaming('Part 1')), ...goalAt('two', s.files[goalFile('two')]) });
+  assert.equal(due(mixed).due, true);
+  assert.deepEqual(cut(mixed), [{ name: 'prog-documentation', documentation: true }]);
+  // Every part named by goals of the old form and none cut by code: built by today's rules to its end.
+  const old = programmeStore(goalAt('both', goalNaming('Part 1; Part 2')));
+  assert.deepEqual([due(old).due, due(old).reason], [false, 'its goals are already cut']);
+});
+
+test('what a session on the last goal is given: the fixed text with the programme and its directory, then the order whole', () => {
+  assert.equal(documentationBrief({ programme: 'prog', dir: `${HOME}/prog`, text: README_MD }), [
+    'DOCUMENTATION — the last goal of programme prog',
+    '',
+    'Every part of the order has landed. Read the order below, the LOG.md of every goal of the programme (in /p/prog/goals/.archive/ and goals/), with its "Read as:" lines, and what landed: the pull requests named in /p/prog/goals/goal_log.md and their commits on origin/main.',
+    '',
+    'Write docs/technical/ in each repository of the programme so that it describes what now runs: correct each page the programme made untrue and add what it made true where a reader would look for it. Write what runs, not how it was built, and change no page the programme did not touch. Then publish and hand over to review as for any goal. If no page needs a change, say why in the log and end.',
+    '',
+    README_MD,
+  ].join('\n'));
 });
 
 test('what a session on a goal that is a part is given: the part byte for byte under its heading line, then the shared sections; a part that has left gives nothing', () => {

@@ -22,7 +22,7 @@ import { programsHome } from './paths.js';
 import { CRITERION_KEYS_V2, criteriaCount, plain, prose, text, unknownKeys, unmetCriteria, validateCriteria, validateDocuments } from './criteria.js';
 import { NAME_RE } from './plan-schema.js';
 import { changePhases, readRecord } from './programme-record.js';
-import { GOAL_KEYS_V2, partsOf, partsToWrite, renderGoalTextV2, validateParts } from './goal-parts.js';
+import { cutFromOrder, GOAL_KEYS_V2, partsOf, partsToWrite, renderGoalTextV2, validateParts } from './goal-parts.js';
 
 export const GOAL_FILE = 'GOAL.json';
 export const GOAL_SCHEMA = 'mc-goal';
@@ -191,6 +191,7 @@ export function validateGoal(value, { draft = false } = {}) {
   if (value.created !== undefined && value.created !== null && !(typeof value.created === 'string' && Number.isFinite(Date.parse(value.created)))) problems.push('created: an ISO instant, or null');
   if (value.phase !== undefined && !isPhase(value.phase)) problems.push(`phase: a whole number from 1, not ${JSON.stringify(value.phase)}`);
   if (version === 2 && value.part !== undefined && !isPhase(value.part)) problems.push(`part: the number of the part of the order the goal is, a whole number from 1, not ${JSON.stringify(value.part)}`);
+  if (version === 2 && value.documentation !== undefined && value.documentation !== true) problems.push(`documentation: true on the last goal of an order and absent on every other, not ${JSON.stringify(value.documentation)}`);
   if (value.prs !== undefined && !Array.isArray(value.prs)) problems.push('prs: an array of <repo>#<number>, possibly empty');
   else for (const ref of value.prs ?? []) if (!parsePrRef(ref)) problems.push(`prs: ${ref} is not <repo>#<number>`);
   if (!text(value.title)) problems.push('title: what the goal is, in one line');
@@ -215,7 +216,8 @@ export function isPhase(value) {
  * contract, out_of_scope, success_criteria, documents }`, or `{ problems }`
  * when it does not parse or validate (`validateGoal`, as a draft: a goal with
  * no criterion yet parses). `phase` is 1 when GOAL.json has none; `part` is there
- * only on a version 2 goal that is a part of its programme's order. `repos` is
+ * only on a version 2 goal that is a part of its programme's order, and
+ * `documentation` only on the last goal of such a programme. `repos` is
  * in order, the first being where a session starts; `prs` is `[{ repo, pr }]`,
  * each once.
  */
@@ -233,6 +235,7 @@ export function parseGoal(text) {
   const head = {
     version: value.version, stage: readStage(value.stage), status: value.status, phase: value.phase ?? 1,
     ...(value.version === 2 && value.part !== undefined ? { part: value.part } : {}),
+    ...(value.version === 2 && value.documentation === true ? { documentation: true } : {}),
     repos: [...value.repos], created: value.created ?? null,
     prs, title: value.title.trim(),
   };
@@ -254,6 +257,7 @@ export function renderGoal(goal) {
   const head = {
     schema: GOAL_SCHEMA, version, stage: readStage(goal.stage), status: goal.status, phase: goal.phase ?? 1,
     ...(version === 2 && goal.part !== undefined ? { part: goal.part } : {}),
+    ...(version === 2 && goal.documentation === true ? { documentation: true } : {}),
     repos: goal.repos,
     created: goal.created ?? null, prs: (goal.prs ?? []).map((item) => (typeof item === 'string' ? item : prRef(item))),
     title: goal.title,
@@ -302,12 +306,12 @@ export function criteriaWords(goal) {
 
 /**
  * Why a goal may not go to review, or null: it has no criterion, or one is not
- * met — named by number, with the verb that records it. A goal that is a part
- * of an order needs none.
+ * met — named by number, with the verb that records it. A goal cut from an
+ * order (`cutFromOrder`) needs none.
  */
 export function unmetGoalWords(goal, name = '<programme>/<goal>') {
-  // A goal that is a part of an order holds no criterion: its part is what is built, and review judges the build against it.
-  if (!(goal.success_criteria ?? []).length && goal.part) return null;
+  // A goal cut from an order holds no criterion: its part is what is built, and review judges the build against it.
+  if (!(goal.success_criteria ?? []).length && cutFromOrder(goal)) return null;
   if (!(goal.success_criteria ?? []).length) return `${name} has no criterion — mc goal criterion add ${name} --criterion "…" --check "…"`;
   const unmet = unmetCriteria(goal);
   if (!unmet.length) return null;
@@ -788,16 +792,16 @@ export function renumberedAfter(after, number) {
 }
 
 /**
- * Whether `programme`'s goals are parts of its order: one of them, live or archived, carries `part`. The phase of
- * such a goal is its part's number, which the record's dependencies name, so its programme's phases are never
- * renumbered and may have holes.
+ * Whether `programme`'s goals are parts of its order: one of them, live or archived, was cut from it (`cutFromOrder`).
+ * The phase of such a goal is its part's number, which the record's dependencies name, so its programme's phases are
+ * never renumbered and may have holes.
  */
 export function partProgramme({ home, programme, list = listDirsOf, read = readTextOrNull }) {
   const goals = join(home, programme, GOALS_DIR);
   const dirs = [...list(goals).filter((name) => !name.startsWith('.')).map((name) => join(goals, name)), ...list(join(goals, ARCHIVE_DIR)).map((name) => join(goals, ARCHIVE_DIR, name))];
   return dirs.some((dir) => {
     const text = read(join(dir, GOAL_FILE));
-    return text !== null && text !== undefined && parseGoal(text).part !== undefined;
+    return text !== null && text !== undefined && cutFromOrder(parseGoal(text));
   });
 }
 
@@ -858,11 +862,11 @@ export function nextGoal(goals, { repos = [], held = new Set(), may = () => true
 }
 
 /**
- * Whether a goal has no criterion yet: `mc goal new`'s skeleton, which no session is started on. A goal that is a
- * part of an order (`part`) is never one: it holds no criterion and is built from its part.
+ * Whether a goal has no criterion yet: `mc goal new`'s skeleton, which no session is started on. A goal cut from an
+ * order (`cutFromOrder`) is never one: it holds no criterion and is built from its part.
  */
 export function noCriteria(goal) {
-  return !goal.part && Array.isArray(goal.success_criteria) && goal.success_criteria.length === 0;
+  return !cutFromOrder(goal) && Array.isArray(goal.success_criteria) && goal.success_criteria.length === 0;
 }
 
 /**

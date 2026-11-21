@@ -31,6 +31,15 @@ section: Changed
   NOT OK — <what the part says that the build does not do, and where>`. No
   criterion, obligation, `untouched`, `seen` or `write-back` line is asked of
   it. The repair loop is unchanged.
+- **Documentation is the programme's last goal.** The cut adds one more goal
+  after the parts, `<programme>-documentation`, titled Documentation. It waits
+  for every part, and its sessions are given a fixed task and the order whole:
+  read the order, every goal's log and what landed, and write
+  `docs/technical/` so that it describes what now runs. It is built, reviewed
+  and landed as any goal, and the programme is archived when it has landed. A
+  build session on a part writes no `docs/technical/` page. A programme whose
+  goals were all written before keeps its `write-back` lines and gets no such
+  goal.
 - **The `plan` model list is gone with the session it routed.** `mc model`
   lists, adds to and sets build, review, finish, mend, manager and decision. A
   `models.json` that still holds a `plan` list reads as before; the list is

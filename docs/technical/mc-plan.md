@@ -121,7 +121,8 @@ it makes one goal in build per part, by code
 ([mc-run.md](mc-run.md#the-cut-of-a-ready-order)). A part of the order waits
 for the part before it unless it holds the line `In parallel with the previous
 part.`; `mc programs state <programme> ready` writes the record's
-`phases.after` from that. A programme with
+`phases.after` from that, with the phase of the last goal, Documentation,
+after the last parts. A programme with
 no record, or with an invalid one, is never cut; `mc plan` stays the person's
 entrance.
 

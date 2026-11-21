@@ -3749,6 +3749,36 @@ test('a build session moves a goal that is a part to review with a clean worktre
   assert.equal((await callWith(MOVES_TO_REVIEW[0], v2Files(fullEvidence()), { git: worktreeGit({ heads: { ...TWO_HEADS }, dirty: ['memoro'] }) })).code, 0);
 });
 
+// Order mc-parts-are-goals, Part 3: the programme's last goal is cut from the order as a part's goal is, and is treated as one.
+test('the documentation goal carries its mark through parse and render, is shown as its task and the order whole, moves to review with no criterion, and takes no defect from a build session', async () => {
+  const text = partGoal({ part: undefined, documentation: true, phase: 3, title: 'Documentation', documents: [{ label: 'The order', path: ORDER_AT }] });
+  const goal = parseGoal(text);
+  assert.deepEqual([goal.documentation, goal.part, goal.phase, goal.success_criteria], [true, undefined, 3, []]);
+  assert.equal(renderGoal(goal), text, 'a parsed goal renders back to the same text');
+  assert.deepEqual(Object.keys(JSON.parse(text)).slice(0, 7), ['schema', 'version', 'stage', 'status', 'phase', 'documentation', 'repos']);
+  assert.equal(goalSession({ ...goal, log: [] }), 'build', 'the runner starts it without a criterion');
+  assert.deepEqual(parseGoal(withGoal(text, { documentation: false })).problems, ['documentation: true on the last goal of an order and absent on every other, not false']);
+  assert.deepEqual(parseGoal(withGoal(GOAL_TEXT, { documentation: true })).problems, ['documentation: unknown key']);
+  const files = () => ({ ...partFiles(), [`${DIR}/${GOAL_FILE}`]: text });
+
+  const f = fixture({ files: files() });
+  assert.equal(await run(['show', 'mc/plain'], f.deps), 0, f.err());
+  assert.ok(f.out().startsWith(`mc/plain · build · ready · phase 3 · memoro-cli, memoro · criteria 0/0 · created 2026-11-01T20:00:00Z\n\nDOCUMENTATION — the last goal of programme mc\n\nEvery part of the order has landed. Read the order below, the LOG.md of every goal of the programme (in ${HOME}/mc/goals/.archive/ and goals/), with its "Read as:" lines, and what landed: the pull requests named in ${HOME}/mc/goals/goal_log.md and their commits on origin/main.\n\nWrite docs/technical/ in each repository of the programme so that it describes what now runs:`), f.out());
+  assert.ok(f.out().includes(`say why in the log and end.\n\n${ORDER}\nLOG\n`), 'then the order whole, every part in it');
+
+  const moved = await callWith(MOVES_TO_REVIEW[0], files());
+  assert.equal(moved.code, 0, moved.err());
+  assert.equal(stateOf(moved), 'review · ready');
+  const dirty = await callWith(MOVES_TO_REVIEW[0], files(), { git: worktreeGit({ heads: { ...TWO_HEADS }, dirty: ['memoro'] }) });
+  assert.equal(dirty.code, 1);
+  assert.match(dirty.err(), /its worktrees are not clean at a published head —\n {2}memoro has uncommitted changes/u);
+
+  const build = fixture({ files: files(), env: BUILD });
+  assert.equal(await run(DEFECT, build.deps), 2);
+  assert.equal(build.err(), NO_DEFECT);
+  assert.equal(stateOf(build), 'build · ready');
+});
+
 test('mc goal show of a goal that is a part prints its header, then its part and the shared sections as README.md has them now; mc goal list says when its part has left the order', async () => {
   const f = fixture({ files: partFiles() });
   assert.equal(await run(['show', 'mc/plain'], f.deps), 0, f.err());

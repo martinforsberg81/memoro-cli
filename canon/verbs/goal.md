@@ -120,7 +120,7 @@ its check, and each worktree's state.
 
 - **No session on a draft, and none that plans.** The runner starts no session on a draft (Martin, 2026-11-21).
   A ready programme is cut by code (`mc-run.md#The cut of a ready order`): the runner makes one goal in
-  `build · ready` for each part of README.md that has none. Such a goal holds no text: `mc goal show` prints its
+  `build · ready` for each part of README.md that has none, and one more, last, that writes `docs/technical/`. Such a goal holds no text: `mc goal show` prints its
   part as README.md has it now, its sessions are given the same, and a build session reports no goal defect on
   it. A goal whose part has left the order starts no session, and `mc goal list` says so. A goal in build
   starts when its phase is open. Interactive mc plan remains the person's entrance; a draft written there

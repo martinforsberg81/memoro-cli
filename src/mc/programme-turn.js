@@ -2,8 +2,9 @@
  * The cut of a ready order into goals, model-free (mc-run.md, "The cut of a ready order").
  *
  * A ready programme whose README.md has a part no goal names is cut by the runner itself, with no session and no
- * model: one goal per part (`cutParts`), marked with the part's number and holding no text of its own. Every session
- * on such a goal is given its part as README.md has it at that moment (`partOfOrder`, `partBrief`). A part waits for
+ * model: one goal per part (`cutParts`), marked with the part's number and holding no text of its own, and one more,
+ * last, that writes `docs/technical/` (`documentationBrief`). Every session
+ * on a part's goal is given its part as README.md has it at that moment (`partOfOrder`, `partBrief`). A part waits for
  * the part before it unless it says it runs in parallel with it (`partsOrder`), which `mc programs state <programme>
  * ready` writes into the record.
  * Everything here is what the runner decides without a model: whether a programme is due (`programmeDue`), the state
@@ -12,6 +13,7 @@
  */
 import { join, resolve } from 'node:path';
 import { deskItemId } from './desk-items.js';
+import { cutFromOrder } from './goal-parts.js';
 import { appendLog, ARCHIVE_DIR, GOAL_FILE, GOALS_DIR, LOG_FILE, logStamp, parseGoal, renderGoal } from './goals.js';
 import { NAME_RE } from './plan-schema.js';
 import { readRecord } from './programme-record.js';
@@ -117,7 +119,8 @@ const PARALLEL_LINE = /^\s*in parallel with the previous part\.?\s*$/iu;
  * a part that waits for nothing left out), or null for a document with no part. A part waits for the part before it,
  * unless its section holds the line `In parallel with the previous part.` (a fenced example is no line): such a part
  * joins the group of the part before it and waits for what that group waits for, and any other part waits for every
- * part of the group before it. The first part waits for nothing.
+ * part of the group before it. The first part waits for nothing. The programme's last goal, Documentation, is in the
+ * phase after the highest part and waits for the last group.
  */
 export function partsOrder(text) {
   const parts = [...partSections(text)].sort(([a], [b]) => a - b);
@@ -126,11 +129,13 @@ export function partsOrder(text) {
   let group = [];
   let waits = [];
   for (const [number, section] of parts) {
+    if (group.includes(number)) continue;
     const parallel = group.length > 0 && String(section).replace(FENCES, '').split(/\r?\n/u).some((line) => PARALLEL_LINE.test(line));
     if (!parallel) { waits = group; group = []; }
     group.push(number);
     if (waits.length) after[number] = [...waits];
   }
+  after[parts.at(-1)[0] + 1] = group;
   return { after };
 }
 
@@ -151,6 +156,32 @@ export function partOfOrder(text, number) {
 /** What a session on a goal that is a part is given, and what `mc goal show` prints: the heading line, the part, the shared sections. */
 export function partBrief(part) {
   return `${part.heading}\n\n${part.section}\n\n${part.shared}\n`;
+}
+
+/** The title of the programme's last goal, the one that writes `docs/technical/`. */
+export const DOCUMENTATION_TITLE = 'Documentation';
+
+/**
+ * What a session on the programme's last goal is given, and what `mc goal show` prints: a fixed text, then the order
+ * (`text`, its README.md) whole. `dir` is the programme's directory.
+ */
+export function documentationBrief({ programme, dir, text }) {
+  return `DOCUMENTATION — the last goal of programme ${programme}\n\n`
+    + `Every part of the order has landed. Read the order below, the LOG.md of every goal of the programme (in ${dir}/goals/.archive/ and goals/), with its "Read as:" lines, and what landed: the pull requests named in ${dir}/goals/goal_log.md and their commits on origin/main.\n\n`
+    + 'Write docs/technical/ in each repository of the programme so that it describes what now runs: correct each page the programme made untrue and add what it made true where a reader would look for it. Write what runs, not how it was built, and change no page the programme did not touch. Then publish and hand over to review as for any goal. If no page needs a change, say why in the log and end.\n\n'
+    + `${String(text).trimEnd()}\n`;
+}
+
+/**
+ * What a session on a goal cut from an order is given in place of a goal's text: its part (`partBrief`), or for the
+ * last goal the documentation text (`documentationBrief`), from the order's document `text`. Null when the document
+ * is missing or no longer has the part.
+ */
+export function orderBrief({ goal, programme, home, text }) {
+  if (text === null || text === undefined) return null;
+  if (goal.documentation === true) return documentationBrief({ programme, dir: join(home, programme), text });
+  const part = partOfOrder(text, goal.part);
+  return part ? partBrief(part) : null;
 }
 
 /**
@@ -212,10 +243,11 @@ export function partsCut({ home, programme, list, read }) {
 
 /**
  * The goals, live and archived, that name no part of the programme's `README.md`: goals written by hand or cut
- * from another document. A programme holding one is written by hand and is not cut.
+ * from another document. A programme holding one is written by hand and is not cut. The programme's last goal,
+ * Documentation, is cut from the order and is not one of them.
  */
 export function goalsNamingNoPart({ home, programme, list, read }) {
-  return goalParts({ home, programme, list, read }).filter(({ named }) => !named.size).map(({ name }) => name).sort();
+  return goalParts({ home, programme, list, read }).filter(({ named, goal }) => !named.size && goal.documentation !== true).map(({ name }) => name).sort();
 }
 
 /**
@@ -240,8 +272,10 @@ export const REPAIR_NOT_CUT = 'not cut: repair releases are cut by hand until re
 
 /**
  * Whether `programme` is due the cut now: `{ due: true, record }`, or `{ due: false, reason, notice }`. It is due
- * while its record reads ready, a part of README.md is named by no goal and the record states the order the parts
- * give (`partsOrder`). A `notice` is what the runner says once while it lasts. A programme
+ * while its record reads ready, a part of README.md is named by no goal or the programme has no documentation goal,
+ * and the record states the order the parts give (`partsOrder`). A programme whose every part is named and none of
+ * whose goals was cut from the order is of the old form: its goals write `docs/technical/` themselves, and it gets no
+ * documentation goal. A `notice` is what the runner says once while it lasts. A programme
  * holding a goal that names no part is written by hand and is not cut; a released repair order is not cut by code.
  */
 export function programmeDue({ programme, home, list, read, items = [], horizon = () => null, state }) {
@@ -262,7 +296,9 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
     if (record.record.repair.reconciled?.revision === repair.release.revision) return { due: false, reason: 'its release is reconciled', notice: null };
     return { due: false, reason: REPAIR_NOT_CUT, notice: `${programme}: ${REPAIR_NOT_CUT}` };
   }
-  if (cutProblems({ home, programme, list, read }).length === 0) return { due: false, reason: 'its goals are already cut', notice: null };
+  const goals = goalParts({ home, programme, list, read }).map(({ goal }) => goal);
+  const lastCut = goals.some((goal) => goal.documentation === true) || !goals.some(cutFromOrder);
+  if (lastCut && cutProblems({ home, programme, list, read }).length === 0) return { due: false, reason: 'its goals are already cut', notice: null };
   const unnamed = goalsNamingNoPart({ home, programme, list, read });
   if (unnamed.length) {
     const named = unnamed.length > 3 ? `${unnamed.slice(0, 3).join(', ')} and ${unnamed.length - 3} more` : unnamed.join(', ');
@@ -310,9 +346,13 @@ export function goalSlug(title, number, taken = new Set()) {
  * named from the part's heading, GOAL.json (version 2) in `build · ready` with `part` and `phase` the part's number,
  * the title the heading's name, the repositories of the README's `Repositories:` line (`repositories(text)` is the
  * caller's reading of it: `{ repos: [{ repo }] }` or `{ error }`), a document that points at README.md labelled
- * `Part <n>`, no criterion and no other text — and LOG.md with the runner's first entry. A name is unique among the
+ * `Part <n>`, no criterion and no other text — and LOG.md with the runner's first entry. Then, where the programme has
+ * none, live or archived, one more goal, last: `<programme>-documentation`, titled Documentation, marked
+ * `documentation` in place of `part`, in the phase after the highest part; one that is live is moved to that phase
+ * when a part has been added since. A name is unique among the
  * programme's goals, live and archived, and among the live goals of every other programme, since a goal's branch
- * `goal/<goal>` is one per repository. Returns the goals made as `[{ name, part }]`; throws when the cut cannot be made.
+ * `goal/<goal>` is one per repository. Returns the goals made as `[{ name, part }]`, the last one as
+ * `{ name, documentation: true }`; throws when the cut cannot be made.
  */
 export function cutParts({ programme, home, list, read, write, repositories, now }) {
   const dir = join(home, programme);
@@ -321,26 +361,41 @@ export function cutParts({ programme, home, list, read, write, repositories, now
   if (text === null || text === undefined) throw new Error('README.md is missing');
   const found = repositories(text);
   if (found.error) throw new Error(found.error);
-  const named = partsCut({ home, programme, list, read });
+  const goals = goalParts({ home, programme, list, read });
+  const named = new Set(goals.flatMap((one) => [...one.named]));
   const live = (one) => list(join(home, one, GOALS_DIR)).filter((name) => !name.startsWith('.'));
   const taken = new Set([
     ...list(home).flatMap(live),
     ...list(join(dir, GOALS_DIR, ARCHIVE_DIR)).flatMap((name) => [name, name.replace(/-\d{8}T\d{4}$/u, '')]),
   ]);
   const made = [];
-  for (const [number, section] of partSections(text)) {
+  const make = (name, fields, done) => {
+    taken.add(name);
+    const goalDir = join(dir, GOALS_DIR, name);
+    const goal = { version: 2, stage: 'build', status: 'ready', repos: found.repos.map((one) => one.repo),
+      created: now.toISOString().replace(/\.\d{3}Z$/u, 'Z'), prs: [], success_criteria: [], ...fields };
+    write(join(goalDir, GOAL_FILE), renderGoal(goal));
+    write(join(goalDir, LOG_FILE), appendLog('', { at: logStamp(now), tool: 'runner', model: null, stage: 'build', status: 'ready', done, comment: null, next: null }));
+  };
+  const parts = partSections(text);
+  for (const [number, section] of parts) {
     if (named.has(number)) continue;
     named.add(number);
     const title = partName(section);
     const name = goalSlug(title, number, taken);
-    taken.add(name);
-    const goalDir = join(dir, GOALS_DIR, name);
-    const goal = { version: 2, stage: 'build', status: 'ready', phase: number, part: number, repos: found.repos.map((one) => one.repo),
-      created: now.toISOString().replace(/\.\d{3}Z$/u, 'Z'), prs: [], title, success_criteria: [], documents: [{ label: `Part ${number}`, path: readme }] };
-    const rendered = renderGoal(goal);
-    write(join(goalDir, GOAL_FILE), rendered);
-    write(join(goalDir, LOG_FILE), appendLog('', { at: logStamp(now), tool: 'runner', model: null, stage: 'build', status: 'ready', done: `cut from Part ${number} of README.md`, comment: null, next: null }));
+    make(name, { phase: number, part: number, title, documents: [{ label: `Part ${number}`, path: readme }] }, `cut from Part ${number} of README.md`);
     made.push({ name, part: number });
+  }
+  if (!parts.length) return made;
+  const phase = Math.max(...parts.map(([number]) => number)) + 1;
+  const last = goals.find(({ goal }) => goal.documentation === true);
+  if (!last) {
+    const name = goalSlug(`${programme}-documentation`, phase, taken);
+    make(name, { phase, documentation: true, title: DOCUMENTATION_TITLE, documents: [{ label: 'The order', path: readme }] }, 'cut as the last goal of README.md');
+    made.push({ name, documentation: true });
+  } else if (!last.archived && last.goal.phase !== phase) {
+    // A part added since: the last goal moves to the phase after it, so it still waits for every part.
+    write(join(last.dir, GOAL_FILE), renderGoal({ ...last.goal, phase }));
   }
   return made;
 }
