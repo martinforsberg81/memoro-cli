@@ -338,7 +338,7 @@ export async function runHelperTurn({
       routeCandidate = (catalog.build || []).find((candidate) => candidate.tool === toolShortName(tool)) || null;
     } else if (!tool && savedPriority !== 'auto') {
       const roleCandidates = [
-        { tool: 'claude', model: role.model || 'opus', effort: 'medium' },
+        { tool: 'claude', model: role.model || 'sonnet', effort: 'medium' },
         ...(catalog.build || []).filter((candidate) => fromCatalog(candidate.tool)),
       ];
       const chosen = chooseCandidate({ cls: 'build', catalog: { build: roleCandidates }, capacity: (deps.capacity || (() => readCapacity({ root: runnerDir(env) })))(), now, priority: savedPriority });

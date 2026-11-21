@@ -1,6 +1,6 @@
 ---
 name: archive-reader
-model: opus
+model: sonnet
 singleton: false
 tools: claude, codex
 ---
