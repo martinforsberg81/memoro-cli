@@ -26,9 +26,13 @@ Measured, with the baselines of 2026-11-14 (programme `mc`):
 On main now:
 
 - Opening or resuming the desk supplies a fresh snapshot and tells the session to wait for Martin's instruction. The overview groups programmes under their open horizons and shows the rest separately.
-- The desk checks that the current order has been reviewed and its necessary investigations are complete before bringing it to Martin to set ready. The ordinary `state ready` command does not enforce either check.
-- Before an order is set ready, programme review checks the acceptance procedure
-  and its setup; the build session establishes the setup in its worktree before it builds
+- Ordinary programme review is advisory. The desk reads the current order for
+  feedback and returns to review only when a changed part needs it; the
+  ordinary `state ready` command does not enforce review.
+- Before an order is set ready, programme review assesses the acceptance
+  procedure and its prerequisites. The [runner cuts the ready order](../mc-run.md#the-cut-of-a-ready-order)
+  directly into build; no planning session runs. The build session establishes
+  the setup in its worktree before it builds
   ([acceptance setup](../mc-plan.md#acceptance-setup-at-build)).
   During delivery, goal list and show report the evidenced outcome and who
   acts next when available. A build that has more in-scope work records a
@@ -47,12 +51,19 @@ On main now:
   holds delivery for an automatic desk decision ([goal stages](../mc-goals.md)).
 - The runner's archive turn and `mc programs archive <programme>` share one
   writer, which records the retained trees in a versioned receipt before the
-  programme is shelved. The overview and list show a programme's archive status
+  programme is shelved. For a ready programme with at least one done goal and
+  no live goals, the runner can archive without a second write-back reading or
+  an archive-reader session. The overview and list show a programme's archive status
   and attention reason, and a programme leaves the page only when that receipt
   validates against main ([programme archive turn](../mc-run.md#programme-archive-turn),
   [archiving a programme](../mc-plan.md#archiving-a-programme)).
 - A waiting deploy reserves the next opening for a full run when a different commit is being measured. It can still join a measurement of its own commit.
-- The helper preserves anonymous app suggestions in intake before it acknowledges their receipt. Collection does not create a programme or goal.
+- The helper preserves anonymous app suggestions in intake before it acknowledges
+  them. The drain catalogues them through jev and keeps the original files in
+  area suggestion stores; it creates no proposal, programme or goal.
+- [`mc-admin`](../mc-admin.md) shows the latest completed nightly app and
+  assistant usage ahead of the other usage windows and distinguishes a missing
+  rollup from a measured zero.
 
 ## Decisions
 
@@ -95,6 +106,9 @@ On main now:
 - The `~/mc` layout: programmes, archive, the areas' proposals, horizons, runner state and the desk's items, as [mc-layout.md](../mc-layout.md) describes it.
 - `~/mc/martin/lessons/` — [lesson evidence](../mc-martin.md#lessons-and-the-learning-pass)
   used by the separate area-learning pass.
+- The [tailnet file server](../mc-server.md#files-on-the-tailnet) exposes the desk's designs,
+  design work, horizons, items and lessons beside programme files, not the
+  desk worktrees.
 
 ## Standards
 
