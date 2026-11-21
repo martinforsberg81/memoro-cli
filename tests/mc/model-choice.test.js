@@ -296,7 +296,7 @@ test('a role list chooses within itself and never borrows a class', () => {
   const catalog = { ...TEST_CATALOG, build: [{ tool: 'claude', model: 'haiku', effort: 'high' }] };
   for (const [list, claudeSpec, codexSpec] of [
     ['finish', 'claude:opus:high', 'codex:gpt-6.2-sol:high'],
-    ['mend', 'claude:sonnet:medium', 'codex:gpt-6.2-sol:medium'],
+    ['mend', 'claude:opus:medium', 'codex:gpt-6.2-sol:high'],
     ['plan', 'claude:opus:high', 'codex:gpt-6.2-sol:high'],
     ['manager', 'claude:opus:medium', 'codex:gpt-6.2-sol:medium'],
   ]) {

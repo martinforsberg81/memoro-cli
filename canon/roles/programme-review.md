@@ -1,6 +1,6 @@
 ---
 name: programme-review
-model: sonnet
+model: opus
 singleton: false
 tools: claude, codex, agy
 ---

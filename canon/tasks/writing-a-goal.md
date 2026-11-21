@@ -48,8 +48,6 @@ phases is [designing a programme](designing-a-programme.md): a complete brief en
 - **What waits on Martin:** only what [asking-martin](asking-martin.md) names, resolved before build and recorded as a decision item.
 - **Test protection:** `protection` names protected behaviours, failure consequences, the cheapest credible test level, existing tests to reuse
   and the fault to replay, and states the evidence the build must produce, or why no new automated test is warranted. Follow [writing-tests.md](writing-tests.md); not every fix needs one.
-- **Model:** a goal names none and has no class; builds run on the catalog's `build` list. Write the goal so the build can do it without
-  choosing between designs the goal could not choose for.
 - **Out of scope:** each item names its owner: another goal, another programme, or nobody.
 - **Proposals consumed:** the programme document names them and the desk has archived them in their area
   ([proposals](proposals.md)); carry into the goal everything it needs from them.

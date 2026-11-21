@@ -1,6 +1,6 @@
 ---
 name: intake
-model: sonnet
+model: opus
 singleton: false
 tools: claude
 ---

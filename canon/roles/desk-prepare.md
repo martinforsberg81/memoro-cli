@@ -1,6 +1,6 @@
 ---
 name: desk-prepare
-model: sonnet
+model: opus
 singleton: false
 tools: claude, codex
 ---

@@ -705,11 +705,11 @@ written whole or not at all:
   well, never `build`.
 
 With no file, the defaults are: `build`, `codex:gpt-6.2-sol:high` then
-`claude:sonnet:high`; review, `agy:gemini-4-argon-high:high`, then
+`claude:opus:high`; review, `agy:gemini-4-argon-high:high`, then
 `claude:opus:medium`, then `codex:gpt-6.2-sol:medium`; finish, `claude:opus:high` then
-`codex:gpt-6.2-sol:high`; mend, `claude:sonnet:medium` then
-`codex:gpt-6.2-sol:medium`; plan, `claude:opus:high` then
-`codex:gpt-6.2-sol:high`; manager, `claude:opus:medium` then
+`codex:gpt-6.2-sol:high`; mend, `codex:gpt-6.2-sol:high` then
+`claude:opus:medium`; plan, `codex:gpt-6.2-sol:high` then
+`claude:opus:high`; manager, `claude:opus:medium` then
 `codex:gpt-6.2-sol:medium`; decision, `claude:opus:high` then
 `codex:gpt-6.2-sol:high`. A file without finish, mend, plan, manager or decision reads
 that list from the defaults; a file without `build` also reads its default. A file written with the retired classes `fast`, `medium` and `large` reads `build` as its `large` list (else `medium`, else `fast`) and is written back with `build` and none of them the first time `mc model` changes it.
