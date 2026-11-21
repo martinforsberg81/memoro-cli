@@ -34,6 +34,7 @@ test('entry validates before delegation, supports offline help, and sends only f
   let calls=[];
   assert.equal(await run(['--help'], { stdout:{write:s=>calls.push(s)}, env:{MC_HEADLESS:'1'} }),0);
   assert.match(calls[0],/read-only/);
+  assert.match(calls[0],/Exit codes: .*1 .*partial usage, or a daily usage rollup behind yesterday \(UTC\)/);
   assert.equal(await run(['--oops'], { stderr:{write:s=>calls.push(s)}, env:{} }),1);
   assert.equal(await run(['--json','--json'], { stderr:{write:s=>calls.push(s)}, env:{} }),1);
   assert.equal(await run(['--json'], { env:{MC_HEADLESS:'1'}, stderr:{write:s=>calls.push(s)} }),1);
@@ -142,25 +143,11 @@ test('usage and costs retain periods, account groups and quality without sensiti
   const data = fixtures();
   const { model, exitCode } = await collectDashboard({token:'t',clock:fixed,fetch:async url=>response(sourceFor(url,data))});
   assert.equal(exitCode,0);
-  assert.deepEqual(model.sources.usage.data, {timezone:'UTC', activityBasis:'active_session_last_seen', windows:data.usage.windows, groups:[
-    {kind:'regular',total:11,activeYesterday:2,activeLastSevenDays:5},
-    {kind:'test',total:3,activeYesterday:0,activeLastSevenDays:1},
-    {kind:'review',total:4,activeYesterday:1,activeLastSevenDays:2},
-    {kind:'admin',total:1,activeYesterday:0,activeLastSevenDays:1},
-    {kind:'otherManaged',total:5,activeYesterday:3,activeLastSevenDays:4},
-  ]});
+  assert.deepEqual(model.sources.usage.data, {...legacyProjection, dailyUsage:null});
   assert.deepEqual(model.sources.costs.data, {month:'2026-11',vendor:{usd:12,source:'actual',throughDate:'2026-11-03',days:3},aiMonth:{usd:5,source:'partial'},aiToday:{usd:0,source:'estimate'}});
   const text = renderDashboard(model), json = JSON.stringify(model);
   assert.deepEqual(text.split('\n').slice(text.split('\n').indexOf('USAGE'), text.split('\n').indexOf('COSTS') - 1), [
-    'USAGE', '24 accounts in total',
-    'UTC session-recency windows: yesterday [2026-11-03T00:00:00Z, 2026-11-04T00:00:00Z), trailing 168 hours [2026-10-28T12:00:00Z, 2026-11-04T12:00:00Z)',
-    'Account totals exclude deleted accounts. Admin takes precedence over managed groups.',
-    'Session recency counts active accounts with an active session last seen in the window. A return visit or sign-out can change earlier counts.',
-    'regular: 11 accounts, with a session last seen yesterday 2, trailing 168 hours 5',
-    'test: 3 accounts, with a session last seen yesterday 0, trailing 168 hours 1',
-    'review: 4 accounts, with a session last seen yesterday 1, trailing 168 hours 2',
-    'admin: 1 account, with a session last seen yesterday 0, trailing 168 hours 1',
-    'otherManaged: 5 accounts, with a session last seen yesterday 3, trailing 168 hours 4',
+    'USAGE', 'Daily usage is unavailable on this server.', ...fallback,
   ]);
   assert.match(text,/External vendors 2026-11 \(UTC\): USD 12.00; actual; recorded through 2026-11-03; 3 days represented/);
   assert.match(text,/AI metered 2026-11 to date \(UTC\): USD 5.00; partial/);
@@ -179,7 +166,7 @@ test('usage shows the exact account total beyond the safe integer range', async 
   const { model, exitCode } = await collectDashboard({token:'t',clock:fixed,fetch:async url=>response(sourceFor(url,data))});
   assert.equal(exitCode,0);
   const lines = renderDashboard(model).split('\n');
-  assert.equal(lines[lines.indexOf('USAGE') + 1], '9007199254740993 accounts in total');
+  assert.equal(lines[lines.indexOf('USAGE') + 2], '9007199254740993 accounts in total');
   assert.deepEqual(JSON.parse(JSON.stringify(model)).sources.usage.data.groups, groups);
 });
 
@@ -232,4 +219,182 @@ test('zero usage is successful and an isolated usage failure stays unknown', asy
   assert.match(text,/unknown \(usage source unavailable\)/);
   assert.doesNotMatch(text,/accounts in total/);
   assert.match(text,/External vendors 2026-11/);
+});
+
+const kinds = ['regular', 'test', 'review', 'admin', 'otherManaged'];
+const healthyAttention = '- No reported attention signals; unknown source or conclusion remains unknown.';
+const partialAttention = '- Daily usage is unavailable.';
+const accountLines = ['regular: 11 accounts', 'test: 3 accounts', 'review: 4 accounts', 'admin: 1 account', 'otherManaged: 5 accounts'];
+const legacyProjection = {
+  timezone:'UTC', activityBasis:'active_session_last_seen',
+  windows:{yesterdayStart:'2026-11-03T00:00:00Z',todayStart:'2026-11-04T00:00:00Z',sevenDaysStart:'2026-10-28T12:00:00Z',end:'2026-11-04T12:00:00Z'},
+  groups:[
+    {kind:'regular',total:11,activeYesterday:2,activeLastSevenDays:5},
+    {kind:'test',total:3,activeYesterday:0,activeLastSevenDays:1},
+    {kind:'review',total:4,activeYesterday:1,activeLastSevenDays:2},
+    {kind:'admin',total:1,activeYesterday:0,activeLastSevenDays:1},
+    {kind:'otherManaged',total:5,activeYesterday:3,activeLastSevenDays:4},
+  ],
+};
+const fallback = [
+  '24 accounts in total',
+  'UTC session-recency windows: yesterday [2026-11-03T00:00:00Z, 2026-11-04T00:00:00Z), trailing 168 hours [2026-10-28T12:00:00Z, 2026-11-04T12:00:00Z)',
+  'Account totals exclude deleted accounts. Admin takes precedence over managed groups.',
+  'Session recency counts active accounts with an active session last seen in the window. A return visit or sign-out can change earlier counts.',
+  'regular: 11 accounts, with a session last seen yesterday 2, trailing 168 hours 5',
+  'test: 3 accounts, with a session last seen yesterday 0, trailing 168 hours 1',
+  'review: 4 accounts, with a session last seen yesterday 1, trailing 168 hours 2',
+  'admin: 1 account, with a session last seen yesterday 0, trailing 168 hours 1',
+  'otherManaged: 5 accounts, with a session last seen yesterday 3, trailing 168 hours 4',
+];
+
+function dailyFixture({ day = '2026-11-03', start = '2026-10-28', marker = '2026-10-27',
+  complete = true, zero = false, assistantOnly = false } = {}) {
+  const measured = day && !zero;
+  const regular = measured ? [assistantOnly ? 0 : 2, assistantOnly ? 0 : 3, 1, 2, 34] : [0, 0, 0, 0, 0];
+  const admin = measured && !assistantOnly ? [0, 1, 0, 0, 0] : [0, 0, 0, 0, 0];
+  const groups = kinds.map((kind, i) => {
+    const [users, users7d, aiUsers, aiUsers7d, aiQuestions] = i === 0 ? regular : i === 3 ? admin : [0, 0, 0, 0, 0];
+    return { kind, users:day ? users : null, users7d:day && complete ? users7d : null,
+      aiUsers:day ? aiUsers : null, aiUsers7d:day && complete ? aiUsers7d : null, aiQuestions:day ? aiQuestions : null };
+  });
+  return { date:day, window7d:day ? {start,end:day,complete} : null,
+    collectionStartedAt:marker ? `${marker}T00:00:00.000Z` : null,
+    uniqueUsers:day ? regular[0] : null, uniqueUsers7d:day && complete ? regular[1] + admin[1] : null,
+    aiUsers:day ? regular[2] : null, aiUsers7d:day && complete ? regular[3] : null, aiQuestions:day ? regular[4] : null, groups };
+}
+
+async function readUsage(extension) {
+  const data = fixtures();
+  Object.assign(data.usage, extension);
+  data.health = { ok:true, status:'healthy', checkedAt:data.health.checkedAt,
+    services:Object.fromEntries(['secrets','d1','r2','kv','universeVectors','queues'].map(name => [name, {status:'healthy'}])) };
+  data.operations = { ok:true, generatedAt:data.operations.generatedAt, operations:[],
+    incidents:{summary:{},totalGroups:0,totalOccurrences:0} };
+  const { model, exitCode } = await collectDashboard({token:'t',clock:fixed,fetch:async url=>response(sourceFor(url,data))});
+  const text = renderDashboard(model);
+  const json = JSON.stringify(model);
+  const usage = JSON.parse(json).sources.usage;
+  return { text, json, usage, exitCode };
+}
+
+function assertUsage(result, { dailyUsage, exitCode = 0, availability = 'available', attention = healthyAttention, lines }) {
+  const { text, json, usage } = result;
+  assert.equal(result.exitCode, exitCode);
+  assert.equal(JSON.parse(json).schemaVersion, 2);
+  assert.deepEqual(usage, { availability, errorCode:availability === 'partial' ? 'daily_usage_unavailable' : null,
+    timestamp:'2026-11-04T11:59:00Z', ageSeconds:60, future:false, data:{...legacyProjection,dailyUsage} });
+  assert.equal(text.split('\n')[1], `Sources: health available; operations available; usage ${availability}; costs available`);
+  assert.equal(text.split('\nATTENTION\n')[1].split('\n\nUSAGE\n')[0], attention);
+  assert.deepEqual(text.split('\nUSAGE\n')[1].split('\n\nCOSTS\n')[0].split('\n'), lines);
+  assert.match(text,/External vendors 2026-11 \(UTC\): USD 12.00; actual/);
+}
+
+const usageBasis = 'Daily usage counts accounts with signed-in app requests per UTC day, from the nightly rollup. Groups are as of the rollup and can be revised for seven days.';
+function completeLines(day, interval, { zero = false, assistantOnly = false } = {}) {
+  const [used, weekly, ai, aiWeek, questions, regularWeek, adminWeek] = zero ? [0,0,0,0,0,0,0]
+    : assistantOnly ? [0,0,1,2,34,0,0] : [2,4,1,2,34,3,1];
+  return [
+    `Unique users ${day}: ${used}`, `Unique users ${interval}: ${weekly}`,
+    `Asked the assistant ${day}: ${ai} (${questions} questions); ${interval}: ${aiWeek}`,
+    '24 accounts in total', usageBasis,
+    `regular: 11 accounts; ${day} used ${used}, assistant ${ai}; last 7 days used ${regularWeek}, assistant ${aiWeek}`,
+    `test: 3 accounts; ${day} used 0, assistant 0; last 7 days used 0, assistant 0`,
+    `review: 4 accounts; ${day} used 0, assistant 0; last 7 days used 0, assistant 0`,
+    `admin: 1 account; ${day} used 0, assistant 0; last 7 days used ${adminWeek}, assistant 0`,
+    `otherManaged: 5 accounts; ${day} used 0, assistant 0; last 7 days used 0, assistant 0`,
+  ];
+}
+
+test('daily report leads with actual UTC dates, distinct counts, known zero and separate assistant use', async () => {
+  for (const options of [{}, {zero:true}, {assistantOnly:true}]) {
+    const dailyUsage = dailyFixture(options);
+    const reordered = {...dailyUsage, groups:[...dailyUsage.groups].reverse()};
+    assertUsage(await readUsage({dailyUsage:reordered}), {
+      dailyUsage, lines:completeLines('2026-11-03', '2026-10-28 – 2026-11-03', options),
+    });
+  }
+  const dailyUsage = dailyFixture({day:'2026-11-02',start:'2026-10-27',marker:'2026-10-26'});
+  assertUsage(await readUsage({dailyUsage}), {
+    dailyUsage, exitCode:1, attention:'- Daily usage rollup is behind (latest 2026-11-02).',
+    lines:completeLines('2026-11-02', '2026-10-27 – 2026-11-02'),
+  });
+});
+
+test('collecting and earlier holes retain daily readings; waiting or empty has totals only', async () => {
+  for (const [marker, since] of [['2026-11-01', ' since 2026-11-02'], ['2026-10-27', ' since 2026-10-28'], [null, '']]) {
+    const dailyUsage = dailyFixture({marker, complete:false});
+    assertUsage(await readUsage({dailyUsage}), { dailyUsage, lines:[
+      'Unique users 2026-11-03: 2', `Unique users last 7 days: collecting${since}`,
+      'Asked the assistant 2026-11-03: 1 (34 questions); last 7 days: collecting',
+      '24 accounts in total', usageBasis,
+      'regular: 11 accounts; 2026-11-03 used 2, assistant 1; last 7 days collecting',
+      ...accountLines.slice(1).map(group => `${group}; 2026-11-03 used 0, assistant 0; last 7 days collecting`),
+    ] });
+  }
+  for (const marker of ['2026-11-03', null]) {
+    const dailyUsage = dailyFixture({day:null, marker});
+    assertUsage(await readUsage({dailyUsage}), { dailyUsage, lines:[
+      'Unique users: waiting for the first nightly rollup', '24 accounts in total', ...accountLines,
+    ] });
+  }
+});
+
+const partial = { dailyUsage:null, exitCode:1, availability:'partial', attention:partialAttention, lines:fallback };
+
+test('an omitted extension is compatible; explicit or lookalike failures keep exact legacy fallback', async () => {
+  assertUsage(await readUsage({}), { dailyUsage:null, lines:['Daily usage is unavailable on this server.', ...fallback] });
+  for (const extension of [
+    {dailyUsage:null}, {dailyUsageError:'unavailable'}, {dailyUsage:null,dailyUsageError:'unavailable'},
+    {dailyUsage:null,dailyUsageError:'USAGE-PRIVATE-SENTINEL'}, {dailyUsage:dailyFixture(),dailyUsageError:'unavailable'},
+  ]) {
+    const result = await readUsage(extension);
+    assert.doesNotMatch(result.text + result.json, /USAGE-PRIVATE-SENTINEL/);
+    assertUsage(result, partial);
+  }
+});
+
+test('misleading daily counts, group membership, UTC dates and null combinations are independently rejected', async () => {
+  const invalid = {
+    negative: d => { d.groups[0].aiQuestions = d.aiQuestions = -1; },
+    fractional: d => { d.groups[0].aiQuestions = d.aiQuestions = 0.5; },
+    unsafe: d => { d.groups[0].aiQuestions = d.aiQuestions = Number.MAX_SAFE_INTEGER + 1; },
+    duplicate: d => { d.groups[2] = d.groups[1]; },
+    missing: d => { d.groups.pop(); },
+    weeklyAboveTotal: d => { d.groups[0].users7d = 12; d.uniqueUsers7d = 13; },
+    weeklyAssistantAboveTotal: d => { d.groups[3].aiUsers7d = 2; d.aiUsers7d = 4; },
+    dailyAboveWeekly: d => { d.groups[0].users = d.uniqueUsers = 4; },
+    dailyAssistantAboveWeekly: d => { d.groups[0].aiUsers = d.aiUsers = 3; },
+    mismatchedSum: d => { d.uniqueUsers7d = 3; },
+    wrongInterval: d => { d.window7d.start = '2026-10-29'; },
+    wrongEnd: d => { d.window7d.end = '2026-11-02'; },
+    dateTimeInsteadOfDate: d => { d.date = d.window7d.end = '2026-11-03T00:00:00Z'; },
+    normalizedButNonexistentDate: d => { d.date = d.window7d.end = '2026-02-29'; d.window7d.start = '2026-02-23'; d.collectionStartedAt = '2026-02-21T00:00:00.000Z'; },
+    currentDate: d => { d.date = d.window7d.end = '2026-11-04'; d.window7d.start = '2026-10-29'; },
+    markerNotMidnight: d => { d.collectionStartedAt = '2026-10-27T12:23:00.000Z'; },
+    noCoverage: d => { d.collectionStartedAt = null; },
+    firstDayIsNotFullyCovered: d => { d.collectionStartedAt = '2026-10-28T00:00:00.000Z'; },
+    weeklyWhileCollecting: d => { d.window7d.complete = false; },
+    waitingWithWindow: d => { d.date = null; },
+    waitingWithCounts: d => { d.date = d.window7d = null; },
+  };
+  for (const [name, change] of Object.entries(invalid)) {
+    const dailyUsage = dailyFixture();
+    change(dailyUsage);
+    try {
+      assertUsage(await readUsage({dailyUsage}), partial);
+    } catch (error) {
+      throw new Error(name, {cause:error});
+    }
+  }
+});
+
+test('forbidden daily fields are rejected at each object level and never reach text or JSON', async () => {
+  for (const target of [d => d, d => d.window7d, d => d.groups[0]]) {
+    const dailyUsage = dailyFixture();
+    target(dailyUsage).forbidden = 'USAGE-PRIVATE-SENTINEL';
+    const result = await readUsage({dailyUsage});
+    assert.doesNotMatch(result.text + result.json, /USAGE-PRIVATE-SENTINEL/);
+    assertUsage(result, partial);
+  }
 });
