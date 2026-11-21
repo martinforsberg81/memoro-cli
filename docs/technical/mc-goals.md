@@ -1498,8 +1498,9 @@ A draft is its writer's to finish and move to `build`:
 - The programme planning turn ([mc-run.md](mc-run.md#programme-planning-turn))
   cuts every part of a ready programme's README.md into a goal, writes the
   goal's stand on every rule area and moves it to `build`. It ends `cut` only
-  when no live goal naming a part is still a draft, and it is due again while
-  such a draft is `draft · ready`, not held and not decision-claimed.
+  when no live goal naming a part is still `draft · ready`, not held and not
+  decision-claimed, and it is due again while such a draft remains. A draft
+  that is held, claimed, blocked or waiting on Martin is its holder's.
 - A draft made without `MC_HEADLESS=1` is held from creation (Martin,
   2026-11-15; `hold` in The verbs) while its author writes it. Moving it to
   `build` frees it. `mc goal release` removes the hold without moving it: a

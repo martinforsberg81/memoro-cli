@@ -144,12 +144,13 @@ test('programme turn: a draft naming a part keeps the turn incomplete, named, an
   const left = programmeStore({ ...built, ...goalAt('two', naming('Part 2', { stage: 'draft' })) });
   assert.deepEqual(finish(left), { kind: 'incomplete', problems: ['goal two is still a draft'] });
   assert.equal(due(left).due, true, 'a ready, free draft calls the turn back');
+  assert.equal(finishTurn({ programme: 'prog', home: HOME, list: left.list, read: left.read, write: left.write, lock: left.lock, root: ROOT, unavailable: () => true }).kind, 'cut', 'a held draft does not fail the turn');
   const seen = [];
   assert.deepEqual([due(left, { unavailable: (draft) => { seen.push(draft); return true; } }).due, seen],
     [false, [{ name: 'two', dir: `${HOME}/prog/goals/two` }]], 'a held or decision-claimed draft is its holder\'s');
   for (const status of ['Martin', 'blocked']) {
     const waiting = programmeStore({ ...built, ...goalAt('two', naming('Part 2', { stage: 'draft', status })) });
-    assert.equal(finish(waiting).kind, 'incomplete', `${status}: still not cut`);
+    assert.equal(finish(waiting).kind, 'cut', `${status}: its holder's, so it does not fail the turn`);
     assert.deepEqual([due(waiting).due, due(waiting).reason], [false, 'its goals are already cut'], `${status}: no turn is called for it`);
   }
   // An archived draft is over, and a draft naming no part is not the turn's.

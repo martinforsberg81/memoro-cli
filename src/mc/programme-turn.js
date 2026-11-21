@@ -187,6 +187,16 @@ export function partDrafts({ home, programme, list, read }) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * The drafts of `partDrafts` that are the turn's to finish: `ready`, and not `unavailable({ name, dir })` (the
+ * runner's word that a draft is held or decision-claimed). A draft that is held, claimed, blocked or waiting on
+ * Martin is its holder's: it neither calls a turn nor fails one.
+ */
+export function freeDrafts({ home, programme, list, read, unavailable = () => false }) {
+  return partDrafts({ home, programme, list, read })
+    .filter((draft) => draft.goal.status === 'ready' && !unavailable({ name: draft.name, dir: draft.dir }));
+}
+
 /** A record the turn cuts from: valid and ready. */
 export const cuttable = (record, dir) => record?.state === 'ready' && (!record.repair || Boolean(dir && repairReleaseState(dir, record)?.release));
 
@@ -215,8 +225,7 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
     if (record.record.repair.reconciled?.revision === repair.release.revision) return { due: false, reason: 'its release is reconciled', notice: null };
   } else {
     const problems = cutProblems({ home, programme, list, read });
-    const drafts = problems.length ? [] : partDrafts({ home, programme, list, read })
-      .filter((draft) => draft.goal.status === 'ready' && !unavailable({ name: draft.name, dir: draft.dir }));
+    const drafts = problems.length ? [] : freeDrafts({ home, programme, list, read, unavailable });
     if (problems.length === 0 && drafts.length === 0) return { due: false, reason: 'its goals are already cut', notice: null };
     const unnamed = goalsNamingNoPart({ home, programme, list, read });
     if (unnamed.length) {
@@ -242,10 +251,10 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
 
 /**
  * How the turn ended: `{ kind: 'cut' }` when a goal names every part and no live goal naming a part is still a
- * draft, `{ kind: 'incomplete', problems }` when parts or drafts remain (each draft is named), or
+ * free draft (`freeDrafts`), `{ kind: 'incomplete', problems }` when parts or such drafts remain (each draft is named), or
  * `{ kind: 'settled', problems }` when the programme state is no longer ready.
  */
-export function finishTurn({ programme, home, list, read, write, lock, root, revision }) {
+export function finishTurn({ programme, home, list, read, write, lock, root, revision, unavailable = () => false }) {
   try {
     const dir = join(home, programme);
     const record = readRecord(dir, { read });
@@ -260,7 +269,7 @@ export function finishTurn({ programme, home, list, read, write, lock, root, rev
     }
     const problems = cutProblems({ home, programme, list, read });
     if (problems.length > 0) return { kind: 'incomplete', problems };
-    const drafts = partDrafts({ home, programme, list, read }).map(({ name }) => `goal ${name} is still a draft`);
+    const drafts = freeDrafts({ home, programme, list, read, unavailable }).map(({ name }) => `goal ${name} is still a draft`);
     if (drafts.length > 0) return { kind: 'incomplete', problems: drafts };
     return { kind: 'cut' };
   } catch (error) {

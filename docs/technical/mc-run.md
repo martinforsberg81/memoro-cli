@@ -1009,11 +1009,12 @@ runner lock and reads the Part headings (`### Part <n> — …` inside
 (`partsCut`, no stage excluded). The ending is one of:
 
 - `cut`: every part is named by a goal, and no live goal that names a part is
-  still in stage `draft` (`partDrafts`; an archived goal is over and is not
-  one);
+  still a free draft: `draft · ready`, not held and not decision-claimed
+  (`freeDrafts`; an archived goal is over and is not one, and a draft that is
+  held, claimed, blocked or waiting on Martin is its holder's);
 - `settled`: the record is no longer ready. Nothing counts;
 - `incomplete`: a part is named by no goal, `README.md` is missing, or a live
-  goal naming a part is still a draft (`goal <name> is still a draft`, one
+  goal naming a part is still a free draft (`goal <name> is still a draft`, one
   problem per goal). A failure (below).
 
 **Legacy goals.** A goal whose `documents` names no part of `README.md` is

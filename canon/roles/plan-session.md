@@ -111,7 +111,7 @@ that needs it: jev, then a reader, answers it, and the other goals go on. Do not
 implement a goal or process proposals.
 
 The turn ends when you stop. It succeeds when goals name every part of
-README.md and none of them is still a draft. Any other ending counts as a
+README.md and none of them is still a ready, free draft. Any other ending counts as a
 failure: the runner runs the turn again while a part has no goal or a draft
 naming a part is ready and free (not held, not decision-claimed), and the
 second failure opens a desk item.

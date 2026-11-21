@@ -1866,12 +1866,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /** `programme`: its notice, said once while it lasts (an unreadable state file, a horizon that is not open). */
   const turnSaid = new Map();
   const turnItems = () => { try { return deps.deskItems?.list() || []; } catch { return []; } };
+  /** A draft held (`mc goal hold`) or under a live decision claim is its holder's: it neither calls the turn back nor fails it. */
+  const draftUnavailable = ({ dir }) => Boolean(readHold(dir, deps.read)) || decisionClaimed(join(dir, '.decision.json'));
   /** Whether `programme` is due a planning turn now (D3), read through the runner's own list and read. */
   function turnDue(programme, items = turnItems()) {
     const state = readTurnState({ root, programme, read: deps.read });
-    // A draft held (`mc goal hold`) or under a live decision claim is its holder's: it does not call the turn back.
-    const unavailable = ({ dir }) => Boolean(readHold(dir, deps.read)) || decisionClaimed(join(dir, '.decision.json'));
-    return programmeDue({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, items, horizon: slug => deps.horizon?.(slug) ?? null, state, unavailable });
+    return programmeDue({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, items, horizon: slug => deps.horizon?.(slug) ?? null, state, unavailable: draftUnavailable });
   }
   function programmeWork(names, passed = new Set()) {
     if (!names.length) return [];
@@ -2000,7 +2000,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const count = goalCount({ home: programsHome(deps.env), programme, list: deps.list });
       // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
       const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
-      const ended = finishTurn({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, write: deps.write, lock, root, revision: due.revision });
+      const ended = finishTurn({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, write: deps.write, lock, root, revision: due.revision, unavailable: draftUnavailable });
       let note = `${read.note},${count} goal${count === 1 ? '' : 's'}`;
       if (ended.kind === 'cut') note = `${note},cut`;
       else if (ended.kind === 'settled') note = `${note},not cut (${ended.problems.join('; ')})`;
