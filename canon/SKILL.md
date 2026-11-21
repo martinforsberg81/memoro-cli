@@ -15,6 +15,11 @@ Paths below are relative to this skill's directory. Do not preload the tree.
   when work there begins. Do not read the other programmes.
 - Before using `mc goal`, read [verbs/goal.md](verbs/goal.md).
   `mc <verb> --help` gives command syntax for other verbs.
+- A file shown or referred to Martin is a clickable link, never a bare path:
+  `http://mc-server.tail6983e4.ts.net:8080/<path under ~/mc/programs>`
+  (a markdown link whose text is the file name). A picture or evidence
+  outside `~/mc/programs` is first placed in its programme's `designs/` or
+  `evidence/`. Code is referred to as `file:line`, as before.
 - The total set by `mc run lanes <n>` belongs to Martin. Preserve it unless
   he explicitly asks to change that total. A blocked goal, disk pressure,
   quota shortage, slow tests or a runner restart does not authorize changing

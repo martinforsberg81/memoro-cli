@@ -197,6 +197,26 @@ socket. `mc session` takes it as follows.
 | Client sleep or network outage | survives; same entrance offers join | connection may be lost |
 | Server reboot/power loss or explicit provider termination | ends | connection fails; history remains resumable |
 
+## Files on the tailnet
+
+mc-server serves `~/mc/programs` read-only to Martin's tailnet with Tailscale
+Serve, so a programme's pictures, evidence and pages open in a browser on his
+Mac and iPhone:
+
+    http://mc-server.tail6983e4.ts.net:8080/<programme>/<path>
+
+A directory's address lists its files. Only devices on Martin's tailnet reach
+it; nothing else under `~/mc` is served, because worktrees there hold
+credentials (`.dev.vars`). It was set up at the desk on 2026-11-21 with
+`sudo tailscale serve --bg --http=8080 /home/martin/mc/programs` (path serving
+needs root) and persists in tailscaled's serve config;
+`sudo tailscale serve --http=8080 off` stops it and `tailscale serve status`
+shows it. On mc-server itself the name does not resolve; a check from there
+uses `curl -H 'Host: mc-server.tail6983e4.ts.net:8080' http://100.67.31.13:8080/…`.
+
+A session that shows Martin a file or refers him to one gives this link, as
+the mc skill says.
+
 ## Probed versions and upgrade procedure
 
 The bounded TC probes used **Codex CLI 0.168.0** and **Claude Code 2.1.325**.
