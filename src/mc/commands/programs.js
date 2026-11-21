@@ -45,7 +45,8 @@ import { beginRepairReview, repairReviewCall } from '../repair-review.js';
 import { isDesk, releaseRepair, repairReleaseState } from '../repair-release.js';
 import { reconcileRepair, setDeskRepairState } from '../repair-reconcile.js';
 import { disposeRepair, REPAIR_DISPOSITIONS, stopRepair } from '../repair-stop.js';
-import { partsOrder } from '../programme-turn.js';
+import { goalParts, partsOrder } from '../programme-turn.js';
+import { cutFromOrder } from '../goal-parts.js';
 
 export function usage() {
   return commandUsage('programs');
@@ -396,8 +397,11 @@ function stateVerb({ positional }, { env, stdout, stderr, lock, now = new Date()
   try {
     const found = readRecord(dir).record;
     // A part of an order waits for the part before it unless it says it runs in parallel with it: ready writes the
-    // record's dependencies from that in the same write. A repair-owned order is released by its own verbs and is not read here.
-    const given = targetState === 'ready' && found && !found.repair ? partsOrder(readTextOrNull(join(dir, 'README.md')) ?? '') : null;
+    // record's dependencies from that in the same write. A repair-owned order is released by its own verbs and is not read here,
+    // and a programme whose goals a plan session wrote keeps the dependencies that session stated for its phases.
+    const written = goalParts({ home, programme: name, list: listDirsOf, read: readTextOrNull });
+    const oldForm = written.some(({ named }) => named.size > 0) && !written.some(({ goal }) => cutFromOrder(goal));
+    const given = targetState === 'ready' && found && !found.repair && !oldForm ? partsOrder(readTextOrNull(join(dir, 'README.md')) ?? '') : null;
     const outcome = found?.repair?.desk
       ? setDeskRepairState(dir, targetState, env, { lock })
       : setRecordState(dir, targetState, { root: workRoot(env), lock, ...(given ? { after: given.after } : {}) });

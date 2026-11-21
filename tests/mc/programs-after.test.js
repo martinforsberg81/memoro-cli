@@ -239,6 +239,18 @@ describe('an order gives what its parts wait for', () => {
     } finally { a.done(); }
   });
 
+  it('a programme whose goals a plan session wrote keeps the dependencies that session stated when it is set ready again', async () => {
+    // Fault protected: the phases of such goals are not part numbers, so writing the parts' order would start them in the wrong order.
+    const a = area({ ...DRAFT, phases: { order: 'stated', after: { 3: [1] } } });
+    try {
+      writeFileSync(page(a), order('Closes: a.', 'Closes: b.'));
+      const goal = join(a.home, 'prog', 'goals', 'g1', 'GOAL.json');
+      writeFileSync(goal, goalJson({ phase: 1, documents: [{ label: 'Part 2', path: page(a) }] }));
+      assert.equal((await call(['state', 'prog', 'ready'], desk(a))).code, 0);
+      assert.deepEqual([recordOf(a.home).state, recordOf(a.home).phases], ['ready', { order: 'stated', after: { 3: [1] } }]);
+    } finally { a.done(); }
+  });
+
   it('a record that stated no phases gets them from the parts, and a document with no part is set ready as before', async () => {
     const plain = area({ ...RECORD, version: 2, state: 'draft' });
     try {
