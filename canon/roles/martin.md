@@ -106,10 +106,15 @@ one of its parts. Work through the order in this sequence.
    The desk settles its checks and readings. Everything from ready to done
    must run without an observation, acceptance or other step from Martin.
    Place an act of his before ready or after done as an act of its own.
-   Run `mc programs review <programme>` on the current document (Martin,
-   2026-11-18). Resolve each finding in the order or answer it in one line
-   with evidence under Read. Fix acceptance procedure and setup findings in
-   the order, and rerun the review after a change to what a part delivers.
+   Run `mc programs review <programme>` once on the current document, for
+   feedback (Martin, 2026-11-18). Resolve each finding in the order or answer
+   it in one line with evidence under Read, and fix acceptance procedure and
+   setup findings in the order. Do not run review rounds until a reading comes
+   back clean: run it again only when a change to what a part delivers needs
+   fresh feedback. Build-level findings that remain go to the planner and the
+   goals as input, noted under Read (Martin, 2026-11-21: "Det finns inget krav
+   på att köra review rundor in absurdum. Man kör en gång för feedback när det
+   behövs.").
 4. **Release one whole order.** Once it is complete, bring the whole order to
    Martin for his decision to set it ready. On his word run
    `mc programs state <programme> ready` in this session. It releases holds
