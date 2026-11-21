@@ -6,7 +6,8 @@
  * last, that writes `docs/technical/` (`documentationBrief`). Every session
  * on a part's goal is given its part as README.md has it at that moment (`partOfOrder`, `partBrief`). A part waits for
  * the part before it unless it says it runs in parallel with it (`partsOrder`), which `mc programs state <programme>
- * ready` writes into the record.
+ * ready` writes into the record. A released repair order is cut the same way from its released snapshot, and the
+ * same cut records its release as reconciled and writes that order (`reconcileRepair`, repair-reconcile.js).
  * Everything here is what the runner decides without a model: whether a programme is due (`programmeDue`), the state
  * file that counts the cuts that failed, and the desk item the second failure opens. The runner (`run.js`) supplies
  * its own file reads and lock, so a fixture drives all of it in memory.
@@ -267,16 +268,15 @@ export function cutProblems({ home, programme, list, read }) {
 /** A record the cut reads: valid and ready. */
 export const cuttable = (record, dir) => record?.state === 'ready' && (!record.repair || Boolean(dir && repairReleaseState(dir, record)?.release));
 
-/** Why a released repair order is not cut by code: its reconciliation compares authored goal contracts, which a goal that is a part does not have. */
-export const REPAIR_NOT_CUT = 'not cut: repair releases are cut by hand until reconciliation reads goals that are parts';
-
 /**
  * Whether `programme` is due the cut now: `{ due: true, record }`, or `{ due: false, reason, notice }`. It is due
  * while its record reads ready, a part of README.md is named by no goal or the programme has no documentation goal,
  * and the record states the order the parts give (`partsOrder`). A programme whose every part is named and none of
  * whose goals was cut from the order is of the old form: its goals write `docs/technical/` themselves, and it gets no
  * documentation goal. A `notice` is what the runner says once while it lasts. A programme
- * holding a goal that names no part is written by hand and is not cut; a released repair order is not cut by code.
+ * holding a goal that names no part is written by hand and is not cut. A released repair order is due while its
+ * release is not reconciled, whatever goals it holds and whatever order its record states: the answer then carries
+ * `release`, the release and the snapshot it was read with (`repairReleaseState`), which the cut is made from.
  */
 export function programmeDue({ programme, home, list, read, items = [], horizon = () => null, state }) {
   const dir = join(home, programme);
@@ -294,19 +294,19 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
   if (!parts.length) return { due: false, reason: 'README.md names no part', notice: null };
   if (repair) {
     if (record.record.repair.reconciled?.revision === repair.release.revision) return { due: false, reason: 'its release is reconciled', notice: null };
-    return { due: false, reason: REPAIR_NOT_CUT, notice: `${programme}: ${REPAIR_NOT_CUT}` };
-  }
-  const goals = goalParts({ home, programme, list, read }).map(({ goal }) => goal);
-  const lastCut = goals.some((goal) => goal.documentation === true) || !goals.some(cutFromOrder);
-  if (lastCut && cutProblems({ home, programme, list, read }).length === 0) return { due: false, reason: 'its goals are already cut', notice: null };
-  const unnamed = goalsNamingNoPart({ home, programme, list, read });
-  if (unnamed.length) {
-    const named = unnamed.length > 3 ? `${unnamed.slice(0, 3).join(', ')} and ${unnamed.length - 3} more` : unnamed.join(', ');
-    return { due: false, reason: `its goal${unnamed.length === 1 ? '' : 's'} ${named} name${unnamed.length === 1 ? 's' : ''} no part of README.md`, notice: null };
-  }
-  const recorded = record.record.phases?.order === 'stated' ? record.record.phases.after ?? {} : null;
-  if (recorded === null || !sameAfter(partsOrder(readme).after, recorded)) {
-    return { due: false, reason: 'its record does not state the order its parts give', notice: `${programme}: its record does not state the order its parts give — the desk sets it ready again` };
+  } else {
+    const goals = goalParts({ home, programme, list, read }).map(({ goal }) => goal);
+    const lastCut = goals.some((goal) => goal.documentation === true) || !goals.some(cutFromOrder);
+    if (lastCut && cutProblems({ home, programme, list, read }).length === 0) return { due: false, reason: 'its goals are already cut', notice: null };
+    const unnamed = goalsNamingNoPart({ home, programme, list, read });
+    if (unnamed.length) {
+      const named = unnamed.length > 3 ? `${unnamed.slice(0, 3).join(', ')} and ${unnamed.length - 3} more` : unnamed.join(', ');
+      return { due: false, reason: `its goal${unnamed.length === 1 ? '' : 's'} ${named} name${unnamed.length === 1 ? 's' : ''} no part of README.md`, notice: null };
+    }
+    const recorded = record.record.phases?.order === 'stated' ? record.record.phases.after ?? {} : null;
+    if (recorded === null || !sameAfter(partsOrder(readme).after, recorded)) {
+      return { due: false, reason: 'its record does not state the order its parts give', notice: `${programme}: its record does not state the order its parts give — the desk sets it ready again` };
+    }
   }
   if (items.some((item) => item.kind === TURN_ITEM_KIND && item.reference === turnReference(programme) && item.state !== 'closed')) {
     return { due: false, reason: 'a programme desk item is open', notice: null };
@@ -321,7 +321,7 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
       return { due: false, reason: 'its horizon is not open', notice: `${programme}: its horizon ${slug} ${found ? `reads ${found.state}` : 'is missing or unreadable'} — the programme is not cut while that lasts` };
     }
   }
-  return { due: true, record: record.record };
+  return { due: true, record: record.record, ...(repair ? { release: repair } : {}) };
 }
 
 /** Whether two `after` maps state the same dependencies, whatever the order of their keys. */
@@ -352,12 +352,14 @@ export function goalSlug(title, number, taken = new Set()) {
  * when a part has been added since. A name is unique among the
  * programme's goals, live and archived, and among the live goals of every other programme, since a goal's branch
  * `goal/<goal>` is one per repository. Returns the goals made as `[{ name, part }]`, the last one as
- * `{ name, documentation: true }`; throws when the cut cannot be made.
+ * `{ name, documentation: true }`; throws when the cut cannot be made. `text` is the document the parts are read
+ * from when it is not README.md as it stands: the released snapshot of a repair order, whose goals still point at
+ * README.md. A programme whose every part is named and none of whose goals was cut from the order is of the old form
+ * and gets nothing (`programmeDue`).
  */
-export function cutParts({ programme, home, list, read, write, repositories, now }) {
+export function cutParts({ programme, home, list, read, write, repositories, now, text = read(join(home, programme, 'README.md')) }) {
   const dir = join(home, programme);
   const readme = join(dir, 'README.md');
-  const text = read(readme);
   if (text === null || text === undefined) throw new Error('README.md is missing');
   const found = repositories(text);
   if (found.error) throw new Error(found.error);
@@ -378,6 +380,7 @@ export function cutParts({ programme, home, list, read, write, repositories, now
     write(join(goalDir, LOG_FILE), appendLog('', { at: logStamp(now), tool: 'runner', model: null, stage: 'build', status: 'ready', done, comment: null, next: null }));
   };
   const parts = partSections(text);
+  if (parts.every(([number]) => named.has(number)) && !goals.some(({ goal }) => cutFromOrder(goal))) return made;
   for (const [number, section] of parts) {
     if (named.has(number)) continue;
     named.add(number);

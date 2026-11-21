@@ -13,8 +13,9 @@ import { answerHeldDeployMend, publishDeployMend, readDeployMends, recordRepaire
 import { answerHeldMend, answerMainMend, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { newRecord, readRecord, writeRecord } from '../../src/mc/programme-record.js';
+import { interruptedRepairCut } from '../../src/mc/repair-cut.js';
 import { repairSnapshot } from '../../src/mc/repair-manifest.js';
-import { reconcileRepair } from '../../src/mc/repair-reconcile.js';
+import { repairGoalAdmission } from '../../src/mc/repair-reconcile.js';
 import { REPAIR_HANDOFF } from '../../src/mc/repair-delivery.js';
 import { freeMemoryPercent } from '../../src/mc/dev-servers.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
@@ -6612,9 +6613,11 @@ const goalsNow = (f) => [...new Set(Object.keys(f.files).filter((path) => path.s
   .sort().map((name) => { const goal = parseGoal(f.files[`${GOALS}/${name}/GOAL.json`]); return [name, `${goal.stage} · ${goal.status}`, goal.phase, goal.part]; });
 const said = (f, text) => f.log.filter((line) => line.includes(text)).length;
 
-// The planning session reconciled a repair release; no session does now, and the cut does not: a released repair order
-// is cut and reconciled by hand until reconciliation reads goals that are parts (programme-turn.js, REPAIR_NOT_CUT).
-test('runner keeps a stale or unreconciled repair release out of the cut, build and settlement; changed design needs a reconciled contract', async t => {
+// The runner reconciles a repair release with its cut (mc-run.md, "Repair releases"). This order's one goal is of the
+// old form, written with a contract before the cut became code, so every rule of an authored goal holds for it and the
+// cut makes no goal. The verb `mc programs reconcile` and the planner's identity are gone; the fixture's writes of the
+// goal stand in for a desk that took the order over.
+test('runner keeps a stale or unreconciled repair release out of build and settlement; an authored goal whose released design changed needs a new contract before the cut reconciles', async t => {
   const root = mkdtempSync(join(tmpdir(), 'mc-runner-repair-release-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, 'programs');
@@ -6652,31 +6655,24 @@ test('runner keeps a stale or unreconciled repair release out of the cut, build 
   f.dirs.add(join(goalDir, 'memoro'));
   Object.assign(f.files, { [pagePath]: page, [recordPath]: readFileSync(recordPath, 'utf8'), [goalPath]: before, [logPath]: '' });
   const runner = createRunner({ deps: f.deps });
-  /** What the planning session did by its verbs, done by hand: the release reconciled under the planner's identity. */
-  const reconcile = (release, reason) => {
-    const planner = { ...f.deps.env, MC_WORK_ROOT: root, MC_ROLE: 'plan', MC_HEADLESS: '1', MC_PROGRAMME: 'prog', MC_REPAIR_REVISION: release };
-    const result = reconcileRepair({ home, programme: 'prog', env: planner, reason });
-    if (result.ok) f.files[recordPath] = readFileSync(recordPath, 'utf8');
-    return result;
-  };
+  /** The record as the runner reads and writes it. */
+  const recorded = () => JSON.parse(f.files[recordPath]);
+  const failures = () => JSON.parse(f.files[join(root, 'runner', 'programme-turn', 'prog.json')] ?? '{"failures":[]}').failures.map((failure) => failure.reason);
 
   writeFileSync(design, 'An unreviewed edit.');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
   assert.equal(f.calls.sessions.length, 0);
   assert.equal(f.files[goalPath], before);
+  assert.equal(recorded().repair.reconciled, undefined, 'a stale release is not reconciled');
 
-  // A current release that nobody has reconciled: the runner cuts nothing, starts nothing and says why once.
+  // A current release nobody has reconciled: the runner's cut records it, and the goal builds in the same pass.
   writeFileSync(design, oldDesign);
-  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, f.log.join('\n'));
-  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
-  assert.equal(f.calls.sessions.length, 0);
-  assert.equal(said(f, 'prog: not cut: repair releases are cut by hand until reconciliation reads goals that are parts'), 1, f.log.join('\n'));
-  assert.equal(readdirSync(join(dir, 'goals')).join(), 'restore', 'no goal is made for it');
-  assert.equal(reconcile(revision, 'Part 1 agrees with the build contract.').ok, true);
-  assert.equal(readRecord(dir).record.repair.reconciled.revision, revision);
   const built = await runner.pass({ repo: 'memoro' });
+  assert.equal(recorded().repair.reconciled?.revision, revision, f.log.join('\n'));
   assert.equal(built.name, 'goal:prog/restore', f.log.join('\n'));
   assert.equal(f.calls.sessions.at(-1).env.MC_REPAIR_REVISION, revision);
+  assert.deepEqual(f.deps.list(join(dir, 'goals')), ['restore'], 'an order whose goals are all of the old form gets no goal from the cut');
+  assert.equal(recorded().phases, undefined, 'and keeps the dependencies its record states');
 
   writeFileSync(design, newDesign);
   const calls = f.calls.sessions.length;
@@ -6684,20 +6680,17 @@ test('runner keeps a stale or unreconciled repair release out of the cut, build 
   assert.equal(f.calls.sessions.length, calls);
   // An independent reading and release are exercised in programme-review.test.js.
   // Supply that release here while keeping the real previous cut and runnable goal.
-  const issued = readRecord(dir).record;
+  const issued = recorded();
   issued.repair.release = { revision: nextRevision, manifest: repairSnapshot(dir).manifest };
   f.files[recordPath] = JSON.stringify(issued);
-  writeFileSync(recordPath, f.files[recordPath]);
-  const obsolete = reconcile(nextRevision, 'Compared the unchanged goal with the revised design.');
-  assert.equal(obsolete.ok, false);
-  assert.match(obsolete.problems[0], /released part changed/u);
   assert.equal(runner.nextWork(), null, 'the old runnable goal cannot build under the new release');
+  assert.deepEqual(failures(), ['the cut could not be made: restore: the released part changed — update its contract, take back its criterion marks and return it to draft or build before reconciliation']);
+  assert.equal(recorded().repair.reconciled.revision, revision, 'the new release is not reconciled over an unchanged authored contract');
   const updated = withGoal(before, { contract: [newDesign] });
-  writeFileSync(goalPath, updated);
   f.files[goalPath] = updated;
   expectedContract = newDesign;
-  assert.equal(reconcile(nextRevision, 'The goal contract now says the revised design.').ok, true);
   assert.equal((await runner.pass({ repo: 'memoro' })).name, 'goal:prog/restore');
+  assert.equal(recorded().repair.reconciled.revision, nextRevision);
   assert.equal(f.calls.sessions.at(-1).env.MC_REPAIR_REVISION, nextRevision);
 
   const merged = withGoal(updated, { stage: 'merge', status: 'ready', prs: ['memoro#31'] });
@@ -6716,6 +6709,127 @@ test('runner keeps a stale or unreconciled repair release out of the cut, build 
   time += 60 * 60_000;
   recovery.nextWork();
   assert.equal(parseGoal(f.files[goalPath]).stage, 'done');
+});
+
+/* A released repair order `prog` as the runner's cut finds it. A release binds files on disk, so the page is under a
+ * real directory and in the runner's files; the record is the runner's. `release(revision, page)` leaves what an
+ * independent reading and `mc programs release` leave (programme-review.test.js exercises those): the page as it now
+ * is, bound by a new release that names the goals of an earlier cut that never reconciled. */
+const REPAIR_PAGE = '# prog\n\nRepositories: memoro.\n\n## Parts\n\n### Part 1 — One\n\nSolution: the first thing.\n\n### Part 2 — Two\n\nSolution: the second thing.\n';
+const RELEASES = ['b833c806-2932-46f3-81d6-ec21b75d8aad', '88c2e348-d3e4-4a85-8270-cdfad7c64b6b'];
+function repairOrder(t) {
+  const root = mkdtempSync(join(tmpdir(), 'mc-runner-repair-cut-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const dir = join(root, 'programs', 'prog');
+  const pagePath = join(dir, 'README.md');
+  const recordPath = join(dir, 'PROGRAMME.json');
+  mkdirSync(dir, { recursive: true });
+  const f = fixture({ root, capacity: capacityWith({ claude: 0.1 }), session: (call) => f.answer(call) });
+  f.answer = okSession();
+  f.files[recordPath] = JSON.stringify({ ...newRecord({ end: 'Order is restored.', createdBy: 'repair', repair: {
+    sources: [{ kind: 'proposal', path: '/evidence/proposal.md', key: 'a'.repeat(64), digest: 'b'.repeat(64) }] } }), state: 'ready' });
+  const record = () => JSON.parse(f.files[recordPath]);
+  const release = (revision, page = REPAIR_PAGE) => {
+    writeFileSync(pagePath, page);
+    f.files[pagePath] = page;
+    const { repair, ...rest } = record();
+    const interrupted = interruptedRepairCut(dir, repair, { list: f.deps.list, read: f.deps.read });
+    f.files[recordPath] = JSON.stringify({ ...rest, repair: { ...repair, release: { revision, manifest: repairSnapshot(dir).manifest, ...interrupted } } });
+  };
+  const goalFile = (name) => join(dir, 'goals', name, 'GOAL.json');
+  const goals = () => f.deps.list(join(dir, 'goals')).sort().map((name) => { const goal = parseGoal(f.files[goalFile(name)]); return [name, `${goal.stage} · ${goal.status}`, goal.phase, goal.part]; });
+  const entries = (name) => parseLog(f.files[join(dir, 'goals', name, 'LOG.md')]);
+  const failures = () => JSON.parse(f.files[join(root, 'runner', 'programme-turn', 'prog.json')] ?? '{"failures":[]}').failures.map((failure) => failure.reason);
+  const admitted = (name, revision) => repairGoalAdmission(dir, name, { read: f.deps.read, revision });
+  return { f, dir, pagePath, recordPath, record, release, goalFile, goals, entries, failures, admitted, runner: createRunner({ deps: f.deps }) };
+}
+
+// Order: repair releases are cut by code. Fault replayed: `cutOrders` made to return after `cutParts` without recording
+// the reconciliation (`return { made }` for a repair release too): the three goals are cut, and the first assertion,
+// on `record().repair.reconciled`, fails (undefined is not the released revision).
+test('the cut of a released repair order: one pass makes a goal per released part and the documentation goal, records the release as reconciled with the order its parts give, and starts the first part; a later release that changes a part leaves its unfinished goal as it is and gives the next session the new text', async (t) => {
+  const o = repairOrder(t);
+  const [first, second] = RELEASES;
+  o.release(first);
+  const started = await o.runner.pass({ repo: 'memoro' });
+  assert.deepEqual([o.record().repair.reconciled?.revision, o.record().repair.reconciled?.reason], [first, 'cut by code: one goal per released part'], o.f.log.join('\n'));
+  assert.deepEqual(o.goals(), [['one', 'build · ready', 1, 1], ['prog-documentation', 'build · ready', 3, undefined], ['two', 'build · ready', 2, 2]]);
+  assert.deepEqual(o.record().repair.reconciled.parts.map(([number]) => number), [1, 2]);
+  assert.deepEqual(o.record().repair.reconciled.goals.map(([name, , parts]) => [name, parts]).sort(), [['one', [1]], ['prog-documentation', []], ['two', [2]]], 'the documentation goal is reconciled though it names no part');
+  assert.deepEqual(o.record().phases, { order: 'stated', after: { 2: [1], 3: [2] } }, 'the same write states what each part waits for');
+  assert.deepEqual(parseGoal(o.f.files[o.goalFile('two')]).documents, [{ label: 'Part 2', path: o.pagePath }], 'a goal points at the programme\'s README.md');
+  assert.equal(said(o.f, 'programme:prog: cut — Part 1 is prog/one, Part 2 is prog/two, Documentation is prog/prog-documentation, in build · ready'), 1);
+  assert.equal(started.name, 'goal:prog/one', 'a goal session is admitted in that pass');
+  assert.equal(o.f.calls.sessions[0].env.MC_REPAIR_REVISION, first);
+  assert.ok(o.f.calls.sessions[0].prompt.includes('PART 1 — One, as README.md has it now\n\n### Part 1 — One\n\nSolution: the first thing.'), o.f.calls.sessions[0].prompt);
+  assert.equal(o.admitted('prog-documentation', first).release.revision, first);
+  assert.deepEqual(o.failures(), []);
+
+  // A second release changes both parts. Part 1's goal is unfinished in build: its file is not touched. Part 2's goal
+  // is in review (the fixture puts it there): its judged work was built from the old part, so it returns to build.
+  o.f.files[o.goalFile('two')] = withGoal(o.f.files[o.goalFile('two')], { stage: 'review' });
+  const untouched = o.f.files[o.goalFile('one')];
+  o.release(second, REPAIR_PAGE.replace('Solution: the first thing.', 'Solution: the first thing, said better.').replace('Solution: the second thing.', 'Solution: another second thing.'));
+  assert.match(o.admitted('one').problems[0], /prog is not reconciled for this repair release/u, 'released and not yet cut: nothing is admitted');
+  o.runner.nextWork();
+  assert.equal(o.record().repair.reconciled.revision, second, o.f.log.join('\n'));
+  assert.equal(o.f.files[o.goalFile('one')], untouched, 'a changed part asks nothing of its unfinished goal');
+  assert.deepEqual(o.goals().map(([name, state]) => [name, state]), [['one', 'build · ready'], ['prog-documentation', 'build · ready'], ['two', 'build · ready']], 'no second goal is cut for a changed part');
+  assert.deepEqual([o.entries('two').at(-1).tool, o.entries('two').at(-1).comment], ['runner', 'its released part changed — back to build']);
+  assert.match(o.admitted('one', first).problems[0], /different repair release/u);
+  assert.equal((await o.runner.pass({ repo: 'memoro' })).name, 'goal:prog/one');
+  const next = o.f.calls.sessions.at(-1);
+  assert.equal(next.env.MC_REPAIR_REVISION, second);
+  assert.ok(next.prompt.includes('### Part 1 — One\n\nSolution: the first thing, said better.'), next.prompt);
+  assert.equal(next.prompt.includes('Solution: the first thing.'), false, 'the earlier wording is gone');
+  assert.deepEqual(o.failures(), []);
+});
+
+test('the cut of a released repair order: a release that removes a part reconciles and leaves that part\'s goal unstarted for the desk to drop', async (t) => {
+  const o = repairOrder(t);
+  const [first, second] = RELEASES;
+  o.release(first);
+  o.runner.nextWork();
+  const left = o.f.files[o.goalFile('two')];
+  o.release(second, REPAIR_PAGE.replace(/### Part 2 — Two[\s\S]*$/u, ''));
+  o.runner.nextWork();
+  assert.equal(o.record().repair.reconciled.revision, second, o.f.log.join('\n'));
+  assert.deepEqual(o.record().repair.reconciled.goals.map(([name]) => name).sort(), ['one', 'prog-documentation'], 'the goal of the removed part is not among the reconciled goals');
+  assert.deepEqual(o.record().phases.after, { 2: [1] }, 'the documentation goal waits for the one part that is left');
+  assert.equal(o.f.files[o.goalFile('two')], left, 'nothing is dropped or rewritten by code');
+  assert.deepEqual(o.failures(), []);
+  // Part 1 is built and lands; the documentation goal follows; the goal whose part left never starts.
+  assert.equal((await o.runner.pass({ repo: 'memoro' })).name, 'goal:prog/one');
+  o.f.files[o.goalFile('one')] = withGoal(o.f.files[o.goalFile('one')], { stage: 'done' });
+  assert.equal((await o.runner.pass({ repo: 'memoro' })).name, 'goal:prog/prog-documentation');
+  o.f.files[o.goalFile('prog-documentation')] = withGoal(o.f.files[o.goalFile('prog-documentation')], { stage: 'done' });
+  assert.equal((await o.runner.pass({ repo: 'memoro' })).ran, 0);
+  assert.deepEqual(o.f.calls.sessions.map((call) => call.env.MC_GOAL), ['prog/one', 'prog/prog-documentation']);
+  assert.equal(said(o.f, 'goal:prog/two: two is not reconciled for this repair release — no session is started'), 1);
+});
+
+test('the cut of a released repair order: a cut whose reconciliation is not recorded is a failure and admits no session; the next release reconciles the goals that cut left', async (t) => {
+  const o = repairOrder(t);
+  const [first, second] = RELEASES;
+  o.release(first);
+  const { write } = o.f.deps;
+  let full = true;
+  o.f.deps.write = (path, text) => { if (full && path === o.recordPath) throw new Error('no space left on device'); return write(path, text); };
+  assert.equal((await o.runner.pass({ repo: 'memoro' })).ran, 0);
+  assert.deepEqual(o.goals().map(([name]) => name), ['one', 'prog-documentation', 'two'], 'the goals were cut');
+  assert.equal(o.record().repair.reconciled, undefined);
+  assert.deepEqual(o.failures(), ['the cut could not be made: no space left on device']);
+  assert.deepEqual(o.f.calls.sessions, [], 'delivery admission refuses every goal of a release that is not reconciled');
+  assert.equal(said(o.f, 'goal:prog/one: prog is not reconciled for this repair release — no session is started'), 1);
+  assert.match(o.admitted('one', first).problems[0], /prog is not reconciled for this repair release/u);
+  // The order is released again before any cut reconciled: the release names the goals of the cut that never did.
+  full = false;
+  o.release(second);
+  assert.deepEqual(o.record().repair.release.unreconciled.map(([name]) => name).sort(), ['one', 'prog-documentation', 'two']);
+  assert.equal((await o.runner.pass({ repo: 'memoro' })).name, 'goal:prog/one', o.f.log.join('\n'));
+  assert.equal(o.record().repair.reconciled.revision, second);
+  assert.deepEqual(o.goals().map(([name]) => name), ['one', 'prog-documentation', 'two'], 'and no goal is cut twice');
+  assert.equal(o.failures().length, 1, 'nothing more failed');
 });
 
 const draftRecordText = () => `${JSON.stringify({ ...JSON.parse(plainText()), version: 2, state: 'draft' }, null, 2)}\n`;

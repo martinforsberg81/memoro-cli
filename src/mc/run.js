@@ -83,7 +83,7 @@ import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
 import { readRecord } from './programme-record.js';
-import { repairGoalAdmission } from './repair-reconcile.js';
+import { PART_CHANGED, reconcileRepair, repairGoalAdmission } from './repair-reconcile.js';
 import { programmeRepositories } from './programme-review.js';
 import { repairMergeBinding } from './repair-delivery.js';
 import { RUNNER_DISK, RUNNER_MEMORY, planAreaName, programsHome, restrictedProgrammeDir, runnerDir, runnerScratchDir, workRoot } from './paths.js';
@@ -1885,6 +1885,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * Every ready order with a part no goal names is cut here, by code: one goal per such part and one more, last, for
    * the documentation, in `build · ready` (`cutParts`, programme-turn.js). No session, no model, no lane and no `runs.tsv` row: the pick that follows reads
    * the new goals with every other goal. The cut is made under the runner lock, on a second reading of what is due.
+   * A released repair order is cut from its released snapshot, and the same cut records the release as reconciled and
+   * writes the order its parts give (`reconcileRepair`, repair-reconcile.js); a goal that is a part in review or merge
+   * whose released part changed returns to build first. A reconciliation that refuses is a cut that failed.
    */
   function cutOrders() {
     const items = turnItems();
@@ -1900,18 +1903,25 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       let outcome;
       try {
         outcome = lock(root, () => {
-          if (!turnDue(programme, items).due) return { made: [] };
+          const again = turnDue(programme, items);
+          if (!again.due) return { made: [] };
+          let made = [];
           try {
-            return { made: cutParts({ programme, home, list: deps.list, read: deps.read, write: deps.write, repositories: (text) => programmeRepositories(text, known), now: deps.now() }) };
-          } catch (error) { return { failed: error.message || String(error) }; }
+            made = cutParts({ programme, home, list: deps.list, read: deps.read, write: deps.write, repositories: (text) => programmeRepositories(text, known), now: deps.now(), ...(again.release ? { text: again.release.snapshot.text } : {}) });
+            if (!again.release) return { made };
+            const toBuild = (one) => goalState(one, `goal:${programme}/${one.name}`, { stage: 'build' }, { comment: `${PART_CHANGED} — back to build` }).problems?.join('; ') ?? null;
+            const recorded = reconcileRepair({ dir: join(home, programme), current: again.release, root, toBuild, list: deps.list, read: deps.read, write: deps.write });
+            return recorded.ok ? { made } : { made, failed: recorded.problems[0] ?? `${programme} has no valid record` };
+          } catch (error) { return { made, failed: error.message || String(error) }; }
         }, { strict: true, name: 'programme-cut' });
       } catch (error) { say(`${name}: not cut now — ${error.message || String(error)}`); continue; }
+      if (outcome.made.length) {
+        say(`${name}: cut — ${outcome.made.map((goal) => `${goal.part ? `Part ${goal.part}` : 'Documentation'} is ${programme}/${goal.name}`).join(', ')}, in build · ready`);
+      }
       if (outcome.failed) {
         const reason = `the cut could not be made: ${outcome.failed}`;
         say(`${name}: ${reason}`);
         countTurnFailure(programme, reason);
-      } else if (outcome.made.length) {
-        say(`${name}: cut — ${outcome.made.map((goal) => `${goal.part ? `Part ${goal.part}` : 'Documentation'} is ${programme}/${goal.name}`).join(', ')}, in build · ready`);
       }
     }
   }
@@ -2895,6 +2905,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const set = setGoalState({ dir: goal.dir, ...change, entry, read: deps.read, write: deps.write });
     const words = [change.stage, change.status].filter(Boolean).join(' · ');
     say(set.problems ? `${name}: could not be set ${words} (${set.problems.join('; ')})` : `${name}: ${stageWords(set.goal)} — ${fields.done ?? fields.comment}`);
+    return set;
   }
 
   /** The goal as GOAL.json has it now, after a session: `{ stage, status }`, the record's when it does not parse. */

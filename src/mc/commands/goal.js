@@ -95,7 +95,7 @@ import { pidAlive, readCurrents } from '../status-collect.js';
 import { NAME_RE } from '../plan-schema.js';
 import { readRecord, repairDraftRefusal } from '../programme-record.js';
 import { deskRepairDraft, repairReleaseState } from '../repair-release.js';
-import { repairGoalAdmission, repairPlanRevision } from '../repair-reconcile.js';
+import { repairGoalAdmission } from '../repair-reconcile.js';
 import { REPAIR_HANDOFF, repairHandoff } from '../repair-delivery.js';
 import { programsHome } from '../paths.js';
 import { orderBrief, orderText, partLeftWords, partOfOrder } from '../programme-turn.js';
@@ -333,9 +333,8 @@ function newGoal(args, flags, ctx) {
   const record = readRecord(programmeDir, { read: ctx.read });
   const repair = repairReleaseState(programmeDir, record.record);
   const deskDraft = deskRepairDraft(ctx.env, record.record);
-  const refusal = deskDraft ? null : repair?.problems?.[0] ?? (repair && (record.record.state !== 'ready'
-    || record.record.repair.reconciled?.revision === repair.release.revision || !repairPlanRevision(ctx.env, programme, repair.release.revision))
-    ? `only the planner of the current release may create goals for repair programme ${programme}` : null);
+  const refusal = deskDraft ? null : repair?.problems?.[0] ?? (repair
+    ? `the runner cuts the goals of repair programme ${programme} from its release — no goal is made in it by hand` : null);
   if (refusal) { stderr.write(`mc: ${refusal}\n`); return 1; }
   if (record.status === 'invalid') { stderr.write(`mc: ${programme} has no valid record\n`); return 1; }
   if (record.status === 'valid' && record.record.state === 'draft' && !deskDraft) {
@@ -438,9 +437,7 @@ function logEntry(args, fields, ctx) {
   const programmeDir = join(ctx.home, target.programme);
   const record = readRecord(programmeDir, { read }).record;
   const release = repairReleaseState(programmeDir, record);
-  const planner = release?.release && repairPlanRevision(env, target.programme, release.release.revision)
-    && record.repair.reconciled?.revision !== release.release.revision;
-  const preparing = planner || deskRepairDraft(env, record);
+  const preparing = deskRepairDraft(env, record);
   const reset = preparing && ['review', 'merge'].includes(goal.stage) && fields.stage === 'build';
   if (release && (fields.stage !== null || fields.status !== null)) {
     let problem = null;
@@ -1477,8 +1474,6 @@ function changeGoal(named, ctx, change, said, after = null) {
     if (!current) return null;
     const env = ctx.env;
     if (deskRepairDraft(env, record)) return null;
-    if (current.release && repairPlanRevision(env, target.programme, current.release.revision)
-      && record.repair.reconciled?.revision !== current.release.revision) return null;
     return repairGoalAdmission(programmeDir, target.goal, { read, record, revision: env.MC_REPAIR_REVISION ?? null })?.problems?.[0];
   };
   const bound = readRecord(programmeDir, { read }).record?.repair;

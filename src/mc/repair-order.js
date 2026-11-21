@@ -128,7 +128,7 @@ export async function finishRepair({ name }, deps = {}) {
     if (!opened.ok) throw new Error(opened.problems[0] ?? `no valid repair order for ${name}`);
     if (opened.record.state === 'ready') {
       archive(opened.record.repair.release.revision);
-      say(`repair programme ${name} is ready for planning`);
+      say(`repair programme ${name} is released — the runner cuts its goals`);
       return 0;
     }
     if (opened.record.repair.pending_scope) return scopeStop(dir, lease, opened.record.repair.pending_scope, { lock, now, say, stderr });
@@ -140,7 +140,7 @@ export async function finishRepair({ name }, deps = {}) {
       if (!current.findings.length) {
         const released = releaseRepair(dir, lease, { lock });
         if (!released.ok) throw new Error(released.problems[0]);
-        say(`repair programme ${name} is ready for planning`);
+        say(`repair programme ${name} is released — the runner cuts its goals`);
         try { archive(released.record.repair.release.revision); }
         finally { wake(root); }
         return 0;

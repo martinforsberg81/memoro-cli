@@ -11,6 +11,7 @@ import { run as martin } from '../../src/mc/commands/martin.js';
 import { goalJson } from './_helpers/goal-file.js';
 import { NO_PROGRESS_STOP, parseLog } from '../../src/mc/goals.js';
 import { writeDeskItem } from '../../src/mc/desk-items.js';
+import { repairSnapshot } from '../../src/mc/repair-manifest.js';
 
 const roots=[]; after(()=>roots.forEach(x=>rmSync(x,{recursive:true,force:true})));
 function fixture() { const root=mkdtempSync(join(tmpdir(),'mc-desk-items-')); roots.push(root); const env={MC_WORK_ROOT:join(root,'mc'),MC_HOME:join(root,'mc-home')}; const home=join(env.MC_WORK_ROOT,'programs'); mkdirSync(join(env.MC_WORK_ROOT,'runner','projects'),{recursive:true}); mkdirSync(join(home,'alpha','goals','one'),{recursive:true}); return {root,env,home,dir:join(home,'alpha','goals','one')}; }
@@ -472,6 +473,19 @@ test('a programme item closes by source when goals name every part of its README
     const closed = syncProgramme(f).item;
     assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.summary], ['closed', 'source', 'The programme record no longer reads valid and ready.'], kind);
   }
+
+  // A repair order's cut is done when its release is reconciled: its goals may name every part while the release is refused.
+  const repair = fixture(); programmeItem(repair); namesParts(repair, 'all', [1, 2]);
+  const revision = 'b833c806-2932-46f3-81d6-ec21b75d8aad';
+  const released = { ...JSON.parse(PROGRAMME_RECORD), created_by: 'repair', repair: {
+    sources: [{ kind: 'proposal', path: '/evidence/proposal.md', key: 'a'.repeat(64), digest: 'b'.repeat(64) }],
+    release: { revision, manifest: repairSnapshot(join(repair.home, 'prog')).manifest } } };
+  writeFileSync(join(repair.home, 'prog', 'PROGRAMME.json'), JSON.stringify(released));
+  assert.equal(syncProgramme(repair).item.state, 'prepared', 'a released repair order that is not reconciled keeps its item open, whatever its goals name');
+  writeFileSync(join(repair.home, 'prog', 'PROGRAMME.json'), JSON.stringify({ ...released, repair: { ...released.repair,
+    reconciled: { revision, reason: 'cut by code: one goal per released part', parts: [[1, 'c'.repeat(64)], [2, 'd'.repeat(64)]], goals: [] } } }));
+  const reconciled = syncProgramme(repair).item;
+  assert.deepEqual([reconciled.state, reconciled.outcome.by, reconciled.outcome.summary], ['closed', 'source', 'The repair release is now reconciled.']);
 
   const gone = fixture(); programmeItem(gone); rmSync(join(gone.home, 'prog'), { recursive: true, force: true });
   const missing = syncProgramme(gone).item;

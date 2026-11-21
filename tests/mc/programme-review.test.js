@@ -35,10 +35,10 @@ import { withRepairAuthor } from '../../src/mc/repair-authority.js';
 import { currentRepairReview } from '../../src/mc/repair-review.js';
 import { reopenRepair, repairReleaseState } from '../../src/mc/repair-release.js';
 import { archivedProposal, readRepairSource, settleRepairSources } from '../../src/mc/repair-sources.js';
-import { repairGoalAdmission } from '../../src/mc/repair-reconcile.js';
-import { programmeDue, REPAIR_NOT_CUT } from '../../src/mc/programme-turn.js';
+import { reconcileRepair, repairGoalAdmission } from '../../src/mc/repair-reconcile.js';
+import { cutParts, programmeDue } from '../../src/mc/programme-turn.js';
 import { realLock } from '../../src/mc/runner-lock.js';
-import { goalJson } from './_helpers/goal-file.js';
+import { goalJson, withGoal } from './_helpers/goal-file.js';
 
 const NOW = new Date('2026-11-15T10:00:00Z');
 const AFTER_START = NOW.getTime() + 60_000;
@@ -135,6 +135,20 @@ function repairSetup(t) {
   return { ...f, artifact, receipt, review, reader, asAuthor: fn => withRepairAuthor(f.baseEnv, 'p', fn) };
 }
 
+/**
+ * The runner's cut of released repair order `p`, through the functions `cutOrders` (run.js) calls under its lock: what
+ * is due, a goal for each released part that has none, and the record change that reconciles the release. The runner
+ * itself is driven in run.test.js. Returns what `reconcileRepair` returns, or `programmeDue`'s answer when nothing is due.
+ */
+function cutRelease(f) {
+  const home = join(f.root, 'programs');
+  const due = programmeDue({ programme: 'p', home, list: listDirsOf, read: readTextOrNull, state: { status: 'none' } });
+  if (!due.due) return due;
+  cutParts({ programme: 'p', home, list: listDirsOf, read: readTextOrNull, write: writeFileAtomic, now: NOW, text: due.release.snapshot.text,
+    repositories: () => ({ repos: [{ repo: 'memoro-cli' }] }) });
+  return reconcileRepair({ dir: f.dir, current: due.release, root: f.root });
+}
+
 test('mc repair re-reviews a revision, releases it, and resumes source archival without a second review', async t => {
   const f = baseSetup(t);
   const home = join(f.root, 'programs');
@@ -186,7 +200,7 @@ test('mc repair re-reviews a revision, releases it, and resumes source archival 
     return DONE;
   });
   assert.equal(first.code, 1, first.err);
-  assert.match(first.out, /restore is ready for planning/u);
+  assert.match(first.out, /restore is released — the runner cuts its goals/u);
   assert.match(first.err, /could not archive repair sources.*--resume restore/u);
   assert.match(orderSeen, /Proved by: Assert the existing success line[\s\S]*Repair review: The fixture now asserts/u);
   assert.equal(readings, 2);
@@ -195,7 +209,8 @@ test('mc repair re-reviews a revision, releases it, and resumes source archival 
   const record = () => readRecord(dir).record;
   const released = record().repair.release.revision;
   const due = programmeDue({ programme: 'restore', home, list: listDirsOf, read: readTextOrNull, state: { status: 'none' } });
-  assert.deepEqual([due.due, due.reason, due.notice], [false, REPAIR_NOT_CUT, `restore: ${REPAIR_NOT_CUT}`], 'the release is unreconciled, and no code cuts a repair release');
+  assert.deepEqual([due.due, due.release.release.revision], [true, released], 'the release is unreconciled: it is due the runner\'s cut, from the snapshot it was released with');
+  assert.equal(due.release.snapshot.text, readFileSync(join(dir, 'README.md'), 'utf8'));
   assert.match(released, /^[a-f0-9-]{36}$/u);
   assert.equal(record().state, 'ready');
 
@@ -203,7 +218,7 @@ test('mc repair re-reviews a revision, releases it, and resumes source archival 
   writeFileSync(path, 'Different waiting evidence.');
   const resumed = await run(['--resume', 'restore']);
   assert.equal(resumed.code, 0, resumed.err);
-  assert.match(resumed.out, /restore is ready for planning/u);
+  assert.match(resumed.out, /restore is released — the runner cuts its goals/u);
   assert.equal(record().repair.release.revision, released);
   assert.equal(readFileSync(path, 'utf8'), 'Different waiting evidence.');
   assert.match(readFileSync(target, 'utf8'), /Utfall: ordered in programme restore[\s\S]*The command refuses its documented input/u);
@@ -379,7 +394,7 @@ test('repair release: only a current receipt with settled findings opens the ord
     writeFileSync(f.artifact, 'original evidence');
     const first = await release();
     assert.equal(first.code, 0, first.err);
-    assert.equal(first.out, 'mc: repair programme p is ready for planning\n');
+    assert.equal(first.out, 'mc: repair programme p is released — the runner cuts its goals\n');
     const original = record();
     assert.equal(repairReleaseState(f.dir, original).release.revision, original.repair.release.revision);
     assert.equal(reopenRepair(f.dir, author).changed, false, 'current release is not replaced');
@@ -398,8 +413,12 @@ test('repair release: only a current receipt with settled findings opens the ord
   });
 });
 
+// The runner's cut reconciles a release; `mc programs reconcile` and the planner's identity are gone. This order's
+// goal is of the old form, written with a contract before the cut became code, so what is pinned here is what an
+// authored goal still owes a release. Its writer is the fixture: no session may write a goal of a release that is
+// not reconciled, and only a desk that took the order over rewrites one.
 for (const edit of ['binding design', 'shared End', 'interrupted cut', 'interrupted takeover']) {
-  test(`repair planning: changed ${edit} needs a new contract and reconciliation`, async t => {
+  test(`repair reconciliation: changed ${edit} needs a new contract of an authored goal before the cut reconciles`, async t => {
     const f = repairSetup(t);
     const home = join(f.root, 'programs');
     const pagePath = join(f.dir, 'README.md');
@@ -408,14 +427,14 @@ for (const edit of ['binding design', 'shared End', 'interrupted cut', 'interrup
     const record = () => readRecord(f.dir).record;
     const readsDue = () => programmeDue(seams);
     const admitted = revision => repairGoalAdmission(f.dir, 'restore', { revision });
-    const plan = () => ({ ...f.baseEnv, MC_HEADLESS: '1', MC_REPAIR_REVISION: record().repair.release.revision });
-    const runGoal = async (args, env = plan()) => {
+    /** A headless session started for `revision`, as the runner starts one. */
+    const session = revision => ({ ...f.baseEnv, MC_HEADLESS: '1', MC_REPAIR_REVISION: revision });
+    const runGoal = async (args, env) => {
       const stdout = sink(), stderr = sink();
       const code = await goal(args, { env, stdout, stderr, known: () => ['/known/memoro-cli'], git: () => ({ ok: true, stdout: '', stderr: '' }) });
       return { code, err: stderr.text() };
     };
     const newArgs = name => ['new', `p/${name}`, '--repo', 'memoro-cli', '--title', 'Restore', '--structure', '1'];
-    const reconcile = () => f.call(['reconcile', 'p', '--reason', 'Compared Part 1 and its goal contract.'], { identity: plan() });
     const sharedOrder = 'End rule: Put row B before row A.';
     let order = page.replace(/### Part 1 — [^\n]+/u, '### Part 1 — Restore rows');
     if (edit === 'shared End') order = order.replace('## End', `## End\n\n${sharedOrder}`);
@@ -428,27 +447,24 @@ for (const edit of ['binding design', 'shared End', 'interrupted cut', 'interrup
     });
     const first = record().repair.release.revision;
     const sources = record().repair.sources;
-    const planner = plan();
-    assert.deepEqual([readsDue().due, readsDue().reason], [false, REPAIR_NOT_CUT], 'a released order nobody has reconciled is not cut by code');
-    for (const args of [
-      newArgs('restore'), ['document', 'add', 'p/restore', '--label', 'Part 1', '--path', pagePath],
-      ['set', 'p/restore', 'goal', '--text', 'Restore settled row order.'],
-      ['set', 'p/restore', 'contract', '--text', 'Put row B before row A.'],
-      ['criterion', 'add', 'p/restore', '--criterion', 'The rows use the settled order.', '--check', 'mc gate'],
-      ['stage', 'p/restore', 'build'],
-    ]) {
-      const made = await runGoal(args);
-      assert.equal(made.code, 0, made.err);
-    }
+    assert.equal(readsDue().due, true, 'a released order nobody has reconciled is due the cut');
+    const goalPath = join(f.dir, 'goals', 'restore', 'GOAL.json');
+    mkdirSync(join(f.dir, 'goals', 'restore'), { recursive: true });
+    writeFileSync(goalPath, goalJson({ title: 'Restore', goal: ['Restore settled row order.'], contract: ['Put row B before row A.'],
+      success_criteria: [{ criterion: 'The rows use the settled order.', check: 'mc gate', met: false }], documents: [{ label: 'Part 1', path: pagePath }] }));
     assert.match(admitted().problems[0], /not reconciled/u);
     if (edit.startsWith('interrupted')) {
       assert.equal(record().repair.reconciled, undefined);
       assert.match(admitted().problems[0], /not reconciled/u);
     } else {
-      const firstReconciled = await reconcile();
-      assert.equal(firstReconciled.code, 0, firstReconciled.err);
+      const firstReconciled = cutRelease(f);
+      assert.equal(firstReconciled.ok, true, firstReconciled.problems?.[0]);
       assert.equal(readsDue().reason, 'its release is reconciled');
       assert.equal(admitted().release.revision, first);
+      assert.deepEqual(readdirSync(join(f.dir, 'goals')), ['restore'], 'every part has a goal of the old form: the cut makes none');
+      const byHand = await runGoal(newArgs('another'), session(first));
+      assert.equal(byHand.code, 1);
+      assert.match(byHand.err, /the runner cuts the goals of repair programme p from its release/u);
     }
 
     const changedContract = 'Put row A before row B.';
@@ -459,7 +475,7 @@ for (const edit of ['binding design', 'shared End', 'interrupted cut', 'interrup
     assert.equal(readsDue().due, false);
     assert.match(readsDue().reason, /needs review/u);
     assert.match(admitted().problems[0], /needs review/u);
-    const refused = await runGoal(newArgs('another'), planner);
+    const refused = await runGoal(newArgs('another'), session(first));
     assert.equal(refused.code, 1, refused.err);
     assert.match(refused.err, /needs review/u);
     assert.equal(existsSync(join(f.dir, 'goals', 'another')), false);
@@ -484,7 +500,6 @@ for (const edit of ['binding design', 'shared End', 'interrupted cut', 'interrup
       return;
     }
     const stdout = sink(), stderr = sink();
-    const goalPath = join(f.dir, 'goals', 'restore', 'GOAL.json');
     const goalBeforeResume = readFileSync(goalPath, 'utf8');
     assert.equal(JSON.parse(goalBeforeResume).stage, 'build');
     const resumed = await repair(['--resume', 'p'], {
@@ -496,25 +511,28 @@ for (const edit of ['binding design', 'shared End', 'interrupted cut', 'interrup
       },
     });
     assert.equal(resumed, 0, stderr.text());
-    assert.match(stdout.text(), /repair programme p is ready for planning/u);
+    assert.match(stdout.text(), /repair programme p is released — the runner cuts its goals/u);
     const second = record().repair.release.revision;
     assert.deepEqual(record().repair.sources, sources);
     assert.equal(readFileSync(goalPath, 'utf8'), goalBeforeResume);
     assert.equal(readFileSync(pagePath, 'utf8'), order, 'resume does not rewrite the reviewed order');
     assert.notEqual(first, second);
-    assert.equal(readsDue().reason, REPAIR_NOT_CUT, 'the new release is unreconciled, even though Part 1 already has a runnable goal');
+    assert.equal(readsDue().due, true, 'the new release is unreconciled and due the cut, though Part 1 already has a runnable goal');
     assert.match(admitted().problems[0], /not reconciled/u);
-    const unchanged = await reconcile();
-    assert.equal(unchanged.code, 1);
-    assert.match(unchanged.err, edit === 'interrupted cut' ? /earlier cut never reconciled/u : /released part changed/u);
+    const unchanged = cutRelease(f);
+    assert.equal(unchanged.ok, false);
+    assert.match(unchanged.problems[0], edit === 'interrupted cut' ? /earlier cut never reconciled/u : /released part changed/u);
     assert.match(admitted().problems[0], /not reconciled/u);
-    const obsolete = await runGoal(['set', 'p/restore', 'contract', '--text', 'Contract from an older turn.'], planner);
+    const obsolete = await runGoal(['set', 'p/restore', 'contract', '--text', 'Contract from an older turn.'], session(first));
     assert.equal(obsolete.code, 1);
     assert.match(obsolete.err, /different repair release/u);
-    const update = await runGoal(['set', 'p/restore', 'contract', '--text', changedContract]);
-    assert.equal(update.code, 0, update.err);
-    const secondReconciled = await reconcile();
-    assert.equal(secondReconciled.code, 0, secondReconciled.err);
+    const unadmitted = await runGoal(['set', 'p/restore', 'contract', '--text', changedContract], session(second));
+    assert.equal(unadmitted.code, 1, 'no session writes a goal of a release that is not reconciled, whatever its role');
+    assert.match(unadmitted.err, /not reconciled for this repair release/u);
+    assert.equal(readFileSync(goalPath, 'utf8'), goalBeforeResume);
+    writeFileSync(goalPath, withGoal(goalBeforeResume, { contract: [changedContract] }));
+    const secondReconciled = cutRelease(f);
+    assert.equal(secondReconciled.ok, true, secondReconciled.problems?.[0]);
     assert.equal(readsDue().due, false);
     assert.equal(admitted(second).release.revision, second);
     assert.match(admitted(first).problems[0], /different repair release/u);
@@ -584,7 +602,6 @@ test('repair delivery: a queued or in-flight PR cannot use a stale order or a la
       return readRecord(f.dir).record.repair.release.revision;
     };
     const identity = (revision, extra) => ({ ...f.baseEnv, MC_HEADLESS: '1', MC_REPAIR_REVISION: revision, ...extra });
-    const reconcile = revision => f.call(['reconcile', 'p', '--reason', 'Compared Part 1 and the goal contract.'], { identity: identity(revision) });
     const call = async (args, env) => {
       const stdout = sink(), stderr = sink();
       const code = await goal(args, {
@@ -606,8 +623,8 @@ test('repair delivery: a queued or in-flight PR cannot use a stale order or a la
     };
     const stale = () => writeFileSync(page, order.replace(/### Part 1 — [^\n]+/u, '### Part 1 — Restore panels'));
     const first = await release();
-    const before = await reconcile(first);
-    assert.equal(before.code, 0, before.err);
+    const before = cutRelease(f);
+    assert.equal(before.ok, true, before.problems?.[0]);
     const old = await intoMerge(first);
     assert.equal(old.repair_revision, first);
     assert.equal(old.sha, sha);
@@ -646,17 +663,15 @@ test('repair delivery: a queued or in-flight PR cannot use a stale order or a la
     assert.equal(reopenRepair(f.dir, author).changed, true);
     const next = await release();
     assert.notEqual(next, first);
-    const planner = identity(next);
-    for (const args of [
-      ['stage', 'p/restore', 'build'],
-      ['set', 'p/restore', 'contract', '--text', 'Restore the panels to their settled order.'],
-      ['criterion', 'unmet', 'p/restore', '1'],
-    ]) {
-      const result = await call(args, planner);
-      assert.equal(result.code, 0, result.err);
-    }
-    const after = await reconcile(next);
-    assert.equal(after.code, 0, after.err);
+    const handedOff = cutRelease(f);
+    assert.equal(handedOff.ok, false);
+    assert.match(handedOff.problems[0], /restore: the released part changed — update its contract/u);
+    // The goal is of the old form, and the planner that rewrote it is gone; the fixture stands in for a desk that
+    // took the order over: back in build from the old merge handoff, a contract for the changed part, no carried mark.
+    writeFileSync(file, goalJson({ ...JSON.parse(readFileSync(file, 'utf8')), stage: 'build',
+      contract: ['Restore the panels to their settled order.'], success_criteria: [{ ...criterion, met: false }] }));
+    const after = cutRelease(f);
+    assert.equal(after.ok, true, after.problems?.[0]);
     const current = await intoMerge(next);
     assert.equal(current.repair_revision, next);
     const obsolete = await call(['stage', 'p/restore', 'merge'], identity(first, {
@@ -724,9 +739,8 @@ test('repair archival: stale inputs cannot complete a newer release', async t =>
       const result = await f.call(['release', 'p'], { identity: author });
       assert.equal(result.code, 0, result.err);
       const revision = readRecord(f.dir).record.repair.release.revision;
-      const identity = { ...f.baseEnv, MC_HEADLESS: '1', MC_REPAIR_REVISION: revision };
-      const reconciled = await f.call(['reconcile', 'p', '--reason', 'Part 1 still describes the landed restoration.'], { identity });
-      assert.equal(reconciled.code, 0, reconciled.err);
+      const reconciled = cutRelease(f);
+      assert.equal(reconciled.ok, true, reconciled.problems?.[0]);
       return revision;
     };
 
@@ -788,9 +802,8 @@ for (const [action, confirmation, lateLanding] of [
       assert.equal(read.code, 0, read.err);
       assert.equal((await f.call(['release', 'p'], { identity: author })).code, 0);
       const prior = record().repair.release.revision;
-      const planner = { ...f.baseEnv, MC_HEADLESS: '1', MC_REPAIR_REVISION: prior };
-      const reconciled = await f.call(['reconcile', 'p', '--reason', 'Reviewed both parts.'], { identity: planner });
-      assert.equal(reconciled.code, 0, reconciled.err);
+      const reconciled = cutRelease(f);
+      assert.equal(reconciled.ok, true, reconciled.problems?.[0]);
       assert.equal(admit(prior).release.revision, prior);
       if (lateLanding) realLock(f.root, () => settleRepairSources({ env: f.baseEnv, sources: [ref], programme: 'p', action: 'order' }), { strict: true });
       writeFileSync(page, firstPage.replace('Restore the settled row order.', 'Choose a new grouping.'));

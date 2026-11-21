@@ -1,30 +1,38 @@
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
 
+import { cutFromOrder } from './goal-parts.js';
 import { GOAL_FILE, GOALS_DIR, listDirsOf, parseGoal, readTextOrNull } from './goals.js';
 import { workRoot } from './paths.js';
-import { changeProgrammeRecord, readRecord } from './programme-record.js';
-import { splitProgrammeParts } from './programme-turn.js';
+import { changeProgrammeRecord, normalized, PHASES_ORDER, readRecord } from './programme-record.js';
+import { partsOrder, splitProgrammeParts } from './programme-turn.js';
 import { readRepairCut, repairGoalContract } from './repair-cut.js';
 import { repairArtifactNames, repairDigest, repairSnapshot } from './repair-manifest.js';
 import { deskRepairDraft, isDesk, repairReleaseState } from './repair-release.js';
 
 const refused = problem => ({ problems: [problem] });
-export function repairPlanRevision(env, name, revision) {
-  return ['plan', 'plan-session'].includes(env.MC_ROLE) && env.MC_HEADLESS === '1' && !env.MC_GOAL
-    && env.MC_PROGRAMME === name && env.MC_REPAIR_REVISION === revision;
-}
 
-export function reconcileRepair({ home, programme, env, reason, list = listDirsOf, read = readTextOrNull, lock }) {
-  const dir = join(home, programme);
+/** The reason the runner's cut records with a reconciliation: no reader compared anything, the goals are the parts. */
+export const CUT_REASON = 'cut by code: one goal per released part';
+/** What the runner writes into a goal it returns to build before a release is reconciled (`reconciledRecord`). */
+export const PART_CHANGED = 'its released part changed';
+
+/**
+ * The record change of the runner's cut of a released repair order (mc-run.md, "The cut of a ready order"): the
+ * release is recorded as reconciled with the goals `cutParts` left, and the order its parts give is written into
+ * `phases.after` in the same write. `current` is the release and the snapshot the goals were cut from, as
+ * `programmeDue` read them. The caller holds the runner lock, so none is taken here. `toBuild({ name, dir })` returns
+ * a goal to build with the runner's log entry and gives null, or the problem that kept it. A programme whose goals
+ * are all of the old form keeps the dependencies its record states.
+ */
+export function reconcileRepair({ dir, current, root, toBuild, list = listDirsOf, read = readTextOrNull, write }) {
+  const programme = basename(dir);
   return changeProgrammeRecord(dir, record => {
-    const current = repairReleaseState(dir, record);
-    if (!current) return refused(`${programme} is not a repair-owned programme`);
-    if (!current.release || record.state !== 'ready') return refused(current.problems?.[0] ?? `${programme} is not ready`);
-    const revision = current.release.revision;
-    if (!repairPlanRevision(env, programme, revision)) return refused('only the programme planner for this release may reconcile it');
-    return reconciledRecord({ record, current, dir, reason, list, read });
-  }, { root: workRoot(env), lock, read }, 'repair-reconcile');
+    if (record.state !== 'ready' || record.repair?.release?.revision !== current.release.revision) return refused(`${programme} is not ready at the release that was cut`);
+    const reconciled = reconciledRecord({ record, current, dir, reason: CUT_REASON, list, read, toBuild });
+    if (reconciled.problems || !readRepairCut(dir, { list, read }).rows.some(({ goal }) => cutFromOrder(goal))) return reconciled;
+    return normalized({ ...reconciled, phases: { order: PHASES_ORDER, after: partsOrder(current.snapshot.text).after } });
+  }, { root, lock: (_root, fn) => fn(), read, ...(write ? { write } : {}) }, 'repair-reconcile');
 }
 
 /**
@@ -61,7 +69,15 @@ function partContracts({ text, manifest }) {
   });
 }
 
-function reconciledRecord({ record, current, dir, reason, list, read }) {
+/**
+ * The record with `current`'s release reconciled, or the refusal. A goal cut from the order (`cutFromOrder`) holds no
+ * text and its sessions read the released snapshot, so it differs from an authored goal: the documentation goal names
+ * no part and is accepted; a changed part or an earlier cut that never reconciled asks no contract change of it; one
+ * whose part has left the release is left out, so nothing of it is admitted, and the desk drops it; and one in review
+ * or merge whose part changed is returned to build (`toBuild`), after every other check, or refused where no caller
+ * can do that.
+ */
+function reconciledRecord({ record, current, dir, reason, list, read, toBuild }) {
   const revision = current.release.revision;
   const prior = record.repair.reconciled;
   if (prior?.revision === revision) return record;
@@ -77,13 +93,16 @@ function reconciledRecord({ record, current, dir, reason, list, read }) {
   const unreconciled = new Map(current.release.unreconciled);
   const goals = [];
   const covered = new Set();
+  const returning = [];
   for (const { name, dir: goalDir, named, goal } of cut.rows) {
     if (goal.stage === 'dropped') continue;
     const landed = goal.stage === 'done';
     const previous = previousGoals.get(name);
     const selected = landed && previous ? previous.named : [...named];
-    if (!landed && previous?.named.some(number => !nextParts.has(number))) return refused(`${name}: retire unfinished work for its removed part`);
-    if (!landed && (!selected.length || selected.some(number => !nextParts.has(number)))) {
+    const fromOrder = !landed && cutFromOrder(goal);
+    if (fromOrder && selected.some(number => !nextParts.has(number))) continue;
+    if (!fromOrder && !landed && previous?.named.some(number => !nextParts.has(number))) return refused(`${name}: retire unfinished work for its removed part`);
+    if (!fromOrder && !landed && (!selected.length || selected.some(number => !nextParts.has(number)))) {
       return refused(`${name}: retire unfinished work for a removed part or name its current parts through mc goal`);
     }
     if (!landed && goalDir !== join(goalsDir, name)) return refused(`${name}: unfinished goal is archived`);
@@ -91,19 +110,25 @@ function reconciledRecord({ record, current, dir, reason, list, read }) {
     const matching = number => nextParts.has(number) && previousParts.get(number) === nextParts.get(number);
     const changed = Boolean(previous && (!selected.every(matching) || !previous.named.every(number => selected.includes(number))));
     const staleContract = unreconciled.get(name);
-    if (!landed && (staleContract || changed) && (contract === staleContract || contract === previous?.digest
+    const back = fromOrder && selected.length > 0 && ['review', 'merge'].includes(goal.stage) && !(previous && selected.every(matching));
+    if (back) returning.push({ name, dir: goalDir });
+    if (!fromOrder && !landed && (staleContract || changed) && (contract === staleContract || contract === previous?.digest
         || !['draft', 'build'].includes(goal.stage) || goal.success_criteria.some(item => item.met))) {
       const why = staleContract ? 'the earlier cut never reconciled' : 'the released part changed';
       return refused(`${name}: ${why} — update its contract, take back its criterion marks and return it to draft or build before reconciliation`);
     }
-    if (!landed && !previous && !['draft', 'build'].includes(goal.stage)) return refused(`${name}: return unversioned work to draft or build before reconciliation`);
-    if (!landed && goal.stage === 'merge') return refused(`${name}: return the old merge handoff to build before reconciling this release`);
+    if (!back && !landed && !previous && !['draft', 'build'].includes(goal.stage)) return refused(`${name}: return unversioned work to draft or build before reconciliation`);
+    if (!back && !landed && goal.stage === 'merge') return refused(`${name}: return the old merge handoff to build before reconciling this release`);
     for (const number of selected) if (!landed || !prior || (previous && matching(number))) covered.add(number);
     goals.push([name, contract, landed ? selected.filter(number => !prior || (previous && matching(number))) : selected]);
   }
   const missing = parts.map(([number]) => number).filter(number => !covered.has(number));
   if (missing.length) return refused(`no current goal covers released part(s) ${missing.join(', ')}`);
   if (new Set(goals.map(([name]) => name)).size !== goals.length) return refused('a goal name exists more than once');
+  for (const one of returning) {
+    const kept = toBuild ? toBuild(one) : 'return it to build before reconciliation';
+    if (kept) return refused(`${one.name}: ${PART_CHANGED} — ${kept}`);
+  }
   return { ...record, repair: { ...record.repair, reconciled: { revision, reason: reason.trim(), parts, goals } } };
 }
 
