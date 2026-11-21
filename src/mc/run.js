@@ -944,7 +944,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     return `skipped:no-capacity (${why})`;
   }
 
-  /** The candidate a work class runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read. */
+  /** The candidate a catalog list runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read. */
   function routeClass(cls, { avoid = null, catalog = null } = {}) {
     try {
       const saved = deps.catalog();
@@ -2045,7 +2045,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         countTurnFailure(programme, reason, `${out}.jsonl`);
         note = reason;
       }
-      logRun({ ...read, ts: stamp(), name, kind: 'plan', exit: result.status, seconds, pr: '-', note, model: settings.model, cls: 'large', tool: settings.tool, effort: settings.effort, billing: picked.billing });
+      logRun({ ...read, ts: stamp(), name, kind: 'plan', exit: result.status, seconds, pr: '-', note, model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing });
       say(`${name}: plan done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
       return 'ran';
     } finally {
@@ -2170,7 +2170,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const roleName = ARCHIVE_ROLE;
     const role = deps.role(roleName);
     if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
-    const route = routeClass('large');
+    const route = routeClass('build');
     if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
     const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const launch = deps.launch(settings.tool);
@@ -2229,7 +2229,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       marker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind: 'plan', stem, started: stamp() };
       deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
       const current = { name, step: null, kind: 'plan', variant: null, programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
-        effort: settings.effort, advisor: settings.advisor, class: 'large', billing: picked.billing,
+        effort: settings.effort, advisor: settings.advisor, billing: picked.billing,
         check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0, started: stamp(), pid, worktree: dir,
         ...(due.revision ? { repair_revision: due.revision } : {}),
         ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
@@ -2281,7 +2281,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         countArchive(programme, { kind: 'not-ok', reason: `write-back NOT OK: ${parsed.lines.join(' | ')}`, log: `${out}.jsonl`, lines: parsed.lines });
         note = `${note},write-back NOT OK`;
       }
-      logRun({ ...read, ts: stamp(), name, kind: 'plan', exit: result.status, seconds, pr: '-', note, model: settings.model, cls: 'large', tool: settings.tool, effort: settings.effort, billing: picked.billing });
+      logRun({ ...read, ts: stamp(), name, kind: 'plan', exit: result.status, seconds, pr: '-', note, model: settings.model, cls: 'build', tool: settings.tool, effort: settings.effort, billing: picked.billing });
       say(`${name}: archive reading done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
       return outcome;
     } finally {
@@ -2350,7 +2350,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } finally { claims.delete(name); claimRepos.delete(name); }
   }
   /**
-   * One manager curation turn: one headless session of the manager role with nobody present, large class, one
+   * One manager curation turn: one headless session of the manager role with nobody present, on the build list (as the large class was), one
    * runs.tsv row, in branch worktrees made from origin/main of every repository that declares areas.
    */
   async function runManager(item, { lane }) {
@@ -2359,7 +2359,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const roleName = 'manager';
     const role = deps.role(roleName);
     if (!role?.overlay) { say(`${turnLabel}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
-    const route = routeClass('large');
+    const route = routeClass('build');
     if (!route.ok) { say(`${turnLabel}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
     const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const launch = deps.launch(settings.tool);
@@ -2422,7 +2422,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       marker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind: 'manager', stem, started: stamp() };
       deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
       const current = { name, step: null, kind: 'manager', variant: null, programme: null, repo: repoName, lane, tool: settings.tool, model: settings.model,
-        effort: settings.effort, advisor: settings.advisor, class: 'large', billing: picked.billing,
+        effort: settings.effort, advisor: settings.advisor, billing: picked.billing,
         check_in_minutes: requireCapability(launch.id, 'WATCH')?.checkIn ? settings.checkInMinutes : null, check_ins: 0, started: stamp(), pid, worktree: cwd,
         ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
         role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
@@ -2470,7 +2470,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         note = `curation session exited ${result.status ?? 1} (${read.note})`;
         say(`${turnLabel}: curation failed — ${note}; the next turn waits for the cadence`);
       }
-      logRun({ ...read, ts: stamp(), name: turnLabel, kind: 'manager', exit: result.status, seconds, pr: '-', note, model: settings.model, cls: 'large', tool: settings.tool, effort: settings.effort, billing: picked.billing });
+      logRun({ ...read, ts: stamp(), name: turnLabel, kind: 'manager', exit: result.status, seconds, pr: '-', note, model: settings.model, cls: 'build', tool: settings.tool, effort: settings.effort, billing: picked.billing });
       say(`${turnLabel}: manager done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
       return 'ran';
     } finally {
@@ -2607,7 +2607,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const instructions = instructionsFor(launch.id, role.overlay);
       const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
       const current = { name, kind: 'mend', variant: null, repo: repoName, lane, pid, worktree, started: stamp(), tool: settings.tool, model: settings.model,
-        effort: settings.effort, class: 'fast', billing: picked.billing,
+        effort: settings.effort, billing: picked.billing,
         ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
         role: roleRecord({ name: MEND_ROLE, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
       writeJson(currentPath, current);
@@ -2631,7 +2631,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
       refuseProvider(read, launch, picked.billing, settings.model);
-      logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: 'fast', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
+      logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       return 'ran';
     } finally {
       try {
@@ -2755,7 +2755,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const instructions = instructionsFor(launch.id, role.overlay);
       const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
       const current = { name, kind: 'mend', variant: null, repo: repoName, lane, pid, worktree: cwd, started: stamp(), tool: settings.tool, model: settings.model,
-        effort: settings.effort, class: 'fast', billing: picked.billing,
+        effort: settings.effort, billing: picked.billing,
         ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
         role: roleRecord({ name: MEND_ROLE, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
       writeJson(currentPath, current);
@@ -2779,7 +2779,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
       refuseProvider(read, launch, picked.billing, settings.model);
-      logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: 'fast', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
+      logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       return 'ran';
     } finally {
       try {
@@ -3375,9 +3375,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * `build` after a rejection gets a repair (the build role, REVIEW.md named in the prompt, the finish list); an unqueued
    * merge failure gets a mend session
    * (`mend-session`) and `afterMend`. Every kind runs in the goal's worktree.
-   * Only a build routes on the goal's class (fast, medium, large); review, repair, mend
-   * and plan each route on their own catalog list, whatever the class, and wait
-   * when it has no candidate rather than borrow a class's.
+   * Only a build routes on the catalog's `build` list (a goal has no class); review, repair, mend
+   * and plan each route on their own catalog list, and wait
+   * when it has no candidate rather than borrow `build`'s.
    *
    * A session cut off by the API is not resumed: it ends, its goal is picked
    * again, and the next session reads `LOG.md` and the branch. The worktree
@@ -3406,7 +3406,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const roleName = GOAL_ROLES[kind];
     const role = deps.role(roleName);
     if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
-    const routeList = kind === 'build' ? goal.class : repair ? 'finish' : kind;
+    const routeList = kind === 'build' ? 'build' : repair ? 'finish' : kind;
     const routed = review ? reviewRoute(goal) : { route: routeClass(routeList) };
     if (review && !routed.ok) { say(`${name}: its review waits — ${routed.reason}`); return 'skipped:no-capacity'; }
     const { route } = routed;
@@ -3506,14 +3506,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const entriesBefore = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length;
       // What a build session is judged on, read before it starts (`afterBuild`).
       const progressBefore = kind === 'build' || repair ? progressReading(goal) : null;
-      say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · ${kind === 'build' ? `class ${goal.class}` : `${routeList} list`}: ${route.basis} (${route.why})`);
+      say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · ${routeList} list: ${route.basis} (${route.why})`);
       const t0 = deps.now().getTime();
       // There exactly as long as the session is, so in flight and slot are one
       // fact, and the eligibility of this goal is that same fact.
       const currentPath = paths.currentFor(repoName, lane);
       const current = {
         name, step: null, kind, variant: goalVariant(kind), programme: goal.programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
-        effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
+        effort: settings.effort, advisor: settings.advisor, billing: picked.billing,
         check_in_minutes: requireCapability(launch.id, 'WATCH')?.checkIn ? settings.checkInMinutes : null, check_ins: 0,
         started: stamp(), pid, worktree: cwd,
         ...(revision ? { repair_revision: revision } : {}),
@@ -3643,7 +3643,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       else if (spoke && progressBefore && !read.quota && !read.interrupted) afterBuild(goal, name, progressBefore);
       else if (!spoke && read.interrupted !== 'offline') goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
       const note = spoke ? read.note : `${read.note},no-log`;
-      logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: goalVariant(kind) }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
+      logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: goalVariant(kind) }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: kind === 'build' ? 'build' : '-', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       say(`${name}: ${kind} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
       return 'ran';
     } finally { admission.release?.(); dropSlot(); }

@@ -34,7 +34,7 @@
  */
 import { join } from 'node:path';
 
-import { addGoalWorktree, appendLog, CLASSES, currentPhase, FINISHED, GOAL_FILE, GOALS_DIR, goalDirIn, listDirsOf, LOG_FILE, logStamp, programsGoals, readTextOrNull, renderGoal } from './goals.js';
+import { addGoalWorktree, appendLog, currentPhase, FINISHED, GOAL_FILE, GOALS_DIR, goalDirIn, listDirsOf, LOG_FILE, logStamp, programsGoals, readTextOrNull, renderGoal } from './goals.js';
 import { repoNameOf } from './repos.js';
 
 const PLAN = 'PLAN.json';
@@ -66,7 +66,7 @@ export function projectSteps(plan, state) {
     const model = step.runner?.model ?? plan.runner?.model;
     return {
       n: i + 1, title: String(step.title ?? `Step ${i + 1}`).trim(), instruction: paragraphs(step.instruction), done_when: String(step.done_when ?? '').trim(),
-      kind: step.kind ?? null, class: CLASSES.includes(model) ? model : null, status,
+      kind: step.kind ?? null, status,
       pr: Number.isInteger(at.pr ?? step.pr) ? (at.pr ?? step.pr) : null, branch: typeof at.branch === 'string' && at.branch ? at.branch : null,
       blocked_by: status === 'blocked' ? (at.blocked_by ?? step.blocked_by ?? null) : null, reason: at.reason ?? step.reason ?? null,
     };
@@ -196,7 +196,7 @@ export function planGoals({ programme, project, plan, state, existing = [], phas
     const goalText = [...paragraphs(plan.goal), ...left.flatMap((step) => [`**Step ${step.n} — ${step.title}.**`, ...step.instruction])];
     const goal = {
       ...shared, ...where, phase: Math.max(phase, ...holds.map((hold) => hold.after + 1)),
-      class: left.find((step) => step.class)?.class ?? 'large', prs: pr ? [{ repo, pr }] : [],
+      prs: pr ? [{ repo, pr }] : [],
       title: titleOf(plan, project), goal: goalText,
       success_criteria: [...left.map((step) => stepCriterion(step, built(step))), ...success],
     };
@@ -214,7 +214,7 @@ export function planGoals({ programme, project, plan, state, existing = [], phas
     before = stepPhase;
     const last = i === left.length - 1;
     const goal = {
-      ...shared, ...where, phase: stepPhase, class: step.class ?? 'large', prs: review ? [{ repo, pr: step.pr }] : [],
+      ...shared, ...where, phase: stepPhase, prs: review ? [{ repo, pr: step.pr }] : [],
       title: step.title, goal: step.instruction,
       success_criteria: [stepCriterion(step, review), ...(last ? success : [])],
     };

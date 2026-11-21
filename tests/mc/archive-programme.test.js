@@ -88,7 +88,7 @@ function fixture({ goal = null, extra = false, second = false } = {}) {
   if (goal) {
     mkdirSync(join(root, 'work', 'programs', programme, 'goals', 'g'), { recursive: true });
     writeFileSync(join(root, 'work', 'programs', programme, 'goals', 'g', 'GOAL.json'), renderGoal({
-      stage: goal, status: 'ready', repos: ['memoro-cli'], class: 'large', title: 'G', goal: ['g'],
+      stage: goal, status: 'ready', repos: ['memoro-cli'], title: 'G', goal: ['g'],
       success_criteria: [{ met: false, criterion: 'x', check: 'y' }],
     }));
   }

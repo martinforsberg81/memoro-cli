@@ -261,13 +261,13 @@ test('goal outcome: an active main-red wait retains the attempt and Next, then r
 
 test('mc goal new writes a GOAL.json skeleton and LOG.md, fetches each repository, and makes no worktree', async () => {
   const f = fixture();
-  const code = await run(['new', 'mc/plain', '--repo', 'memoro-cli,memoro', '--class', 'large', '--title', 'Make the goal plain', '--structure', '1'], f.deps);
+  const code = await run(['new', 'mc/plain', '--repo', 'memoro-cli,memoro', '--title', 'Make the goal plain', '--structure', '1'], f.deps);
   assert.equal(code, 0, f.err());
 
   const goal = parseGoal(f.store[`${DIR}/GOAL.json`]);
   assert.deepEqual([goal.stage, goal.status], ['draft', 'ready'], 'a new goal is in draft unless --stage build');
   assert.deepEqual(goal.repos, ['memoro-cli', 'memoro']);
-  assert.equal(goal.class, 'large');
+  assert.equal(goal.class, undefined, 'a goal has no class');
   assert.equal(goal.created, '2026-11-01T20:00:00Z');
   assert.equal(goal.title, 'Make the goal plain');
   assert.deepEqual([goal.goal, goal.contract, goal.out_of_scope, goal.success_criteria, goal.documents], [[], [], [], [], []]);
@@ -285,38 +285,41 @@ test('mc goal new writes a GOAL.json skeleton and LOG.md, fetches each repositor
   assert.match(f.out(), /GOAL\.json is to be filled in by verbs: mc goal set mc\/plain/u);
 });
 
-test('mc goal new accepts medium and reads it back from GOAL.json', async () => {
+test('mc goal new refuses --class, which goals no longer have', async () => {
   const f = fixture();
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'medium', '--title', 'Across chosen components'], f.deps), 0, f.err());
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--title', 'Across chosen components'], f.deps), 0, f.err());
   const goal = parseGoal(f.store[`${DIR}/GOAL.json`]);
-  assert.equal(goal.class, 'medium');
+  assert.equal(goal.class, undefined);
+  assert.doesNotMatch(f.store[`${DIR}/GOAL.json`], /"class"/u);
   assert.match(f.out(), /mc: mc\/plain · draft · ready/u);
   assert.equal(await run(['show', 'mc/plain'], f.deps), 0, f.err());
-  assert.match(f.out(), /draft · ready · phase 1 · memoro-cli · medium/u, 'show exposes medium in the goal status line');
+  assert.match(f.out(), /draft · ready · phase 1 · memoro-cli · criteria/u, 'show has no class in the goal status line');
+  const withClass = fixture();
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'medium', '--title', 'T'], withClass.deps), 2);
 });
 
 test('mc goal new --stage build is refused with exit 2 and creates nothing; --stage draft makes the goal; no other stage is a new goal\'s', async () => {
   const f = fixture();
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T', '--stage', 'build'], f.deps), 2);
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--title', 'T', '--stage', 'build'], f.deps), 2);
   assert.match(f.err(), /written in draft.*mc goal stage <programme>\/<goal> build\n/u);
   assert.equal(f.store[`${DIR}/GOAL.json`], undefined);
   assert.equal(f.store[`${DIR}/LOG.md`], undefined);
   assert.deepEqual(f.calls, [], 'nothing was fetched');
   const d = fixture();
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T', '--stage', 'draft'], d.deps), 0, d.err());
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--title', 'T', '--stage', 'draft'], d.deps), 0, d.err());
   assert.equal(parseGoal(d.store[`${DIR}/GOAL.json`]).stage, 'draft');
   const g = fixture();
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T', '--stage', 'review'], g.deps), 2);
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--title', 'T', '--stage', 'review'], g.deps), 2);
   assert.match(g.err(), /--stage is draft for a new goal, not review/u);
   const h = fixture();
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T', '--stage', 'plan'], h.deps), 2, 'the old word is not a new goal\'s stage');
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--title', 'T', '--stage', 'plan'], h.deps), 2, 'the old word is not a new goal\'s stage');
   assert.match(h.err(), /--stage is draft for a new goal, not plan/u);
   assert.equal(g.store[`${DIR}/GOAL.json`], undefined);
 });
 
 test('mc goal new makes no worktree even when goal/<goal> already exists: the runner re-adds it at the first session', async () => {
   const f = fixture({ git: (cwd, args) => (args[0] === 'show-ref' ? ok() : allOk()) });
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'Again'], f.deps), 0);
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--title', 'Again'], f.deps), 0);
   assert.deepEqual(f.calls.map((call) => call.args[0]), ['fetch'], 'only the fetch');
 });
 
@@ -338,7 +341,7 @@ test('addGoalWorktree adds an existing goal/<goal> as it is, after a prune, and 
 });
 
 test('mc goal new refuses a programme with no directory, a goal that exists, a repository mc does not know, and an unknown class', async () => {
-  const args = (programme, repo, cls) => ['new', programme, '--repo', repo, '--class', cls, '--title', 'T'];
+  const args = (programme, repo, cls) => ['new', programme, '--repo', repo, '--title', 'T'];
 
   const nope = fixture();
   assert.equal(await run(args('nope/plain', 'memoro', 'fast'), nope.deps), 1);
@@ -353,29 +356,25 @@ test('mc goal new refuses a programme with no directory, a goal that exists, a r
   assert.match(unknown.err(), /nowhere is not a repository mc knows/u);
   assert.equal(unknown.store[`${HOME}/mc/goals/other/GOAL.json`], undefined);
 
-  const badClass = fixture();
-  assert.equal(await run(args('mc/plain', 'memoro', 'huge'), badClass.deps), 2);
-  assert.match(badClass.err(), /--class is fast or medium or large, not huge/u);
-  assert.deepEqual(badClass.calls, []);
 });
 
 test('mc goal new refuses without a title, a repository or a class, and a name that is not programme/goal', async () => {
   const f = fixture();
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast'], f.deps), 2);
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', ], f.deps), 2);
   assert.match(f.err(), /new needs --title/u);
 
   const g = fixture();
-  assert.equal(await run(['new', 'mc/plain', '--class', 'fast', '--title', 'T'], g.deps), 2);
+  assert.equal(await run(['new', 'mc/plain', '--title', 'T'], g.deps), 2);
   assert.match(g.err(), /new needs --repo/u);
 
   const h = fixture();
-  assert.equal(await run(['new', 'plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T'], h.deps), 2);
+  assert.equal(await run(['new', 'plain', '--repo', 'memoro', '--title', 'T'], h.deps), 2);
   assert.match(h.err(), /plain is not <programme>\/<goal>/u);
 });
 
 test('mc goal new leaves nothing behind when a repository cannot be fetched', async () => {
   const f = fixture({ git: (cwd, args) => (args[0] === 'fetch' ? failed('network down') : allOk()) });
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T'], f.deps), 1);
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--title', 'T'], f.deps), 1);
   assert.match(f.err(), /could not fetch memoro — network down/u);
   assert.equal(f.store[`${DIR}/GOAL.json`], undefined);
   assert.equal(f.store[`${DIR}/LOG.md`], undefined);
@@ -383,7 +382,7 @@ test('mc goal new leaves nothing behind when a repository cannot be fetched', as
 
 test('mc goal new cannot fail on a worktree, since it makes none: a git that refuses worktrees changes nothing', async () => {
   const f = fixture({ git: (cwd, args) => (args[0] === 'worktree' ? failed('branch in use') : allOk()) });
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T'], f.deps), 0, f.err());
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--title', 'T'], f.deps), 0, f.err());
   assert.equal(f.calls.some((call) => call.args[0] === 'worktree'), false);
   assert.equal(goalField(f.store[`${DIR}/GOAL.json`], 'stage'), 'draft');
 });
@@ -771,7 +770,7 @@ test('mc goal log and new name the session that wrote the entry by its role in t
     assert.equal(last, `## 2026-11-01T20:00Z ${heading}`, JSON.stringify(env));
   }
   const created = fixture({ env: { MC_TOOL: 'claude', MC_ROLE: PLAN_ROLE } });
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T'], created.deps), 0, created.err());
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--title', 'T'], created.deps), 0, created.err());
   assert.equal(created.store[`${DIR}/LOG.md`], '## 2026-11-01T20:00Z · claude · draft · ready · by plan\n\nDone: created\nComment: held from creation: draft being written by its author\n');
 });
 
@@ -2059,7 +2058,7 @@ test('mc goal show prints the status line, the goal as text with each criterion\
   const f = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { repos: ['memoro-cli', 'memoro'], success_criteria: criteria }) }), git });
   assert.equal(await run(['show', 'mc/plain'], f.deps), 0, f.err());
   const text = f.out();
-  assert.match(text, /^mc\/plain · build · ready · phase 1 · memoro-cli, memoro · large · criteria 1\/2 · created 2026-11-01T20:00:00Z\n/u);
+  assert.match(text, /^mc\/plain · build · ready · phase 1 · memoro-cli, memoro · criteria 1\/2 · created 2026-11-01T20:00:00Z\n/u);
   assert.match(text, /\n# Make the goal plain\n\nGOAL\n  Two files and a worktree\./u);
   assert.match(text, /\nCRITERIA 1\/2\n  1 ✓ it parses\n      check: mc gate tests\/mc\/goals\.test\.js\n  2 ✗ it shows\n      check: a test on the text\n/u);
   assert.doesNotMatch(text, /Done: created/u, 'only the last three entries');
@@ -2201,7 +2200,7 @@ test('mc goal new without MC_HEADLESS holds the draft from creation: the hold is
   const written = [];
   const { write } = f.deps;
   f.deps.write = (path, text) => { written.push(path); write(path, text); };
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T'], f.deps), 0, f.err());
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--title', 'T'], f.deps), 0, f.err());
   assert.deepEqual(JSON.parse(f.store[`${DIR}/.hold.json`]), { by: 'person', tool: 'person', at: '2026-11-01T20:00Z', reason: 'draft being written by its author', created: true });
   assert.ok(written.indexOf(`${DIR}/.hold.json`) >= 0 && written.indexOf(`${DIR}/.hold.json`) < written.indexOf(`${DIR}/GOAL.json`), `the hold first: ${written.join(', ')}`);
   const entries = parseLog(f.store[`${DIR}/LOG.md`]);
@@ -2213,7 +2212,7 @@ test('mc goal new without MC_HEADLESS holds the draft from creation: the hold is
 
 test('mc goal new with MC_HEADLESS=1 writes no hold, and its entry and stdout carry no held line', async () => {
   const f = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: legacyRecord() }, env: { MC_HEADLESS: '1' } });
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T'], f.deps), 0, f.err());
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--title', 'T'], f.deps), 0, f.err());
   assert.equal(f.store[`${DIR}/.hold.json`], undefined, 'no hold file');
   assert.equal(parseLog(f.store[`${DIR}/LOG.md`])[0].comment, null, 'no held comment');
   assert.doesNotMatch(f.out(), /held from creation/u);
@@ -2222,7 +2221,7 @@ test('mc goal new with MC_HEADLESS=1 writes no hold, and its entry and stdout ca
 
 test('mc goal new --stage build without MC_HEADLESS is refused and writes no hold', async () => {
   const f = fixture();
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T', '--stage', 'build'], f.deps), 2);
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--title', 'T', '--stage', 'build'], f.deps), 2);
   assert.deepEqual(Object.keys(f.store).filter((key) => key.startsWith(DIR)), [], 'no hold, no GOAL.json, no LOG.md');
 });
 
@@ -2348,7 +2347,7 @@ const goalAt = (name, stage, phase = 1, after = null) => ({
   [`${HOME}/mc/goals/${name}/LOG.md`]: '',
 });
 const goalOf = (f, name) => parseGoal(f.store[`${HOME}/mc/goals/${name}/GOAL.json`]);
-const newArgs = (name, ...extra) => ['new', name, '--repo', 'memoro-cli', '--class', 'large', '--title', 'T', ...extra];
+const newArgs = (name, ...extra) => ['new', name, '--repo', 'memoro-cli', '--title', 'T', ...extra];
 
 test('mc goal new --phase puts the goal in that phase, and refuses one that would leave a hole', async () => {
   const f = fixture({ files: { ...goalAt('first', 'build') } });
@@ -2745,7 +2744,7 @@ for (const [name, args] of [
   ['ready', ['ready', 'mc/plain']],
   ['set', ['set', 'mc/plain', 'title', '--text', 'Unauthorized']],
   ['criterion met', ['criterion', 'met', 'mc/plain', '1']],
-  ['new', ['new', 'mc/other', '--repo', 'memoro-cli', '--class', 'medium', '--title', 'Unauthorized']],
+  ['new', ['new', 'mc/other', '--repo', 'memoro-cli', '--title', 'Unauthorized']],
   ['pr', ['pr', 'mc/plain', 'memoro-cli#1']],
   ['archive', ['archive', 'mc/plain']],
 ]) test(`desk-prepare refuses goal ${name} before any file, Git or ledger effect`, async () => {
@@ -2796,7 +2795,7 @@ const snapshot = (f) => JSON.stringify(f.store);
 
 test('the learning role cannot create or mutate goals, including ones an older session created', async () => {
   const further = [
-    ['new', 'mc/fresh', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'],
+    ['new', 'mc/fresh', '--repo', 'memoro-cli', '--title', 'Learned'],
     ['stage', 'mc/plain', 'build'], ['stage', 'mc/plain', 'review'], ['ready', 'mc/plain', '--reason', 'x'], ['drop', 'mc/plain', '--reason', 'x'],
     ['criterion', 'set', 'mc/plain', '1', '--criterion', 'Changed'], ['log', 'mc/plain', '--comment', 'x'], ['set', 'mc/plain', 'goal', '--text', 'Changed'],
     ['criterion', 'add', 'mc/plain', '--criterion', 'Extra', '--check', 'x'], ['criterion', 'met', 'mc/plain', '1'],
@@ -2829,7 +2828,7 @@ const jevCtx = (f) => ({ read: f.deps.read, env: f.deps.env, home: HOME, stderr:
 
 test('mc goal new writes a version 2 goal by default, with empty parts and no id given, and its hint names version 2\'s verbs; --structure 1 writes version 1 and its hint; --structure 3 is refused', async () => {
   const f = fixture();
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'large', '--title', 'Plain', '--structure', '2'], f.deps), 0, f.err());
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--title', 'Plain', '--structure', '2'], f.deps), 0, f.err());
   const goal = parseGoal(f.store[`${DIR}/GOAL.json`]);
   assert.equal(goal.problems, undefined, String(goal.problems));
   assert.equal(goal.version, 2);
@@ -2840,18 +2839,18 @@ test('mc goal new writes a version 2 goal by default, with empty parts and no id
   assert.doesNotMatch(f.out(), /contract/u, 'no version 1 verb in a version 2 hint');
 
   const one = fixture();
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'large', '--title', 'Plain', '--structure', '1'], one.deps), 0, one.err());
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--title', 'Plain', '--structure', '1'], one.deps), 0, one.err());
   assert.equal(parseGoal(one.store[`${DIR}/GOAL.json`]).version, 1, '--structure 1 writes version 1');
   assert.match(one.out(), /GOAL\.json is to be filled in by verbs: mc goal set mc\/plain goal\|contract\|out-of-scope --text "…"/u);
   assert.doesNotMatch(one.out(), /version 2/u);
   const plain = fixture();
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'large', '--title', 'Plain'], plain.deps), 0, plain.err());
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--title', 'Plain'], plain.deps), 0, plain.err());
   assert.equal(plain.store[`${DIR}/GOAL.json`], f.store[`${DIR}/GOAL.json`], '--structure 2 is the default');
   assert.equal(parseGoal(plain.store[`${DIR}/GOAL.json`]).version, 2);
   assert.equal(plain.out(), f.out(), 'and its hint is the version 2 hint');
 
   const bad = fixture();
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'large', '--title', 'Plain', '--structure', '3'], bad.deps), 2);
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--title', 'Plain', '--structure', '3'], bad.deps), 2);
   assert.match(bad.err(), /--structure is 1 or 2, not 3/u);
   assert.deepEqual(bad.store, { [`${HOME}/mc/PLAN.json`]: '{}' }, 'nothing written');
 });
@@ -3541,7 +3540,7 @@ test('mc goal phase that empties a phase says in one line what it no longer wait
 /* ------------------------------ one repair goal in flight per area (D8) */
 
 const AREA_RECORD = `${JSON.stringify({ ...STATED_RECORD, area: 'memoro-cli/operations' }, null, 2)}\n`;
-const newInProg = (name) => ['new', `prog/${name}`, '--repo', 'memoro', '--class', 'fast', '--title', 'T'];
+const newInProg = (name) => ['new', `prog/${name}`, '--repo', 'memoro', '--title', 'T'];
 
 test('several live goals in an area repair programme: mc goal new makes a second goal while the first is in each live stage, exit 0', async () => {
   for (const stage of ['draft', 'build', 'review', 'merge']) {
@@ -3598,7 +3597,7 @@ test('one way to ask: the guard — mc goal in the ask-reader role allows show, 
 
 
 test('programme-review is a reader: every goal mutation, including goal-less creation, is refused before effects', async () => {
-  for (const argv of [['new', 'mc/new', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Do not create'], ['set', 'mc/plain', 'title', '--text', 'Do not rewrite'], ['stage', 'mc/plain', 'build'], ['log', '--done', 'Do not log']]) {
+  for (const argv of [['new', 'mc/new', '--repo', 'memoro-cli', '--title', 'Do not create'], ['set', 'mc/plain', 'title', '--text', 'Do not rewrite'], ['stage', 'mc/plain', 'build'], ['log', '--done', 'Do not log']]) {
     const f = fixture({ env: { MC_ROLE: 'programme-review', MC_PROGRAMME: 'mc', MC_HEADLESS: '1' } });
     const before = { ...f.store };
     assert.equal(await run(argv, f.deps), 2, argv.join(' '));
@@ -3611,7 +3610,7 @@ test('programme-review is a reader: every goal mutation, including goal-less cre
 // These command-store cases prove the new refusal precedes Git and every write.
 const legacyRecord = () => JSON.stringify({ schema: 'mc-programme', version: 1, horizon: null, end: 'Done.', state: 'open', created: '2026-11-01T20:00:00Z', created_by: 'person' });
 const unsignedRecord = (state) => ({ ...JSON.parse(legacyRecord()), version: 2, state, signed_at: null, signed_by: null, signed_text: null, cut_text: null });
-const newArgv = ['new', 'mc/fresh', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'A signed part'];
+const newArgv = ['new', 'mc/fresh', '--repo', 'memoro-cli', '--title', 'A signed part'];
 
 test('goal new refuses draft programmes before any fetch or goal write', async () => {
   for (const state of ['draft']) {

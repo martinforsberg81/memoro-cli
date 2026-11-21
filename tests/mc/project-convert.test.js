@@ -105,11 +105,10 @@ test('from-project: a project with done, built, ready and blocked steps becomes 
   assert.deepEqual(two.success_criteria, [{ criterion: 'two', check: 'two passes', met: true }]);
   assert.deepEqual(two.contract, ['Flags stay.']);
   assert.deepEqual(two.documents, [{ label: 'protocol', path: 'docs/dev.md' }]);
-  assert.equal(two.class, 'large');
+  assert.equal(two.class, undefined, 'a goal has no class');
 
   assert.deepEqual([three.stage, three.status, three.phase], ['build', 'ready', 2], 'the next step is the next phase');
   assert.deepEqual(three.prs, []);
-  assert.equal(three.class, 'fast');
   assert.deepEqual(three.success_criteria, [{ criterion: 'three', check: 'three passes', met: false }]);
 
   assert.deepEqual([four.stage, four.status, four.phase], ['build', 'blocked', 3]);

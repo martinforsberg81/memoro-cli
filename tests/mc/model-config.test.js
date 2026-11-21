@@ -61,7 +61,7 @@ test('a catalog whose review is one object reads as a list of it, and is written
   }
 });
 
-test('mc model add and remove review change the list as they do fast and large; set review replaces it whole', async () => {
+test('mc model add and remove review change the list as they do build; set review replaces it whole', async () => {
   const c = catalogAt(null);
   try {
     assert.equal((await c.verb('remove', 'review', 'agy:gemini-4-argon-high')).code, 0);
@@ -87,11 +87,11 @@ test('mc model add and remove review change the list as they do fast and large; 
     assert.equal(set.code, 0, set.err);
     assert.equal(set.out, 'mc: review is now claude:fable:high alone\n');
     assert.deepEqual(c.file().review, [{ tool: 'claude', model: 'fable', effort: 'high' }]);
-    assert.deepEqual(c.file().fast, readModels(c.env).fast, 'the classes are untouched');
+    assert.deepEqual(c.file().build, readModels(c.env).build, 'the build list is untouched');
 
     const unknown = await c.verb('add', 'slow', 'claude:opus:high');
     assert.equal(unknown.code, 2);
-    assert.match(unknown.err, /"slow" is not a list: add takes fast, medium, large, review, finish, mend, plan, manager/u);
+    assert.match(unknown.err, /"slow" is not a list: add takes build, review, finish, mend, plan, manager/u);
   } finally {
     c.done();
   }
@@ -106,7 +106,7 @@ test('a file without the role lists reads them as the defaults; mc model lists e
     assert.deepEqual(models.plan, [{ tool: 'claude', model: 'opus', effort: 'high' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }]);
     assert.deepEqual(models.manager, [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'medium' }]);
     const listed = (await c.verb('list')).out;
-    for (const list of ['fast', 'medium', 'large', 'review', 'finish', 'mend', 'plan', 'manager']) assert.match(listed, new RegExp(`\\n${list}\\n {2}1 `, 'u'));
+    for (const list of ['build', 'review', 'finish', 'mend', 'plan', 'manager']) assert.match(listed, new RegExp(`\\n${list}\\n {2}1 `, 'u'));
     assert.equal(c.file().finish, undefined, 'reading writes nothing');
 
     const set = await c.verb('set', 'finish', 'codex:gpt-6.2-sol:high');
@@ -117,7 +117,7 @@ test('a file without the role lists reads them as the defaults; mc model lists e
     assert.equal((await c.verb('add', 'manager', 'claude:sonnet:high')).code, 0);
     assert.equal((await c.verb('remove', 'manager', 'claude:opus')).code, 0);
     assert.deepEqual(c.file().manager.map((item) => item.model), ['gpt-6.2-sol', 'sonnet']);
-    const classSet = await c.verb('set', 'fast', 'claude:opus:high');
+    const classSet = await c.verb('set', 'build', 'claude:opus:high');
     assert.equal(classSet.code, 2);
     assert.match(classSet.err, /mc model set review\|finish\|mend\|plan\|manager/u);
   } finally {
@@ -131,46 +131,44 @@ test('a file without the role lists reads them as the defaults; mc model lists e
   }
 });
 
-test('a pre-medium catalog reads the two medium defaults unchanged, then writes every list when medium changes', async () => {
-  const c = catalogAt(BEFORE_MEDIUM);
+test('a catalog written with fast, medium and large reads build as its large list, then is written with build only when it changes', async () => {
+  const older = { ...BEFORE_MEDIUM, medium: [{ tool: 'claude', model: 'sonnet', effort: 'high' }, { tool: 'codex', model: 'gpt-6.1-terra', effort: 'high' }] };
+  const c = catalogAt(older);
   try {
     const original = readFileSync(modelsPath(c.env), 'utf8');
     const models = readModels(c.env);
-    assert.deepEqual(models.medium, [
-      { tool: 'claude', model: 'sonnet', effort: 'high' },
-      { tool: 'codex', model: 'gpt-6.1-terra', effort: 'high' },
-    ]);
+    assert.deepEqual(models.build, older.large);
+    assert.equal(models.fast, undefined);
     const listed = await c.verb('list');
     assert.equal(listed.code, 0, listed.err);
-    assert.ok(listed.out.indexOf('\nfast\n') < listed.out.indexOf('\nmedium\n'));
-    assert.ok(listed.out.indexOf('\nmedium\n') < listed.out.indexOf('\nlarge\n'));
-    assert.match(listed.out, /\nmedium\n  1  claude:sonnet:high\n  2  codex:gpt-6\.1-terra:high\n/u);
+    assert.match(listed.out, /\nbuild\n  1  claude:opus:medium\nreview\n/u);
+    assert.doesNotMatch(listed.out, /\n(fast|medium|large)\n/u);
     assert.equal(readFileSync(modelsPath(c.env), 'utf8'), original, 'reading the old file does not rewrite it');
 
-    const added = await c.verb('add', 'medium', 'codex:gpt-6-luna:high');
+    const added = await c.verb('add', 'build', 'codex:gpt-6.2-sol:high');
     assert.equal(added.code, 0, added.err);
-    assert.deepEqual(c.file().medium.map(({ tool, model, effort }) => ({ tool, model, effort })), [
-      { tool: 'claude', model: 'sonnet', effort: 'high' },
-      { tool: 'codex', model: 'gpt-6.1-terra', effort: 'high' },
-      { tool: 'codex', model: 'gpt-6-luna', effort: 'high' },
-    ]);
-    for (const key of ['fast', 'large', 'review', 'finish', 'mend', 'plan', 'manager']) assert.deepEqual(c.file()[key], BEFORE_MEDIUM[key]);
-    assert.equal((await c.verb('remove', 'medium', 'codex:gpt-6-luna')).code, 0);
-    assert.deepEqual(c.file().medium.map((candidate) => candidate.model), ['sonnet', 'gpt-6.1-terra']);
-    const set = await c.verb('set', 'medium', 'claude:opus:high');
+    assert.deepEqual(c.file().build, [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }]);
+    for (const key of ['fast', 'medium', 'large']) assert.equal(c.file()[key], undefined, `${key} is not written back`);
+    for (const key of ['review', 'finish', 'mend', 'plan', 'manager']) assert.deepEqual(c.file()[key], BEFORE_MEDIUM[key]);
+    assert.equal((await c.verb('remove', 'build', 'claude:opus')).code, 0);
+    assert.deepEqual(c.file().build.map((candidate) => candidate.model), ['gpt-6.2-sol']);
+    const set = await c.verb('set', 'build', 'claude:opus:high');
     assert.equal(set.code, 2);
     assert.match(set.err, /mc model set review\|finish\|mend\|plan\|manager/u);
+    assert.equal((await c.verb('add', 'fast', 'claude:opus:high')).code, 2, 'the retired classes are no lists');
   } finally { c.done(); }
 });
 
-test('an absent catalog has the same ordered medium defaults', () => {
-  const c = catalogAt(null);
+test('a catalog without build or any retired class reads the default build list; one with only medium reads it as build', () => {
+  const none = catalogAt(null);
+  const onlyMedium = catalogAt({ ...BEFORE_MEDIUM, fast: undefined, large: undefined, medium: [{ tool: 'claude', model: 'sonnet', effort: 'high' }] });
   try {
-    assert.deepEqual(readModels(c.env).medium, [
+    assert.deepEqual(readModels(none.env).build, [
+      { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' },
       { tool: 'claude', model: 'sonnet', effort: 'high' },
-      { tool: 'codex', model: 'gpt-6.1-terra', effort: 'high' },
     ]);
-  } finally { c.done(); }
+    assert.deepEqual(readModels(onlyMedium.env).build, [{ tool: 'claude', model: 'sonnet', effort: 'high' }]);
+  } finally { none.done(); onlyMedium.done(); }
 });
 
 test('a catalog with an unknown key remains refused and is not rewritten', () => {
@@ -210,12 +208,11 @@ test('provider priority reads as auto, roundtrips reversibly, and catalog edits 
     const before = c.file();
     assert.equal((await c.verb('priority', 'nobody')).code, 2);
     assert.deepEqual(c.file(), before, 'invalid command does not modify the file');
-    await c.verb('add', 'fast', 'codex:gpt-6-luna:high');
-    await c.verb('remove', 'fast', 'codex:gpt-6-luna');
+    await c.verb('add', 'build', 'codex:gpt-6-luna:high');
+    await c.verb('remove', 'build', 'codex:gpt-6-luna');
     await c.verb('set', 'review', 'claude:opus:high');
     assert.equal(c.file().provider_priority, 'auto');
-    assert.deepEqual(c.file().large, before.large);
-    assert.deepEqual(c.file().fast, before.fast);
+    assert.deepEqual(c.file().build, OLD.large);
   } finally { c.done(); }
 });
 

@@ -413,7 +413,7 @@ for (const edit of ['binding design', 'shared End', 'interrupted cut', 'interrup
       const code = await goal(args, { env, stdout, stderr, known: () => ['/known/memoro-cli'], git: () => ({ ok: true, stdout: '', stderr: '' }) });
       return { code, err: stderr.text() };
     };
-    const newArgs = name => ['new', `p/${name}`, '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Restore', '--structure', '1'];
+    const newArgs = name => ['new', `p/${name}`, '--repo', 'memoro-cli', '--title', 'Restore', '--structure', '1'];
     const reconcile = () => f.call(['reconcile', 'p', '--reason', 'Compared Part 1 and its goal contract.'], { identity: plan() });
     const sharedOrder = 'End rule: Put row B before row A.';
     let order = page.replace(/### Part 1 — [^\n]+/u, '### Part 1 — Restore rows');

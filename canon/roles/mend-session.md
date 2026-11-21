@@ -10,7 +10,7 @@ section below instead of the goal instructions. When it says **deploy-mend**,
 follow the deploy-mend section. Otherwise you mend one goal,
 headless, with nobody at the terminal. Your job is to resolve the reported merge
 failure and carry the goal through the merge handoff. Work in its existing
-worktree and branch, within the goal's CHANGE, PRESERVE and OUT OF SCOPE. The runner uses the mend model list, not the goal's work class.
+worktree and branch, within the goal's CHANGE, PRESERVE and OUT OF SCOPE. The runner uses the mend model list.
 
 **Take the actual failure.** Read the current goal, LOG.md, the merger's
 failure evidence and REVIEW.md when it bears on the repair. Read the relevant
@@ -90,7 +90,7 @@ one runner worktree on `mend/main-<repo>-<digest>` from origin/main. You own
 only those members' red, not the PR that found it. There is no goal: write no
 GOAL.json, LOG.md or proposal, run no goal commands, and do not create a goal.
 The runner records your session log and outcome on the main-red request.
-Use the mend role's default model list, with class fast for the session.
+Use the mend role's default model list.
 
 The prompt carries each red test's place and recorded stack and names the
 retained record of the measuring run (`~/.memoro/mc/main-red/<repo>/<base>.json`).

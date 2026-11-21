@@ -528,9 +528,9 @@ waiting items). A per-item PID claim, acquired/released under the strict runner
 lock, prevents simultaneous manual/chore preparations; a dead claim is reclaimed.
 The turn stands in the item's directory, has `MC_ROLE=desk-prepare` and
 `MC_HEADLESS=1`, and inherits no goal or programme identity. It has a fifteen-minute
-wall-clock limit and uses only `routeClass('medium')`'s catalog candidates,
+wall-clock limit and uses only `routeClass('build')`'s catalog candidates,
 including their tool, model and effort, with the existing provider/billing rules.
-No usable medium candidate means wait, never borrow another list. Quota endings
+No usable build candidate means wait, never borrow another list. Quota endings
 pause the runner as the intake drain does, before another preparation round.
 Existing headless restrictions in [mc-hooks.md](mc-hooks.md) apply unchanged.
 

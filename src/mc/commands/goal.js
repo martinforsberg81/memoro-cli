@@ -1,7 +1,7 @@
 /**
  * `mc goal` — a goal and its two text files and worktrees (`goals.js`).
  *
- *   mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|medium|large --title "<title>" [--phase <n>] [--stage draft] [--structure 1|2]
+ *   mc goal new <programme>/<goal> --repo <repo>[,<repo>] --title "<title>" [--phase <n>] [--stage draft] [--structure 1|2]
  *                                  GOAL.json (a skeleton) and LOG.md; no worktree yet — the runner makes each
  *                                  repository's worktree on goal/<goal> at the goal's first session;
  *                                  in phase <n> (1 by default), at most one past the last;
@@ -82,7 +82,7 @@ import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
 import { readGoalDeskItem } from '../desk-items.js';
-import { addPr, backward, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, inStage, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, phaseOpen, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { addPr, backward, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, goalReferences, inStage, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, phaseOpen, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { addItem, ITEM_PARTS, ITEM_WORDS, moveGate, partsLacks, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { buildWaitsForMain } from '../main-repair.js';
@@ -106,13 +106,13 @@ import { knownRepositories } from '../work-area.js';
 import { only, scanArgs } from './flags.js';
 
 /** Every flag any verb takes as a value. */
-const VALUE_FLAGS = ['--part', '--found', '--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check', '--evidence', '--evidence-file', '--structure', '--source', '--basis', '--at', '--by', '--on', '--where', '--upheld-by', '--settled-by', '--owner', '--stand', '--standard', '--avoid', '--file'];
+const VALUE_FLAGS = ['--part', '--found', '--repo', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check', '--evidence', '--evidence-file', '--structure', '--source', '--basis', '--at', '--by', '--on', '--where', '--upheld-by', '--settled-by', '--owner', '--stand', '--standard', '--avoid', '--file'];
 const SCAN = { booleans: ['--all'], strictValues: VALUE_FLAGS };
 /** The flags the fields of the numbered parts are given by (`item add|set`); a part takes its own and refuses the others. */
 const ITEM_FLAGS = Object.freeze([...new Set(Object.values(ITEM_PARTS).flatMap((part) => part.fields.map((field) => `--${flagOf(field)}`)))]);
 /** The flags each verb takes; any other given is refused with exit 2. */
 const VERB_FLAGS = {
-  new: ['--repo', '--class', '--title', '--phase', '--stage', '--structure'],
+  new: ['--repo', '--title', '--phase', '--stage', '--structure'],
   phase: [],
   set: ['--text'],
   'document add': ['--label', '--path'],
@@ -306,11 +306,10 @@ function newGoal(args, flags, ctx) {
   }
   const [programme, goal] = parts;
 
-  const missing = [['--repo', flags.repo], ['--class', flags.class], ['--title', flags.title]]
+  const missing = [['--repo', flags.repo], ['--title', flags.title]]
     .filter(([, value]) => value === null || value.trim() === '')
     .map(([flag]) => flag);
   if (missing.length) { stderr.write(`mc: new needs ${missing.join(', ')}\n`); return 2; }
-  if (!CLASSES.includes(flags.class)) { stderr.write(`mc: --class is ${CLASSES.join(' or ')}, not ${flags.class}\n`); return 2; }
   const repos = [...new Set(flags.repo.split(',').map((repo) => repo.trim()).filter(Boolean))];
   if (repos.length === 0) { stderr.write('mc: new needs --repo <repo>[,<repo>]\n'); return 2; }
 
@@ -357,7 +356,7 @@ function newGoal(args, flags, ctx) {
   }
 
   const created = stampSeconds(now);
-  const made = { stage, status: 'ready', phase, repos, class: flags.class, created, title: flags.title.trim(), success_criteria: [] };
+  const made = { stage, status: 'ready', phase, repos, created, title: flags.title.trim(), success_criteria: [] };
   // A draft an interactive session makes is held from creation (D1, D3): the hold is written first, so no reader finds the goal without it.
   const held = ctx.env.MC_HEADLESS !== '1';
   const create = () => {
@@ -1667,7 +1666,7 @@ function showGoal(args, ctx) {
     for (const problem of goal.problems) stderr.write(`  ${problem}\n`);
     return 1;
   }
-  stdout.write(`${target.name} · ${stageWords(goal)} · phase ${goal.phase} · ${goal.repos.join(', ')} · ${goal.class} · ${criteriaWords(goal)} · created ${goal.created ?? '—'}${goal.prs.length ? ` · prs ${goal.prs.map(prRef).join(', ')}` : ''}\n`);
+  stdout.write(`${target.name} · ${stageWords(goal)} · phase ${goal.phase} · ${goal.repos.join(', ')} · ${criteriaWords(goal)} · created ${goal.created ?? '—'}${goal.prs.length ? ` · prs ${goal.prs.map(prRef).join(', ')}` : ''}\n`);
   const hold = readHold(target.dir, read);
   if (hold) stdout.write(`held by ${hold.by ?? '—'} since ${hold.at ?? '—'}: ${hold.reason ?? '—'}\n`);
   // The records are in a file of their own (`goal-evidence.js`): the goal's text is the same with or without them,

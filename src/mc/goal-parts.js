@@ -57,7 +57,7 @@ export const OBLIGATION_KEYS = Object.freeze(['area', 'stand', 'text', 'standard
 
 /** A version 2 GOAL.json's keys, in the order it is written. */
 export const GOAL_KEYS_V2 = Object.freeze([
-  'schema', 'version', 'stage', 'status', 'phase', 'repos', 'class', 'created', 'prs',
+  'schema', 'version', 'stage', 'status', 'phase', 'repos', 'created', 'prs',
   'title', 'aim', 'outcome', 'problem', 'premises', 'decisions', 'change', 'latitude', 'preserve', 'obligations', 'risks',
   'success_criteria', 'protection', 'out_of_scope', 'documents', 'ids',
 ]);

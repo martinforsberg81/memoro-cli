@@ -2,11 +2,14 @@
  * The model catalog (ruling 59): the ordered candidates each list may run on,
  * the first preferred.
  *
- * `fast`, `medium` and `large` are the work classes: a goal's class routes its build
- * sessions and nothing else. The role lists — `review`, `finish`, `mend`, `plan`
- * `manager` and `decision` — each route their own unattended role, whatever the goal's
- * class (ruling 59 § 2 for review; the 2026-11-09 ruling for the others). None
- * of them falls back to a class.
+ * `build` is the one list a goal's build sessions run on; goals have no class. The role
+ * lists — `review`, `finish`, `mend`, `plan`, `manager` and `decision` — each route their
+ * own unattended role (ruling 59 § 2 for review; the 2026-11-09 ruling for the others).
+ * None of them falls back to `build`.
+ *
+ * A file written when builds had the classes `fast`, `medium` and `large` reads its
+ * `build` as its `large` list, else `medium`, else `fast` (the one Martin kept, 2026-11-21);
+ * it is written back with `build` the first time `mc model` changes the file.
  *
  * A file whose `review` is one candidate object, as every catalog was before
  * review became a list, reads as a list of that one candidate; it is written
@@ -43,16 +46,18 @@ import { pidAlive } from './status-collect.js';
 export const MODELS_SCHEMA = 'mc-models';
 export const MODELS_VERSION = 1;
 export const MODELS_FILE = 'models.json';
-/** The work classes: a goal's class routes its build sessions, and nothing else. */
-export const CLASSES = Object.freeze(['fast', 'medium', 'large']);
+/** The build list: what a goal's build sessions run on. A goal has no class. */
+export const BUILD_LISTS = Object.freeze(['build']);
+/** The retired work classes, read from an older file as `build` and never written. */
+export const LEGACY_CLASSES = Object.freeze(['large', 'medium', 'fast']);
 /** The role lists, each routing its own unattended role. `set` replaces one whole. */
 export const ROLE_LISTS = Object.freeze(['review', 'finish', 'mend', 'plan', 'manager', 'decision']);
 /** Every list the catalog holds. `mc model add` and `remove` take any of them. */
-export const LISTS = Object.freeze([...CLASSES, ...ROLE_LISTS]);
+export const LISTS = Object.freeze([...BUILD_LISTS, ...ROLE_LISTS]);
 /** The lists a file may lack, which then read as their defaults. `review` is required, as it always was. */
-const DEFAULTED_LISTS = Object.freeze(['medium', 'finish', 'mend', 'plan', 'manager', 'decision']);
+const DEFAULTED_LISTS = Object.freeze(['build', 'finish', 'mend', 'plan', 'manager', 'decision']);
 export const TOOLS = Object.freeze(implementedTools());
-const DOCUMENT_KEYS = Object.freeze(['schema', 'version', ...LISTS, 'provider_priority']);
+const DOCUMENT_KEYS = Object.freeze(['schema', 'version', ...LISTS, ...LEGACY_CLASSES, 'provider_priority']);
 export const PROVIDER_PRIORITIES = Object.freeze(providerPriorities());
 const CANDIDATE_KEYS = Object.freeze(['tool', 'model', 'effort']);
 const LOCK_POLL_MS = 50;
@@ -69,9 +74,7 @@ const candidate = (tool, model, effort) => Object.freeze({ tool, model, effort }
 
 /** What an absent catalog reads as, and what a file lacking one of the defaulted lists reads for it. */
 export const DEFAULT_CATALOG = Object.freeze({
-  fast: Object.freeze([candidate('claude', 'haiku', 'high'), candidate('codex', 'gpt-6-luna', 'high')]),
-  medium: Object.freeze([candidate('claude', 'sonnet', 'high'), candidate('codex', 'gpt-6.1-terra', 'high')]),
-  large: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.2-sol', 'high')]),
+  build: Object.freeze([candidate('codex', 'gpt-6.2-sol', 'high'), candidate('claude', 'sonnet', 'high')]),
   review: Object.freeze([candidate('agy', 'gemini-4-argon-high', 'high'), candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.2-sol', 'medium')]),
   finish: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.2-sol', 'high')]),
   mend: Object.freeze([candidate('claude', 'sonnet', 'medium'), candidate('codex', 'gpt-6.2-sol', 'medium')]),
@@ -146,7 +149,7 @@ export function parseTarget(text) {
   return { tool: parts[0], model: parts[1] };
 }
 
-/** A list's first repeated tool:model, as a problem. A class names each model once. */
+/** A list's first repeated tool:model, as a problem. A list names each model once. */
 function duplicateProblems(cls, list) {
   const seen = new Set();
   const problems = [];
@@ -165,8 +168,11 @@ function documentProblems(value) {
   if (value.schema !== MODELS_SCHEMA) problems.push(`schema: must be "${MODELS_SCHEMA}"`);
   if (value.version !== MODELS_VERSION) problems.push(`version: ${MODELS_VERSION} is the only version this mc reads`);
   if (value.provider_priority !== undefined && !PROVIDER_PRIORITIES.includes(value.provider_priority)) problems.push(`provider_priority: one of ${PROVIDER_PRIORITIES.join(', ')}`);
-  for (const cls of LISTS) {
+  const legacyBuild = LEGACY_CLASSES.find((cls) => value[cls] !== undefined);
+  for (const cls of [...LISTS, ...LEGACY_CLASSES]) {
+    if (LEGACY_CLASSES.includes(cls) && (value.build !== undefined || value[cls] === undefined)) continue;
     if (DEFAULTED_LISTS.includes(cls) && value[cls] === undefined) continue;
+    if (cls === 'build' && legacyBuild) continue;
     const list = cls === 'review' ? reviewList(value.review) : value[cls];
     if (!Array.isArray(list) || list.length === 0) {
       problems.push(`${cls}: a list of at least one candidate`);
@@ -185,6 +191,13 @@ const RECOVERY = 'fix it, or move it aside to read the defaults';
 /** A file's `review`: a list as written, or the one candidate object an older file holds, as a list of it. */
 function reviewList(value) {
   return plain(value) ? [value] : value;
+}
+
+/** A file's `build`; an older file's `large`, `medium` or `fast` list stands for it, in that order. */
+function legacyBuildList(value) {
+  if (value.build !== undefined) return value.build;
+  const cls = LEGACY_CLASSES.find((name) => value[name] !== undefined);
+  return cls ? value[cls] : undefined;
 }
 
 /** The catalog as an object of its own: a copy whose candidates a change may edit. */
@@ -225,7 +238,7 @@ export function readModels(env = process.env) {
     providerPriority: value.provider_priority ?? 'auto',
     providerPriorityPersisted: Object.hasOwn(value, 'provider_priority'),
     ...Object.fromEntries(LISTS.map((cls) => {
-      const list = cls === 'review' ? reviewList(value.review) : value[cls] ?? DEFAULT_CATALOG[cls];
+      const list = cls === 'review' ? reviewList(value.review) : (cls === 'build' ? legacyBuildList(value) : value[cls]) ?? DEFAULT_CATALOG[cls];
       return [cls, list.map((item) => candidate(item.tool, item.model, item.effort))];
     })),
   };
@@ -236,7 +249,7 @@ function classList(catalog, cls) {
   return catalog[cls];
 }
 
-/** Appended to the class's order. A model is listed once per class, whatever its effort. */
+/** Appended to the list's order. A model is listed once per list, whatever its effort. */
 export function addCandidate(catalog, cls, value) {
   const list = classList(catalog, cls);
   const existing = list.find((item) => identity(item) === identity(value));
@@ -259,7 +272,7 @@ export function removeCandidate(catalog, cls, { tool, model }) {
   return catalog;
 }
 
-/** A role list replaced whole by the one candidate. A work class is changed by add and remove only. */
+/** A role list replaced whole by the one candidate. `build` is changed by add and remove only. */
 export function setRoleList(catalog, list, value) {
   if (!ROLE_LISTS.includes(list)) throw new ModelConfigError(`"${list}" is not a role list: set takes ${ROLE_LISTS.join(', ')}`);
   catalog[list] = [candidate(value.tool, value.model, value.effort)];
