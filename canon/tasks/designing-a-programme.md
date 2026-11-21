@@ -37,9 +37,8 @@ Use the supported manual route without a record, or the valid-record route when 
 
 1. For a recorded desk order, start the cut once the desk sets it ready. Cut fully investigated, measured and designed work into [goals](references/goal-design.md) headless sessions can build to the end. Settle decisions before writing the goal.
 2. Order by prerequisites and shared files. A programme whose record states its phases runs independent phases side by side: state a prerequisite, shared files included, with `mc programs after`. Elsewhere independent goals share a phase and dependent goals go later. In both a prerequisite is a phase dependency, never a note.
-3. Move a complete goal to `build` only with its acceptance procedure and setup verified.
-   Keep a consumer needing a producer in draft in a dependent phase; use the plan role's
-   next-draft procedure when evidence is missing or a relevant premise has changed.
+3. Move every complete goal to `build`; a draft is never started. A consumer needing a producer
+   goes to `build` in a dependent phase, as [the plan role](../roles/plan-session.md) says.
 
 ## When a goal lands
 
@@ -52,4 +51,4 @@ Landed sections leave the README.
 
 Investigate until facts and remaining uncertainty are established. Separate technical gaps planning can resolve from what [asking-martin](asking-martin.md) names as his; the rest is decided and recorded. On clarification, amend the README/design, standards, briefs and criteria consistently; change only clarified scope and preserve other requirements/prerequisites unless Martin changes them. Deferring consumer features does not imply deferring provider, data or DPA prerequisites. Before handoff reconcile README, briefs, phases and actual stages; name remaining gaps. Do not hand unresolved prerequisites to build with a ceremonial LOG.md hold.
 
-A runner-assigned plan completes only its selected draft under the same rules; see [the plan role](../roles/plan-session.md) and mc-goals.md, Next draft planning.
+The runner's programme planning turn cuts a ready order into goals in build under the same rules; see [the plan role](../roles/plan-session.md) and mc-run.md, Programme planning turn.

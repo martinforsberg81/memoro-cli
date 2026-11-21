@@ -303,11 +303,6 @@ function withBrief(prompt, brief) {
   return brief ? `${prompt}\n\nThe goal, as \`mc goal show\` renders it:\n\n${brief.trimEnd()}` : prompt;
 }
 
-/** One unattended planning assignment; the role keeps interactive planning separate. */
-export function goalPlanPrompt({ name, dir, worktree, branch, brief = null }) {
-  return withBrief(`You are the headless plan session for the next draft ${name}. Read the programme README at \`${dir}/../../README.md\` first. Its other goals are done, dropped or draft. Your assignment is to complete exactly this draft: investigate its code and decided standards, finish its parts as \`mc goal show\` names them, its stand on every rule area, its documents and executable success checks, reconcile the programme README and phases, and follow your plan role to verify acceptance setup before any promotion. Use goal-bound mc ask for a change to a text Martin holds. Do not implement the draft or process other drafts/proposals in this turn. Your directory is \`${dir}\`; your worktree is \`${worktree}\`, on branch \`${branch}\`. Use the headless next-draft section of your plan role.`, brief);
-}
-
 /**
  * What a goal session is told: where the goal is and where it works, and the
  * goal itself (`brief`). The rest is the build role's
@@ -386,15 +381,6 @@ export function goalMendCheckInPrompt({ minutes, count }) {
 }
 
 /**
- * What the runner writes to a running goal session every `check_in_minutes`
- * (ruling 18). Nothing is killed on elapsed time; instead the session is
- * asked to judge whether it is still moving the goal.
- */
-export function goalPlanCheckInPrompt({ minutes, count }) {
-  return `Planning check-in after ${minutes} minutes (${count}). Complete the selected draft under the next-draft section of your plan role. Resolve technical details locally; use goal-bound mc ask for a change to a text Martin holds. Keep this turn to the one draft's planning assignment.`;
-}
-
-/**
  * What the headless programme turn is told (mc-run.md, "Programme planning
  * turn"): the programme to cut, its signed document, the commands that read it, and the
  * read checkouts of the served repositories. The rest is the plan role's
@@ -406,13 +392,13 @@ export function programmePlanPrompt({ programme, dir, horizon = null, repos = []
   const horizonLine = horizon ? ` Its record names the horizon ${horizon}: read it with \`mc martin horizon show ${horizon}\`.` : '';
   const areas = repos.length ? ` Read the rule areas of each repository with \`mc goal areas <repo>\` (${repos.join(', ')}).` : '';
   const order = released ? `The fixed programme inputs for repair release ${revision} are in \`${released}\`. Read those files, not the live inputs. The goals' part documents still point at \`${dir}/README.md\`.` : `Read \`${dir}/README.md\`.`;
-  const past = released ? `Check every existing goal contract against this release. Keep matching goals. For changed unfinished goals update the contract through validated goal verbs, take back criterion marks and return any review goal to build. Return unfinished merge goals to build even if their contract matched: the prior handoff cannot land under this release. Retire unfinished work for removed parts and retain landed goals as evidence (cut a separate goal for any further correction). Before ending record reconciliation with \`mc programs reconcile ${programme} --reason "<what was compared and changed>"\`.` : 'Where goals already exist from an earlier cut, compare them with README.md: a part unchanged since then keeps its goals; for a changed part a goal not yet in build is rewritten, and a goal already built gets a new goal for the difference.';
-  return `You are the headless plan session: cut programme ${programme} from README.md, with nobody present. Its directory is \`${dir}\`; read \`mc programs show ${programme}\` first. ${order}${horizonLine}${areas} Read checkouts of the served repositories, detached at origin/main, are ${read}; read code there and change nothing in them. The turn is short. Cut one goal per part, in the Order's sequence as phases: its outcome, change, intended result and criteria are taken from that part's Closes, Solution, Design and Proved by, and each goal names its part by a document that points at README.md and is labelled with \`Part <n>\`. Add nothing about what is delivered or how it looks: no solution, design or decision of your own there, no investigation and no proposal; the construction is the builder's. ${past} Create each goal as a draft through the mc verbs. Follow your plan role for when to promote directly and when to leave it draft. State a stated programme's dependencies with \`mc programs after\`. Where a part leaves open a choice of what is delivered or how it looks that the document neither shows nor routes, do not make it: leave it at the desk with \`mc martin propose --text ${programme}/README.md --file <brief>\`, and end. A question that is not such a choice goes through goal-bound \`mc ask\` on the draft that needs it. Do not implement a goal, process proposals or commit. Your plan role's headless programme-turn section says the rest.`;
+  const past = released ? `Check every existing goal contract against this release. Keep matching goals. For changed unfinished goals update the contract through validated goal verbs, take back criterion marks and return any review goal to build. Return unfinished merge goals to build even if their contract matched: the prior handoff cannot land under this release. Retire unfinished work for removed parts and retain landed goals as evidence (cut a separate goal for any further correction). Before ending record reconciliation with \`mc programs reconcile ${programme} --reason "<what was compared and changed>"\`.` : 'Where goals already exist from an earlier cut, compare them with README.md: a part unchanged since then keeps its goals; for a changed part a goal not yet in build is rewritten and moved to build, and a goal already built gets a new goal for the difference. A draft left by an earlier turn is finished the same way.';
+  return `You are the headless plan session: cut programme ${programme} from README.md, with nobody present. Its directory is \`${dir}\`; read \`mc programs show ${programme}\` first. ${order}${horizonLine}${areas} Read checkouts of the served repositories, detached at origin/main, are ${read}; read code there and change nothing in them. The turn is short. Cut one goal per part, in the Order's sequence as phases: its outcome, change, intended result and criteria are taken from that part's Closes, Solution, Design and Proved by, and each goal names its part by a document that points at README.md and is labelled with \`Part <n>\`. Add nothing about what is delivered or how it looks: no solution, design or decision of your own there, no investigation and no proposal; the construction is the builder's. ${past} Create each goal through the mc verbs, write its stand on every rule area with \`mc goal obligation set\` (saying only what the part says), and move it to build with \`mc goal stage <programme>/<goal> build\`: every goal of the cut is in build when you end, and a goal left in draft fails the turn. A goal that waits for another is held by its phase alone: state a stated programme's dependencies with \`mc programs after\`. You do not verify the acceptance setup; the build session does, in its own worktree. Where a part leaves open a choice of what is delivered or how it looks that the document neither shows nor routes, do not make it: leave it at the desk with \`mc martin propose --text ${programme}/README.md --file <brief>\`, and end. A question that is not such a choice goes through goal-bound \`mc ask\` on the goal that needs it. Do not implement a goal, process proposals or commit. Your plan role's headless programme-turn section says the rest.`;
 }
 
 /** `checkInPrompt` for the programme turn: the same judgement as a plan session's, over every goal the turn cuts. */
 export function programmePlanCheckInPrompt({ minutes, count }) {
-  return `Programme planning check-in after ${minutes} minutes (${count}). Keep cutting README.md: one or more goals per part, each naming its part, its change, criteria and protection copied from that part's Solution, Design and Proved by. Follow the headless programme-turn section of your plan role for promotion. A part unchanged since an earlier cut keeps its goals. Add nothing the part does not say. Do not implement, process proposals or commit.`;
+  return `Programme planning check-in after ${minutes} minutes (${count}). Keep cutting README.md: one or more goals per part, each naming its part, its change, criteria and protection copied from that part's Solution, Design and Proved by. Write each goal's stand on every rule area and move it to build: a goal left in draft fails the turn. A part unchanged since an earlier cut keeps its goals. Add nothing the part does not say. Do not implement, process proposals or commit.`;
 }
 
 /** `checkInPrompt` for the manager's turns (mc-run.md, "Manager turns"): keep to the turn's one task and end in one of its endings. */
@@ -420,6 +406,11 @@ export function managerCheckInPrompt({ minutes, count }) {
   return `Manager check-in after ${minutes} minutes (${count}). Keep to this curation turn's one task: change only what docs/technical/ says is wrong, publish it with plain mc publish, which queues it for the merger, and bring what waits on Martin to the desk. Do not make a horizon or a goal and do not perform a reserved act.`;
 }
 
+/**
+ * What the runner writes to a running goal session every `check_in_minutes`
+ * (ruling 18). Nothing is killed on elapsed time; instead the session is
+ * asked to judge whether it is still moving the goal.
+ */
 export function goalCheckInPrompt({ minutes, count }) {
   return [
     `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,

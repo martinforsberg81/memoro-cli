@@ -19,12 +19,15 @@ Aim to size each goal so one build session can reasonably implement it and
 hand it to independent review in one turn. This is a planning target, not a
 new session limit or a reason to narrow the intended solution.
 
-A goal moves from `draft` to `build` only after its acceptance procedure and
-setup are verified for the intended build, including the normal branch refresh
-described under **Preparing the acceptance setup** below. A consumer waiting
-for a producer remains draft in a dependent phase. Unresolved planning
-prerequisites mean the work is not build-ready: do not hand it to build with a
-ceremonial `LOG.md` hold. Investigate until relevant facts and remaining
+A goal moves from `draft` to `build` when its brief is complete: its parts,
+its stand on every rule area, documents, criteria and checks. A consumer
+waiting for a producer is in `build` in a dependent phase: the phase holds it,
+not the stage, and the runner starts no session on a draft (Martin,
+2026-11-21). The acceptance procedure and its usable setup belong to the
+programme order; the build session establishes them in its own worktree before
+it builds. Unresolved planning prerequisites mean the work is not build-ready:
+do not hand it to build with a ceremonial `LOG.md` hold.
+Investigate until relevant facts and remaining
 uncertainty are established; what is left is decided as
 [asking-martin](../tasks/asking-martin.md) says, and only a change to a text
 Martin holds is asked, with evidence and a recommendation. Do not infer that deferring consumer
@@ -41,79 +44,30 @@ finishing the work there when that is quicker, simpler or cheaper than a new
 build session. The programme aim is written in
 `~/mc/programs/<programme>/README.md`; read it first.
 
-## Interactive planning and the headless next draft
+## Interactive planning
 
 Martin opens interactive planning with `mc plan`; a session never runs that
 command. With Martin at the terminal you have full freedom toward the programme aim.
 
-When `MC_HEADLESS=1` and `MC_GOAL` names a draft, the runner assigns exactly
-that one next draft. It starts only when the programme has at least one draft and all
-its goals are draft, done or dropped. The next draft is the lowest phase,
-then oldest creation time, then name. A first draft waiting on Martin or held, or
-unreadable goal data, holds automatic planning. A programme with no drafts
-starts no plan session. In a programme whose record states its phases the
-trigger reads each phase: an open phase with none of its goals in build, review
-or merge offers its oldest draft when that draft is ready, not held and not
-decision-claimed; the offered draft of the lowest phase is next, whatever other
-phases build, and a first draft waiting on Martin or held holds its own phase
-only. One plan session runs in a programme at a time.
-
-Complete that draft's planning: read the programme README first, its relevant
-design, technical contracts, goal and log, and the affected code.
-Resolve implementation questions yourself; finish the goal's parts, its stand
-on every rule area, documents and executable criteria through `mc goal`.
-Reconcile the README, phases and shedding (a section whose goals have landed
-is in `docs/technical/` and leaves the README). Follow **Preparing the
-acceptance setup** below in the goal's worktrees. An opened phase alone is
-not evidence of a producer output, including when the producer was dropped.
-If a sound check lacks its named input in an open phase, log the evidence
-and put the blocking input and technical desk action in `mc goal log --next`
-(for example, “Missing seed course; technical desk verifies setup”). End with
-the goal draft and ready: the existing incomplete-session stop hands it to
-the technical desk, which returns it when the input is verifiably available.
-If the setup premise itself is wrong, report it and evidence with
-`mc goal defect` while draft. A change to the programme promise goes to
-`mc martin`. Ask a
-remaining question through goal-bound `mc ask`, the one way to ask: jev, then a
-reader, answer it inside the call, and you continue on the answer (or on your
-recommendation when the call says unread). Amend the canonical rule and goal consistently.
-
-Your headless assignment ends after that one draft is ready for build or
-waits on a concrete decision. Do not implement it, plan another draft or
-process proposals in this turn. Work in the selected
-goal's worktrees on its goal branch, as the launch prompt says; the interactive
-planning checkouts remain separate. Reserved acts retain their headless boundary.
-The runner contains an incomplete session that leaves draft ready so it cannot
-launch indefinitely without progress.
-
-### Preparing the acceptance setup
-
-Verify the current check, required capability and usable named input against
-the checkout that build will receive, not a stale draft branch. Entering
-`build` and starting the first build can refresh a branch with no commits of
-its own from `origin/main`. Before running the setup check, in each relevant
-goal worktree run `git fetch origin` and inspect `origin/main..HEAD`. If it is
-empty, bring the draft checkout to the fetched base with
-`git merge --ff-only origin/main` and verify there. If the branch has its own
-commits, the normal refresh leaves it in place; verify on that branch, not on
-main. Do not discard work. If fetch or the fast-forward fails, or you cannot
-establish what setup the build will receive, leave the goal in draft and log why.
-Before promotion, fetch again and confirm the named premises still hold
-against the source of the refresh. If one changed, reverify on the updated
-setup before promoting. Unrelated main movement does not invalidate the
-evidence. Record the check, build setup and observed results in the goal log.
+A draft you write is yours to finish and move to `build`: no headless session
+completes it for you. Each check names a command and an input that exist at
+`origin/main` or that the goal itself builds; entering `build` and the first
+build remake a branch with no commits of its own from `origin/main`, and the
+build session verifies the setup there. A change to the programme promise goes
+to `mc martin`.
 
 ## The headless programme turn
 
-When `MC_HEADLESS=1` and `MC_PROGRAMME` names a programme but `MC_GOAL` is not
-set, you are the programme's one planning turn: its record is `ready`, and
-`README.md` is the programme document. The turn cuts goals from README.md of
-the ready programme.
-The launch prompt gives the programme directory, the horizon command when the record names
-a horizon, and read checkouts of the served repositories, detached at
-origin/main. Read `README.md` and `mc programs show <programme>`; open code only
-to name the files a part already implies. Change nothing in the checkouts,
-commit nothing and create no branch.
+The plan session runs once: it takes the whole programme and cuts it into
+phases and goals, and all of them are then ready (Martin, 2026-11-21).
+
+When `MC_HEADLESS=1` and `MC_PROGRAMME` names a programme, you are that
+programme's planning turn: its record is `ready`, and `README.md` is the
+programme document. The launch prompt gives the programme directory, the
+horizon command when the record names a horizon, and read checkouts of the
+served repositories, detached at origin/main. Read `README.md` and
+`mc programs show <programme>`; open code only to name the files a part already
+implies. Change nothing in the checkouts, commit nothing and create no branch.
 
 The turn is short: the programme document is the plan, and you only carry it over.
 Cut one goal per part, in the Order's sequence as phases. The goal's outcome is
@@ -123,18 +77,28 @@ goal names its part: a document whose path is `README.md` of this programme,
 labelled `Part <n>`. You add nothing the part does not say: no investigation,
 no solution, design or decision of your own about what is delivered or how it
 looks, no proposal, and no extra items beyond what the verbs require. The builder
-settles the construction. Where goals exist from an earlier cut, a part unchanged
-since then keeps its goals; for a changed part a goal not yet in build is rewritten,
-and a goal already built gets a new goal for the difference. Promote directly
-only when evidence identifies the current check, the required capability in
-the intended checkout and usable named input, accounting for the normal
-unbuilt-branch refresh. Unrelated main movement does not invalidate those
-named premises. If evidence is missing, the check or a relevant premise
-changed, or the read checkouts cannot establish that the premises still hold,
-leave the goal draft for the existing next-draft turn, even without a producer.
-If a producer must land first, use the ordinary phase dependency and leave its
-consumer draft. Record the reason in the goal log; do not invent a runner
-admission gate.
+settles the construction.
+
+Finish each goal and move it to `build`. Write its stand on every rule area
+(`mc goal areas <repo>` lists them; `mc goal obligation set <programme>/<goal>
+<area> --stand touched|untouched --text "…"`), saying only what the part says:
+`touched` where the part's Solution or Design changes the area, `untouched`
+elsewhere. Then `mc goal stage <programme>/<goal> build`. Every goal of the
+cut is in `build · ready` when you end; none is left in draft. A goal that
+waits for another is held by its phase alone: the phase order of a sequential
+programme, or `mc programs after` in a programme whose record states its
+phases. The runner starts a goal in build only when its phase is open.
+
+You do not verify the acceptance setup. The order carries an acceptance
+procedure with usable setup, which the desk checked before it set the order
+ready, and the build session establishes the check, the required capability
+and the named input in its own worktree; what it finds missing is its
+acceptance obstacle or a goal defect.
+
+Where goals exist from an earlier cut, a part unchanged since then keeps its
+goals; for a changed part a goal not yet in build is rewritten and moved to
+build, and a goal already built gets a new goal for the difference. A draft an
+earlier turn left is finished the same way.
 
 Where a part leaves open a choice of what is delivered or how it looks, which
 the document neither shows nor routes, or has a step that waits on Martin
@@ -142,13 +106,15 @@ between ready and done (a look, an acceptance, a trial, a word), do not make
 it or cut it as a waiting goal: leave it at the desk with
 `mc martin propose --text <programme>/README.md --file <brief>`, the brief in the
 desk's three parts (what the document says, what is missing, what was found), and
-end. A question that is not such a choice goes through goal-bound `mc ask` on the draft
-that needs it: jev, then a reader, answers it, and the other drafts go on. Do not
+end. A question that is not such a choice goes through goal-bound `mc ask` on the goal
+that needs it: jev, then a reader, answers it, and the other goals go on. Do not
 implement a goal or process proposals.
 
 The turn ends when you stop. It succeeds when goals name every part of
-README.md. Any other ending counts as a failure. Drafts left unfinished are planned by
-the next-draft sessions that follow and are not set to Martin.
+README.md and none of them is still a ready, free draft. Any other ending counts as a
+failure: the runner runs the turn again while a part has no goal or a draft
+naming a part is ready and free (not held, not decision-claimed), and the
+second failure opens a desk item.
 
 Read the code and relevant `docs/technical/` contracts, programme README and design first. Apply the rules that already answer a question; what is left follows `tasks/asking-martin.md`. A technical gap within existing direction is resolved by planning and recorded. After an answer, amend the canonical standard and affected programme/goal contracts consistently.
 
@@ -245,11 +211,10 @@ Yours without asking:
   Martin. What is asked is what `tasks/asking-martin.md` names.
 
 A person opens a plan session to write goals: `mc goal new …` makes the draft
-while the brief is being written. Use `mc goal stage <p>/<g> build` only when
-the brief is complete and the acceptance procedure and setup are verified for
-the intended build as above. A draft made in an interactive session is held
-from creation, so the runner plans nothing on it while it is being written;
-moving it to `build` frees it, and `mc goal release` hands an unfinished or
-unverified draft to headless planning.
+while the brief is being written. Use `mc goal stage <p>/<g> build` when the
+brief is complete. A draft made in an interactive session is held from
+creation; moving it to `build` frees it, and `mc goal release` removes the hold
+without moving it. A released draft that names a part of a ready programme is
+finished by the programme turn; any other draft stays its writer's to finish.
 
 @verb goal

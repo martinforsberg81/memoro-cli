@@ -481,7 +481,7 @@ or prompt content. Session ownership and headless restrictions are unchanged.
 
 The plan session owns the coherent programme README/design, prerequisite investigation/decisions, phases, complete goal briefs and executable checks; a finished brief moves to build once its acceptance procedure and setup are verified. It may also investigate,
 write goals, build and land work itself, or take over a goal's branch when
-that costs less than a new build session. This broad freedom belongs to interactive planning with Martin at the terminal. The runner may complete one next draft under [the programme trigger](mc-goals.md#next-draft-planning) (Martin, 2026-11-09);
+that costs less than a new build session. This broad freedom belongs to interactive planning with Martin at the terminal. The runner starts no session on a draft; its one headless planning is the [programme planning turn](mc-run.md#programme-planning-turn), which cuts a ready programme into goals in build (Martin, 2026-11-21);
 a goal in `finish` gets a finish session and a red merge a mend session (a
 merge failure only; a `blocked` goal before merge is Martin's), each with its own role ([mc-goals.md](mc-goals.md) § *Finish
 and mend*).
@@ -585,7 +585,7 @@ and launch evidence for descendant review, wrong programme, unknown identity,
 explicit refusal, aliases and compatible continuation.
 `tests/mc/archive-programme.test.js` covers archive refusals and ordering.
 
-## Acceptance preparation before build
+## Acceptance setup at build
 
 Programme review assesses each part's proposed acceptance procedure for an
 observable failure, exercise of the promised behaviour and named workspace,
@@ -594,29 +594,20 @@ permitted checks; missing evidence is a finding, not a pass. For unbuilt
 functionality it assesses the procedure and prerequisites, not a final result.
 The desk corrects findings in the order before release.
 
-The programme planning turn promotes directly only on evidence naming the
-current check, required capability in the intended checkout and usable named
-input. Unrelated main movement does not invalidate those premises. Missing
-evidence or a changed check or relevant premise leaves a draft for next-draft
-planning, even without a producer. A consumer requiring a producer stays draft
-in a dependent phase; an open phase, including after a dropped producer, is not
-evidence of output. Planning verifies the procedure and setup against the
-checkout build will receive, accounting for the [unbuilt-branch
-refresh](mc-goals.md#the-verbs) on promotion and the first build. In the
-next-draft worktree, fetch first, fast-forward an unbuilt branch to the fetched
-base, and verify there. On a branch with its own commits, verify the branch
-the refresh will retain. Do not discard work or promote on unverified setup.
-Before promotion, fetch again and confirm that the named premises still hold
-against the source of the branch refresh. Reverify on the updated setup if a
-named premise changed; unrelated main movement does not invalidate the evidence.
-If either fetch or a required fast-forward fails, or planning cannot establish
-what setup build will receive, leave the goal in draft and log why.
+Planning does not verify the setup (Martin, 2026-11-21). The programme
+planning turn has read checkouts only: it carries each part's Proved by into
+the goal's criteria and moves the goal to build. A consumer requiring a
+producer is in build in a dependent phase, and the phase holds it.
 
-A sound check missing its input in an open phase is logged and left draft and
-ready, with the blocking input and technical desk action in `mc goal log
---next`. The existing incomplete-session handoff keeps that Next visible; the
-desk returns the draft when the input is verifiably available. A wrong setup
-premise is reported by `mc goal defect` in
-draft; the desk verifies the change before returning it to planning. Changes to
-the programme promise go to the desk. This adds no runner admission service or
-separate review. The report and goal log carry the evidence.
+The build session establishes the setup before it builds
+(`canon/roles/build-session.md`). Entering build and the first build remake a
+branch with no commits of its own from `origin/main` (the [unbuilt-branch
+refresh](mc-goals.md#the-verbs)); in that worktree the session establishes for
+each criterion that its check exists or is what the goal builds, that the
+capability it requires is there and that the input it names is usable, and
+logs what it found. What is missing is the session's acceptance obstacle: a
+bounded repair of a check, fixture or helper, or a goal-bound `mc ask`. A
+criterion whose premise is wrong is reported with `mc goal defect`, and the
+desk amends the goal. Changes to the programme promise go to the desk. This
+adds no runner admission service or separate review. The goal log carries the
+evidence.

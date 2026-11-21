@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { BUILD_SESSION, buildSessionCount, noProgressEntry, noProgressStreak, NO_PROGRESS_SESSION, NOT_COUNTED, PROGRESS_AGAIN } from '../../src/mc/goals.js';
-import { appendEntry, backward, entryHeadings, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, isRepair, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextDraft, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, rejections, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
+import { appendEntry, backward, entryHeadings, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, isRepair, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, rejections, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
 import * as criteria from '../../src/mc/criteria.js';
 import { goalField, goalJson, goalJsonV2, goalMinimalV2, withGoal } from './_helpers/goal-file.js';
 import { addPr, goalOfRecord, readHold } from '../../src/mc/goals.js';
@@ -580,47 +580,6 @@ test('legacy merging records and log headings read as merge and write the new st
 });
 
 
-test('nextDraft requires unfinished planning only and orders by phase, creation and name without bypassing Martin', () => {
-  const draft = (name, fields = {}) => ({ programme: 'p', goal: name, stage: 'draft', status: 'ready', phase: 1, created: '2026-11-01T00:00:00Z', problems: [], ...fields });
-  const a = draft('a'), b = draft('b'), later = draft('later', { phase: 2 });
-  assert.equal(nextDraft([], 'p'), null);
-  assert.equal(nextDraft([draft('done', { stage: 'done' })], 'p'), null);
-  assert.equal(nextDraft([b, later, a, draft('done', { stage: 'done' }), draft('gone', { stage: 'dropped' })], 'p'), a);
-  assert.equal(nextDraft([b, draft('a', { created: '2026-11-02T00:00:00Z' })], 'p'), b);
-  assert.equal(nextDraft([later, b], 'p'), b);
-  assert.equal(nextDraft([draft('a', { status: 'Martin' }), b], 'p'), null);
-  assert.equal(nextDraft([draft('a', { problems: ['unreadable'] }), b], 'p'), null);
-  for (const stage of ['build', 'review', 'finish', 'merge']) {
-    for (const status of ['ready', 'blocked', 'Martin']) {
-      assert.equal(nextDraft([a, draft('delivery', { stage, status })], 'p'), null, `${stage} ${status}`);
-    }
-  }
-  assert.equal(nextDraft([a, { programme: 'other', stage: 'build' }], 'p'), a);
-
-  const dated = (name, created, status = 'ready') => {
-    const parsed = parseGoal(withGoal(GOAL_TEXT, { stage: 'draft', created, status }));
-    assert.equal(parsed.problems, undefined, 'timestamp inputs pass the real goal validator');
-    return { ...parsed, programme: 'p', goal: name };
-  };
-  const older = dated('older', '2026-11-01T01:00:00+02:00', 'Martin');
-  const newer = dated('newer', '2026-11-01T00:30:00Z');
-  assert.equal(nextDraft([newer, older], 'p'), null, 'the chronologically first draft waits on Martin; later drafts cannot bypass it');
-  const olderReady = { ...older, status: 'ready' };
-  assert.equal(nextDraft([newer, olderReady], 'p'), olderReady, 'offsets are compared as instants');
-  const seconds = dated('seconds', '2026-11-01T00:00:00Z');
-  const fraction = dated('fraction', '2026-11-01T00:00:00.001Z');
-  assert.equal(nextDraft([fraction, seconds], 'p'), seconds, 'mixed precision preserves chronological order');
-  const equalA = dated('a', '2026-11-01T00:00:00Z');
-  const equalB = dated('b', '2026-11-01T01:00:00.000+01:00');
-  for (const goals of [[equalB, equalA], [equalA, equalB]]) {
-    assert.equal(nextDraft(goals, 'p'), equalA, 'equal instants tie by goal name, not timestamp spelling or input order');
-  }
-  const missing = dated('z', null);
-  const absent = dated('a', undefined);
-  assert.equal(nextDraft([equalA, missing], 'p'), missing, 'missing creation dates retain their oldest-first treatment');
-  assert.equal(nextDraft([missing, absent], 'p'), absent, 'missing dates tie by goal name');
-});
-
 /* ------------------------------------------------ the count of build sessions without progress */
 
 const logEntry = (tool, stage, status, comment = '') => ({ at: '2026-11-14T10:00Z', tool, role: null, stage, status, done: null, comment, next: null });
@@ -937,39 +896,7 @@ test('a programme with no record, or a record without phases, gives the answers 
     const building = [listed('prog/first', 'build', 1), listed('prog/second', 'build', 2)];
     assert.equal(phaseOpen(building[1], building, order('prog')), false, `${kind}: phase 2 waits for phase 1`);
     assert.equal(nextGoal(building, { repos: ['memoro-cli'], held: new Set(['goal:prog/first']), order }), null, `${kind}: phase 2 is not picked`);
-    const draft = (name, fields = {}) => ({ programme: 'prog', goal: name, stage: 'draft', status: 'ready', phase: 1, created: '2026-11-01T00:00:00Z', problems: [], ...fields });
-    const drafts = [[draft('b'), draft('later', { phase: 2 }), draft('a')], [draft('a', { status: 'Martin' }), draft('b')], [draft('one', { stage: 'build' }), draft('two', { phase: 2 })]];
-    for (const goals of drafts) assert.equal(nextDraft(goals, 'prog', { order: order('prog') }), nextDraft(goals, 'prog'), `${kind}: draft`);
-    assert.equal(nextDraft(drafts[0], 'prog', { order: order('prog') }).goal, 'a', `${kind}: the lowest phase, then the oldest and by name`);
   }
-});
-
-test('nextDraft in a stated programme takes the draft of an open phase with no goal in build, review or merge', () => {
-  const draft = (name, phase, fields = {}) => ({ programme: 'prog', goal: name, stage: 'draft', status: 'ready', phase, created: '2026-11-01T00:00:00Z', problems: [], ...fields });
-  const built = listed('prog/built', 'build', 1);
-  const ready = draft('ready', 2);
-  assert.equal(nextDraft([built, ready], 'prog', { order: orderOf() }), ready, 'no dependency: phase 2 is planned while phase 1 builds');
-  assert.equal(nextDraft([built, ready], 'prog', { order: orderOf({ 2: [1] }) }), null, 'phase 2 waits for phase 1');
-  assert.equal(nextDraft([built, ready], 'prog'), null, 'no record: as today');
-  // (b) the phase of the draft holds a goal in build
-  const own = listed('prog/own', 'build', 2);
-  assert.equal(nextDraft([ready, own], 'prog', { order: orderOf() }), null);
-  assert.equal(nextDraft([ready, { ...own, stage: 'done' }], 'prog', { order: orderOf() }), ready);
-  // (c) a first draft waiting on Martin holds its phase only
-  const martin = draft('martin', 1, { status: 'Martin' });
-  assert.equal(nextDraft([martin, ready], 'prog', { order: orderOf() }), ready);
-  const youngerReady = draft('younger', 1, { created: '2026-11-02T00:00:00Z' });
-  const olderMartin = draft('older', 1, { status: 'Martin' });
-  assert.equal(nextDraft([youngerReady, olderMartin], 'prog', { order: orderOf() }), null, 'the older draft of a phase is not bypassed within it');
-  // (d) the lowest phase first; within a phase the oldest, then by name
-  assert.equal(nextDraft([draft('three', 3), draft('one', 1)], 'prog', { order: orderOf() }).goal, 'one');
-  assert.equal(nextDraft([draft('b', 1), draft('a', 1, { created: '2026-11-02T00:00:00Z' })], 'prog', { order: orderOf() }).goal, 'b');
-  assert.equal(nextDraft([draft('b', 1), draft('a', 1)], 'prog', { order: orderOf() }).goal, 'a');
-  // (e) a goal that does not parse holds the programme
-  assert.equal(nextDraft([ready, { ...listed('prog/bad', null, null), problems: ['x'] }], 'prog', { order: orderOf() }), null);
-  // an invalid record and an unavailable draft offer none
-  assert.equal(nextDraft([ready], 'prog', { order: { kind: 'invalid', problems: ['x'] } }), null);
-  assert.equal(nextDraft([ready], 'prog', { order: orderOf(), unavailable: () => true }), null);
 });
 
 test('renumberPhases keeps each stated dependency on the phase it was stated for', () => {

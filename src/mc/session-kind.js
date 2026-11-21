@@ -4,8 +4,9 @@
  * has two variants, `project` (one step of a project) and `goal`; a review is
  * of a project (its review step) or of a goal. A finish and a mend are always
  * a goal's and have no variant. `plan` is read for the rows and lane files the
- * runner wrote before 2026-11-07, the interactive plan session, and the
- * runner's focused next-draft planning assignment (2026-11-09).
+ * runner wrote before 2026-11-07, the interactive plan session, the rows of
+ * the next-draft planning sessions the runner ran from 2026-11-09 to
+ * 2026-11-21, and the runner's programme planning turn.
  *
  * Everything a person reads names a session this way: the page, `mc --json`,
  * the runner's lane files and `runs.tsv`. `runs.tsv` has one `kind` column

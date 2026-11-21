@@ -4,8 +4,9 @@
  * The runner starts goal sessions: a free lane takes the next goal that could
  * start on any repository (`nextWork`, `pickWork` in lane-pick.js) — a build
  * session on an open goal (a repair after a rejection), a review session on a goal in review, or the mend session a merge failure wakes — runs it, and picks again. One session is one fresh headless
- * process in the goal's worktree. A plan session completes the next draft
- * when its programme has only draft or finished goals (Martin, 2026-11-09). The runner decides
+ * process in the goal's worktree. A draft gets no session: the programme
+ * planning turn cuts a ready programme into goals and moves each to build
+ * (Martin, 2026-11-21). The runner decides
  * nothing with a model: it reads files, runs git and gh, starts the session
  * through the launch adapter and waits for it. It is the parent of the
  * process it starts.
@@ -70,7 +71,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addBranchWorktree, addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, BUILD_SESSION, BUILD_SESSION_LIMIT, BUILD_SESSION_STOP, buildSessionCount, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, WAITS_FOR_MAIN, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addBranchWorktree, addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, BUILD_SESSION, BUILD_SESSION_LIMIT, BUILD_SESSION_STOP, buildSessionCount, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, WAITS_FOR_MAIN, PLAN_ROLE, PROGRESS_AGAIN, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainingOwners, drainState, drainWaiting, fullRunWords, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -138,7 +139,7 @@ import { SCRATCH_MARKER, SCRATCH_SCHEMA } from './tidy.js';
 import { dockerStep, tidyStep } from './disk-admission.js';
 import {
   DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, RESULT_GRACE_MS, TIMEOUT_EXIT,
-  BUILD_ROLES, collectNote, goalCheckInPrompt, goalMendCheckInPrompt, goalMendPrompt, goalPlanCheckInPrompt, goalPlanPrompt, goalPrompt, managerCheckInPrompt, programmePlanCheckInPrompt, programmePlanPrompt, goalRepairPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
+  BUILD_ROLES, collectNote, goalCheckInPrompt, goalMendCheckInPrompt, goalMendPrompt, goalPrompt, managerCheckInPrompt, programmePlanCheckInPrompt, programmePlanPrompt, goalRepairPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
   readSessionOutput, sessionResult, routedSettings, streamSummary, describeSettings, describeWatch, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
@@ -1653,22 +1654,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const programmes = [...new Set(all.map(goal => goal.programme))];
     // Each programme's record, once for this pick (D10): who may start what is read where it is decided.
     const orders = new Map(programmes.map(programme => [programme, orderOf(programme)]));
-    const unavailable = goal => heldBy(goal) || decisionClaimed(join(goal.dir, '.decision.json'));
-    const drafts = programmes
-      .map(programme => nextDraft(all, programme, { order: orders.get(programme), unavailable })).filter(Boolean);
-    const planning = drafts.filter(goal => names.includes(goal.repos[0]) && !unavailable(goal)
-      && (orders.get(goal.programme).kind === 'stated'
-        // Stated phases: this draft's own name and any plan session of the programme hold it; delivery sessions of other phases do not.
-        ? !held.has(goalName(goal)) && ![...held].some(name => !name) && planSessions(goal.programme, all).size === 0 && !held.has(turnName(goal.programme))
-        : ![...held].some(name => !name || name === turnName(goal.programme) || name.startsWith(`goal:${goal.programme}/`))))
-      .map(goal => ({ name: goalName(goal), repo: goal.repos[0], kind: 'plan', variant: null, since: goal.log.at(-1)?.at ?? '', resumed: false, goal }));
-    return [...planning, ...all
+    return all
       .filter((goal) => goalSession(goal, merge) !== null
         && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && !decisionClaimed(join(goal.dir, '.decision.json')) && phaseOpen(goal, all, orders.get(goal.programme)) && !heldBy(goal) && may(goal) && !heldForMain(goal))
       .map((goal) => {
         const kind = goalSession(goal, merge);
         return { name: goalName(goal), repo: goal.repos[0], kind, variant: goalVariant(kind), since: goal.log.at(-1)?.at ?? '', resumed: false, goal };
-      })];
+      });
   }
 
 
@@ -1684,24 +1676,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     return order;
   }
 
-  /**
-   * The plan sessions of `programme` that are claimed or current, by name: the
-   * session's kind (`kind` of its current record) and not its goal's stage tells
-   * a plan session from a delivery one, since a plan session moves its draft
-   * to build while it runs. A claim with no current record yet is a plan
-   * session when its goal is still a draft.
-   */
-  function planSessions(programme, all) {
-    const names = new Set(stepsHeld().filter(item => item.kind === 'plan' && item.programme === programme && item.name).map(item => item.name));
-    const current = new Set(stepsHeld().map(item => item.name));
-    for (const name of claims) {
-      if (current.has(name)) continue;
-      const goal = all.find(item => goalName(item) === name);
-      if (goal?.programme === programme && goal.stage === 'draft') names.add(name);
-    }
-    return names;
-  }
-
   /** A build or review is `goal`'s variant (a project's was the other); a repair or a mend has none (`session-kind.js`). */
   function goalVariant(kind) {
     return kind === 'build' || kind === 'review' ? 'goal' : null;
@@ -1710,11 +1684,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /**
    * The session a goal gets (`goalSession`): `mend` only for unqueued merge failures,
    * `review` in review, in build a `repair` after a rejection and else `build`. Only a candidate of
-   * `goalWork` comes here, so the merger's line is not asked again. Drafts
-   * receive the separate, programme-gated plan assignment.
+   * `goalWork` comes here, so the merger's line is not asked again. A draft
+   * has no session (null): the programme planning turn finishes it.
    */
   function goalKind(goal) {
-    if (goal.stage === 'draft') return 'plan';
+    if (goal.stage === 'draft') return null;
     if (goal.stage === 'merge') return 'mend';
     if (goal.stage === 'review') return 'review';
     return goalSession(goal) === 'repair' ? 'repair' : 'build';
@@ -1892,10 +1866,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /** `programme`: its notice, said once while it lasts (an unreadable state file, a horizon that is not open). */
   const turnSaid = new Map();
   const turnItems = () => { try { return deps.deskItems?.list() || []; } catch { return []; } };
+  /** A draft held (`mc goal hold`) or under a live decision claim is its holder's: it neither calls the turn back nor fails it. */
+  const draftUnavailable = ({ dir }) => Boolean(readHold(dir, deps.read)) || decisionClaimed(join(dir, '.decision.json'));
   /** Whether `programme` is due a planning turn now (D3), read through the runner's own list and read. */
   function turnDue(programme, items = turnItems()) {
     const state = readTurnState({ root, programme, read: deps.read });
-    return programmeDue({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, items, horizon: slug => deps.horizon?.(slug) ?? null, state });
+    return programmeDue({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, items, horizon: slug => deps.horizon?.(slug) ?? null, state, unavailable: draftUnavailable });
   }
   function programmeWork(names, passed = new Set()) {
     if (!names.length) return [];
@@ -2024,12 +2000,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const count = goalCount({ home: programsHome(deps.env), programme, list: deps.list });
       // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
       const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
-      const ended = finishTurn({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, write: deps.write, lock, root, revision: due.revision });
+      const ended = finishTurn({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, write: deps.write, lock, root, revision: due.revision, unavailable: draftUnavailable });
       let note = `${read.note},${count} goal${count === 1 ? '' : 's'}`;
       if (ended.kind === 'cut') note = `${note},cut`;
       else if (ended.kind === 'settled') note = `${note},not cut (${ended.problems.join('; ')})`;
       else if (!providerEnding) {
-        const reason = `planning session exited ${result.status ?? 1} without a goal naming every part of README.md (${ended.problems.join('; ')}; ${read.note})`;
+        const reason = `planning session exited ${result.status ?? 1} without every part of README.md cut into a goal in build (${ended.problems.join('; ')}; ${read.note})`;
         countTurnFailure(programme, reason, `${out}.jsonl`);
         note = reason;
       }
@@ -2660,7 +2636,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /** The hold each goal was last said to be held by (`by|at`), so a hold is said once. */
   const holdsSaid = new Map();
   /**
-   * Whether `goal` is held (`mc goal hold`, read now). A held goal gets no planning, delivery or decision session;
+   * Whether `goal` is held (`mc goal hold`, read now). A held goal gets no delivery or decision session;
    * the first pass that would have started one says so, once for each hold.
    */
   function goalRelease(goal, revision) {
@@ -3244,7 +3220,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const [repoName] = goal.repos;
     const worktree = join(goal.dir, repoName);
     const kind = goalKind(goal);
-    const planning = kind === 'plan';
+    if (!kind) return 'skipped:draft';
     const review = kind === 'review';
     const repair = kind === 'repair';
     const mend = kind === 'mend';
@@ -3336,9 +3312,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
       const brief = goal.title ? renderGoalText(goalOfRecord(goal)) : null;
       const told = { name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief };
-      const prompt = planning
-        ? goalPlanPrompt(told)
-        : review
+      const prompt = review
         ? goalReviewPrompt({ ...told, pr: pr.number, head: pr.head, verdict: goal.verdict, tripped: found.tripped ?? [], trippedError: found.error ?? null, seen: judged.seen ?? [], seenError: judged.error ?? null, writeBack })
         : repair
         ? goalRepairPrompt({ ...told, verdict: goal.verdict })
@@ -3399,17 +3373,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         if (stopRequested()) return 'stop';
         if (updateRequested()) return 'skipped:update';
         if (heldBy(goal) || (revision && goalRelease(goal, revision)?.problems)) return 'skipped:held';
-        const listed = goals();
-        const order = planning ? orderOf(goal.programme) : null;
-        // Stated phases: the draft must still be the programme's next, and no other plan session of it may be on.
-        const others = order?.kind === 'stated' ? [...planSessions(goal.programme, listed)].filter(other => other !== name) : [];
-        const unavailable = (item) => item.goal !== goal.goal && (heldBy(item) || decisionClaimed(join(item.dir, '.decision.json')));
-        // The programme turn's claim or current record holds the programme: the drafts it creates are its own until it ends (D7).
-        const turnHolds = planning && (claims.has(turnName(goal.programme)) || stepsHeld().some(item => item.name === turnName(goal.programme)));
-        if (planning && (nextDraft(listed, goal.programme, { order, unavailable })?.goal !== goal.goal || others.length || turnHolds)) {
-          say(`${name}: programme changed during admission — planning deferred`);
-          return 'skipped:programme-changed';
-        }
         const handoffPath = join(scratch, MERGE_HANDOFF_FILE);
         // A session whose `mc goal stage merge` ends it: a review, and a mend in merge.
         const canHandoff = (review || mend) && scratchEnv.MC_SCRATCH;
@@ -3428,7 +3391,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
             catch { return false; }
           } : null,
           ...watchFor(launch, settings, {
-            prompt, name, checkInText: planning ? goalPlanCheckInPrompt : mend ? goalMendCheckInPrompt : goalCheckInPrompt,
+            prompt, name, checkInText: mend ? goalMendCheckInPrompt : goalCheckInPrompt,
             onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
           }),
           env: {
@@ -3477,16 +3440,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       else if (result.handedOff) { say(`${name}: handed to the merger — lane released`); }
       else if (holdAtEnd) say(`${name}: held by ${holdAtEnd.by ?? '—'} since ${holdAtEnd.at ?? '—'} when its session ended — stage and status stay, nothing is written`);
       // A quota or API ending answers nothing about the goal: the next pick takes it again.
-      else if (planning) {
-        const now = stateNow(goal);
-        if (!read.quota && !read.interrupted && now.stage === 'draft' && now.status === 'ready') {
-          const last = spoke ? entriesAfter.at(-1) : null;
-          goalState(goal, name, { status: 'Martin' }, {
-            comment: 'the plan session ended without completing the draft — inspect LOG.md and the session log before continuing planning',
-            next: last?.role === PLAN_ROLE && last.stage === 'draft' && last.status === 'ready' ? last.next : null,
-          });
-        }
-      }
       else if (mend && !read.quota && !read.interrupted) afterMend(goal, name, { stage: goal.stage, status: goal.status });
       // An offline ending answers nothing about the goal: no review entry, no runner entry.
       else if (review && read.interrupted !== 'offline') afterReview(goal, name);
