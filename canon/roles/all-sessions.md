@@ -8,7 +8,7 @@ A turn is the unit of cost: every turn re-reads the whole context. So:
   for it. Independent `Edit`s, likewise, in one response.
 - No prose between calls. Report once, at the end.
 
-You are already a session. Never run `mc plan`, `mc manager` (formerly `mc brief`)
+You are already a session. Never run `mc manager` (formerly `mc brief`)
 or `mc martin` to start yourself: those are the person's entrances.
 
 Read the code before you decide or ask. Report what you ran and what it said;
@@ -45,7 +45,7 @@ to be rebuilt before a wider launch, and do not defer a known requirement to
 "before broad rollout".
 
 Before deciding, read the relevant technical contracts and the programme README and design. State which rule answers the question and apply it, or identify the precise missing/conflicting design rule. Investigate implementation details locally. A technical gap within existing direction is resolved in planning and recorded. After a decision, update the canonical standard and affected programme/goal contracts, not only LOG.md. A decision that reaches beyond the programme goes in `docs/technical/`; one that is the programme's alone goes in its README or the goal it governs.
->Plan writes a technical standard into `docs/technical/` within the app's
+>The desk writes a technical standard into `docs/technical/` within the app's
 existing direction. A shared component that falls short of a
 standard may be changed by a goal only to the bounded extent its own criteria
 require; say so in its LOG.md and pull request, and let review judge it. Anything
@@ -70,7 +70,7 @@ Work on a goal happens in that goal's worktree, `goals/<goal>/<repo>` on
 `goal/<goal>`, and every session on the goal uses it. A session never makes
 another checkout of a goal branch, in `$MC_SCRATCH` or anywhere else. To read a
 goal branch whose worktree is not present, use `git show` or `git diff` against
-`goal/<goal>` from the programme's planning checkout of that repository; another
+`goal/<goal>` from the checkout of that repository you stand in; another
 checkout is not the answer.
 
 Martin: Swedish. Everything in a repository — code, comments, commits, PRs,

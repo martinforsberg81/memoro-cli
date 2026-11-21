@@ -4,7 +4,8 @@
  * has two variants, `project` (one step of a project) and `goal`; a review is
  * of a project (its review step) or of a goal. A finish and a mend are always
  * a goal's and have no variant. `plan` is read for the rows and lane files the
- * runner wrote before 2026-11-07, the interactive plan session, the rows of
+ * runner wrote before 2026-11-07, the interactive plan session (`mc plan`,
+ * removed 2026-11-21), the rows of
  * the next-draft planning sessions the runner ran from 2026-11-09 to
  * 2026-11-21, and the rows of the programme planning turn it ran until the
  * cut of a ready order became code.

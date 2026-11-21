@@ -8,7 +8,6 @@ import { codexSessionDriver } from '../codex-sessions.js';
 import { claudeBackgroundDriver } from '../claude-background.js';
 import { descriptor, sessionDescriptor, ENTRANCES } from '../server-protocol.js';
 import { pidAlive } from '../status-collect.js';
-import { chooseProgramme } from './plan.js';
 import { requireCapability } from '../../adapters/index.js';
 import { interactiveToolRefusal } from '../interactive-tool.js';
 
@@ -38,7 +37,7 @@ function parse(argv) {
   }
   if (!Array.isArray(answers) || answers.some(value => typeof value !== 'string')) throw new Error('answers must be strings');
   if (!['version', 'list', 'start', 'join'].includes(operation) || (operation !== 'version' && !ENTRANCES.has(entrance))) throw new Error('unknown session operation or entrance');
-  if (args.some(arg => ['--headless', '--intake', '--collect', '--archive', '--local'].includes(arg)) || (entrance === 'martin' && args[0] === 'get')) throw new Error('session accepts interactive entrance flags only');
+  if (args.some(arg => ['--headless', '--intake', '--collect', '--local'].includes(arg)) || (entrance === 'martin' && args[0] === 'get')) throw new Error('session accepts interactive entrance flags only');
   if (operation === 'join' && !session) throw new Error('join needs a listed --session id');
   return { operation, entrance, args, json, answers, session, host };
 }
@@ -60,7 +59,7 @@ export async function run(argv, {
     if (request.operation === 'version') { emit(descriptor('handshake')); return 0; }
     let answerIndex = 0;
     const choose = (title, items = null) => {
-      const publicItems = items?.map(item => ({ key: item.key, value: typeof item.value === 'symbol' ? '__new_programme__' : item.value,
+      const publicItems = items?.map(item => ({ key: item.key, value: item.value,
         name: item.name || item.label, label: item.label || item.name })) ?? null;
       if (answerIndex >= request.answers.length) throw new Question(descriptor('question', { title, items: publicItems }));
       const answer = request.answers[answerIndex++];
@@ -151,8 +150,7 @@ export async function run(argv, {
           return prepared;
         } });
     };
-    const status = await module.run(request.args, { env, stdout: capture, stderr: capture, interactive: () => true,
-      choose: options => chooseProgramme({ ...options, choose, question: title => choose(title) }), open: opened });
+    const status = await module.run(request.args, { env, stdout: capture, stderr: capture, interactive: () => true, open: opened });
     if (emitted && messages.length) stderr.write(messages.join(''));
     if (!emitted) {
       if (status !== 0) throw Object.assign(new Error(messages.join('').trim().replace(/^mc: /u, '') || `entrance exited ${status}`),

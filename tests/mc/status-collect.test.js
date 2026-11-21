@@ -9,7 +9,6 @@ import { describe, it } from 'node:test';
 import { parseRuns } from '../../src/mc/brief-collect.js';
 import { estimateCost, priceFor, rowCost } from '../../src/mc/prices.js';
 import { declared } from '../../src/adapters/index.js';
-import { planProviders, planSessionWords } from '../../src/mc/page-render.js';
 import { nowBlock, pidAlive } from '../../src/mc/status-collect.js';
 import { agyTail } from '../../src/mc/work-status.js';
 
@@ -172,9 +171,6 @@ describe('agy on the page: its tail, its model reader and its provider name', ()
     assert.equal(declared('antigravity-cli', 'MODEL_READER'), 'agy-step');
   });
 
-  it('a programme\'s plan sessions are counted under the tool\'s short name, whichever id the item carries', () => {
-    const group = { planning_sessions: [{ tool: 'antigravity-cli' }, { tool: 'agy' }, { tool: 'claude-code' }, { tool: 'codex' }, { tool: 'codex' }] };
-    assert.deepEqual(planProviders(group), { agy: 2, claude: 1, codex: 2 });
-    assert.equal(planSessionWords(group), 'agy 2 · claude 1 · codex 2');
-  });
+  // Retired with `mc plan` (2026-11-21): 'a programme's plan sessions are counted under the tool's short name,
+  // whichever id the item carries' protected the provider counts a programme's heading and `mc programs list` drew.
 });

@@ -1046,54 +1046,46 @@ describe('SESSIONS', () => {
     verb: 'helper', area: null, tool: 'claude', model: 'sonnet', pid: 99,
     started: '2026-08-27T12:00:00Z',
   };
+  /** A plan session still open from before `mc plan` went (2026-11-21): its register entry is all that is left of the entrance. */
   const PLAN = {
-    verb: 'plan', area: 'plan/msr-core', tool: 'claude', model: 'opus', pid: 100,
+    verb: 'plan', area: 'plan/msr-core', programme: 'msr-core', tool: 'claude', model: 'opus', pid: 100,
     started: '2026-08-29T11:30:00Z',
   };
 
   it('gives each desk its own slot, and says so when nobody is at one', () => {
-    const s = sessionsSection({ foreground: [HELPER, PLAN, { verb: 'martin', area: 'martin', pid: 103, started: NOW }], now: NOW, alive: live });
+    const s = sessionsSection({ foreground: [HELPER, { verb: 'martin', area: 'martin', pid: 103, started: NOW }], now: NOW, alive: live });
     assert.equal(s.desks.helper.pid, 99);
     // A desk nobody is at is `null` rather than missing: the page draws the
     // row either way, and "is the helper running?" is answered both ways.
     assert.equal(s.desks.manager, null);
     assert.equal(s.desks.martin.pid, 103);
-    assert.equal(s.count, 3);
+    assert.equal(s.count, 2);
   });
 
-  // A planning session belongs to its programme, and PROGRAMMES draws it on
-  // that programme's own row. It is keyed by programme here so that section
-  // never has to know how `mc plan` spells an area.
-  it('keys a planning session by its programme, as its owner', () => {
-    const s = sessionsSection({ foreground: [HELPER, PLAN], now: NOW, alive: live });
-    assert.equal(s.planning['msr-core'].pid, 100);
-    assert.deepEqual(s.planning['msr-core'].owner, { kind: 'programme', name: 'msr-core' });
-    assert.deepEqual(s.strays, []);
+  // Retired with `mc plan` (2026-11-21): 'keys a planning session by its programme, as its owner' protected that
+  // PROGRAMMES drew an open plan session on its programme's row, and 'makes a plan session with no programme a
+  // stray' that one from before programmes was a stray. No verb opens one now, so every one left is a stray.
+  it('makes a plan session left open a stray, whatever programme it names', () => {
+    const s = sessionsSection({ foreground: [HELPER, PLAN, { ...PLAN, pid: 104, area: 'mc-test', programme: undefined }], now: NOW, alive: live });
+    assert.equal('planning' in s, false);
+    assert.equal('planning_sessions' in s, false);
+    assert.deepEqual(s.programme_sessions, {});
+    assert.deepEqual(s.strays.map((item) => [item.kind, item.name, item.verb, item.pid]), [['register', 'mc-test', 'plan', 104], ['register', 'plan/msr-core', 'plan', 100]]);
+    assert.equal(s.count, 1);
   });
 
   // Every session has an owner: a programme or a desk, and no third kind
   // (goal mc/no-work).
   it('gives every session an owner that is a programme or a desk', () => {
     const PROJECT = { verb: 'project', area: 'step/ui', programme: 'mc', tool: 'codex', pid: 101, started: '2026-08-29T11:00:00Z' };
-    const s = sessionsSection({ foreground: [HELPER, PLAN, PROJECT, { verb: 'brief', pid: 102 }, { verb: 'martin', area: 'martin', pid: 103 }], now: NOW, alive: live });
+    const s = sessionsSection({ foreground: [HELPER, PROJECT, { verb: 'brief', pid: 102 }, { verb: 'martin', area: 'martin', pid: 103 }], now: NOW, alive: live });
     assert.deepEqual(s.desks.helper.owner, { kind: 'desk', name: 'helper' });
     assert.deepEqual(s.desks.manager.owner, { kind: 'desk', name: 'manager' });
     assert.deepEqual(s.desks.martin.owner, { kind: 'desk', name: 'martin' });
     assert.deepEqual(s.programme_sessions.mc.map((item) => [item.pid, item.owner]), [[101, { kind: 'programme', name: 'mc' }]]);
-    assert.equal(s.count, 5);
+    assert.equal(s.count, 4);
     assert.deepEqual(s.strays, []);
     assert.equal('others' in s, false);
-  });
-
-  // A `mc plan` from before the programme change carries a bare project name,
-  // belongs to no programme and cannot be started again: a stray.
-  it('makes a plan session with no programme a stray', () => {
-    const s = sessionsSection({
-      foreground: [{ ...PLAN, area: 'mc-test' }], now: NOW, alive: live,
-    });
-    assert.deepEqual(s.planning, {});
-    assert.deepEqual(s.strays.map((item) => [item.kind, item.name, item.verb]), [['register', 'mc-test', 'plan']]);
-    assert.equal(s.count, 0);
   });
 
   // The whole point of the section. `started` has been in the register since
@@ -1102,7 +1094,7 @@ describe('SESSIONS', () => {
   it('carries how long each session has been open', () => {
     const s = sessionsSection({ foreground: [HELPER, PLAN], now: NOW, alive: live });
     assert.equal(s.desks.helper.age_seconds, 2 * 24 * 60 * 60);
-    assert.equal(s.planning['msr-core'].age_seconds, 1800);
+    assert.equal(s.strays[0].age_seconds, 1800);
   });
 
   it('counts a tmux session mc did not start for anyone as a stray, with its age', () => {
@@ -1124,7 +1116,7 @@ describe('SESSIONS', () => {
       now: NOW,
       alive: live,
     });
-    assert.deepEqual(s.strays.map((item) => item.name), ['red', 'mc-docx-editor']);
+    assert.deepEqual(s.strays.map((item) => item.name), ['red', 'mc-docx-editor', 'plan/msr-core']);
   });
 
   it('drops a registered session whose process is gone', () => {
@@ -2319,7 +2311,8 @@ describe('collectPage', () => {
     const page = await fx.collect();
     assert.ok(!page.programmes.programmes.some((g) => g.programme === 'vanished'));
     assert.ok(!page.horizons.none.includes('vanished'));
-    assert.equal(maintenanceItems(page).filter((item) => item.text.includes('session with no programme') && item.text.includes('plan')).length, 1);
+    // A plan session left open is a stray since `mc plan` went (2026-11-21), drawn once.
+    assert.deepEqual(maintenanceItems(page).filter((item) => item.text.includes('mc plan with no programme')).map((item) => item.key), ['stray:programs/vanished']);
   });
 
   it('shows an archive turn and its competing attention sources until completion', async (t) => {
@@ -2435,7 +2428,7 @@ describe('collectPage', () => {
     assert.ok(!page.programmes.programmes.some((g) => g.programme === 'finished'));
     assert.deepEqual(page.desk.acts.filter((entry) => entry.id === item.id).map((entry) => entry.reference), ['archive:finished']);
     assert.deepEqual(maintenanceItems(page).filter((entry) => entry.key === 'pr:memoro#9000').map((entry) => entry.key), ['pr:memoro#9000']);
-    assert.equal(maintenanceItems(page).filter((entry) => entry.text.includes('session with no programme') && entry.text.includes('plan')).length, 1);
+    assert.deepEqual(maintenanceItems(page).filter((entry) => entry.text.includes('mc plan with no programme')).map((entry) => entry.key), ['stray:programs/finished']);
     assert.equal(horizonFigures(page)[0].programmes, 0);
     assert.ok(renderPageLines(page, { columns: 160, now: NOW, overview: true }).some((line) => line.includes('No programmes')));
   });
@@ -2693,7 +2686,8 @@ describe('collectPage', () => {
     group.finished = 1;
     group.priority = 5;
     group.record_invalid = true;
-    group.planning_sessions = [{ kind: 'plan', name: 'plan:mc', pid: 4001, started: '2026-08-29T11:30:00Z', age_seconds: 1800 }];
+    // A session somebody has open in the programme; its plan session was drawn here until `mc plan` went (2026-11-21).
+    group.sessions = [{ verb: 'project', programme: 'mc', tool: 'claude', pid: 4001, started: '2026-08-29T11:30:00Z', age_seconds: 1800 }];
     const runner = [{ kind: 'build', goal: 'mc/waits', repo: 'memoro-cli', tool: 'claude', model: 'opus', pid: 4000, started: '2026-08-29T11:55:00Z', elapsed_seconds: 300 }];
     const page = { ...data, runner: { ...data.runner, sessions: runner } };
     for (const columns of [160, 80]) {
@@ -2707,7 +2701,7 @@ describe('collectPage', () => {
       assert.match(body, /NEEDS ATTENTION[\s\S]*GOAL\.json: GOAL\.json does not parse/u, `${columns}: the malformed goal`);
       assert.match(body, /runner pid 4000/u, `${columns}: the runner session sits under its goal`);
       assert.equal(body.match(/runner pid 4000/gu).length, 1);
-      assert.match(body, /PLAN/u, `${columns}: the plan session`);
+      assert.match(body, /pid 4001/u, `${columns}: the programme's own session`);
       if (columns === 160) assert.match(frame.heading, / {2}phase 1 of 3 · 6 goals · priority 5 · 1 finished in tree · record invalid/u, frame.heading);
       // HORIZONS counts the same goals: open, landed, held, and a mark while a session works.
       const at = lines.findIndex((line) => /Title of first/u.test(line));
@@ -2844,7 +2838,8 @@ describe('collectPage', () => {
     assert.ok('horizons' in data);
     assert.deepEqual(Object.keys(data.horizons), ['open', 'none', 'unreadable', 'error']);
     const group = data.programmes.programmes.find((item) => item.programme === 'mc');
-    for (const key of ['programme', 'priority', 'dormant', 'finished', 'goals', 'phases', 'current_phase', 'repos', 'planning', 'planning_sessions', 'sessions', 'statuses']) assert.ok(key in group, key);
+    for (const key of ['programme', 'priority', 'dormant', 'finished', 'goals', 'phases', 'current_phase', 'repos', 'sessions', 'statuses']) assert.ok(key in group, key);
+    for (const key of ['planning', 'planning_sessions']) assert.equal(key in group, false, `${key} went with mc plan`);
     assert.equal('proposals' in group, false, 'a programme holds no proposals: they wait in the areas');
   });
 
@@ -3281,8 +3276,8 @@ describe('MC', () => {
   it('gives the live loop a key that moves with a goal and not with a clock', () => {
     const key = (over) => pageKey(pageData({ programmes: programmesSection({ goalRows: GOALS, ...over }) }));
     assert.notEqual(key({}), key({ priority: () => 10 }), 'a priority change refreshes programme headings');
-    assert.equal(key({ planning: { mc: { age_seconds: 600 } } }), key({ planning: { mc: { age_seconds: 60 } } }), 'a planning session getting older is not news');
-    assert.notEqual(key({}), key({ planning: { mc: { age_seconds: 60 } } }), 'a planning session starting is: the programme draws it');
+    assert.equal(key({ programmeSessions: { mc: [{ pid: 7, age_seconds: 600 }] } }), key({ programmeSessions: { mc: [{ pid: 7, age_seconds: 60 }] } }), 'a programme session getting older is not news');
+    assert.notEqual(key({}), key({ programmeSessions: { mc: [{ pid: 7, age_seconds: 60 }] } }), 'a programme session starting is: the programme draws it');
     assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, running: true })) }), 'a goal the runner took is');
     assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, stage: 'review', state: 'review' })) }), 'a goal that moved is');
     assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, phase: 2 })) }), 'a phase move refreshes the tree');
@@ -3592,7 +3587,7 @@ describe('PULL REQUESTS', () => {
       collect: async () => ({ prs: pulls, notes: [] }),
     });
     assert.equal(code, 0);
-    const order = ['PLAN SESSIONS  1', "NOBODY'S  3"].map((head) => out.indexOf(head));
+    const order = ['PLAN BRANCHES  1', "NOBODY'S  3"].map((head) => out.indexOf(head));
     assert.ok(order.every((n, i) => n > 0 && (i === 0 || n > order[i - 1])), out);
     assert.doesNotMatch(out, /ON A STEP/u);
     const rows = out.split('\n').filter((line) => /#1\d{4}/u.test(line));
@@ -3912,11 +3907,11 @@ describe('the overview: its order, its programmes and what belongs to none', () 
 
   /**
    * A day: `open` horizons with `per` programmes each under them and `none` programmes under no horizon, every one with a goal
-   * at work; `runner` runner sessions, `managers` manager sessions and `plans` plan sessions; the attention items and the
+   * at work; `runner` runner sessions, `managers` manager sessions and `rooms` sessions somebody has open in a programme; the attention items and the
    * merge and deploy facts asked for. Programmes are `prog-01…`, in horizon order and then the ones serving none.
    */
   function day({
-    open = 3, per = 3, none = 5, runner = 7, managers = 2, plans = 0, desk = 2, held = 0, blocked = 0, failedMerges = 0, strays = 0,
+    open = 3, per = 3, none = 5, runner = 7, managers = 2, rooms = 0, desk = 2, held = 0, blocked = 0, failedMerges = 0, strays = 0,
     queued = {}, deploy = null, preparation = null, failedAttempt = false, martin = true,
   } = {}) {
     const total = open * per + none;
@@ -3928,27 +3923,28 @@ describe('the overview: its order, its programmes and what belongs to none', () 
       else if (i < held + blocked + failedMerges) Object.assign(extra, { stage: 'merge', prs: [{ repo: 'memoro', number: 900 + i, merge_red: 'merge: X not mergeable' }] });
       return { ...goalRow(`goal-${nn(i + 1)}`, programme, { repos: ['memoro-cli'] }), ...extra };
     });
-    const planning = Object.fromEntries(names.slice(total - plans).map((name, i) => [name, [{
-      verb: 'plan', area: `programs/${name}`, tool: 'claude', model: 'opus', pid: 7000 + i, started: at(30 + i), age_seconds: (30 + i) * 60,
-    }]]));
+    const inRooms = names.slice(total - rooms).map((name, i) => ({
+      verb: 'project', programme: name, area: `programs/${name}`, tool: 'claude', model: 'opus', pid: 7000 + i, started: at(30 + i),
+    }));
     const foreground = [
       ...Array.from({ length: managers }, (_, i) => ({ verb: 'manager', area: null, tool: 'claude', model: 'opus', pid: 6000 + i, started: at(60 + i) })),
       ...(martin ? [{ verb: 'martin', area: null, tool: 'claude', model: 'opus', pid: 6500, started: at(15) }] : []),
-      ...Object.values(planning).flat().map((session) => ({ verb: 'plan', area: session.area, tool: 'claude', model: 'opus', pid: session.pid, started: session.started })),
+      ...inRooms,
     ];
     const currents = Array.from({ length: runner }, (_, i) => ({
       name: `goal:${names[i % total]}/goal-${nn((i % total) + 1)}`, kind: i % 5 === 4 ? 'review' : 'build', repo: 'memoro-cli', tool: 'claude', model: 'opus',
       check_in_minutes: 60, check_ins: 0, started: at(5 + i), pid: 5000 + i,
     }));
+    const sessions = sessionsSection({ foreground, now: NOW, alive: live });
     const base = pageData({
       runner: runnerSection({ runner: { pid: 4242, started: at(600) }, currents, rows: [], now: NOW, alive: live }),
-      sessions: sessionsSection({ foreground, now: NOW, alive: live }),
+      sessions,
       merges: mergesSection({
         now: NOW, merger: { pid: 4242 },
         queued: Object.entries(queued).flatMap(([repo, count]) => Array.from({ length: count }, (_, i) => ({ repo, pr: 100 + i, since: at(20), state: 'queued', branch: `b${i}` }))),
       }),
       programmes: programmesSection({
-        goalRows: goals, planningSessions: planning, strays: Array.from({ length: strays }, (_, i) => ({ name: `stray-${i}`, checkout: false, uncommitted: 0 })),
+        goalRows: goals, programmeSessions: sessions.programme_sessions, strays: Array.from({ length: strays }, (_, i) => ({ name: `stray-${i}`, checkout: false, uncommitted: 0 })),
       }),
     });
     const production = { ...base.runner.production };
@@ -3968,10 +3964,10 @@ describe('the overview: its order, its programmes and what belongs to none', () 
     };
   }
   /** 3 open horizons; 15 programmes, 10 under the horizons and 5 under none; 9 sessions and the desk's `martin`; 2 desk items; 2 attention items; 1 merge queued. */
-  const normalDay = () => day({ open: 3, per: 3, none: 5, runner: 7, managers: 2, plans: 0, desk: 2, held: 1, blocked: 1, queued: { memoro: 1 } });
-  /** 5 open horizons; 30 programmes; 14 runner sessions, 2 managers and 3 plan sessions; 8 attention items; 6 desk items; 2 repositories merging; a deploy. */
+  const normalDay = () => day({ open: 3, per: 3, none: 5, runner: 7, managers: 2, rooms: 0, desk: 2, held: 1, blocked: 1, queued: { memoro: 1 } });
+  /** 5 open horizons; 30 programmes; 14 runner sessions, 2 managers and 3 sessions open in programmes; 8 attention items; 6 desk items; 2 repositories merging; a deploy. */
   const heavyDay = () => day({
-    open: 5, per: 5, none: 5, runner: 14, managers: 2, plans: 3, desk: 6, held: 2, blocked: 2, failedMerges: 1, strays: 1, queued: { memoro: 3, 'memoro-cli': 2 },
+    open: 5, per: 5, none: 5, runner: 14, managers: 2, rooms: 3, desk: 6, held: 2, blocked: 2, failedMerges: 1, strays: 1, queued: { memoro: 3, 'memoro-cli': 2 },
     deploy: { short: 'def5678', age_seconds: 240, late: false },
     preparation: { state: 'failed', short: '0a1b2c3', error: 'the full run was red' }, failedAttempt: true,
   });
@@ -4025,7 +4021,7 @@ describe('the overview: its order, its programmes and what belongs to none', () 
     }
     assert.equal(lines.filter((row) => /runner pid \d+/u.test(row)).length, 7, 'seven runner sessions, each drawn once');
     assert.equal(flightRows(data).runner.length, 7);
-    const title = (options) => draw(day({ open: 1, per: 1, none: 0, runner: 0, managers: 0, plans: 0, desk: 2, ...options })).find((row) => /┌─ DESK/u.test(row));
+    const title = (options) => draw(day({ open: 1, per: 1, none: 0, runner: 0, managers: 0, rooms: 0, desk: 2, ...options })).find((row) => /┌─ DESK/u.test(row));
     assert.match(title({ martin: true }), /┌─ DESK {2}2 waiting for you · 1 desk session open ─/u);
     assert.match(title({ managers: 2 }), /┌─ DESK {2}2 waiting for you · 3 desk sessions open ─/u);
     assert.doesNotMatch(title({ martin: false }), /desk session/u, 'no session, nothing counted');
@@ -4052,7 +4048,7 @@ describe('the overview: its order, its programmes and what belongs to none', () 
     }
     return data;
   }
-  const quiet = () => day({ open: 1, per: 2, none: 0, runner: 0, managers: 0, plans: 0, desk: 0, martin: false });
+  const quiet = () => day({ open: 1, per: 2, none: 0, runner: 0, managers: 0, rooms: 0, desk: 0, martin: false });
 
   describe('the header', () => {
     it('keeps the compact header at 160 columns and shows priority and provider usage below it', () => {
@@ -4181,15 +4177,15 @@ describe('the overview: its order, its programmes and what belongs to none', () 
       assert.deepEqual(maintenanceItems(running), [], 'a preparation that runs is no maintenance');
     });
 
-    it('has a row for a session no programme or goal explains, and none for a plan session of a listed programme', () => {
-      const data = day({ open: 1, per: 2, none: 0, runner: 0, managers: 0, plans: 1, desk: 0, martin: false });
-      assert.deepEqual(maintenanceItems(data), [], 'the plan session of prog-02 is in prog-02\'s frame');
+    it('has a row for a session no programme or goal explains, and none for a session open in a listed programme', () => {
+      const data = day({ open: 1, per: 2, none: 0, runner: 0, managers: 0, rooms: 1, desk: 0, martin: false });
+      assert.deepEqual(maintenanceItems(data), [], 'the session open in prog-02 is in prog-02\'s frame');
       data.runner = { ...data.runner, sessions: [{ kind: 'build', goal: 'ghost/none', repo: 'memoro-cli', tool: 'claude', model: 'opus', pid: 4000, started: at(5), elapsed_seconds: 300 }] };
-      data.sessions = { ...data.sessions, planning_sessions: { ...data.sessions.planning_sessions, 'programs/ghost': [{ verb: 'plan', area: 'programs/ghost', tool: 'claude', model: 'opus', pid: 4100, started: at(9), age_seconds: 540 }] } };
+      data.sessions = { ...data.sessions, programme_sessions: { ...data.sessions.programme_sessions, ghost: [{ verb: 'project', programme: 'ghost', area: 'programs/ghost', tool: 'claude', model: 'opus', pid: 4100, started: at(9), age_seconds: 540 }] } };
       const lines = draw(data);
       assert.ok(lines.some((row) => /^ {6}ghost\/none +build · .* · on no goal of a programme$/u.test(row)), lines.join('\n'));
-      assert.ok(lines.some((row) => /^ {6}programs\/ghost +plan session with no programme · open 9 min/u.test(row)), lines.join('\n'));
-      assert.ok(!lines.some((row) => /prog-02 +plan session with no programme/u.test(row)));
+      assert.ok(lines.some((row) => /^ {6}ghost +project session with no programme · open 9 min/u.test(row)), lines.join('\n'));
+      assert.ok(!lines.some((row) => /prog-02 +project session with no programme/u.test(row)));
     });
 
     it('has a row for a pull request outside goals, and none for one a programme or the merger draws', () => {

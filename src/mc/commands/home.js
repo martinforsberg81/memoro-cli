@@ -248,7 +248,7 @@ export function readerFor({ stdout, lines, page, key = null }) {
  * The live loop compares it between frames. PROGRAMMES is the top of a page
  * that is taller than most terminals, so its rows are the ones that scroll out
  * of reach, and a stage or status that changed up there is the one change worth printing
- * the page again for (page-live.js, `draw`). A planning session's age
+ * the page again for (page-live.js, `draw`). A session's age
  * changes every minute and is deliberately not in it.
  */
 export function pageKey(data) {
@@ -256,9 +256,7 @@ export function pageKey(data) {
   const goalKey = goals
     .map((g) => [g.programme, g.name, g.stage, g.status, g.phase, g.title, g.held ? 1 : 0, g.criteria?.met ?? '', g.criteria?.all ?? '', g.running ? 1 : 0, JSON.stringify([g.hold, g.question, g.last, g.prs, g.repos, g.sessions, g.archive_refused, g.problems])].join(':'))
     .join('|');
-  const foreground = (data?.programmes?.programmes || []).flatMap((group) => [
-    ...(group.planning_sessions || []), ...(group.sessions || []),
-  ]);
+  const foreground = (data?.programmes?.programmes || []).flatMap((group) => group.sessions || []);
   // Activity is now above the prompt too. Identity/check-ins force a whole
   // redraw when off-screen; a clock tick alone still does not.
   const activityKey = [...(data?.runner?.sessions || []), ...foreground]
@@ -302,7 +300,7 @@ export function parsePageArgs(argv) {
 
 const KEYS = [
   '  <n>  show a goal   ·   a  all / collapse   ·   o  operations   ·   h  home   ·   d  desk',
-  `  p  plan a programme   ·   priority <${providerPriorities().join('|')}>   ·   f  fresh from GitHub   ·   q  quit`,
+  `  priority <${providerPriorities().join('|')}>   ·   f  fresh from GitHub   ·   q  quit`,
   '  priority <programme>... --set <n>   higher number goes first within a stage',
   '  r  refresh   ·   m  maintenance   ·   c  clear finished goals   ·   deploy  deploy to production',
   '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',
@@ -490,14 +488,6 @@ export async function menu(first, {
       data = await redraw();
       continue;
     }
-    // `p` alone is as good an answer as `p <programme>`: `mc plan` asks which
-    // programme when it is not told, and the page is exactly the place
-    // somebody would rather be shown the list than have to remember a name.
-    if (words[0] === 'p' && words.length <= 2) {
-      const plan = await import('./plan.js');
-      return plan.run(words.slice(1), { stdout, stderr });
-    }
-
     // A goal's number shows the goal, and the page is drawn again under the
     // prompt: a goal is looked at, not opened.
     const goal = goals.find((item) => item.number === Number(answer));

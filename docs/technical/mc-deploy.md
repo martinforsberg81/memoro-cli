@@ -47,7 +47,7 @@ mc deploy --follow
 It takes no repository argument and never will: memoro-cli is installed, not
 deployed. `REPO` is `memoro` in
 [`src/mc/commands/deploy.js`](../../src/mc/commands/deploy.js), resolved to a
-path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
+path through `defaultRepos(env)`, the same reading the page uses.
 
 1. **Fetch and read.** `git fetch origin main` in `~/memoro`, then
    `rev-parse origin/main` — main's tip — and the first-parent chain of

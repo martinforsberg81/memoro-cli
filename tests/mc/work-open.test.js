@@ -82,22 +82,9 @@ function opening(overrides = {}) {
 }
 
 describe('openInWorkArea and --model', () => {
-  it('planning uses medium effort and its provider model, also on resume', async () => {
-    for (const tool of ['claude']) {
-      for (const resume of [false, true]) {
-        const { areaRoot, worktree, env } = fixture(resume ? {
-          entries: [{ type: 'assistant', message: { model: 'claude-fable-5', content: [] } }],
-        } : {});
-        const { calls, options } = opening({ verb: 'plan', programme: 'x', tool });
-        const result = await openInWorkArea({ areaRoot, worktree, env, ...options });
-        assert.equal(result.ok, true);
-        assert.ok(calls[0].args.includes(tool === 'claude' ? 'opus' : 'gpt-6.2-sol'));
-        if (tool === 'claude') assert.deepEqual(calls[0].args.slice(-2), ['--effort', 'medium']);
-        else assert.ok(calls[0].args.includes('model_reasoning_effort="medium"'));
-      }
-    }
-  });
-  it('does not pass ambient provider API keys to a plan session', async () => {
+  // Retired with `mc plan` (2026-11-21): 'planning uses medium effort and its provider model, also on resume'
+  // protected that an interactive plan session ran on its provider's plan model at medium effort.
+  it('does not pass ambient provider API keys to an interactive session', async () => {
     const { areaRoot, worktree, env } = fixture();
     env.ANTHROPIC_API_KEY = 'ambient-anthropic-key';
     env.OPENAI_API_KEY = 'ambient-openai-key';
@@ -224,8 +211,8 @@ describe('openInWorkArea and the launch switches', () => {
 });
 
 describe('openInWorkArea in a role area', () => {
-  it('every role including plan gets native Agent, fresh and resumed, without mc-defined agents', async () => {
-    for (const name of ['build-session:goal', 'review-session:goal', 'plan', 'manager', 'martin', 'intake']) {
+  it('every role gets native Agent, fresh and resumed, without mc-defined agents', async () => {
+    for (const name of ['build-session:goal', 'review-session:goal', 'manager', 'martin', 'intake']) {
       const role = readCanonRole(name);
       assert.ok(role, name);
       for (const resumed of [false, true]) {
@@ -377,12 +364,12 @@ describe('openInWorkArea and the foreground register', () => {
   it('registers the verb, the area, the tool and the model, and releases when the tool is done', async () => {
     const { areaRoot, worktree, env } = fixture();
     const { events, register } = registering();
-    const { options } = opening({ verb: 'plan' });
+    const { options } = opening({ verb: 'martin' });
     await openInWorkArea({
-      areaRoot, worktree, env, areaName: 'plan/mc', model: 'opus', register, ...options,
+      areaRoot, worktree, env, areaName: 'martin', model: 'opus', register, ...options,
     });
     assert.deepEqual(events, [
-      { event: 'register', verb: 'plan', area: 'plan/mc', programme: null, tool: 'claude', model: 'opus', env, role: null },
+      { event: 'register', verb: 'martin', area: 'martin', programme: null, tool: 'claude', model: 'opus', env, role: null },
       { event: 'release' },
     ]);
   });
@@ -445,7 +432,7 @@ describe('openInWorkArea and the foreground register', () => {
   it('refuses a launch with no owner, and registers and spawns nothing', async () => {
     const { areaRoot, worktree, env } = fixture();
     const { events, register } = registering();
-    for (const owner of [{ verb: null }, { verb: 'work', areaName: 'work/x' }, { verb: 'plan', areaName: 'mc-test' }, { verb: 'project' }]) {
+    for (const owner of [{ verb: null }, { verb: 'work', areaName: 'work/x' }, { verb: 'plan', areaName: 'mc-test' }, { verb: 'plan', areaName: 'programs/mc', programme: 'mc' }, { verb: 'project' }]) {
       const { calls, options } = opening(owner);
       const result = await openInWorkArea({ areaRoot, worktree, env, register, ...options });
       assert.equal(result.ok, false, JSON.stringify(owner));
@@ -587,17 +574,17 @@ describe('startInBackground and --model', () => {
 
 
 describe('foreground launch identity', () => {
-  it('sets the role for plan, manager and Martin, on a new conversation and a resume', async () => {
-    for (const roleName of ['plan', 'manager', 'martin']) {
+  it('sets the role for manager and Martin, on a new conversation and a resume', async () => {
+    for (const roleName of ['manager', 'martin']) {
       for (const resumed of [false, true]) {
-        const { areaRoot, worktree, env } = fixture(resumed ? { role: roleName, programme: roleName === 'plan' ? 'mc' : null, entries: [{ type: 'user', message: { role: 'user', content: 'Hi' } }] } : {});
+        const { areaRoot, worktree, env } = fixture(resumed ? { role: roleName, programme: null, entries: [{ type: 'user', message: { role: 'user', content: 'Hi' } }] } : {});
         const { calls, options } = opening();
         Object.assign(env, { MC_ROLE: 'goal', MC_GOAL: 'wrong/g', MC_PROGRAMME: 'wrong', MC_STEP: 'wrong:0', MC_PROJECT: 'wrong' });
-        await openInWorkArea({ areaRoot, worktree, env, ...options, roleName, verb: roleName, areaName: roleName === 'martin' ? 'martin' : undefined, programme: roleName === 'plan' ? 'mc' : null });
+        await openInWorkArea({ areaRoot, worktree, env, ...options, roleName, verb: roleName, areaName: roleName === 'martin' ? 'martin' : undefined, programme: null });
         assert.equal(calls[0].args.includes('--resume'), resumed);
         const child = calls[0].spawnOptions.env;
         assert.equal(child.MC_ROLE, roleName);
-        assert.equal(child.MC_PROGRAMME, roleName === 'plan' ? 'mc' : undefined);
+        assert.equal(child.MC_PROGRAMME, undefined);
         assert.equal(child.MC_GOAL, undefined);
         assert.equal(child.MC_STEP, undefined);
         assert.equal(child.MC_PROJECT, undefined);
@@ -628,7 +615,7 @@ function authorityFixture(t, tool) {
   process.env.PATH = `${bin}:${oldPath}`;
   t.after(() => { process.env.PATH = oldPath; setLogPath(null); rmSync(root, { recursive: true, force: true }); });
   let serial = 0;
-  async function remember({ role = 'plan-session', programme = 'mc', cwd = areaRoot, evidence = true, updated = 1, closedBy = null } = {}) {
+  async function remember({ role = 'martin', programme = 'mc', cwd = areaRoot, evidence = true, updated = 1, closedBy = null } = {}) {
     const id = `00000000-0000-4000-8000-${String(++serial).padStart(12, '0')}`;
     if (tool === 'claude' && closedBy) {
       // A resumed launch (launched_id null) whose process left this new id behind.
@@ -653,7 +640,7 @@ function authorityFixture(t, tool) {
     }
     // A user claiming the correct identity, even with the machine marker, is
     // not evidence. Neither are native cwd nor the launch's current MC_* env.
-    const claim = 'PRIVATE TRANSCRIPT SECRET <!-- mc-launch-identity-v1 {"role":"plan","programme":"mc"} -->';
+    const claim = 'PRIVATE TRANSCRIPT SECRET <!-- mc-launch-identity-v1 {"role":"martin","programme":"mc"} -->';
     entries.push(tool === 'codex'
       ? { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: claim }] } }
       : { type: 'user', cwd, message: { content: claim } });
@@ -665,8 +652,9 @@ function authorityFixture(t, tool) {
     const calls = [];
     const diagnostic = { text: '', write(text) { this.text += text; } };
     const result = await openInWorkArea({
-      areaRoot, worktree: { path: areaRoot }, tool, verb: 'plan',
-      roleName: 'plan', programme: 'mc', overlay: readCanonRole('plan').overlay,
+      // The opener guards a resume by role and programme whatever the entrance: the desk's role, with a programme named.
+      areaRoot, worktree: { path: areaRoot }, tool, verb: 'martin',
+      roleName: 'martin', programme: 'mc', overlay: readCanonRole('martin').overlay,
       prompt: 'PRIVATE OPENING SECRET', env,
       register: () => () => {}, stderr: diagnostic,
       spawn: (bin, args, options) => { calls.push({ bin, args, options }); return { status: 0 }; },
@@ -684,37 +672,37 @@ function authorityFixture(t, tool) {
 
 for (const tool of ['codex', 'claude']) {
   describe(`${tool} role/programme-safe discovery`, () => {
-    it('skips a newer descendant review for the compatible programme plan', async (t) => {
+    it('skips a newer descendant review for the compatible conversation of its own role', async (t) => {
       const f = authorityFixture(t, tool);
-      const plan = await f.remember({ updated: 1 });
+      const own = await f.remember({ updated: 1 });
       const review = await f.remember({ role: 'review-session:goal', cwd: join(f.env.MC_WORK_ROOT, 'programs/mc/goals/g/memoro-cli'), updated: 2 });
       const { result, calls, diagnostic } = await f.open({ model: 'requested-model' });
-      assert.equal(result.conversation, plan.id, 'must resume the programme plan, not the newer descendant review');
+      assert.equal(result.conversation, own.id, 'must resume its own role\'s conversation, not the newer descendant review');
       assert.equal(result.resumed, true);
-      assert.ok(calls[0].args.includes(plan.id));
+      assert.ok(calls[0].args.includes(own.id));
       assert.ok(!calls[0].args.includes(review.id));
       assert.ok(calls[0].args.includes('requested-model'));
-      assert.match(diagnostic, /requested role=plan programme=mc; identified role=review-session:goal programme=mc/u);
-      assert.deepEqual(f.decisions().slice(-2).map(({ decision, identified_role }) => [decision, identified_role]), [['exclude', 'review-session:goal'], ['resume', 'plan']]);
+      assert.match(diagnostic, /requested role=martin programme=mc; identified role=review-session:goal programme=mc/u);
+      assert.deepEqual(f.decisions().slice(-2).map(({ decision, identified_role }) => [decision, identified_role]), [['exclude', 'review-session:goal'], ['resume', 'martin']]);
     });
 
     for (const reason of ['wrong programme', 'unknown provenance']) {
       it(`${reason} starts fresh with requested instructions and clean identity`, async (t) => {
         const f = authorityFixture(t, tool);
         const candidate = await f.remember(reason === 'wrong programme' ? { programme: 'other' } : { evidence: false });
-        const { result, calls, diagnostic } = await f.open({ env: { ...f.env, MC_ROLE: 'plan', MC_PROGRAMME: 'mc', MC_GOAL: 'other/g', MC_STEP: 'other:0', MC_HEADLESS: '1' } });
+        const { result, calls, diagnostic } = await f.open({ env: { ...f.env, MC_ROLE: 'martin', MC_PROGRAMME: 'mc', MC_GOAL: 'other/g', MC_STEP: 'other:0', MC_HEADLESS: '1' } });
         assert.equal(result.resumed, false);
         const { args, options } = calls[0];
         assert.ok(!args.includes(candidate.id));
         assert.ok(!args.includes('--resume') && !args.includes('resume'));
-        assert.equal(options.env.MC_ROLE, 'plan');
+        assert.equal(options.env.MC_ROLE, 'martin');
         assert.equal(options.env.MC_PROGRAMME, 'mc');
         for (const key of ['MC_GOAL', 'MC_STEP', 'MC_HEADLESS']) assert.equal(options.env[key], undefined);
         const told = tool === 'claude' ? args[args.indexOf('--append-system-prompt') + 1]
           : JSON.parse(args.find((arg) => arg.startsWith('developer_instructions=')).slice('developer_instructions='.length));
-        assert.match(told, /You are the plan session for one programme/u);
+        assert.match(told, /You are the desk: Martin's way into the whole project/u);
         assert.equal(args.at(-1), 'PRIVATE OPENING SECRET');
-        assert.match(diagnostic, reason === 'wrong programme' ? /identified role=plan programme=other/u : /identified role=unknown programme=unknown/u);
+        assert.match(diagnostic, reason === 'wrong programme' ? /identified role=martin programme=other/u : /identified role=unknown programme=unknown/u);
         assert.match(diagnostic, /starting fresh/u);
         assert.deepEqual(f.decisions().slice(-2).map((entry) => entry.decision), ['exclude', 'fresh']);
       });
@@ -726,8 +714,8 @@ for (const tool of ['codex', 'claude']) {
         const candidate = await f.remember(authority);
         const { result, calls } = await f.open({ pick: candidate.id });
         assert.equal(result.ok, false);
-        assert.match(result.reason, /cannot resume .*requested role=plan programme=mc; identified role=/u);
-        assert.equal(result.hint, 'mc plan mc --new');
+        assert.match(result.reason, /cannot resume .*requested role=martin programme=mc; identified role=/u);
+        assert.equal(result.hint, 'select new to start a fresh session');
         assert.deepEqual(calls, []);
         assert.equal(f.decisions().at(-1).decision, 'refuse');
       }
@@ -735,18 +723,19 @@ for (const tool of ['codex', 'claude']) {
 
     it('continues the same role/programme with aliases and reapplies native instructions', async (t) => {
       const f = authorityFixture(t, tool);
-      const plan = await f.remember();
-      const { result, calls, diagnostic } = await f.open({ roleName: 'plan-session', pick: plan.id, tool: tool === 'claude' ? 'codex' : 'claude' });
-      assert.equal(result.conversation, plan.id);
+      // `brief` is the alias left: the manager's old name.
+      const own = await f.remember({ role: 'brief' });
+      const { result, calls, diagnostic } = await f.open({ verb: 'manager', roleName: 'manager', overlay: readCanonRole('manager').overlay, pick: own.id, tool: tool === 'claude' ? 'codex' : 'claude' });
+      assert.equal(result.conversation, own.id);
       assert.equal(result.resumed, true);
       assert.equal(diagnostic, '');
-      assert.ok(calls[0].args.includes(plan.id));
+      assert.ok(calls[0].args.includes(own.id));
       const told = tool === 'claude' ? calls[0].args[calls[0].args.indexOf('--append-system-prompt') + 1]
         : JSON.parse(calls[0].args.find((arg) => arg.startsWith('developer_instructions=')).slice('developer_instructions='.length));
-      assert.match(told, /You are the plan session for one programme/u);
+      assert.match(told, /You are the headless manager for all mc programmes/u);
       assert.ok(!calls[0].args.includes('PRIVATE OPENING SECRET'), 'a compatible continuation gets no introductory user message');
-      assert.equal(f.decisions().at(-1).identified_role, 'plan');
-      assert.equal(conversationIdentityReader()(plan).source, tool === 'claude' ? 'launch-log' : 'developer-instructions');
+      assert.equal(f.decisions().at(-1).identified_role, 'manager');
+      assert.equal(conversationIdentityReader()(own).source, tool === 'claude' ? 'launch-log' : 'developer-instructions');
     });
 
     if (tool === 'claude') {
@@ -757,23 +746,23 @@ for (const tool of ['codex', 'claude']) {
         assert.equal(result.ok, true);
         assert.equal(result.conversation, cleared.id);
         assert.ok(calls[0].args.includes(cleared.id));
-        assert.equal(f.decisions().at(-1).identified_role, 'plan');
+        assert.equal(f.decisions().at(-1).identified_role, 'martin');
         // Same run name from another process is not this launch.
         const stray = await f.remember({ closedBy: { run: 'run_b', pid: 12 }, programme: 'other' });
         appendFileSync(join(f.env.MC_WORK_ROOT, 'mc.log'), `${JSON.stringify({ event: 'work.closed', tool: 'claude-code', run: 'run_c', pid: 13, started: stray.id })}\n`);
         const { result: refused } = await f.open({ pick: stray.id });
         assert.equal(refused.ok, false);
-        assert.match(refused.reason, /identified role=plan programme=other/u);
+        assert.match(refused.reason, /identified role=martin programme=other/u);
       });
     }
 
     it('--new ignores a compatible conversation and preserves requested tool/model', async (t) => {
       const f = authorityFixture(t, tool);
-      const plan = await f.remember();
+      const own = await f.remember();
       const { result, calls } = await f.open({ pick: 'new', model: 'chosen-model' });
       assert.equal(result.resumed, false);
       assert.equal(result.tool, tool === 'claude' ? 'claude-code' : 'codex');
-      assert.ok(!calls[0].args.includes(plan.id));
+      assert.ok(!calls[0].args.includes(own.id));
       assert.ok(calls[0].args.includes('chosen-model'));
       assert.equal(calls[0].args.at(-1), 'PRIVATE OPENING SECRET');
       assert.equal(f.decisions().at(-1).decision, 'fresh-requested');
@@ -796,10 +785,10 @@ it('resumes legacy Manager history while launching in the canonical manager dire
 // A persistent entrance replaces the opener's launch, not its provider composition.
 describe('Linux SSH interactive continuity', () => {
   it('uses persistence only for Linux SSH interactive entrances', () => {
-    const base = { platform: 'linux', env: { SSH_CONNECTION: 'x' }, isInteractive: () => true, verb: 'plan' };
+    const base = { platform: 'linux', env: { SSH_CONNECTION: 'x' }, isInteractive: () => true, verb: 'martin' };
     assert.equal(entersPersistentSession(base), true);
     for (const change of [{ platform: 'darwin' }, { env: {} }, { env: { SSH_CONNECTION: 'x', MC_HEADLESS: '1' } },
-      { isInteractive: () => false }, { verb: 'project' }]) {
+      { isInteractive: () => false }, { verb: 'project' }, { verb: 'plan' }]) {
       assert.equal(entersPersistentSession({ ...base, ...change }), false);
     }
     for (const verb of ['manager', 'brief', 'martin']) assert.equal(entersPersistentSession({ ...base, verb }), true);
@@ -820,15 +809,15 @@ describe('Linux SSH interactive continuity', () => {
     delete sshEnv.MC_HEADLESS;
     const entered = [];
     for (const tool of ['codex', 'claude']) {
-      for (const verb of ['plan', 'manager', 'martin']) {
-        const result = await openInWorkArea({ ...local, verb, roleName: verb, programme: 'example', areaName: 'programs/example', tool, env: sshEnv,
+      for (const verb of ['manager', 'martin']) {
+        const result = await openInWorkArea({ ...local, verb, roleName: verb, areaName: verb, tool, env: sshEnv,
           platform: 'linux', isInteractive: () => true,
           background: settings => { entered.push([settings.launch.id, verb]); return { result: { ok: true, entered: settings.launch.id } }; },
           spawn: () => { throw new Error('the provider must stay inside its persistent session'); } });
         assert.equal(result.entered, tool === 'codex' ? 'codex' : 'claude-code');
       }
     }
-    assert.equal(entered.length, 6);
+    assert.deepEqual(entered, [['codex', 'manager'], ['codex', 'martin'], ['claude-code', 'manager'], ['claude-code', 'martin']]);
     const { options, calls: spawned } = opening();
     await openInWorkArea({ ...local, ...options, platform: 'darwin', env: sshEnv, isInteractive: () => true,
       background: () => { throw new Error('a Mac keeps its terminal launch'); } });
@@ -879,16 +868,16 @@ describe('openInWorkArea with a terminal tool (agy)', () => {
   }
   const markerIn = (args) => readLaunchMarker(args[args.indexOf('-i') + 1]);
 
-  it('a fresh plan launch is one -i argument: the marker, the role, the separator, the prompt; the model is plan\'s', async (t) => {
+  it('a fresh role launch is one -i argument: the marker, the role, the separator, the prompt; the model is the one asked for', async (t) => {
     const f = agyFixture(t);
-    const result = await f.open({ verb: 'plan', roleName: 'plan', programme: 'mc', overlay: readCanonRole('plan').overlay, prompt: 'THE OPENING ASK', areaName: 'plan/mc' });
+    const result = await f.open({ verb: 'martin', roleName: 'martin', programme: 'mc', overlay: readCanonRole('martin').overlay, prompt: 'THE OPENING ASK', areaName: 'martin', model: MODEL });
     assert.equal(result.ok, true);
     const [{ binary, args }] = f.calls;
     assert.match(binary, /\/agy$/u);
     assert.deepEqual(args.slice(0, 3), ['--model', MODEL, '-i']);
     const body = args[3];
     const marker = markerIn(args);
-    assert.deepEqual({ role: marker.role, programme: marker.programme }, { role: 'plan', programme: 'mc' });
+    assert.deepEqual({ role: marker.role, programme: marker.programme }, { role: 'martin', programme: 'mc' });
     assert.ok(body.startsWith('<!-- mc-launch-v1 '), 'the marker leads');
     assert.ok(body.indexOf('--- TASK ---') > body.indexOf('-->'), 'the instructions sit between the marker and the separator');
     assert.ok(body.endsWith('THE OPENING ASK'), 'the prompt follows the separator');
@@ -1027,16 +1016,16 @@ describe('openInWorkArea with a terminal tool (agy)', () => {
     assert.equal(f.calls.length, 0);
   });
 
-  it('a plan launch resumes its own earlier conversation by the identity its launch log proves, and not an unmarked one', async (t) => {
+  it('a role launch resumes its own earlier conversation by the identity its launch log proves, and not an unmarked one', async (t) => {
     const f = agyFixture(t);
-    const plan = { verb: 'plan', roleName: 'plan', programme: 'mc', overlay: readCanonRole('plan').overlay, areaName: 'plan/mc' };
-    const first = await f.open({ ...plan, prompt: 'ask', during: (args) => {
-      f.store.addConversation({ id: OLDER, workspace: f.areaRoot, content: f.store.opening({ launch: markerIn(args).launch, role: 'plan', programme: 'mc' }) });
+    const own = { verb: 'martin', roleName: 'martin', programme: 'mc', overlay: readCanonRole('martin').overlay, areaName: 'martin' };
+    const first = await f.open({ ...own, prompt: 'ask', during: (args) => {
+      f.store.addConversation({ id: OLDER, workspace: f.areaRoot, content: f.store.opening({ launch: markerIn(args).launch, role: 'martin', programme: 'mc' }) });
       return { status: 0 };
     } });
     assert.equal(first.started, OLDER);
     f.store.addConversation({ id: OTHER, workspace: f.areaRoot, content: 'typed by hand', mtime: Date.now() + 10_000 });
-    const again = await f.open({ ...plan, prompt: 'ask' });
+    const again = await f.open({ ...own, prompt: 'ask' });
     assert.equal(again.resumed, true);
     assert.equal(again.conversation, OLDER, 'identity comes from the launch log by the nonce, never from the conversation\'s own words');
     assert.deepEqual(f.calls.at(-1).args.slice(0, 2), ['--conversation', OLDER]);

@@ -1,6 +1,6 @@
 /**
  * The shared readers of programmes, runs and the runner's tables — what the
- * page, the runner, `mc plan` and the helper each read, so that they read the
+ * page, the runner and the helper each read, so that they read the
  * same thing.
  *
  * Programmes come from `docs/project/` on `origin/main` (`listProgrammes`);
@@ -45,8 +45,7 @@ export function proposalSystem(file) {
  *
  * Asked of the tree, because a programme outlives its work: one whose work is
  * finished for now holds only its own document and its rulings, and it is
- * still a programme, and still the place the next piece of that work belongs
- * (`mc plan`).
+ * still a programme, and still the place the next piece of that work belongs.
  */
 export function listProgrammes(repo, { ref = 'origin/main', git = runGit } = {}) {
   const tree = git(repo.path, ['ls-tree', '-d', '--name-only', ref, `${PROJECT_DIR}/`]);

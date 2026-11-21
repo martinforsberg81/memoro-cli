@@ -38,7 +38,7 @@ export const GOALS_DIR = 'goals';
 /**
  * Where a goal is in the process: its `stage`, in this order, which only
  * moves forward (`backward`). Each stage has one owner
- * (`docs/technical/mc-goals.md`): the interactive plan session writes the goal
+ * (`docs/technical/mc-goals.md`): the runner's cut of a ready order, or the desk by hand, writes the goal
  * in `draft` and moves it to `build`; a build session moves it to `review`; a
  * review session to `merge` (all OK, all registered PRs sent to merge) or back to
  * `build` (a NOT OK line, with REVIEW.md in its fixed form); the
@@ -602,8 +602,6 @@ export function waitsOnPerson(goal) {
   return goal.status === 'Martin' && !FINISHED.includes(goal.stage);
 }
 
-/** Interactive planning uses canon/roles/plan-session.md. */
-export const PLAN_ROLE = 'plan';
 /** The role a goal's mend session runs with: `canon/roles/mend-session.md`. It handles merge failures only. */
 export const MEND_ROLE = 'mend-session';
 

@@ -147,9 +147,9 @@ export function workAreaStatePath(name, env = process.env) {
 }
 
 /**
- * Legacy layout 1's planning root, `<work root>/plan/`. Current programme
- * sessions stand in `~/mc/programs/<programme>/`; `planAreaRoot` selects the
- * installed layout.
+ * Legacy layout 1's planning root, `<work root>/plan/`, where a plan session stood until
+ * the entrance went (2026-11-21). A programme's directory is `~/mc/programs/<programme>/`;
+ * `planAreaRoot` selects the installed layout.
  *
  * It is deliberately *not* a work area, and the reason is structural rather
  * than a rule about names: `mc run`'s `workareas()` and `mc status`'s
@@ -159,7 +159,7 @@ export function workAreaStatePath(name, env = process.env) {
  * planning session; `listStepAreas` (work-area.js) skips it by name as well.
  *
  * The name lives here, with the rest of the work root's shape, because two
- * modules need it — `commands/plan.js` to build the directory and
+ * modules need it — `tidy.js` to find what a plan session left and
  * `work-area.js` to keep it off the area list — and two copies of one word is
  * how the two drift apart.
  */
@@ -203,7 +203,7 @@ export function programsHome(env = process.env) {
 }
 
 /**
- * `~/mc/archive/programs/` — where `mc plan <programme> --archive` moves a
+ * `~/mc/archive/programs/` — where `mc programs archive <programme>` moves a
  * programme's directory once the programme is over (ruling 57). Nothing
  * under `archive/` is read as live: no plan, no register entry, no area.
  */
@@ -285,7 +285,7 @@ export const RUNNER_STEP = 'runner/step';
 export const RUNNER_DEPS = 'runner/deps';
 
 /**
- * The area name of a programme's planning session: `programs/<programme>` in
+ * The area name of a programme's directory: `programs/<programme>` in
  * layout 2, `plan/<programme>` (`PLAN_HOME`) in layout 1.
  */
 export function planAreaName(programme, { root = workRoot(), read } = {}) {
@@ -297,7 +297,7 @@ export function depsAreaName(name, { root = workRoot(), read } = {}) {
   return layoutVersion({ root, read }) === 2 ? `${RUNNER_DEPS}/${name}` : `${STEP_HOME}/${name}`;
 }
 
-/** The directory every planning session sits under: `programs/` in layout 2, `plan/` in layout 1. */
+/** The directory every programme's directory sits under: `programs/` in layout 2, `plan/` in layout 1. */
 export function planAreaRoot({ root = workRoot(), read } = {}) {
   return layoutVersion({ root, read }) === 2 ? join(root, PROGRAMS_HOME) : join(root, PLAN_HOME);
 }

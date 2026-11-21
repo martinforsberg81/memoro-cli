@@ -65,7 +65,7 @@ mc ask [<programme>/<goal>] --reason "<the question>" \
   document is sent only if its real path is inside an allowed goal repository
   worktree, programme planning worktree, or (without programme context) the
   working directory's git top level. Escaping symlinks are refused with a
-  warning. Goal-listed documents are sent as plan wrote them.
+  warning. Goal-listed documents are sent as they were written.
 - `--kind` is accepted and ignored: an old call still parses, and stderr says
   `mc: --kind is not read — whether a text of Martin’s would change is the reader’s finding`.
 - `--reserved <act>` names an act only Martin may do (`deploy`,
@@ -86,7 +86,7 @@ contract, documents and last log entries. Without a goal, programme context is
 carries only question, options, evidence and documents. The questions say “this
 work” when there is no goal.
 
-Build, review, finish, mend, plan, decision and interactive Martin may call it
+Build, review, finish, mend, decision and interactive Martin may call it
 within their role bounds; a goal session cannot ask for another goal. The
 Martin role's interactive-only restriction also applies to `mc ask`: an
 unattended Martin call is refused before any goal/log/ledger mutation, key read
@@ -337,7 +337,7 @@ transport refuses to run under the Node test runner. The reader is injected the
 same way (`tests/mc/ask-reader.test.js`): no test starts a model, and none makes
 a git call (the copy takes an injected `git`); the copy is proved against real
 Git by a probe that is run and not committed. Drift in TypeSafe's real
-response shape is not covered by acceptance; plan runs a live smoke call
+response shape is not covered by acceptance; the desk runs a live smoke call
 after landing.
 
 ## `mc decisions`

@@ -33,7 +33,7 @@ export function parseWorktrees(text) {
  * Who a pull request belongs to — the question a list of open pull requests
  * could not answer, and the reason they got lost (Martin, 2026-10-09). One of:
  *
- *   - `plan`      a plan session's: its branch is checked out under
+ *   - `plan`      a plan branch's, left by a plan session: its branch is checked out under
  *                 `<root>/plan/<programme>/` or `<root>/programs/<programme>/`,
  *                 or it is called `plan/…`
  *   - `workarea`  checked out in a step, deps, work or legacy area, and

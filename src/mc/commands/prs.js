@@ -3,7 +3,7 @@
  *
  * The page draws a project's pull requests under its row and the merger's in
  * MERGES, and what is left under PULL REQUESTS. This is all of them at once,
- * grouped by owner — a project's step, a plan session, a workarea, a folder
+ * grouped by owner — a project's step, a plan branch, a workarea, a folder
  * elsewhere, or nobody — because with twenty projects in runner sessions and
  * more in a terminal, a pull request nobody is holding is the one that gets
  * lost (Martin, 2026-10-09).

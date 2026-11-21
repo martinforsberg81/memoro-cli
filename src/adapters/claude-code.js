@@ -597,9 +597,6 @@ export const API_ROUTE = Object.freeze({
   },
 });
 
-/** The model a plan session runs on when none is named. */
-export const PLAN_MODEL = 'opus';
-
 /**
  * How an interactive launch hands the role's instructions over: the
  * channel's name, its arguments, whether a resume supplies them again, the

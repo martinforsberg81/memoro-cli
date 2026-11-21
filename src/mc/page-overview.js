@@ -84,7 +84,7 @@ export function headerRows(c, wide, data, version) {
 
 /* ----------------------------------------------------------------- Sessions */
 
-/** A session's identity, so the same one seen twice is counted once: the desk's and a programme's copies of a plan session. */
+/** A session's identity, so the same one seen twice is counted once: the desk's and a programme's copies of a session. */
 const identity = (session) => JSON.stringify([session.verb || session.kind || '', session.name || '', session.pid ?? '', session.started ?? '']);
 
 const RUNNER_KINDS = ['plan', 'build', 'review', 'mend'];
@@ -92,7 +92,7 @@ const RUNNER_KINDS = ['plan', 'build', 'review', 'mend'];
 /**
  * Every session at work, as rows (they are counted in DESK's title, drawn under their goal and programme, and — with no
  * programme or goal — in MAINTENANCE; the rows are the page's key): `desk` (the sessions of every desk kind, by name: martin, manager, helper, and a kind
- * added later), `interactive` (the plan and programme sessions somebody has open) and `runner` (the runner's, by kind
+ * added later), `interactive` (the programme sessions somebody has open) and `runner` (the runner's, by kind
  * and start). Each row is `{ kind, on, age, who, state, key }`; `key` is the session's identity.
  */
 export function flightRows(data) {
@@ -114,10 +114,8 @@ export function flightRows(data) {
     kind, on: session.programme || session.area || 'no programme', age: session.age_seconds, who: who(session), state: null,
     key: identity({ ...session, verb: session.verb || kind }),
   });
-  for (const list of Object.values(sessions.planning_sessions || {})) for (const session of list || []) add(session, 'plan');
   for (const list of Object.values(sessions.programme_sessions || {})) for (const session of list || []) add(session, session.verb || 'programme');
   for (const group of groups) {
-    for (const session of group.planning_sessions || []) add({ ...session, programme: session.programme || group.programme }, 'plan');
     for (const session of group.sessions || []) add({ ...session, programme: session.programme || group.programme }, session.kind || session.verb || 'programme');
   }
 
@@ -149,7 +147,7 @@ export function ownerWords(owner) {
 }
 
 /**
- * The open pull requests no programme, goal, session or the merger draws: a plan session's, one opened from a terminal,
+ * The open pull requests no programme, goal, session or the merger draws: one on a plan branch, one opened from a terminal,
  * and one nobody holds any more. `sessionPrs` are the pull requests the runner's sessions carry.
  */
 export function outsidePrs(prs, sessionPrs = []) {
@@ -161,7 +159,7 @@ export function outsidePrs(prs, sessionPrs = []) {
 /**
  * What belongs to no programme, as items `{ key, label, text, tone }` in the order of the page: a failed merge no goal's
  * pull request carries, a main-red or deploy repair that waits on Martin, a failed deploy preparation or attempt, a stray
- * directory or session no verb explains, a runner or plan session with no goal or programme, and a pull request outside
+ * directory or session no verb explains, a runner session with no goal or programme, and a pull request outside
  * goals. What belongs to a programme is in its frame: a held, blocked, malformed or stopped goal, a finished goal not
  * archived, and a goal's failed merge.
  */
@@ -206,15 +204,14 @@ export function maintenanceItems(data) {
     add(`stray:${stray.name}`, stray.name, `${what} · ${openFor(stray.age_seconds)}${pid}`, ['yellow'], [], `${what}${pid}`);
   }
 
-  // Sessions no programme explains: a runner session on no goal of any programme, and a plan or programme session
+  // Sessions no programme explains: a runner session on no goal of any programme, and a programme session
   // whose programme is not listed. Match identities rather than object references: cached JSON copies sessions.
   const names = new Set(groups.map((group) => group.programme));
   const known = new Set(groups.flatMap((group) => (group.goals || []).map((goal) => `${group.programme}/${goal.name}`)));
-  const plans = new Set(groups.flatMap((group) => group.planning_sessions || []).map((session) => JSON.stringify([session.name, session.pid, session.started])));
   const sessionRow = (kind, on, age, who) => [kind, openFor(age), who].filter(Boolean).join(' · ');
   const who = (session) => [session.tool, session.model].filter(Boolean).join(' · ');
   for (const session of data.runner?.sessions || []) {
-    if (known.has(sessionGoal(session)) || plans.has(JSON.stringify([session.name, session.pid, session.started]))) continue;
+    if (known.has(sessionGoal(session))) continue;
     // The pull requests the session carries are its child rows, as they are under a goal.
     const prs = (session.prs || []).map((pr) => `${pr.repo || 'unknown'}#${pr.number}`);
     add(`session:${identity({ ...session, verb: session.kind })}`, sessionGoal(session) || session.repo || 'unknown', `${sessionRow(session.kind || 'build', null, session.elapsed_seconds, who(session))} · on no goal of a programme`, ['yellow'], prs);

@@ -374,8 +374,8 @@ of agy excludes only the model it refused (*Quota scope*). An unavailable prefer
 model/effort falls back to another subscription before API reserve. Existing
 API-off guards still apply.
 `auto` keeps capacity balancing. Manager and intake use role-appropriate
-provider models; manual explicit tool/model choices and interactive `mc plan`
-and `mc manager` retain their selections. The page displays this setting and
+provider models; manual explicit tool/model choices and interactive
+sessions retain their selections. The page displays this setting and
 its menu's `priority auto|codex|claude|agy` command writes through `mc model`.
 
 Catalog routing supplies the tool, model and effort. The shared internal
@@ -442,7 +442,7 @@ D-Bus session bus, so mc adds nothing; an empty-password login keyring, or
 unlocking it at login, lets an unattended session reach it. Then add agy to
 the catalog with `mc model` (`mc model add review agy:gemini-4-argon-high:high`,
 `mc model priority agy`); the defaults already list it first in review. agy
-also runs the interactive entrances `mc plan`, `mc martin` and the server's
+also runs the interactive entrance `mc martin` and the server's
 `mc session`, in the terminal that starts it
 ([mc-interactive-sessions.md](mc-interactive-sessions.md#a-tool-that-lives-in-the-terminal-agy)).
 The retired `mc helper` desk is not one of them.
@@ -504,7 +504,7 @@ key. A current plan
 window below 100% remains eligible. At 100%, or after that provider refuses a
 plan request, the next launch uses its API key through the local billing gateway.
 This applies to every current MC session path: build, review, repair, mend,
-helper, and interactive sessions. An ordinary interactive `mc plan` still lets
+helper, and interactive sessions. An interactive `mc martin` still lets
 Martin choose the tool and model; billing follows that choice. A repair build or
 mend session runs on its own catalog list (finish, mend; `finish` is the list's name, kept), never the
 `build` list, and is billed as any other session. `mc run --billing` shows both providers' next routes, and names an agy model
@@ -577,7 +577,7 @@ The gateway wrapper opens only the fixed `mc-anthropic-api-key` (Anthropic) or
 `mc-openai-api-key` (OpenAI) record from MC Vault. The provider key stays in the
 wrapper process. The coding tool receives an expiring, request-limited loopback
 grant, and requests only the chosen model through the provider-specific route.
-An interactive session (`mc plan`, `mc martin`) is the exception: its grant names
+An interactive session (`mc martin`) is the exception: its grant names
 no model, because `/model` inside the session changes it, and a grant on the
 launch model refused every request after the switch.
 Linux SSH Claude background sessions use a detached gateway holder rather than
@@ -596,7 +596,7 @@ environment, and lives until the server dies or the grant expires. Its optional
 directory and register entry, leaving a one-shot expiry status for the next
 entrance. Both providers' persistent credit sessions end at their bounded grant
 expiry, without renewal; the conversation can be resumed in a new session.
-Plan sessions have no grant clock. The terminal's `codex --remote`
+Sessions on plan billing have no grant clock. The terminal's `codex --remote`
 client holds no grant and no key. See
 [mc-interactive-sessions.md](mc-interactive-sessions.md#codex-its-own-app-server).
 The runner never reads or places the key in a session's environment or argv.
@@ -655,7 +655,7 @@ Every other unattended role runs on its
 own catalog list: `review`, `finish` (a repair build), `mend`, `manager` (an unattended manager turn
 without an explicit tool or model) and `decision` (desk items). A role list never borrows `build`'s
 candidates: with none of its own usable and its API off, the session waits
-(Martin, 2026-11-09). Interactive `mc plan` and `mc martin` keep their own
+(Martin, 2026-11-09). Interactive `mc martin` keeps its own
 selection. The route
 is decided locally, before a tool is launched, from the catalog
 (`~/mc/runner/models.json`) and the capacity snapshot
@@ -1060,7 +1060,7 @@ never rewritten and never cut again: its programme is not due while it is
 there, live or archived (`goalsNamingNoPart`). A goal that names a part of
 another file counts as naming none. A goal of the old form that names a part
 keeps that part: the cut makes goals only for the parts no goal names. A draft
-an earlier planning session left is its writer's to finish; no session
+a plan session left before `mc plan` went is the desk's to finish or drop; no session
 finishes it. Nothing on disk is deleted or rewritten by reading it.
 
 **Failure.** A cut that throws or cannot be made, such as a README with no
@@ -1105,7 +1105,7 @@ the old form wrote it as it landed (the review's `write-back:` line,
 [mc-goals.md](mc-goals.md#the-verdict)), so nothing is read again at the end. A horizon it served then waits for
 Martin's next programme. Only a programme **with a valid record** is touched: one
 without a record, or with an invalid one, is never archived by the
-runner, and `mc plan <p> --archive` stays that programme's person's act, or interactive
+runner, and `mc programs archive <p>` stays that programme's person's act, or interactive
 Martin's at the desk ([mc-plan.md](mc-plan.md#archiving-a-programme)).
 
 `archiveDue` (`archive-turn.js`) is model-free and reads at every pick. A programme
@@ -1126,13 +1126,13 @@ retired on 2026-11-21 (Martin: "Archive-reader är slöseri").
 
 1. refuses when `~/mc/restricted/<p>/` holds entries: deleting data is a person's
    act. It opens one `for-martin` item at once, sort `reserved`, with a Swedish
-   brief naming `mc plan <p> --archive`; the programme stays as it was;
+   brief naming `mc programs archive <p>`; the programme stays as it was;
 2. moves a legacy programme's top-level `proposals/*.md` (none is made any more)
    to an area's `proposals/` — the page-area the record's `area` names (its
    declared `page`, read at origin/main), else `~/mc/areas/memoro-cli/system/proposals/` —
    each with a first line naming the programme, never over a file already there;
 3. calls `archiveProgramme` with the runner's own git, gh, docs merge and release
-   and a `fence`, the same function `mc plan <p> --archive` calls. Receipt
+   and a `fence`, the same function `mc programs archive <p>` calls. Receipt
    fetches finish before the pre-release fence. The fence
    re-reads `goals/` and `~/mc/restricted/<p>/` after each docs PR merge, before
    release and before shelving. A live goal or a restricted entry that has
@@ -1158,7 +1158,7 @@ destination}`; `reading`, written by the retired reading, is read and ignored. A
 missing file, and an older version of this schema, read as no failures; a file
 that cannot be read starts no archive, counts nothing and is said once in
 `runner.log`, the desk sync reports it and the item stays open. A programme an
-older runner or `mc plan --archive` has already moved is no longer in the
+older runner or `mc programs archive` has already moved is no longer in the
 programmes home and is no candidate. The cases are in `tests/mc/run.test.js`
 and `tests/mc/archive-turn.test.js`.
 

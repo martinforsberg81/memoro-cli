@@ -5,9 +5,9 @@ Every session mc starts in a role is told two things, in this order: the text
 the user's Coding Profile, which once came first, was removed by ruling 24, and
 the one rule in it nothing else said (what is written in English) is a sentence
 in `all-sessions.md`. This document is the one account of how those two are found
-and joined. `mc run`, `mc plan`, `mc martin` and `mc manager` each described a corner
+and joined. `mc run`, `mc martin` and `mc manager` each described a corner
 of it from their own angle; they now point here, because parallel accounts
-of one mechanism is four things to keep true.
+of one mechanism is several things to keep true.
 
 What a session is told is never written into a worktree. It rides on the launch
 argument each tool already takes — `--append-system-prompt` for claude, `-c
@@ -60,13 +60,12 @@ There are two catalogues, and they are looked up in that order:
   a verb must be able to launch its own session on a machine with no rulebook
   at all.
 
-What canon holds today: five stage/goal roles, each one file, plus the Martin desk, preparation, decision and ask-reader roles and the three that
+What canon holds today: four stage/goal roles, each one file, plus the Martin desk, preparation, decision and ask-reader roles and the three that
 stay apart (Martin, 2026-11-03, goal `plan-session-roles`: a role says what
-the session is for; a verb file says how a verb is used). Plan supports interactive planning; the runner starts no plan session, and cuts a ready order by code. Mend retains its former delivery recovery work (Martin, 2026-11-07 and 2026-11-09). The finish role was removed on 2026-11-15: a rejected goal returns to build, and `finish` is a name kept for old records (their stage, their run rows, the `finish` model list).
+the session is for; a verb file says how a verb is used). The plan role went with `mc plan` on 2026-11-21: the runner cuts a ready order by code, and no session plans. Mend retains its former delivery recovery work (Martin, 2026-11-07 and 2026-11-09). The finish role was removed on 2026-11-15: a rejected goal returns to build, and `finish` is a name kept for old records (their stage, their run rows, the `finish` model list).
 
 | role | model | started as | who launches it |
 |---|---|---|---|
-| `plan-session` | opus | `plan` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; the runner never starts it |
 | `programme-review` | sonnet | `programme-review` | `mc programs review`, called by Martin's interactive session for an advisory reading or by the assigned repair author for a release receipt; never scheduled by the runner; review catalogue/author exclusion, 30-minute limit and no cap ([mc-plan.md](mc-plan.md#programme-state-and-advisory-reading)) |
 | `ask-reader` | opus | `ask-reader` | `mc ask`, when jev did not settle a question: one fresh headless read-only session, in a read-only copy of the asker's worktree, on the `decision` list (not the asker's own model when another can run), limit 10 minutes; never the runner. It may use only `mc goal show\|list\|areas` and `mc ask answer`, and its run row (kind `ask-reader`) counts under the desk's daily ceiling ([mc-jev.md](mc-jev.md) § *The reader*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build`, a repair build when a review rejected it ([mc-goals.md](mc-goals.md) § *Repair and mend*) |
@@ -106,7 +105,7 @@ MC_PROGRAMME_REVIEW_TOKEN.
 ### Martin's decision desk
 
 `mc martin` is a foreground-only desk in `~/mc/martin/`, distinct from
-the manager, plan and helper. It cannot be launched by the runner or an unattended
+the manager and helper. It cannot be launched by the runner or an unattended
 session. Its `get` subcommand is a model-free, read-only view over live
 goal records, not a cache or a second queue store; see [mc-martin.md](mc-martin.md).
 A resumed conversation receives a fresh queue snapshot so remembered goals are
@@ -228,7 +227,7 @@ Four paths launch a session with instructions, and all four call it:
 
 | path | the session |
 |---|---|
-| `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc martin`, `mc plan` |
+| `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc martin` |
 | `work-open.js:342` (`launchCommand`) | the argv a tmux launch or a handoff respawn is built from |
 | `run.js` (`runGoal`) | a selected-draft plan, build, review or mend session |
 | `helper-turn.js:258` | the intake turn, one file, headless |
@@ -281,29 +280,14 @@ established it says so. This guidance changes neither eligibility nor runner
 stops. Repairable in-scope obstacles remain with build; a verified wrong brief
 or impossible premise follows the goal-defect technical desk route.
 
-**The plan session** (`plan-session.md`) is written around the programme's
-aim in `~/mc/programs/<programme>/README.md` (Martin, 2026-11-03). Its primary
-deliverable is the programme's planning: the README and design, the resolved
-prerequisite and policy decisions, the goal decomposition and phases, and
-complete goal briefs with contracts, exclusions, documents, success criteria and
-executable checks. A complete brief moves from draft to build; the build session establishes its
-[acceptance setup](mc-plan.md#acceptance-setup-at-build). A consumer awaiting
-a producer is in build in a dependent phase; a brief with unresolved planning
-prerequisites stays draft. Within that it has, in
-principle, full freedom to move the programme toward the aim, a goal's branch
-included: it may finish a goal's work itself when that is quicker than a new
-build session. That freedom is interactive. The runner does not run the role:
-code cuts a ready order into one goal per part, with no session
-([mc-run.md](mc-run.md#the-cut-of-a-ready-order); Martin, 2026-11-21), and the
-role's section *The headless programme turn* says only that. It names
-the headless roles and what each owns, so it knows the goal's text is its
-own and a headless session's `Martin` is a question for it. A goal
-is what the runner builds, a means toward the aim. `refusedMove`
-(`commands/goal.js`) still enforces forward stage moves for plan sessions. Before 2026-11-03 the
-role was `plan.md`, which forbade a headless plan session code, commits, a
-publish and `review`/`done`, and listed three allowed ends; both are gone.
-Until 2026-11-07 the same file had headless sections (`### finish`, `### blocked`,
-programme planning, `MC_PLAN_REASON`); those are gone too. What it writes unasked is in [mc-plan.md](mc-plan.md) § *Writing goals*.
+**The plan session** (`plan-session.md`) is gone (Martin, 2026-11-21). Code
+cuts a ready order into one goal per part, with no session
+([mc-run.md](mc-run.md#the-cut-of-a-ready-order)); the programme's README and
+design, its decisions and its order are the desk's (`martin.md`), and a goal
+written by hand is written there with the `mc goal` verbs. The build session establishes a goal's
+[acceptance setup](mc-plan.md#acceptance-setup-at-build). A session that still
+carries `MC_ROLE=plan` is held by `refusedMove` (`commands/goal.js`) to a build
+session's moves.
 
 **The mend session** (`mend-session.md`) states one job, its inputs, what it may
 change, its exits and what it hands to whom. The repair a review asks for is a
@@ -423,7 +407,7 @@ body, is **not** listed as a role with the file sitting in the catalogue
 directory under test, and is not in a role's own overlay.
 
 Blocks below it. *The verb files* asserts the defining sentences of each verb
-file are in exactly that file, that `plan-session` and `manager` carry the
+file are in exactly that file, that `manager` and `mend-session` carry the
 markers and no copy, that a verb file is not listed as a role, that
 `instructionsFor` expands the marker and leaves none behind — and that an
 unresolvable marker is left standing. *Every canon role has a body* walks
@@ -435,7 +419,7 @@ start's.
 
 [`tests/mc/roles-decisions.test.js`](../../tests/mc/roles-decisions.test.js) —
 what each role is told, read through the path that actually delivers it: the
-assembler for the roles with a body, `planLaunch` for a role without one. It
+assembler for the roles with a body. It
 walks the canon roles and their starts for the loose-thread and route rules,
 asserts their text exists in exactly one file, and holds the decision shape a
 goal's build and review are held to.
@@ -444,8 +428,7 @@ The delivered text is asserted at each launch path too, against
 `sharedRoleText()` rather than a copy of it:
 [`work-open.test.js`](../../tests/mc/work-open.test.js),
 [`run.test.js`](../../tests/mc/run.test.js),
-[`helper-turn.test.js`](../../tests/mc/helper-turn.test.js) and
-[`commands/plan.test.js`](../../tests/mc/commands/plan.test.js).
+and [`helper-turn.test.js`](../../tests/mc/helper-turn.test.js).
 
 The record and the reader are tested from both ends.
 [`work-open.test.js`](../../tests/mc/work-open.test.js) asserts the digest the
@@ -463,8 +446,7 @@ nothing about the same session while the file is untouched.
 tool will accept. `modelArgs` in
 [`claude-code.js`](../../src/adapters/claude-code.js) passes the string through
 as given — the tool is the authority on its own model names — so a name it
-rejects fails at launch and nowhere earlier. `plan`'s move to `fable` was
-verified by opening a real planning session with it (2026-09-05, #614).
+rejects fails at launch and nowhere earlier.
 
 
 ## Session identity is not only an instruction argument
@@ -474,15 +456,15 @@ accompanies programme-owned launches; `MC_GOAL` identifies a goal. Desks are
 `martin` and the eye's `intake`; `manager` is launched headless, by the runner or by a person. The launch clears inherited session
 identity first so the child cannot inherit the caller's job by accident.
 Runner roles are `build-session:goal`, `review-session:goal`
-and `mend-session`; `plan` serves interactive planning only.
+and `mend-session`.
 
 `sessionIdentity` (`src/mc/session-role.js`) reads MC_ROLE first, then
-MC_GOAL, then cwd. Programme directories identify plan sessions; their
-`goals/<goal>/` subtrees identify goal builds instead. Brief, helper and
+MC_GOAL, then cwd. A programme directory identifies no session; its
+`goals/<goal>/` subtrees identify goal builds. Brief, helper and
 intake directories have their own fallbacks; unknown stays unknown. The
 SessionStart hook prints what it found even outside a repository.
 
-`mc plan` refuses recognised sessions and Claude/Codex agent markers before
-creating anything. A session writes a goal through `mc goal`, not by opening
-another interactive plan session. The runner's mend sessions have
-roles of their own and never use the plan role or that person's entrance.
+`mc programs archive` and `mc decision` refuse recognised sessions and
+Claude/Codex agent markers before doing anything (`personCommandRefusal`);
+interactive Martin may archive on his word. The runner's mend sessions have
+roles of their own and never use a person's entrance.

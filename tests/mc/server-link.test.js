@@ -15,7 +15,7 @@ const session = (fields = {}) => sessionDescriptor({ id: 'session-a', name: 'mc 
   started: '2026-11-14T10:00:00Z', socket: '/server/socket', access: ['--sandbox', 'danger-full-access', '--ask-for-approval', 'on-request'], ...fields }, 'codex', 'codex 0.168.0');
 const sink = () => { let value = ''; return { write: s => { value += s; }, get value() { return value; } }; };
 
-for (const entrance of ['plan', 'martin']) {
+for (const entrance of ['martin']) {
   const cases = [
     ['interactive configured', {}, [], true, 'tc', true],
     ['--local', {}, ['--local'], true, 'tc', false],
@@ -52,7 +52,7 @@ for (const [verb, args, env] of [['manager', [], {}], ['manager', ['--new'], {}]
   });
 }
 for (const [verb, args] of [['run', []], ['goal', []], ['gate', []], ['server', []], ['manager', ['--headless']],
-  ['helper', ['--intake']], ['helper', ['--collect']], ['plan', ['--archive']], ['martin', ['get']]]) {
+  ['helper', ['--intake']], ['helper', ['--collect']], ['programs', ['archive', 'x']], ['martin', ['get']]]) {
   test(`${verb} ${args.join(' ')} non-entrance stays local`, async () => {
     assert.equal(await runModule(VERB_MODULES[verb], args, { load: async () => ({ run: () => 17 }),
       routeEntrance: (entrance, forwarded) => routeServerEntrance(entrance, forwarded, { env: {}, isInteractive: () => true,
@@ -96,9 +96,9 @@ function shellWords(command) {
   return words;
 }
 
-test('injection table: programme, resume id and model reach the server as exact literal argv', () => {
+test('injection table: a positional word, resume id and model reach the server as exact literal argv', () => {
   for (const value of ['two words', "a'b", 'a"b', 'x; touch /bad', '$(touch /bad)', 'a\nb', '']) {
-    const args = ['mc', 'session', 'list', 'plan', value, '--resume', value, '--model', value];
+    const args = ['mc', 'session', 'list', 'martin', value, '--resume', value, '--model', value];
     assert.deepEqual(shellWords(remoteCommand(args)), args);
     const link = serverLink('tc', { env: { SSH_AUTH_SOCK: '/person/agent.sock', OPENAI_API_KEY: 'must-not-cross', MC_ROLE: 'must-not-cross' }, run: (bin, actual, options) => {
       assert.deepEqual(options.env, { SSH_AUTH_SOCK: '/person/agent.sock' });
@@ -106,7 +106,7 @@ test('injection table: programme, resume id and model reach the server as exact 
       assert.deepEqual(shellWords(actual[1]), [...args, '--json', '--answers', '[]']);
       return { status: 0, stdout: JSON.stringify(descriptor('handshake')) };
     } });
-    link.request('list', 'plan', args.slice(4));
+    link.request('list', 'martin', args.slice(4));
   }
 });
 
@@ -207,10 +207,10 @@ test('Claude uses ssh -t with exact literal start/join argv and returns the SSH 
   const calls = [];
   const link = serverLink('tc', { env: {}, run: (bin, args) => { calls.push({ bin, args }); return { status: 17 }; } });
   for (const operation of ['start', 'join']) {
-    assert.equal(link.passthrough(operation, 'plan', ['programme', '--resume', "id';x", '--model', 'two words']).status, 17);
+    assert.equal(link.passthrough(operation, 'martin', ['word', '--resume', "id';x", '--model', 'two words']).status, 17);
     const { bin, args } = calls.at(-1);
     assert.equal(bin, 'ssh'); assert.deepEqual(args.slice(0, 2), ['-t', 'tc']);
-    assert.deepEqual(shellWords(args[2]), ['mc', 'session', operation, 'plan', 'programme', '--resume', "id';x", '--model', 'two words', '--answers', '[]', '--host', 'tc']);
+    assert.deepEqual(shellWords(args[2]), ['mc', 'session', operation, 'martin', 'word', '--resume', "id';x", '--model', 'two words', '--answers', '[]', '--host', 'tc']);
   }
   assert.deepEqual(calls.map(call => call.bin), ['ssh', 'ssh']);
 });
@@ -234,7 +234,7 @@ function serverFixture({ prompt = null, resumePrompt = null, historical = false,
   const input = new PassThrough(); const output = sink(); const errors = sink(); const attaches = [];
   const row = { id: 'session-a', name: 'mc manager', pid: 42, cwd: '/server/desk', socket: '/server/socket',
     resume: 'thread-a', sessionId: 'thread-a', prompt: undefined };
-  const programme = entrance === 'plan' ? 'example' : null;
+  const programme = null;
   const records = [{ pid: 42, verb: entrance, programme, area: programme ? 'programs/example' : null, tool: 'codex', started: '2026-11-14T10:00:00Z' }];
   const launch = { ok: true, id: 'codex', shortName: 'codex', spec: { bin: '/provider/codex', executionAccess: 'host', args: args => args[0] === 'resume' ? ['resume', '--sandbox', 'danger-full-access', ...args.slice(1)] : ['--sandbox', 'danger-full-access', ...args] },
     adapter: { modelArgs: value => value ? ['-m', value] : [], resumeArgs: ({ sessionId }) => ['resume', sessionId] } };
@@ -269,7 +269,7 @@ function serverFixture({ prompt = null, resumePrompt = null, historical = false,
   return { deps, input, output, errors, attaches, get started() { return started; } };
 }
 for (const [name, options, expected] of [
-  ['fresh plan', { entrance: 'plan', prompt: 'plan opening' }, 'plan opening'],
+  ['fresh desk', { entrance: 'martin', prompt: 'desk opening' }, 'desk opening'],
   ['historical resumePrompt', { entrance: 'martin', prompt: 'not repeated', resumePrompt: 'refresh current queue', historical: true }, 'refresh current queue'],
   ['join of a running session', { prompt: 'not repeated', resumePrompt: 'not refreshed', joining: true }, undefined],
 ]) test(`server descriptor opening message: ${name}, no other launch settings cross`, async () => {
@@ -365,27 +365,26 @@ for (const [name, args, chosen, operation, allowed] of [
   if (!allowed) assert.match(errors.value, /on tc: joining an existing session cannot apply --model/u);
 });
 
-test('remote plan identifies its programme after a model value when reporting the entrance', async () => {
+// It named `mc plan <programme>` until the entrance went (2026-11-21): the rejoin line is the entrance alone, never a flag's value.
+test('remote martin reports the entrance without taking a model value for a name', async () => {
   const output = sink(); const row = session();
   const link = { destination: 'tc', request: () => descriptor('snapshot', { provider: 'codex', providerVersion: row.providerVersion, chosen: null, sessions: [] }),
     connect: () => ({ session: row }), codexClient: () => ({ status: 0 }) };
-  assert.equal(await remoteEntrance('plan', ['--model', 'new-model', 'example', '--new'], link, { stdout: output, stderr: sink() }), 0);
-  assert.match(output.value, /with mc plan example\./u);
-  assert.doesNotMatch(output.value, /mc plan new-model/u);
+  assert.equal(await remoteEntrance('martin', ['--model', 'new-model', '--new'], link, { stdout: output, stderr: sink() }), 0);
+  assert.match(output.value, /with mc martin\./u);
+  assert.doesNotMatch(output.value, /mc martin new-model/u);
 });
 
-// `--bg` is forwarded to the host as an entrance flag, never read as a programme: the server decides the lines it prints.
-test('remote Claude --bg is forwarded to the host with the programme it names, and prints nothing of its own', async () => {
+// `--bg` is forwarded to the host as an entrance flag: the server decides the lines it prints.
+test('remote Claude --bg is forwarded to the host, and prints nothing of its own', async () => {
   const forwarded = []; const output = sink();
   const link = { destination: 'tc', request: () => descriptor('snapshot', { provider: 'claude-code', providerVersion: '2.0.0', chosen: null, sessions: [] }),
     connect: () => { throw new Error('a Claude start is passed through, not connected'); },
     passthrough: (operation, entrance, args, answers) => { forwarded.push({ operation, entrance, args, answers }); return { status: 0 }; } };
-  assert.equal(await remoteEntrance('plan', ['--bg', 'example'], link, { stdout: output, stderr: sink() }), 0);
-  assert.deepEqual(forwarded, [{ operation: 'start', entrance: 'plan', args: ['--bg', 'example'], answers: [] }]);
+  assert.equal(await remoteEntrance('martin', ['--bg'], link, { stdout: output, stderr: sink() }), 0);
+  assert.deepEqual(forwarded, [{ operation: 'start', entrance: 'martin', args: ['--bg'], answers: [] }]);
   assert.equal(output.value, '');
-  // The programme the client derives is the word after `--bg`, not `--bg`'s value or nothing.
-  const read = await readEntranceArgs('plan', ['--bg', 'example']);
-  assert.equal(read.programme, 'example');
+  const read = await readEntranceArgs('martin', ['--bg']);
   assert.equal(read.flags.bg, true);
 });
 
@@ -478,8 +477,8 @@ test('remote agy start is passed through to the host terminal, never connected',
   const link = { destination: 'tc', request: () => agySnapshot(),
     connect: () => { throw new Error('a terminal start is passed through, not connected'); },
     passthrough: (operation, entrance, args, answers) => { forwarded.push({ operation, entrance, args, answers }); return { status: 0 }; } };
-  assert.equal(await remoteEntrance('plan', ['example', '--agy'], link, { stdout: output, stderr: sink() }), 0);
-  assert.deepEqual(forwarded, [{ operation: 'start', entrance: 'plan', args: ['example', '--agy'], answers: [] }]);
+  assert.equal(await remoteEntrance('martin', ['--agy'], link, { stdout: output, stderr: sink() }), 0);
+  assert.deepEqual(forwarded, [{ operation: 'start', entrance: 'martin', args: ['--agy'], answers: [] }]);
 });
 
 test('remote agy: the host\'s exit code reaches the client, and a held conversation is not retried', async () => {

@@ -3,7 +3,7 @@
  *
  * agy is Google's coding CLI. mc launches it headless (the build, review,
  * finish, mend, manager, intake and decision sessions) and
- * in a person's terminal (`mc plan`, `mc martin`, the server's `mc session`).
+ * in a person's terminal (`mc martin`, the server's `mc session`).
  * An agy session lives in the terminal that started it: it has no daemon, no
  * remote client and no socket, so `PERSISTENT_DRIVER` is `terminal`, a server
  * start runs in the `ssh -t` terminal and `join` is refused.
@@ -183,9 +183,6 @@ export function interactiveArgs({ model = null, resume = null, instructions = nu
 
 /** The declaration `src/mc/work-open.js` asks for: this tool builds its interactive argv whole. */
 export const INTERACTIVE_ARGS = interactiveArgs;
-
-/** The model a role's `mc plan` runs on. */
-export const PLAN_MODEL = 'gemini-4-argon-high';
 
 /** A session lives in the terminal that started it: no daemon, no join, no socket. */
 export const PERSISTENT_DRIVER = 'terminal';

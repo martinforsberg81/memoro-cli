@@ -402,7 +402,7 @@ function leadSection(text, heading, line) {
  * The page of a new programme with a record: the template with the name in its
  * first line, the end sentence under End and, when there is one, the horizon
  * under What it is for (or the area it repairs), followed by `purpose` when one is given, and, for a programme ordered
- * from a proposal, the proposal's archived path first under Where things are. What the plan session writes is left as
+ * from a proposal, the proposal's archived path first under Where things are. What the desk writes is left as
  * placeholders.
  */
 export function recordPage(template, { name, end, horizon, area = null, purpose = null, proposal = null }) {

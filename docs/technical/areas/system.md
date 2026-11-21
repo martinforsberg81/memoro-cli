@@ -45,7 +45,7 @@ On main now:
 - A review that finds a goal not OK returns it to build for a repair build, up
   to two automatic repairs for the current brief; a further failed verdict
   holds delivery for an automatic desk decision ([goal stages](../mc-goals.md)).
-- The runner's archive turn and `mc plan <programme> --archive` share one
+- The runner's archive turn and `mc programs archive <programme>` share one
   writer, which records the retained trees in a versioned receipt before the
   programme is shelved. The overview and list show a programme's archive status
   and attention reason, and a programme leaves the page only when that receipt

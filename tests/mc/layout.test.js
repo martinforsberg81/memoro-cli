@@ -28,7 +28,7 @@ test('mc layout names layout 1 and its three roots, and no register', async () =
   const { code, out } = await verb([]);
   assert.equal(code, 0);
   assert.equal(out.split('\n')[0], 'layout 1');
-  assert.match(out, /planning sessions {2}~\/plan\n/u);
+  assert.match(out, /programmes {9}~\/plan\n/u);
   assert.match(out, /step areas {9}~\/step\n/u);
   assert.doesNotMatch(out, /registers/u);
 });

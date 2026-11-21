@@ -1,5 +1,5 @@
 /**
- * `mc plan <programme> --archive` — against a repository and a bare origin in
+ * `mc programs archive <programme>` — against a repository and a bare origin in
  * the repository model (`tests/_fake-git-default.mjs`), with GitHub, the docs
  * merge and the area release stubbed. Real git here was some twenty processes
  * a test, 2.2 s under load (2026-11-03); the model answers the same commands
@@ -20,7 +20,7 @@ import {
   PROGRAMME_ARCHIVE_PREFIX, archiveProgramme, archiveVerdict, programmeRow, removedKind, shelveProgramme,
 } from '../../src/mc/archive-programme.js';
 import { formatRow, logRows } from '../../src/mc/archive-plan.js';
-import { run } from '../../src/mc/commands/plan.js';
+import { run } from '../../src/mc/commands/programs.js';
 import { renderGoal } from '../../src/mc/goals.js';
 import { shelvedMembership } from '../../src/mc/archive-receipt.js';
 import { collectPage, readProgrammes } from '../../src/mc/page-collect.js';
@@ -612,12 +612,13 @@ describe('archiveProgramme with the runner\'s fence', () => {
   });
 });
 
-describe('mc plan --archive arguments', () => {
+describe('mc programs archive arguments', () => {
+  // The verb has no session flags any more: what `mc plan <programme> --archive --new` refused by name is an unknown flag.
   it('needs a name and takes none of the session flags', async () => {
     for (const [argv, message] of [
-      [['--archive'], /archive which programme\?/u],
-      [['x', '--archive', '--new'], /--archive starts no session/u],
-      [['x', '--archive', '--codex'], /--archive starts no session/u],
+      [['archive'], /archive which programme\?/u],
+      [['archive', 'x', '--new'], /unknown flag: --new/u],
+      [['archive', 'x', '--codex'], /unknown flag: --codex/u],
     ]) {
       const stderr = sink();
       assert.equal(await run(argv, { stdout: sink(), stderr, repos: [] }), 2);
@@ -632,11 +633,11 @@ describe('mc plan --archive arguments', () => {
       for (const [extra, refused] of [
         [{ MC_ROLE: 'martin' }, false],
         [{ MC_ROLE: 'martin', MC_HEADLESS: '1' }, true],
-        [{ MC_ROLE: 'plan-session' }, true],
+        [{ MC_ROLE: 'review-session:goal' }, true],
         [{}, true],
       ]) {
         const stderr = sink();
-        await run(['gone', '--archive'], { stdout: sink(), stderr, repos: [], env: { ...base, ...extra }, cwd: root });
+        await run(['archive', 'gone'], { stdout: sink(), stderr, repos: [], env: { ...base, ...extra }, cwd: root });
         assert.equal(/is a person's command, not a session's/u.test(stderr.out.text), refused, JSON.stringify(extra));
       }
     } finally {

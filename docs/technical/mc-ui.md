@@ -148,7 +148,7 @@ in this order:
   (a preparation that runs is DEPLOY's row, not maintenance);
 - a stray directory, with its checkout and uncommitted count, or a tmux or register
   session of no area mc knows, with how long it has been open and its pid;
-- a plan or runner session with no goal of a programme (a runner session's pull
+- a runner session with no goal of a programme (a runner session's pull
   requests are its child rows, `↳ repo#N`);
 - a pull request outside the goals, with whose it is.
 
@@ -240,7 +240,7 @@ with its number and title in bold at the left and its facts aligned to the right
 edge. A thin neutral grey rule runs between title and facts. When both cannot fit,
 the rule continues to the right edge after the title and the facts move to
 right-aligned continuation rows. The facts count programmes, drafts,
-open goals, explicit goal holds, associated PRs and plan, programme and goal
+open goals, explicit goal holds, associated PRs and programme and goal
 sessions in that group, including dormant programmes. Done and dropped goals still
 in the live tree read `<n> finished in tree`. Programme and open-goal counts remain
 visible at zero, with `No programmes` for an empty horizon. Drafts, finished-in-tree
@@ -340,8 +340,8 @@ Each live runner session is matched by its explicit programme/goal identity
 (`goal`, or the legacy `goal:` name) and shown beneath that goal, before its
 PRs. The activity row carries kind, elapsed time, tool/model and credits when
 used. A tight rounded frame encloses just this live session data, with green
-borders for build, magenta for review, blue for repair (and for `finish` in
-lane files from before, and for the interactive plan session) and yellow for
+borders for build, magenta for review, blue for repair (and for `finish` and `plan` in
+lane files from before) and yellow for
 mend. Long activity wraps
 inside the frame within the terminal width. Positive check-in counts appear
 at the end of the activity inside the frame, in yellow, and its yellow clock
@@ -352,10 +352,9 @@ with no matching goal is a MAINTENANCE row, with its PR references as child rows
 removing SESSIONS cannot hide it. Rendering joins the
 existing `runner.sessions` and programme records; their JSON shapes remain.
 
-Foreground plan sessions appear directly below their programme heading,
-including programmes that otherwise count as dormant. (Until 2026-11-07 the
-runner's programme planning turns appeared there too, with their trigger; the
-runner starts none now, and a lane file from then is still drawn as it was.)
+No plan session is drawn under a programme since `mc plan` went (2026-11-21).
+One left open, and a `plan` lane file of an older runner, is a row under
+MAINTENANCE.
 A finish or mend session appears under its goal, or as a MAINTENANCE row
 when the goal is missing. Under `a` each open Manager session has a rounded
 activity frame below the hero frame, with its trigger when recorded; it is counted
@@ -491,7 +490,7 @@ A stopped runner has the same nearby warning with its restart command.
 | queued merges and reds | `runner/merges.json` | queue verbs and merger |
 | round in flight | gate lock joined by `runningMerges` (`merges-collect.js`) | gate round |
 | merge counts and last landing | mc home's `gate-rounds.jsonl` | completed rounds |
-| desks and planning sessions | foreground records and tmux processes | launchers |
+| desks and programme sessions | foreground records and tmux processes | launchers |
 | open PRs | `runner/prs.json` | runner and fresh page reads |
 | digest and proposal counts | intake digests and proposal filenames | helper and sessions |
 | production | `runner/log/deploys.tsv`, `runner/version.json` | deploy, helper |
@@ -501,7 +500,7 @@ A stopped runner has the same nearby warning with its restart command.
 | DESK: since | `~/mc/martin/last-open.json` | `mc martin`, after a launch |
 | DESK: asks decided without Martin | the jev ledger, `decisions.jsonl` in mc home | jev |
 | HORIZONS: the open horizons and their order | `martin/horizons/<slug>/horizon.json` (`readHorizons`) | `mc martin horizon`; the page only reads |
-| HORIZONS: the horizon a programme serves | `horizon` in the programme's `PROGRAMME.json` | `mc plan`, the manager |
+| HORIZONS: the horizon a programme serves | `horizon` in the programme's `PROGRAMME.json` | `mc programs create`, `mc programs record` |
 
 Paths without `~/mc/` in this table are relative to the work root.
 `pidAlive` is the liveness test: a current file naming a dead pid is stale,
@@ -961,8 +960,7 @@ and `⊘n` for blocked goals there. The marks are one per session working in the
 stage, in the stage's colour: build and repair sessions on build (a repair in its own
 blue, `KIND_TONE`'s `repair`), review sessions on review, and finish sessions on finish
 (none is started now; the box stays for goals from before); on draft,
-every plan session, interactive (`data.sessions.planning_sessions`) and headless
-(runner `plan` sessions); proposals carries none; on merge `◎` per gate round in
+a runner `plan` session, which only a lane file of an older runner names; proposals carries none; on merge `◎` per gate round in
 flight and `↺` per mend session, in mend's yellow. A box shows at most eight
 marks of one kind; more are drawn `●×n`. A box's border is its stage's colour,
 from `STAGE_TONE` (`page-grid.js`): proposals yellow, draft blue, build green,

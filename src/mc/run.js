@@ -1672,7 +1672,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const key = order.kind === 'invalid' ? order.problems.join('; ') : null;
     if (key === null) invalidSaid.delete(programme);
     else if (invalidSaid.get(programme) !== key) {
-      say(`${programme}: its record (PROGRAMME.json) is invalid — no goal or plan session is started in it until it is repaired (${key}; mc programs show ${programme})`);
+      say(`${programme}: its record (PROGRAMME.json) is invalid — no goal is started in it until it is repaired (${key}; mc programs show ${programme})`);
       invalidSaid.set(programme, key);
     }
     return order;

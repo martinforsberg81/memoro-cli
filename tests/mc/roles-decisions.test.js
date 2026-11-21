@@ -24,10 +24,7 @@ import { canonSkillsDir } from '../../src/mc/skills.js';
  * Every role that writes a question down for Martin to find. `brief` answers
  * them.
  *
- * `plan-session` is not one, and has a body of its own since #656. It is the session
- * Martin is sitting in front of: a question does not have to become anything
- * to reach him, it can be asked — so its overlay says read first and ask the
- * one thing, rather than holding it to the shape a written proposal takes.
+ * The plan session was not one: Martin sat in front of it. It went with `mc plan` (2026-11-21).
  */
 const AUTHORS = ['build-session:goal'];
 
@@ -37,10 +34,8 @@ const phrase = (words) => new RegExp(words.split(' ').join('\\s+'), 'u');
 /**
  * What a session of this role actually receives.
  *
- * One path for all seven now. `plan` used to be the exception — frontmatter
- * with no body, so nothing reached it but `planLaunch`'s prompt — and
- * `tests/mc/roles.test.js` § *every canon role has a body* is what keeps that
- * from coming back.
+ * One path for every role: `tests/mc/roles.test.js` § *every canon role has a body*
+ * is what keeps a role without a body from coming back.
  */
 const toldTo = (name) => {
   const role = readCanonRole(name);
@@ -95,8 +90,8 @@ describe('the decision shape every role writes', () => {
  */
 describe('the rules every session gets, whichever role it is', () => {
   const BUILDS = ['build-session:goal'];
-  const CANON_ROLES = ['manager', ...BUILDS, 'intake', 'plan', 'mend-session'];
-  const PUBLISHERS = ['manager', ...BUILDS, 'plan', 'mend-session'];
+  const CANON_ROLES = ['manager', ...BUILDS, 'intake', 'mend-session'];
+  const PUBLISHERS = ['manager', ...BUILDS, 'mend-session'];
   const LOOSE_THREAD = phrase('What you found that is not your job is a proposal');
 
   for (const name of CANON_ROLES) {

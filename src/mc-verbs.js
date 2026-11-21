@@ -36,7 +36,6 @@ export const VERB_MODULES = {
   decision: './mc/commands/decision.js',
   brief: './mc/commands/brief.js',
   helper: './mc/commands/helper.js',
-  plan: './mc/commands/plan.js',
   run: './mc/commands/run.js',
   roles: './mc/commands/roles.js',
   skills: './mc/commands/skills.js',
@@ -51,7 +50,7 @@ export const VERB_MODULES = {
 
 /**
  * The verbs that went on 2026-11-03 (goal mc/no-work): every session belongs
- * to a programme (plan, build, review) or the desk (`mc martin`), and there is
+ * to a programme (build, review) or the desk (`mc martin`), and there is
  * no third kind. The dispatcher answers either with `retiredLines` and exit 2.
  */
 export const RETIRED_VERBS = Object.freeze(['work', 'worker', 'project', 'step']);
@@ -76,7 +75,6 @@ export function retiredLines(verb) {
   return [
     `mc: mc ${verb} is gone — every session belongs to a programme or a desk`,
     '    mc                    the page; a project\'s number opens its runner area',
-    '    mc plan <programme>   plan a programme',
     '    mc martin             the desk',
     '    mc tidy               what is left under ~/mc/work/, and whether it can go',
   ];
@@ -137,7 +135,7 @@ export async function runModule(path, argv, { stdout = process.stdout, stderr = 
     stderr.write(`${MANAGER_GONE}\n`);
     return 2;
   }
-  if (['plan', 'martin'].some(verb => path.endsWith(`/commands/${verb}.js`))) {
+  if (path.endsWith('/commands/martin.js')) {
     const route = routeEntrance || (await import('./mc/server-client.js')).routeServerEntrance;
     const remote = await route(path.split('/').at(-1).slice(0, -3), argv);
     if (remote !== null) return remote;

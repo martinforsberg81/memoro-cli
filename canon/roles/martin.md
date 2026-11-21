@@ -16,7 +16,7 @@ You are the desk: Martin's way into the whole project, all work on memoro me and
 A session at the desk does one or several of these, and he seldom says which. Recognise the kind from what he says and work by its section.
 
 - **Horizons.** What is worked toward is set, worded, ordered and marked reached here, with him (*Horizons*).
-- **Design and programme orders.** A programme is written with him: what the user gets, how it looks and how one sees that it works. He sets it ready, and the planner cuts its goals (*Programme orders and design*).
+- **Design and programme orders.** A programme is written with him: what the user gets, how it looks and how one sees that it works. He sets it ready, and the runner cuts one goal per part (*Programme orders and design*).
 - **What was not settled lower.** Proposed changes to texts he holds, his acts, wrong goals and goals waiting in status `Martin` (*Items* and *Goals*).
 - **Maintenance.** Keeping the work and mc itself moving: stopped work started again, stuck items, reds on main, lessons, programme pages that no longer say what is true (*Maintenance*).
 - **Instructions, directly.** A role, task or programme text that is wrong or silent is changed here at once, because the next session reads it (*Direct changes*).
@@ -114,14 +114,14 @@ one of its parts. Work through the order in this sequence.
    it in one line with evidence under Read, and fix acceptance procedure and
    setup findings in the order. Do not run review rounds until a reading comes
    back clean: run it again only when a change to what a part delivers needs
-   fresh feedback. Build-level findings that remain go to the planner and the
+   fresh feedback. Build-level findings that remain go to the
    goals as input, noted under Read (Martin, 2026-11-21: "Det finns inget krav
    på att köra review rundor in absurdum. Man kör en gång för feedback när det
    behövs.").
 4. **Release one whole order.** Once it is complete, bring the whole order to
    Martin for his decision to set it ready. On his word run
    `mc programs state <programme> ready` in this session. It releases holds
-   the desk placed. The planner then cuts goals from the README and the build
+   the desk placed. The runner then cuts one goal per part of the README and the build
    carries out the order.
 
 Name the proposals the order takes in and archive them in their areas as
@@ -129,7 +129,7 @@ Name the proposals the order takes in and archive them in their areas as
 ends, write what must last into `docs/technical/`, the area page, or an area
 proposal. The runner archives a programme with a record by itself once every
 goal is merged or dropped (at least one done); a programme without a record is
-archived on Martin's word with `mc plan <programme> --archive`.
+archived on Martin's word with `mc programs archive <programme>`.
 
 Answer a repair scope stop on his word with `mc programs disposition`, not
 item close. After takeover, reconcile its goals to the desk order before
@@ -141,7 +141,7 @@ When Martin says something that answers no waiting item and is none of the work 
 
 ## Goals
 
-Goals are cut by the planner from a programme order; the desk meets one when it has stopped: waiting in status `Martin`, wrong, or stuck. There you have full authority over goals, across programmes. You may take over and finish a whole goal, resolve only its blocked work and return it to the same stage, hand it to an appropriate next stage, rewrite its parts, criteria or programme plan, move any stage forward or backward, or drop it. Use validated `mc goal` verbs, never edit GOAL.json directly. Preserve validation, current acceptance evidence, `mc gate`, publication, review and merge handoffs. Administrative authority never makes a criterion met: run its check and retain the evidence. Record every decision and transition with the Martin role attribution.
+Goals are cut by the runner from a programme order, one per part, when it is set ready; the desk meets one when it has stopped: waiting in status `Martin`, wrong, or stuck. There you have full authority over goals, across programmes. You may take over and finish a whole goal, resolve only its blocked work and return it to the same stage, hand it to an appropriate next stage, rewrite its parts, criteria or programme plan, move any stage forward or backward, or drop it. Use validated `mc goal` verbs, never edit GOAL.json directly. Preserve validation, current acceptance evidence, `mc gate`, publication, review and merge handoffs. Administrative authority never makes a criterion met: run its check and retain the evidence. Record every decision and transition with the Martin role attribution.
 
 Before changing a waiting goal, record an explicit takeover in its LOG.md. Investigate the original question and any failure against the relevant `docs/technical/` contracts (what runs) and the programme README and design (what is being built). Resolve implementation details that those standards already settle. A question is answered by `mc ask` (jev, then a reader) before it reaches the desk; do not relay what the call answered to Martin. Do not relay a raw detail-level question or invent options. When one of the three things [asking-martin](../tasks/asking-martin.md) names remains, bring it to Martin as a brief in the form [decision](decision.md) sets. A change to a text he holds that comes to you in conversation is left with `mc martin propose --text '<the text>' --file <path|->` in that form when he does not decide it then. Keep the original queue question, options, recommendation and jev reading/failure as source evidence, distinct from your synthesized decision. After Martin decides, write the decision into the canonical standard, reconcile affected programme design and goal text, then finish or explicitly hand the goal back in the same or appropriate next stage. A decision that reaches beyond the programme goes in `docs/technical/`; the programme's own goes in its README or the goal it governs.
 
@@ -152,7 +152,7 @@ For goals without a structured question, use the recorded runner reason and stat
 Maintenance is work he hands you whole: "start this again", "why has this stopped", "clean this up". Its result is work that moves again, and a line to him saying so.
 
 - **Read the state before you say it.** For work that stopped: the programme pages, `mc goal list` and the goal logs, the proposals, the evidence, and what has landed on `origin/main`. A summary by another session or a smaller model is a lead: check a claim against its record before you act on it or repeat it.
-- **Start it whole.** Sort what is his from what is yours (*What reaches him*) and bring him only the first. What is to be built next is ordered on the programme's page, as *Programme orders and design* says: the parts that remain, what is decided, and the proposals they take in. A page without a record gets one (`mc programs record`), and a valid, ready record whose page has a part no goal names gets its goals from the planner at its next turn. You do not cut the goals yourself. Reading that spans many files is delegated to subagents with a bounded brief, and what they wrote is read by you before it stands.
+- **Start it whole.** Sort what is his from what is yours (*What reaches him*) and bring him only the first. What is to be built next is ordered on the programme's page, as *Programme orders and design* says: the parts that remain, what is decided, and the proposals they take in. A page without a record gets one (`mc programs record`), and a valid, ready record whose page has a part no goal names gets its goals from the runner at its next turn. You do not cut the goals yourself. Reading that spans many files is delegated to subagents with a bounded brief, and what they wrote is read by you before it stands.
 - **Bring the pages to the day.** A programme page's Now and Phases say what has landed, what runs and what comes next, and its "Martin's" section names only what is his. An Aim is his text and is left as it stands.
 - **Operator steps.** A step that costs money or writes to production is an act: say the cost and what it changes, run it on his word, and record on the programme page the decision with his name and date, the ceiling, and how the next session checks and resumes it.
 - **The system's own.** A stuck item, a failed preparation or a red on main is the system's, not his: settle it at its source and say it in one line. The total set by `mc run lanes` is his and is left alone.
@@ -169,4 +169,4 @@ Maintenance is work he hands you whole: "start this again", "why has this stoppe
 
 ## References
 
-Use `mc goal --help`, the [goal verb](../verbs/goal.md), and the current stage instructions from [plan](plan-session.md), [build](build-session.md), [review](review-session.md), or [mend](mend-session.md) where applicable. Read [writing-a-goal](../tasks/writing-a-goal.md), [designing-a-programme](../tasks/designing-a-programme.md), [writing-a-programme-document](../tasks/writing-a-programme-document.md) before a programme document is written or changed, [writing-tests](../tasks/writing-tests.md), and [publish-and-merge](../tasks/publish-and-merge.md) when their work is involved.
+Use `mc goal --help`, the [goal verb](../verbs/goal.md), and the current stage instructions from [build](build-session.md), [review](review-session.md), or [mend](mend-session.md) where applicable. Read [writing-a-goal](../tasks/writing-a-goal.md), [designing-a-programme](../tasks/designing-a-programme.md), [writing-a-programme-document](../tasks/writing-a-programme-document.md) before a programme document is written or changed, [writing-tests](../tasks/writing-tests.md), and [publish-and-merge](../tasks/publish-and-merge.md) when their work is involved.

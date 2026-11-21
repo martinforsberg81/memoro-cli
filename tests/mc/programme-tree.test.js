@@ -26,7 +26,7 @@ const plain = (line) => line.replace(/\u001b\[[0-9;]*m/gu, '');
 const draw = (data, over = {}) => renderPageLines(data, { columns: 120, now: NOW, ...over }).map(plain);
 
 describe('The programmes\' phase tree', () => {
-  it('shows programme turns under their owner, with triggers, and a Manager only under `a`', () => {
+  it('shows a Manager only under `a`, and what is left of a plan session under MAINTENANCE', () => {
     const runner = runnerSection({ now: NOW, alive: () => true, currents: [
       ...['inbox', 'empty'].map((programme, index) => ({ name: `plan:${programme}`, programme,
         kind: 'plan', reason: 'daily_proposals', pid: 200 + index, session_pid: 300 + index,
@@ -40,7 +40,7 @@ describe('The programmes\' phase tree', () => {
       { verb: 'plan', programme: 'inbox', pid: 402, tool: 'codex', started: '2026-11-05T08:50:00Z' },
     ] });
     const data = { ...fixture(), runner, sessions,
-      programmes: programmesSection({ runnerSessions: runner.sessions, planningSessions: sessions.planning_sessions }) };
+      programmes: programmesSection({ programmes: ['inbox', 'empty'], sessionStrays: sessions.strays }) };
     for (const columns of [60, 80, 120, 160]) for (const expand of [false, true]) {
       const lines = draw(JSON.parse(JSON.stringify(data)), { columns, expand });
       const programmes = lines.findIndex(line => /^ {6}inbox /u.test(line));
@@ -62,19 +62,14 @@ describe('The programmes\' phase tree', () => {
         }
         assert.ok(lines.slice(heroEnd, panels).some(line => line.includes('manual_task')), 'the trigger is in the frame');
       } else assert.ok(!lines.some(line => line.includes('pid 400') || line.includes('pid 401')), 'a desk session has no frame of its own in the overview');
-      for (const [programme, pid] of [['inbox', 300], ['empty', 301]]) {
-        const heading = lines.findIndex(line => line.startsWith(`      ${programme}`));
-        const close = lines.indexOf('', heading + 1);
-        const activity = lines.slice(heading, close).join('\n');
-        assert.match(activity, /daily_proposals/u);
-        assert.ok(activity.includes(`pid ${pid}`), `${programme} owns its plan turn`);
-        assert.equal(lines.filter(line => line.includes(`pid ${pid}`)).length, 1);
-      }
-      assert.equal(lines.filter(line => line.includes('pid 402')).length, 1, 'interactive plan stays visible');
+      // A plan turn of an older runner (a `plan:<programme>` lane file) was drawn under its programme with its trigger, and an
+      // open `mc plan` on its programme's heading, until the plan session went (2026-11-21): each is a MAINTENANCE row now.
       const maintenance = lines.findIndex(line => line.startsWith('  ┌─ MAINTENANCE'));
       assert.ok(maintenance > programmes);
-      assert.ok(lines.slice(maintenance).some(line => /^ {6}inbox\/missing {2}plan · open/u.test(line)), 'goal recovery without a goal is a MAINTENANCE row');
-      assert.ok(!lines.some(line => line.includes('plan:inbox') || line.includes('plan:empty')));
+      for (const name of ['plan:inbox', 'plan:empty', 'inbox/missing']) {
+        assert.equal(lines.slice(maintenance).filter(line => line.startsWith(`      ${name}  plan · open`)).length, 1, name);
+      }
+      assert.equal(lines.filter(line => line.startsWith('      plan  not an area mc knows')).length, 1, 'a plan session left open stays visible, as a stray');
       assert.ok(lines.every(line => width(line) <= columns), `${columns} columns`);
     }
   });
@@ -353,8 +348,9 @@ describe('Programmes without finished goals', () => {
     // The keys of a goal row and of a programme group at d2e05d90, before this goal.
     const rowKeys = ['name', 'title', 'runnable', 'programme', 'repos', 'stage', 'status', 'kind', 'repo', 'state', 'progress', 'prs', 'carries', 'phase', 'held', 'sessions', 'criteria', 'last', 'running', 'person', 'question', 'hold', 'problems'];
     // `proposals` left with the areas (2026-11-17): a programme holds none.
-    const groupKeys = ['programme', 'priority', 'dormant', 'goals', 'current_phase', 'phases', 'repos', 'planning', 'planning_sessions', 'sessions', 'statuses'];
-    const sectionKeys = ['count', 'programmes', 'active', 'dormant', 'statuses', 'planning', 'running', 'strays'];
+    // `planning` and `planning_sessions` went with `mc plan` (2026-11-21): no plan session is collected.
+    const groupKeys = ['programme', 'priority', 'dormant', 'goals', 'current_phase', 'phases', 'repos', 'sessions', 'statuses'];
+    const sectionKeys = ['count', 'programmes', 'active', 'dormant', 'statuses', 'running', 'strays'];
     const goals = goalsFor(['a', 1, { stage: 'done' }], ['b', 1]);
     const rows = goalsOf({ goals, currents: [], alive: () => true });
     for (const row of rows) {

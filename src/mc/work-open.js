@@ -120,12 +120,12 @@ export async function interactiveLaunchPlan({
     if (!chosen) return { ok: false, reason: `no conversation here starting with ${pick}` };
   }
 
-  const requestedRole = normalizeSessionRole(roleName || (verb === 'plan' ? 'plan' : null));
+  const requestedRole = normalizeSessionRole(roleName);
   const requestedProgramme = programme || null;
   const guarded = Boolean(requestedRole || requestedProgramme);
   const compatible = (identity) => identity && requestedRole
     && identity.role === requestedRole && identity.programme === requestedProgramme;
-  const freshRoute = verb === 'plan' ? `mc plan ${programme} --new` : 'select new to start a fresh session';
+  const freshRoute = 'select new to start a fresh session';
   const decision = (item, identity, action) => {
     log('work.resume-decision', {
       requested_role: requestedRole, requested_programme: requestedProgramme,
@@ -242,10 +242,7 @@ export async function interactiveLaunchPlan({
   const roleDefault = defaultModel && (!defaultModelTool || launch.shortName === defaultModelTool)
     ? defaultModel
     : null;
-  const planning = verb === 'plan';
-  const chosenModel = planning
-    ? (model || requireCapability(launch.id, 'PLAN_MODEL'))
-    : chosen ? (model || conversationModel(chosen)) : (model || roleDefault);
+  const chosenModel = chosen ? (model || conversationModel(chosen)) : (model || roleDefault);
   const resuming = chosen && typeof launch.adapter?.resumeArgs === 'function';
   if (chosen && !resuming) return { ok: false, reason: `cannot resume a ${toolId} conversation with this adapter` };
   // Claude's append-system-prompt is launch configuration, not transcript
@@ -268,7 +265,7 @@ export async function interactiveLaunchPlan({
   const launchedId = nonce || (!resuming && guarded && handed.length && channel?.freshSessionId ? randomUUID() : null);
   // No CLAUDE.md, AGENTS.md or memory, and the role's TTL: on a resume too,
   // including the role-aware instruction configuration.
-  const session = [...sessionSwitches(launch, cache), ...(planning ? launch.adapter?.effortArgs?.('medium') ?? [] : [])];
+  const session = sessionSwitches(launch, cache);
   const resumed = resuming ? launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || [] : [];
   const baseArgs = buildArgs
     ? buildArgs({ model: chosenModel, resume: resuming ? chosen.id : null, instructions, prompt,

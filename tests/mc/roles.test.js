@@ -34,11 +34,11 @@ import {
   selectParts,
   sharedRoleText,
 } from '../../src/mc/roles.js';
-import { MEND_ROLE, PLAN_ROLE, REVIEW_ROLE } from '../../src/mc/goals.js';
+import { MEND_ROLE, REVIEW_ROLE } from '../../src/mc/goals.js';
 import { BUILD_ROLES } from '../../src/mc/run-plan.js';
 
 /** Every way a session is started on a canon role, by the role name it runs. */
-const STARTS = [PLAN_ROLE, BUILD_ROLES.goal, REVIEW_ROLE, MEND_ROLE];
+const STARTS = [BUILD_ROLES.goal, REVIEW_ROLE, MEND_ROLE];
 import { discardWorkArea, releaseWorkArea } from '../../src/mc/work-area.js';
 import { canonSkillsDir } from '../../src/mc/skills.js';
 
@@ -86,9 +86,10 @@ describe('role files', () => {
     assert.equal(parseRole(WORKER_MD).cache, '1h');
   });
 
-  it('the canon build role runs on 5m and plan on an hour', () => {
+  // The plan role ran on an hour until it went with `mc plan` (2026-11-21); the manager declares none, which is an hour.
+  it('the canon build role runs on 5m and a role that declares none on an hour', () => {
     assert.equal(readCanonRole(BUILD_ROLES.goal).cache, '5m');
-    assert.equal(readCanonRole('plan').cache, '1h');
+    assert.equal(readCanonRole('manager').cache, '1h');
   });
 
   it('the canon review role parses, runs on opus and five minutes, and is the review\'s own words', () => {
@@ -261,14 +262,14 @@ describe('the text every role session shares', () => {
  * session is for, a verb file how the verb is used).
  *
  * `all-sessions.md` is the text *every* role session is told; how `mc goal` is
- * used is not that. The plan session and the brief write goals and a build
+ * used is not that. The manager and a mend session use the goal verbs and a build
  * session does not, and telling a build session how to write a goal it may
  * never write is worse than telling it nothing. So each verb is its own file,
  * and a role names it on a line of its own.
  */
 describe('the verb files', () => {
   it('reaches a session by reference, without preloading the manual', () => {
-    for (const name of ['plan', 'manager']) {
+    for (const name of ['mend-session', 'manager']) {
       const { overlay } = readCanonRole(name);
       assert.match(overlay, /^@verb goal$/mu);
       const told = instructionsFor('codex', overlay);
@@ -350,10 +351,12 @@ describe('the role catalogue', () => {
   // and the passages verb files, with `plan-session-roles` (2026-11-03);
   // `finish-session.md` and `mend-session.md` took headless plan's goal work
   // when plan became interactive only (Martin, 2026-11-07); `finish-session.md`
-  // went with the finish stage (2026-11-15): a rejected goal returns to build.
+  // went with the finish stage (2026-11-15): a rejected goal returns to build;
+  // `plan-session.md` went with `mc plan` (2026-11-21): code cuts a ready order.
+  // It protected that the plan role had a body of its own and carried the goal verbs by reference.
   it('is exactly the roles and verb files mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      'all-sessions.md', 'ask-reader.md', 'build-session.md', 'decision.md', 'desk-prepare.md', 'intake.md', 'learning.md', 'manager.md', 'martin.md', 'mend-session.md', 'plan-session.md', 'programme-review.md', 'repair.md', 'review-session.md',
+      'all-sessions.md', 'ask-reader.md', 'build-session.md', 'decision.md', 'desk-prepare.md', 'intake.md', 'learning.md', 'manager.md', 'martin.md', 'mend-session.md', 'programme-review.md', 'repair.md', 'review-session.md',
     ]);
   });
 });
@@ -378,7 +381,8 @@ describe('a role\'s parts', () => {
     assert.equal(parseRole(text, null, 'c'), null);
     assert.equal(parseRole(text).overlay, 'shared\ntail');
     assert.equal(readCanonRole('build-session:nothing'), null);
-    assert.equal(readCanonRole('plan-session:goal'), null);
+    assert.equal(readCanonRole('plan-session'), null, 'the plan role is gone');
+    assert.equal(readCanonRole('plan'), null, 'and so is its short name');
   });
 
   it('an area still marked worker carries no canon role: mc worker and its part are gone', () => {

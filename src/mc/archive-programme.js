@@ -1,6 +1,6 @@
 /**
- * A programme that is over, taken off main and off this machine: `mc plan
- * <programme> --archive` for a person, and the runner's archive turn for a
+ * A programme that is over, taken off main and off this machine: `mc programs
+ * archive <programme>` for a person, and the runner's archive turn for a
  * programme with a record (archive-turn.js).
  *
  * A project's plan used to be archived by `mc run` the round it said done,
@@ -83,7 +83,7 @@ export function programmeRow({ programme, date, pointer }) {
     programme,
     project: PROGRAMME_ROW_PROJECT,
     outcome: 'closed',
-    summary: `Programme closed with \`mc plan ${programme} --archive\`: \`docs/project/${programme}/\` removed — its programme document and rulings are in the history (\`git log -- docs/project/${programme}\`).`,
+    summary: `Programme closed with \`mc programs archive ${programme}\`: \`docs/project/${programme}/\` removed — its programme document and rulings are in the history (\`git log -- docs/project/${programme}\`).`,
     doc: 'none',
     pointer: pointer || '-',
   };
@@ -378,7 +378,7 @@ async function archiveOnMain(repo, programme, { deps, gitOut, say, now }) {
     const slug = remoteSlug(gitOut(repo.path, ['remote', 'get-url', 'origin']));
     const title = `Archive programme ${programme}`;
     const body = [
-      `\`mc plan ${programme} --archive\`: no plan under the programme is left on main,`,
+      `\`mc programs archive ${programme}\`: no plan under the programme is left on main,`,
       `so \`docs/project/${programme}/\` is removed and \`docs/project/project_log.md\``,
       'carries one row for the programme itself. The history is the record —',
       `\`git log -- docs/project/${programme}\` still answers every question the`,

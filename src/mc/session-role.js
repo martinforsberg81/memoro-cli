@@ -1,7 +1,6 @@
-/** Session identity shared by launchers, SessionStart and the plan entrance. */
+/** Session identity shared by launchers, SessionStart and the commands only a person runs. */
 import { relative, resolve, sep } from 'node:path';
 
-import { PLAN_ROLE } from './goals.js';
 import { workRoot } from './paths.js';
 import { BUILD_ROLES } from './run-plan.js';
 
@@ -24,7 +23,6 @@ export function withoutSessionIdentity(env) {
 /** Shared aliases for live identity and historical launch evidence. */
 export function normalizeSessionRole(role) {
   if (role === 'brief') return 'manager';
-  if (role === 'plan-session') return PLAN_ROLE;
   return role || null;
 }
 
@@ -37,12 +35,7 @@ export function sessionIdentity({ cwd = process.cwd(), env = process.env } = {})
   const parts = path.split(sep);
   const [first, second, third, fourth] = parts;
   const found = (role, programme = null) => ({ role, programme, source: 'cwd' });
-  if (first === 'programs' && second) {
-    if (third === 'goals') return fourth ? found(BUILD_ROLES.goal, second) : found(null);
-    return found(PLAN_ROLE, second);
-  }
-  // Layout 1 remains readable while machines move to programs/.
-  if (first === 'plan' && second) return found(PLAN_ROLE, second);
+  if (first === 'programs' && second && third === 'goals' && fourth) return found(BUILD_ROLES.goal, second);
   if (first === 'brief') return found('manager');
   if (['manager', 'helper', 'martin', 'intake'].includes(first)) return found(first);
   return found(null);
@@ -52,14 +45,13 @@ export function sessionRoleLine(identity, { cwd = process.cwd(), env = process.e
   const { role, programme } = identity;
   if (!role) return `mc — session role unknown: checked MC_ROLE, MC_GOAL and cwd ${cwd} against ${workRoot(env)}.`;
   const name = programme ? ` for programme \`${programme}\`` : '';
-  if (role === PLAN_ROLE) return `You are the plan session${name}. \`mc plan\` is the person's command that opens a session like this one; you never run it. Goals change through \`mc goal …\`.`;
   return `You are the ${roleLabel(role)}${name}.`;
 }
 
 /**
  * A role's name as a sentence says it: `build-session:goal` is the build
  * session (goal), `mend-session` the mend
- * session, `plan-session` the plan session. A name of another shape —
+ * session. A name of another shape —
  * `brief`, `helper`, a catalogue's own — is that name's session.
  */
 export function roleLabel(role) {
@@ -67,13 +59,16 @@ export function roleLabel(role) {
   return `${file.replace(/-session$/u, '')} session${part ? ` (${part})` : ''}`;
 }
 
-/** A coding agent outside mc's directories is still a session, not a person. */
-export function planSessionRefusal(context = {}) {
+/**
+ * Why `command` (`mc programs archive`) is refused here, or null for a person. A coding agent outside mc's
+ * directories is still a session, not a person.
+ */
+export function personCommandRefusal(command, context = {}) {
   const env = context.env || process.env;
   const identity = sessionIdentity(context);
   const agent = ['CLAUDECODE', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_CI'].find((key) => env[key]);
   if (!identity.role && !agent) return null;
-  return `${sessionRoleLine(identity, context)} mc plan is a person's command, not a session's: you are already in ${identity.role ? `a ${roleLabel(identity.role)}` : `a coding-agent session (${agent})`}. Use mc goal new, mc goal set or mc goal criterion add to change goals; do not open another plan session.`;
+  return `${sessionRoleLine(identity, context)} ${command} is a person's command, not a session's: you are already in ${identity.role ? `a ${roleLabel(identity.role)}` : `a coding-agent session (${agent})`}.`;
 }
 
 /** Build a fresh launch identity, preserving non-identity environment. */

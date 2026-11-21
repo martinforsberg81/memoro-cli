@@ -376,7 +376,7 @@ describe('(I) a planning area\'s own checkouts, while no planning session of the
       assert.deepEqual(list.targets.map((item) => [item.path, item.kind, item.rule]), [
         [join(area, 'memoro'), 'plan-checkout', 'I'], [join(area, 'memoro-cli'), 'plan-checkout', 'I'],
       ]);
-      assert.equal(list.targets[0].why, 'no planning session of its programme is running, untouched for 72 hours; mc plan adds it back');
+      assert.equal(list.targets[0].why, 'no planning session of its programme is running, untouched for 72 hours');
       assert.ok(list.targets.every((item) => item.bytes > 0), 'weighed, since the rule takes them');
       assert.deepEqual(m.released, [join(area, 'memoro'), join(area, 'memoro-cli')]);
       assert.equal(outcome.removed, 2);

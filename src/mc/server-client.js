@@ -4,14 +4,14 @@ import { readServer } from './server-settings.js';
 import { declared } from '../adapters/index.js';
 import { interactiveToolRefusal } from './interactive-tool.js';
 
-const ENTRANCES = new Set(['plan', 'martin']);
+const ENTRANCES = new Set(['martin']);
 
 export async function routeServerEntrance(entrance, args, {
   env = process.env, isInteractive = interactive, read = readServer, link,
   stdout = process.stdout, stderr = process.stderr, choose = select, question = ask,
 } = {}) {
   if (!ENTRANCES.has(entrance) || args.includes('--local') || env.MC_HEADLESS === '1' || !isInteractive(env)
-    || args.some(arg => ['--headless', '--intake', '--collect', '--archive', '--help', '-h'].includes(arg))
+    || args.some(arg => ['--headless', '--intake', '--collect', '--help', '-h'].includes(arg))
     || (entrance === 'martin' && args[0] === 'get')) return null;
   try {
     const destination = read(env);
@@ -22,17 +22,17 @@ export async function routeServerEntrance(entrance, args, {
   catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
 }
 
-/** What the client reads from an entrance's argv. `--bg` is known so that it is never taken for `mc plan`'s programme. */
+/** What the client reads from an entrance's argv. */
 export async function readEntranceArgs(entrance, args) {
   const { scanArgs } = await import('./commands/flags.js');
-  const { flags, positional } = scanArgs(args, { booleans: ['--new', '--resume', '--bg'], strictValues: ['--model'], toolSugar: true });
-  return { flags, programme: entrance === 'plan' ? positional[0] || null : null };
+  const { flags } = scanArgs(args, { booleans: ['--new', '--resume', '--bg'], strictValues: ['--model'], toolSugar: true });
+  return { flags };
 }
 
 export async function remoteEntrance(entrance, args, link, { stdout = process.stdout, stderr = process.stderr,
   choose = select, question = ask } = {}) {
   const { prepareSessionEntrance, BACKGROUND_REFUSALS } = await import('./session-entrance.js');
-  const { flags, programme } = await readEntranceArgs(entrance, args);
+  const { flags } = await readEntranceArgs(entrance, args);
   // Refused before the server is asked for anything: a tool that declares no interactive form is never asked for one.
   const notInteractive = (flags.tool && interactiveToolRefusal(flags.tool)) || null;
   if (notInteractive) { stderr.write(`mc: ${notInteractive}\n`); return 2; }
@@ -75,7 +75,7 @@ export async function remoteEntrance(entrance, args, link, { stdout = process.st
       return result;
     },
   };
-  const options = { verb: entrance, programme,
+  const options = { verb: entrance,
     launch: { id: snapshot.provider }, pick: args.includes('--new') ? 'new' : null,
     chosen: snapshot.chosen ? { id: snapshot.chosen } : null, model: flags.model,
     resumeTool: flags.tool, bg: flags.bg, stdout, stderr };

@@ -148,7 +148,8 @@ describe('mc programs after: refuses with the state on disk', () => {
   it('exits 2 for a role that may not state the order, and names it', async () => {
     const a = area();
     try {
-      for (const role of ['build-session:goal', 'review-session:goal', 'mend-session', 'decision', 'learning', 'work']) {
+      // `plan` stated the order until the plan role went with `mc plan` (2026-11-21).
+      for (const role of ['build-session:goal', 'review-session:goal', 'mend-session', 'decision', 'learning', 'work', 'plan']) {
         await refused(a, ['after', 'prog', '3', '1'], new RegExp(`${role}`, 'u'), 2, { ...a.env, MC_ROLE: role });
       }
       await refused(a, ['after', 'prog', '3', '1'], /Martin role is interactive-only/u, 2, { ...a.env, MC_ROLE: 'martin', MC_HEADLESS: '1' });
@@ -158,8 +159,8 @@ describe('mc programs after: refuses with the state on disk', () => {
 });
 
 describe('mc programs after: who may call', () => {
-  it('lets a person, the manager, the plan role and interactive Martin state an order', async () => {
-    for (const extra of [{}, { MC_ROLE: 'manager' }, { MC_ROLE: 'plan', MC_HEADLESS: '1' }, { MC_ROLE: 'martin' }]) {
+  it('lets a person, the manager and interactive Martin state an order', async () => {
+    for (const extra of [{}, { MC_ROLE: 'manager' }, { MC_ROLE: 'manager', MC_HEADLESS: '1' }, { MC_ROLE: 'martin' }]) {
       const a = area();
       try {
         const { code, err } = await call(['after', 'prog', '3', '2', '1'], { ...a.env, ...extra });
@@ -175,7 +176,7 @@ describe('mc programs after: the usage and which programmes take it', () => {
     const { out } = await call([], {});
     assert.match(out, /programs after <programme> <phase> <phase>…/u);
     assert.match(out, /programs after <programme> <phase> --none/u);
-    assert.match(out, /plan role/u);
+    assert.match(out, /a person, interactive Martin or the manager/u);
   });
 
   it('is opted in by create and not by record', async () => {
@@ -239,7 +240,7 @@ describe('an order gives what its parts wait for', () => {
     } finally { a.done(); }
   });
 
-  it('a programme whose goals a plan session wrote keeps the dependencies that session stated when it is set ready again', async () => {
+  it('a programme whose goals were written in the old form keeps the dependencies stated for it when it is set ready again', async () => {
     // Fault protected: the phases of such goals are not part numbers, so writing the parts' order would start them in the wrong order.
     const a = area({ ...DRAFT, phases: { order: 'stated', after: { 3: [1] } } });
     try {
