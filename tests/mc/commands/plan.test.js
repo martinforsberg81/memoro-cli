@@ -52,8 +52,8 @@ describe('the plan role', () => {
     assert.ok(role.overlay, 'the plan role has no overlay body');
   });
 
-  // Interactive programme planning and the runner-assigned draft share one role.
-  it('says the session drives the programme toward the README aim, with interactive freedom and a bounded next-draft assignment', () => {
+  // Interactive programme planning and the runner's programme turn share one role.
+  it('says the session drives the programme toward the README aim, with interactive freedom and a turn that leaves every goal in build', () => {
     const told = instructionsFor('claude-code', readCanonRole(PLAN_ROLE).overlay).replace(/\s+/gu, ' ');
     assert.match(told, /~\/mc\/programs\/<programme>\/README\.md/u);
     assert.match(told, /primary deliverable/u);
@@ -61,14 +61,14 @@ describe('the plan role', () => {
     assert.match(told, /taking over a goal's branch and finishing the work there/u);
     assert.match(told, /A goal \(`GOAL\.json`, written with the `mc goal` verbs\) is what the runner builds\. It is a means toward the aim, not the aim itself/u);
     assert.match(told, /With Martin at the terminal you have full freedom/u);
-    assert.match(told, /runner assigns exactly that one next draft/u);
-    assert.match(told, /Do not implement it, plan another draft/u);
+    assert.match(told, /the runner starts no session on a draft/u);
+    assert.match(told, /Every goal of the cut is in `build · ready` when you end; none is left in draft/u);
     assert.match(told, /A \*\*review session\*\* judges and moves it to `merge` \(all OK\) or back to `build` \(a NOT OK line\)/u);
     assert.match(told, /A \*\*mend session\*\* handles merge failures only/u);
     assert.match(told, /You move a stage forward only; mc refuses a session's move back/u);
     assert.match(told, /not a runner area/u);
     for (const gone of [/Never write code/u, /no `git commit`/u, /no `mc publish`/u, /Never `--status done`/u, /end with exactly one of/u, /read it, never write in it/u,
-      /\*\*Headless\.\*\*/u, /MC_PLAN_REASON/u, /no_goals_remaining/u, /daily_proposals/u, /### finish/u, /### blocked/u, /Programme planning/u]) {
+      /\*\*Headless\.\*\*/u, /MC_PLAN_REASON/u, /no_goals_remaining/u, /daily_proposals/u, /### finish/u, /### blocked/u, /Programme planning/u, /next draft/u, /next-draft/u]) {
       assert.doesNotMatch(told, gone);
     }
   });

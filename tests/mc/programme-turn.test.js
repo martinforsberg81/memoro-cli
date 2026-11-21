@@ -135,6 +135,30 @@ test('programme document coverage: cutProblems names what keeps the document unc
   assert.equal(finish(store({})).kind, 'settled', 'a record that is gone is settled');
 });
 
+// Martin, 2026-11-21: the turn cuts and promotes. A draft naming a part once counted as cut and then waited for a
+// session of its own; now it keeps the turn unfinished and calls it back while the draft is free.
+test('programme turn: a draft naming a part keeps the turn incomplete, named, and the programme due while that draft is ready and free', () => {
+  const finish = (s) => finishTurn({ programme: 'prog', home: HOME, list: s.list, read: s.read, write: s.write, lock: s.lock, root: ROOT });
+  const naming = (label, fields = {}) => goalJson({ success_criteria: [], documents: [{ label, path: README_AT }], ...fields });
+  const built = goalAt('one', goalNaming('Part 1'));
+  const left = programmeStore({ ...built, ...goalAt('two', naming('Part 2', { stage: 'draft' })) });
+  assert.deepEqual(finish(left), { kind: 'incomplete', problems: ['goal two is still a draft'] });
+  assert.equal(due(left).due, true, 'a ready, free draft calls the turn back');
+  const seen = [];
+  assert.deepEqual([due(left, { unavailable: (draft) => { seen.push(draft); return true; } }).due, seen],
+    [false, [{ name: 'two', dir: `${HOME}/prog/goals/two` }]], 'a held or decision-claimed draft is its holder\'s');
+  for (const status of ['Martin', 'blocked']) {
+    const waiting = programmeStore({ ...built, ...goalAt('two', naming('Part 2', { stage: 'draft', status })) });
+    assert.equal(finish(waiting).kind, 'incomplete', `${status}: still not cut`);
+    assert.deepEqual([due(waiting).due, due(waiting).reason], [false, 'its goals are already cut'], `${status}: no turn is called for it`);
+  }
+  // An archived draft is over, and a draft naming no part is not the turn's.
+  const archived = programmeStore({ ...built, ...goalAt('two', goalNaming('Part 2')), ...goalAt('old', naming('Part 2', { stage: 'draft' }), true) });
+  assert.deepEqual([finish(archived).kind, due(archived).due], ['cut', false]);
+  const promoted = programmeStore({ ...built, ...goalAt('two', goalNaming('Part 2')) });
+  assert.deepEqual([finish(promoted).kind, due(promoted).due], ['cut', false], 'every goal in build: cut, and not due');
+});
+
 test('programme turn: a missing state file reads as no failures, an unreadable one starts no turn', () => {
   const s = programmeStore();
   assert.deepEqual(readTurnState({ root: ROOT, programme: 'prog', read: s.read }), { status: 'none' });

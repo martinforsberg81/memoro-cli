@@ -589,7 +589,7 @@ export function waitsOnPerson(goal) {
   return goal.status === 'Martin' && !FINISHED.includes(goal.stage);
 }
 
-/** Interactive planning and the runner's next-draft assignment use canon/roles/plan-session.md. */
+/** Interactive planning and the runner's programme planning turn use canon/roles/plan-session.md. */
 export const PLAN_ROLE = 'plan';
 /** The role a goal's mend session runs with: `canon/roles/mend-session.md`. It handles merge failures only. */
 export const MEND_ROLE = 'mend-session';
@@ -712,43 +712,6 @@ export function phaseStanding(own, order = SEQUENTIAL) {
       return { phase, state: finished ? 'finished' : open ? 'current' : 'waiting', open, after: order.kind === 'stated' ? order.after[phase] ?? [] : [] };
     }),
   };
-}
-
-/**
- * The one draft a programme may plan, or null. Delivery and unreadable data
- * hold planning; a waiting first draft cannot be bypassed by another draft.
- *
- * `order` is the programme's (`phaseOrder`). For a programme whose phases are
- * stated the trigger reads each phase: a phase offers its first draft (oldest
- * created, then by name) when the phase is open, none of its goals is in build,
- * review or merge, and that draft is ready and not `unavailable(goal)` (told by the
- * runner: held or decision-claimed). The draft of the lowest phase that
- * offers one is the programme's. A goal that does not parse holds the whole
- * programme, as it does for any order. An invalid record offers none.
- */
-export function nextDraft(goals, programme, { order = SEQUENTIAL, unavailable = () => false } = {}) {
-  const own = goals.filter(goal => goal.programme === programme);
-  if (order.kind === 'invalid') return null;
-  // Missing dates stay oldest; compare validated creation instants, not ISO spellings.
-  const createdAt = goal => goal.created == null ? -Infinity : Date.parse(goal.created);
-  const byAge = (a, b) => createdAt(a) - createdAt(b) || a.goal.localeCompare(b.goal);
-  if (order.kind === 'stated') {
-    if (own.some(goal => goal.problems?.length)) return null;
-    const standing = phaseStanding(own, order);
-    for (const { phase, open } of standing.phases) {
-      if (!open) continue;
-      const inPhase = own.filter(goal => phaseOf(goal) === phase);
-      if (inPhase.some(goal => !['draft', ...FINISHED].includes(goal.stage))) continue;
-      const first = inPhase.filter(goal => goal.stage === 'draft').sort(byAge)[0];
-      if (first && first.status === 'ready' && !unavailable(first)) return first;
-    }
-    return null;
-  }
-  if (own.some(goal => goal.problems?.length || !['draft', ...FINISHED].includes(goal.stage))) return null;
-  const drafts = own.filter(goal => goal.stage === 'draft').sort((a, b) =>
-    (a.phase ?? 1) - (b.phase ?? 1)
-    || byAge(a, b));
-  return drafts[0]?.status === 'ready' ? drafts[0] : null;
 }
 
 /**

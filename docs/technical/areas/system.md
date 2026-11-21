@@ -27,8 +27,9 @@ On main now:
 
 - Opening or resuming the desk supplies a fresh snapshot and tells the session to wait for Martin's instruction. The overview groups programmes under their open horizons and shows the rest separately.
 - The desk checks that the current order has been reviewed and its necessary investigations are complete before bringing it to Martin to set ready. The ordinary `state ready` command does not enforce either check.
-- Before build, programme review and planning check the acceptance procedure
-  and its setup ([acceptance preparation](../mc-plan.md#acceptance-preparation-before-build)).
+- Before an order is set ready, programme review checks the acceptance procedure
+  and its setup; the build session establishes the setup in its worktree before it builds
+  ([acceptance setup](../mc-plan.md#acceptance-setup-at-build)).
   During delivery, goal list and show report the evidenced outcome and who
   acts next when available. A build that has more in-scope work records a
   bounded continuation instead of presenting the goal as ready for review

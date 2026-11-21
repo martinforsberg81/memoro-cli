@@ -381,7 +381,7 @@ function newGoal(args, flags, ctx) {
   } else create();
   stdout.write(`mc: ${programme}/${goal} · ${stage} · ready · phase ${phase} — ${dir}\n`);
   stdout.write(`  no worktree yet: the runner makes ${repos.join(', ')} on goal/${goal} at the goal's first session\n`);
-  if (held) stdout.write(`  held from creation: mc goal stage ${programme}/${goal} build moves it on and frees it; mc goal release ${programme}/${goal} hands the draft to headless planning\n`);
+  if (held) stdout.write(`  held from creation: mc goal stage ${programme}/${goal} build moves it on and frees it; mc goal release ${programme}/${goal} removes the hold: a draft naming a part of a ready programme is then finished by the programme planning turn, any other draft stays its writer's\n`);
   if (structure === 2) {
     stdout.write(`${GOAL_FILE} (version 2) is to be filled in by verbs: mc goal set ${programme}/${goal} ${PROSE_PARTS.join('|')} --text "…", mc goal item add ${programme}/${goal} ${ITEM_WORDS.join('|')} --text "…" …, mc goal obligation set ${programme}/${goal} <area> --stand touched|untouched --text "…", mc goal criterion add ${programme}/${goal} --criterion "…" --check "…"\n`);
     return 0;

@@ -20,6 +20,14 @@ each area's questions). Log your evidence under the id it belongs to (`C2`,
 `V1`, criterion 3). `LOG.md` is what the sessions before you did and what the
 last one said comes next. Read it first.
 
+**Establish the acceptance setup before you build.** Planning has not verified
+it (Martin, 2026-11-21): the runner remakes an unbuilt branch from
+`origin/main` at the first build, and in that worktree you establish for each
+criterion that its check exists or is what the goal builds, that the capability
+it requires is there, and that the input it names is usable. Record what you
+found in the log. What is missing is an acceptance obstacle, or a goal defect
+when the criterion's premise is wrong; both are described below.
+
 Your worktree is `<goal dir>/<repo>`, on branch `goal/<goal>`. Work towards the
 goal's criteria from where the last session left it. There is no step and no
 `done_when`: the goal is the whole brief. A criterion is met only when you have

@@ -1,8 +1,9 @@
 /**
  * The programme planning turn, model-free (mc-run.md, "Programme planning turn").
  *
- * A ready programme whose README.md has parts no goal names yet is planned by one headless plan
- * session with nobody present. Everything here is what the runner decides around
+ * A ready programme whose README.md has parts no goal names yet, or whose goals naming a part are
+ * still drafts, is planned by one headless plan session with nobody present: it cuts every part into
+ * a goal and moves each to build (Martin, 2026-11-21). Everything here is what the runner decides around
  * that session without a model: whether a programme is due, the state file that
  * counts the turns that failed, the desk item the second failure opens, and the
  * read checkouts the turn stands beside. The runner (`run.js`) supplies its own
@@ -129,10 +130,10 @@ export function partsNamed(label) {
 export function goalParts({ home, programme, list, read }) {
   const readme = resolve(join(home, programme, 'README.md'));
   const goals = join(home, programme, GOALS_DIR);
-  const dirs = [...list(goals).filter((name) => !name.startsWith('.')).map((name) => [name, join(goals, name)]),
-    ...list(join(goals, ARCHIVE_DIR)).map((name) => [name, join(goals, ARCHIVE_DIR, name)])];
+  const dirs = [...list(goals).filter((name) => !name.startsWith('.')).map((name) => [name, join(goals, name), false]),
+    ...list(join(goals, ARCHIVE_DIR)).map((name) => [name, join(goals, ARCHIVE_DIR, name), true])];
   const found = [];
-  for (const [name, dir] of dirs) {
+  for (const [name, dir, archived] of dirs) {
     let text;
     try { text = read(join(dir, GOAL_FILE)); } catch { continue; }
     if (text == null) continue;
@@ -144,7 +145,7 @@ export function goalParts({ home, programme, list, read }) {
       if (docPath !== readme) continue;
       for (const part of partsNamed(document.label)) named.add(part);
     }
-    found.push({ name, named, dir, goal: parsed });
+    found.push({ name, named, dir, archived, goal: parsed });
   }
   return found;
 }
@@ -176,13 +177,27 @@ export function cutProblems({ home, programme, list, read }) {
   return missing.length ? [`no goal names part${missing.length === 1 ? '' : 's'} ${missing.join(', ')}`] : [];
 }
 
+/**
+ * The live goals that name a part of the programme's `README.md` and are still in stage `draft`, by name: what the
+ * turn has cut and not yet moved to build. An archived goal is over and is not one.
+ */
+export function partDrafts({ home, programme, list, read }) {
+  return goalParts({ home, programme, list, read })
+    .filter(({ named, archived, goal }) => named.size && !archived && goal.stage === 'draft')
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /** A record the turn cuts from: valid and ready. */
 export const cuttable = (record, dir) => record?.state === 'ready' && (!record.repair || Boolean(dir && repairReleaseState(dir, record)?.release));
 
 /**
  * Whether `programme` is due a planning turn now: `{ due: true, record }`, or `{ due: false, reason, notice }`.
+ * It is due while a part of README.md is named by no goal, and while every part is named but a goal naming one is
+ * still `draft · ready` and free: a turn that was interrupted or failed is run again and finishes its own drafts.
+ * `unavailable({ name, dir })` is the runner's word that a draft is held or decision-claimed; such a draft, and one
+ * that waits on Martin or is blocked, is its holder's and calls no turn.
  */
-export function programmeDue({ programme, home, list, read, items = [], horizon = () => null, state }) {
+export function programmeDue({ programme, home, list, read, items = [], horizon = () => null, state, unavailable = () => false }) {
   const dir = join(home, programme);
   const record = readRecord(dir, { read });
   if (record.status === 'none') return { due: false, reason: 'no record', notice: null };
@@ -200,7 +215,9 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
     if (record.record.repair.reconciled?.revision === repair.release.revision) return { due: false, reason: 'its release is reconciled', notice: null };
   } else {
     const problems = cutProblems({ home, programme, list, read });
-    if (problems.length === 0) return { due: false, reason: 'its goals are already cut', notice: null };
+    const drafts = problems.length ? [] : partDrafts({ home, programme, list, read })
+      .filter((draft) => draft.goal.status === 'ready' && !unavailable({ name: draft.name, dir: draft.dir }));
+    if (problems.length === 0 && drafts.length === 0) return { due: false, reason: 'its goals are already cut', notice: null };
     const unnamed = goalsNamingNoPart({ home, programme, list, read });
     if (unnamed.length) {
       const named = unnamed.length > 3 ? `${unnamed.slice(0, 3).join(', ')} and ${unnamed.length - 3} more` : unnamed.join(', ');
@@ -224,8 +241,9 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
 }
 
 /**
- * How the turn ended: `{ kind: 'cut' }` when all parts are cut, `{ kind: 'incomplete', problems }` when parts remain,
- * or `{ kind: 'settled', problems }` when the programme state is no longer ready.
+ * How the turn ended: `{ kind: 'cut' }` when a goal names every part and no live goal naming a part is still a
+ * draft, `{ kind: 'incomplete', problems }` when parts or drafts remain (each draft is named), or
+ * `{ kind: 'settled', problems }` when the programme state is no longer ready.
  */
 export function finishTurn({ programme, home, list, read, write, lock, root, revision }) {
   try {
@@ -242,6 +260,8 @@ export function finishTurn({ programme, home, list, read, write, lock, root, rev
     }
     const problems = cutProblems({ home, programme, list, read });
     if (problems.length > 0) return { kind: 'incomplete', problems };
+    const drafts = partDrafts({ home, programme, list, read }).map(({ name }) => `goal ${name} is still a draft`);
+    if (drafts.length > 0) return { kind: 'incomplete', problems: drafts };
     return { kind: 'cut' };
   } catch (error) {
     return { kind: 'failed', problems: [error.message || String(error)] };
@@ -281,7 +301,7 @@ const failureLines = (failures) => failures.map((failure) => `- ${failure.at}: $
 /** What the decision session reads for the first item: the turns that failed, and where to look. */
 function preparedText({ programme, failures, item }) {
   return `# Programme ${programme}: its planning turn failed twice\n\n`
-    + `The runner's planning turn for programme ${programme} ended twice without a goal naming every part of README.md. `
+    + `The runner's planning turn for programme ${programme} ended twice without every part of README.md cut into a goal in build. `
     + `Nothing was asked of Martin; this is a mechanical failure to repair within reach.\n\n`
     + `## The failures\n${failureLines(failures)}\n\n`
     + `## Where to look\n- Programme directory: ${programme} under the programmes home, with README.md, PROGRAMME.json and goals/.\n`
@@ -293,7 +313,7 @@ function preparedText({ programme, failures, item }) {
 
 /** The brief a later item carries: the turn failed again after a decision pass closed the first. Swedish, as the desk reads it. */
 function briefText({ programme, failures }) {
-  return `## Vad det gäller\nPlaneringspasset för programmet ${programme} slutade igen utan att målen namngav varje del av programmets README.md; arbetet kan inte fortsätta automatiskt.\n\n`
+  return `## Vad det gäller\nPlaneringspasset för programmet ${programme} slutade igen utan att varje del av programmets README.md blev ett mål i build; arbetet kan inte fortsätta automatiskt.\n\n`
     + `## Alternativ och konsekvenser\n- Undersök underlaget: planeringen kan köras igen när felet är löst.\n- Låt programmet vänta: inga fler mål skärs förrän felet är löst.\n\n`
     + `## Rekommendation och skäl\nUndersök underlaget; planeringspasset har misslyckats igen sedan ett tidigare ärende stängts.\n\n`
     + `## Vad som står still\nProgrammet ${programme} väntar på Martin. Felunderlag:\n${failureLines(failures)}\n\n`

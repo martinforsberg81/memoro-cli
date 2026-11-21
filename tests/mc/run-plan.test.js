@@ -825,7 +825,11 @@ test('programmePlanPrompt cuts from README.md: its source, part-named goals, cop
   assert.match(plain, /a goal already built gets a new goal for the difference/u);
   assert.match(plain, /mc martin propose --text prog\/README\.md --file <brief>/u, 'an open choice leaves a proposal');
   assert.match(plain, /mc programs after/u);
-  assert.match(plain, /mc ask` on the draft that needs it/u);
+  assert.match(plain, /mc ask` on the goal that needs it/u);
+  // Martin, 2026-11-21: the turn promotes what it cuts. A prompt that let a goal stay draft left it behind running builds.
+  assert.match(plain, /write its stand on every rule area with `mc goal obligation set`/u);
+  assert.match(plain, /move it to build with `mc goal stage <programme>\/<goal> build`: every goal of the cut is in build when you end/u);
+  assert.doesNotMatch(plain, /leave it draft/u);
   assert.doesNotMatch(plain, /--kind/u);
   assert.match(plain, /Do not implement a goal, process proposals or commit/u);
   const horizon = programmePlanPrompt({ programme: 'prog', dir: '/p/prog', horizon: 'h', repos: ['memoro'], checkouts: { memoro: '/c/memoro' } });
@@ -833,6 +837,7 @@ test('programmePlanPrompt cuts from README.md: its source, part-named goals, cop
   const checkIn = programmePlanCheckInPrompt({ minutes: 20, count: 2 });
   assert.ok(checkIn.includes('Programme planning check-in after 20 minutes (2)'));
   assert.match(checkIn, /Keep cutting README\.md: one or more goals per part, each naming its part/u);
+  assert.match(checkIn, /Write each goal's stand on every rule area and move it to build/u);
 });
 
 describe('the agy-stream reader (fixtures in tests/fixtures/agy, synthesised from the documentation: see its README)', () => {

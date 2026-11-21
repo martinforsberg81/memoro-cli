@@ -2206,7 +2206,7 @@ test('mc goal new without MC_HEADLESS holds the draft from creation: the hold is
   const entries = parseLog(f.store[`${DIR}/LOG.md`]);
   assert.equal(entries.length, 1, 'one entry');
   assert.match(entries[0].comment, /^held from creation/u);
-  assert.match(f.out(), /^  held from creation: mc goal stage mc\/plain build moves it on and frees it; mc goal release mc\/plain hands the draft to headless planning$/mu);
+  assert.match(f.out(), /^  held from creation: mc goal stage mc\/plain build moves it on and frees it; mc goal release mc\/plain removes the hold: a draft naming a part of a ready programme is then finished by the programme planning turn, any other draft stays its writer's$/mu);
   assert.equal(stateOf(f), 'draft · ready');
 });
 

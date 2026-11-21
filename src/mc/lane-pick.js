@@ -8,7 +8,7 @@
  * - `repair` for a repair build (a goal a review rejected; `finish` in rows from before);
  * - `review` for a goal in review;
  * - `build` for a goal in build;
- * - `plan` for one next draft in a programme with no delivery left, and `archive` (the same rank) for the write-back
+ * - `plan` for the planning turn of a ready programme (it cuts every part into a goal in build), and `archive` (the same rank) for the write-back
  *   reading of a programme with a record whose goals are all finished;
  * - `manager` for the unattended manager's curation turn, last of all.
  *
@@ -20,7 +20,7 @@
  * project-shaped build/review items remain accepted legacy inputs to this
  * picker; they do not describe today's runner candidates.
  *
- * Merge-failure and main-red mend go first, then decision, a repair build, review, build, then planning, then the manager's turns. Within the earliest runnable rank, repository fairness reserves a
+ * Merge-failure and main-red mend go first, then decision, a repair build, review, build, then the programme planning turn, then the manager's turns. Within the earliest runnable rank, repository fairness reserves a
  * share (`ceil(lanes / repositories)`) before programme priority, highest first.
  * Carry, resumed work and oldest wait break remaining ties. A carried build
  * never jumps ahead of a review or recovery. A repository with work in the
