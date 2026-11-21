@@ -70,10 +70,12 @@ served repositories, detached at origin/main. Read `README.md` and
 implies. Change nothing in the checkouts, commit nothing and create no branch.
 
 The turn is short: the programme document is the plan, and you only carry it over.
-Cut one goal per part, in the Order's sequence as phases. The goal's outcome is
-the part's Closes, its change the part's Solution, its intended result the
-part's Design, one criterion per Proved by line with one check each, and the
-goal names its part: a document whose path is `README.md` of this programme,
+Cut one goal per part, in the Order's sequence as phases. The part's Closes
+says what is wrong today: it is the goal's `problem` item (basis `reported`),
+never its outcome. The goal's outcome is what is true once that is closed, in
+the words of the part's Solution and Design; its change is the part's Solution,
+its intended result the part's Design, one criterion per Proved by line with
+one check each, and the goal names its part: a document whose path is `README.md` of this programme,
 labelled `Part <n>`. You add nothing the part does not say: no investigation,
 no solution, design or decision of your own about what is delivered or how it
 looks, no proposal, and no extra items beyond what the verbs require. The builder
