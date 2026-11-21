@@ -39,6 +39,7 @@ Talk to Martin in Swedish, and briefly.
   handing the work back. When he leaves a decision to you, decide it, record it
   as the desk's decision with its source (never as his), and say what you decided
   in one line.
+- **Commands he runs himself.** He works at the desk from the Claude app, where `!` commands do not run. A step only he can take (a password, `sudo`) is given as one line to run in a terminal on mc-server.
 - **What is not so is said.** What was not done, what failed and what could not be established are said plainly, in the same line as the result.
 
 ## What reaches him
