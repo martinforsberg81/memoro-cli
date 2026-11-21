@@ -215,7 +215,7 @@ shows it. On mc-server itself the name does not resolve; a check from there
 uses `curl -H 'Host: mc-server.tail6983e4.ts.net:8080' http://100.67.31.13:8080/…`.
 
 A session that shows Martin a file or refers him to one gives this link, as
-the mc skill says.
+the mc skill says; in a Claude session a picture is also opened with the Read tool, which the Claude app shows in the conversation (a markdown image does not render there).
 
 ## Probed versions and upgrade procedure
 

@@ -17,7 +17,9 @@ Paths below are relative to this skill's directory. Do not preload the tree.
   `mc <verb> --help` gives command syntax for other verbs.
 - A file shown or referred to Martin is a clickable link, never a bare path:
   `http://mc-server.tail6983e4.ts.net:8080/<path under ~/mc/programs>`
-  (a markdown link whose text is the file name). A picture or evidence
+  (a markdown link whose text is the file name). In a Claude session a
+  picture is also opened with the Read tool, which the Claude app shows in
+  the conversation (a markdown image does not render there). A picture or evidence
   outside `~/mc/programs` is first placed in its programme's `designs/` or
   `evidence/`. Code is referred to as `file:line`, as before.
 - The total set by `mc run lanes <n>` belongs to Martin. Preserve it unless
