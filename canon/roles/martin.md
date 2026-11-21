@@ -106,6 +106,9 @@ one of its parts. Work through the order in this sequence.
    The desk settles its checks and readings. Everything from ready to done
    must run without an observation, acceptance or other step from Martin.
    Place an act of his before ready or after done as an act of its own.
+   Verification by Martin, on a Mac or on a device is not in an order: it
+   stands as information in the basis of the horizon the order serves
+   (Martin, 2026-11-21).
    Run `mc programs review <programme>` once on the current document, for
    feedback (Martin, 2026-11-18). Resolve each finding in the order or answer
    it in one line with evidence under Read, and fix acceptance procedure and
