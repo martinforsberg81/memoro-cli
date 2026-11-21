@@ -550,7 +550,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 - **`criterion unmet [<p>/<g>] <n>`** — takes the mark back and drops the criterion's evidence record.
 - **`evidence [<p>/<g>] <id> --text "…" | --file <path|->`** — records evidence for a preserve id or
   the area of a touched obligation (*Evidence and heads*). An unknown id is refused, listing the ids.
-  Build, person, plan, decision and interactive Martin may; review, mend, desk-prepare and
+  Build, person, decision and interactive Martin may; review, mend, desk-prepare and
   learning are refused. It writes no LOG.md entry.
 - **`criterion set [<p>/<g>] <n> [--criterion "…"] [--check "…"] [--evidence "…"]`** — rewrites
   the criterion's text, check or evidence (kept when not given) and leaves it unmet, logging the old and new
@@ -594,7 +594,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   for a reserved act (`mc ask --reserved <act>`) and for a goal defect (`mc goal
   defect`); who may set `Martin` (`refusedMove`) is unchanged, and so are the
   runner's own recovery settings of `Martin`.
-- **`done [<p>/<g>] [--reason "…"]`** — stage `done`, a person's (or plan's) act;
+- **`done [<p>/<g>] [--reason "…"]`** — stage `done`, a person's act;
   the merger sets it when the pull request lands.
 - **`drop [<p>/<g>] --reason "…"`** — abandons delivery: stage `dropped`, never
   `done`; it holds no later phase back. The reason is required. Only a person, interactive Martin or decision
@@ -866,8 +866,8 @@ programme:
   and nothing renumbers them.
 - **Dropped** goals meet a dependency, as they hold no later phase back in a
   sequential programme: a phase whose goals are all dropped lets the phase that
-  waited for it open. Dropping is a person's, interactive Martin's, the
-  decision role's or plan's act, and whoever drops it decides knowingly.
+  waited for it open. Dropping is a person's, interactive Martin's or the
+  decision role's act, and whoever drops it decides knowingly.
 - **An invalid record** is read neither as stated nor as sequential: it holds
   every phase of its programme. The runner starts no goal in
   it and says so once per programme while it lasts (`<prog>: its record
@@ -1318,11 +1318,11 @@ the criterion's now counts as none.
   session's mark is refused when a worktree is dirty (`<repo> has uncommitted
   changes — commit them, run the check at that head, then record it`) or
   absent, and, for a version 2 goal, when no evidence is given; a version 1
-  goal needs none. A person, plan, decision or interactive Martin is accepted
+  goal needs none. A person, decision or interactive Martin is accepted
   without worktrees and records the heads that exist.
 - **Other items.** `mc goal evidence <p>/<g> <id> --text "…" | --file <path|->`
   records a preserve id or the area of a touched obligation. An unknown id is
-  refused, listing the ids. Build, person, plan, decision and interactive
+  refused, listing the ids. Build, person, decision and interactive
   Martin may; review, mend, desk-prepare and learning are refused.
 - **Dropping.** `criterion unmet` and `criterion set` drop the criterion's
   record; `criterion remove` drops it and renumbers the later ones.
@@ -1455,7 +1455,7 @@ Each stage has one owner, and a goal passes each once:
 - `merge` — the merger's; the runner starts no session, except one mend session for an unqueued merge failure.
 - `done` — set by the merger or the runner when every pull request the goal
   carries has landed, or by a person. Final.
-- `dropped` — delivery abandoned (`mc goal drop`), by a person, plan, decision or interactive Martin, from any
+- `dropped` — delivery abandoned (`mc goal drop`), by a person, decision or interactive Martin, from any
   stage. Final; it holds no later phase back, and is immediately finalized and
   archived when cleanup is safe. A dropped goal never wakes a mend session or
   accepts an old merger answer.

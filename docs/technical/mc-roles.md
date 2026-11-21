@@ -105,7 +105,7 @@ MC_PROGRAMME_REVIEW_TOKEN.
 ### Martin's decision desk
 
 `mc martin` is a foreground-only desk in `~/mc/martin/`, distinct from
-the manager, plan and helper. It cannot be launched by the runner or an unattended
+the manager and helper. It cannot be launched by the runner or an unattended
 session. Its `get` subcommand is a model-free, read-only view over live
 goal records, not a cache or a second queue store; see [mc-martin.md](mc-martin.md).
 A resumed conversation receives a fresh queue snapshot so remembered goals are

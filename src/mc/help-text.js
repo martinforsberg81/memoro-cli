@@ -163,8 +163,8 @@ WHAT IS NOT HERE
   — went on 2026-09-03. Today's mc dev and mc deps are later verbs that
   share only the name: dev servers, and dependency updates.
 
-  Nor is a session of nobody's. Every session belongs to a programme (plan,
-  build, review) or the desk (Martin); the verbs that opened folders of
+  Nor is a session of nobody's. Every session belongs to a programme
+  (build, review) or the desk (Martin); the verbs that opened folders of
   their own, and the page's list of them, went on 2026-11-03.
 
 REQUIREMENTS
