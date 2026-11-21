@@ -5,7 +5,7 @@
  *   mc programs priority <programme>... --set <n>    prefer work within a stage
  *   mc programs create <programme> --end "…" [--horizon <slug> | --area <repo>/<id>] [--purpose "…"] [--from-proposal <path>]    a new programme with its record
  *   mc programs record <programme> --end "…" [--horizon <slug>]    the record of an existing one
- *   mc programs state <programme> draft|ready    set draft or ready (interactive Martin only); ready releases the desk's holds on its unfinished goals
+ *   mc programs state <programme> draft|ready    set draft or ready (interactive Martin only); ready writes the order the parts give into the record and releases the desk's holds on its unfinished goals
  *   mc programs review <programme>    one independent advisory reading of the current document
  *   mc programs after <programme> <phase> <phase>… | --none    what a phase of a stated programme waits for
  *   mc programs show <programme> [--json]    one programme's record
@@ -45,6 +45,8 @@ import { beginRepairReview, repairReviewCall } from '../repair-review.js';
 import { isDesk, releaseRepair, repairReleaseState } from '../repair-release.js';
 import { reconcileRepair, setDeskRepairState } from '../repair-reconcile.js';
 import { disposeRepair, REPAIR_DISPOSITIONS, stopRepair } from '../repair-stop.js';
+import { goalParts, partsOrder } from '../programme-turn.js';
+import { cutFromOrder } from '../goal-parts.js';
 
 export function usage() {
   return commandUsage('programs');
@@ -393,9 +395,16 @@ function stateVerb({ positional }, { env, stdout, stderr, lock, now = new Date()
     return 1;
   }
   try {
-    const outcome = readRecord(dir).record?.repair?.desk
+    const found = readRecord(dir).record;
+    // A part of an order waits for the part before it unless it says it runs in parallel with it: ready writes the
+    // record's dependencies from that in the same write. A repair-owned order is released by its own verbs and is not read here,
+    // and a programme whose goals a plan session wrote keeps the dependencies that session stated for its phases.
+    const written = goalParts({ home, programme: name, list: listDirsOf, read: readTextOrNull });
+    const oldForm = written.some(({ named }) => named.size > 0) && !written.some(({ goal }) => cutFromOrder(goal));
+    const given = targetState === 'ready' && found && !found.repair && !oldForm ? partsOrder(readTextOrNull(join(dir, 'README.md')) ?? '') : null;
+    const outcome = found?.repair?.desk
       ? setDeskRepairState(dir, targetState, env, { lock })
-      : setRecordState(dir, targetState, { root: workRoot(env), lock });
+      : setRecordState(dir, targetState, { root: workRoot(env), lock, ...(given ? { after: given.after } : {}) });
     if (!outcome.ok) {
       for (const problem of outcome.problems.length ? outcome.problems : [`${name} has no valid record — mc programs show ${name}`]) stderr.write(`mc: ${problem}\n`);
       return 1;

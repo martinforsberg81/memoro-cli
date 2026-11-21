@@ -38,8 +38,10 @@ On main now:
   publish an evidenced factual correction to one area page. It does not
   change held wording or create a repair order.
 - [`mc repair`](../mc-plan.md#repair-drafts) takes an evidenced defect through
-  independent review to the ordinary planner, or records a scope stop at
-  the desk. The release binds the reviewed order and its evidence.
+  independent review to a released order, or records a scope stop at
+  the desk. The release binds the reviewed order and its evidence. No code
+  cuts or reconciles a release yet: its goals are written and reconciled by
+  hand ([the cut of a ready order](../mc-run.md#the-cut-of-a-ready-order)).
 - A review that finds a goal not OK returns it to build for a repair build, up
   to two automatic repairs for the current brief; a further failed verdict
   holds delivery for an automatic desk decision ([goal stages](../mc-goals.md)).
@@ -64,8 +66,8 @@ On main now:
 - A horizon is always created in `mc martin`; the system never sets one. The manager's task is to keep the area texts curated (Martin, 2026-11-15; programme `horizon`).
 - The order of the open horizons is the one priority, and candidates for new horizons are brought to the desk by the manager and become horizons only by Martin (Martin, 2026-11-15; programme `horizon`).
 - The interactive `mc manager` entrance goes; a person's manual headless run stays (Martin, 2026-11-15; programme `horizon`).
-- A change is ordered as a programme document — a repair programme when it is a set of small adjustments — and the planner cuts its goals; only a change small enough to run through directly skips the document, and no change needs a horizon: Martin decides what is taken up and in which form (Martin, 2026-11-16; programme `mc`). This replaces the 2026-11-15 rule that small work runs as a goal without a horizon, one in flight per area, and that a user-promise change needs a horizon.
-- For a bounded repair to existing functionality, a dedicated repair session may write the programme order, run programme review, revise the order in response to the findings, and release it to build through the ordinary planner. If the order goes beyond that remit, the session sets it to Martin. The same end and archival rules apply to repair programmes. This is an exception for the repair session to the ordinary desk authority over programme orders (Martin, 2026-11-18; the desk).
+- A change is ordered as a programme document — a repair programme when it is a set of small adjustments — and its goals are cut from it; only a change small enough to run through directly skips the document, and no change needs a horizon: Martin decides what is taken up and in which form (Martin, 2026-11-16; programme `mc`). This replaces the 2026-11-15 rule that small work runs as a goal without a horizon, one in flight per area, and that a user-promise change needs a horizon.
+- For a bounded repair to existing functionality, a dedicated repair session may write the programme order, run programme review, revise the order in response to the findings, and release it to build. If the order goes beyond that remit, the session sets it to Martin. The same end and archival rules apply to repair programmes. This is an exception for the repair session to the ordinary desk authority over programme orders (Martin, 2026-11-18; the desk).
 - A repair session may release only the current reviewed version of its order, after it has settled the findings. This release condition applies to orders under repair session authority. Ordinary programme review remains advisory (Martin, 2026-11-18; programme `learning-and-repair`).
 - A horizon is what is worked toward now, for roughly one to two months, taking several programmes; it is not standing or per area. A single deliverable with one end is a programme (Martin, 2026-11-15; programme `horizon`).
 - Sessions have one way to ask for advice, `mc ask`, not several (Martin, 2026-11-15; programme `reach`).
@@ -74,7 +76,7 @@ On main now:
 - The ordinary programme path uses `draft`, `ready` and `done`. A person or Martin's interactive session (`mc martin`) creates a draft record, and Martin sets the state with `mc programs state <programme> draft|ready` (Martin, 2026-11-16; programme `plain-programmes`).
 - A programme in draft starts no new plan, build, review or mend session; planning and build take nothing from a draft programme (Martin, 2026-11-16; programme `plain-programmes`).
 - `mc programs review` is advisory: Martin's interactive session calls it when he wants, it writes PROGRAMME-REVIEW.md beside the programme, and nothing reads the report (Martin, 2026-11-16; programme `plain-programmes`).
-- The planner cuts goals from README.md of a ready programme (Martin, 2026-11-16; programme `plain-programmes`).
+- A part of an order is a goal, with no rewriting: code cuts a ready programme into one goal per part of README.md, with no plan session, every session on such a goal is given the part as README.md has it then, and a part waits for the part before it unless it holds the line `In parallel with the previous part.` The build session reads the part, writes what was unclear and how it read it in the log, and hands over when it considers the part done; it reports no goal defect. Review asks one question of such a goal: does the build do what the part says. The programme's last goal, Documentation, waits for every part and writes `docs/technical/`; a build on a part writes no page (Martin, 2026-11-21; order `mc-parts-are-goals`). This replaces the 2026-11-16 rule that the planner cuts goals from README.md (programme `plain-programmes`).
 - A horizon has a basis file, and what is not designed is settled in a programme document (Martin, 2026-11-15; programme `programme-sign-off`).
 - A programme is an order of what is to be built: temporary, archived when its work has landed, and of no interest afterwards. What must last is written in its permanent place before then: `docs/technical/`, the area page, or a proposal in its area (Martin, 2026-11-17; the desk).
 - An order is buildable to its end without Martin: no visual or functional check of his (look, listen, try, accept, a step "on Martin's word") between ready and done. Everything he decides is decided in the document before it is set ready, and an act it needs is done before ready or after its end (Martin, 2026-11-17; the desk).

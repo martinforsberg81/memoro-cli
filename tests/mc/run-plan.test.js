@@ -15,7 +15,7 @@ import { instructionsFor, readCanonRole } from '../../src/mc/roles.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import * as codexAdapter from '../../src/adapters/codex.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
-import { programmePlanPrompt, programmePlanCheckInPrompt } from '../../src/mc/run-plan.js';
+import { goalMendPrompt, goalPrompt } from '../../src/mc/run-plan.js';
 
 test('repair and narrow review prompts carry the rejected items and judged heads', () => {
   const args = { name: 'p/g', dir: '/goal', worktree: '/goal/repo', branch: 'goal/g' };
@@ -807,37 +807,51 @@ test('cacheTtlMs: claude follows the role, codex keeps its five minutes', () => 
   assert.equal(codexAdapter.cacheTtlMs('5m'), 5 * 60_000);
 });
 
-test('programmePlanPrompt cuts from README.md: its source, part-named goals, copied sections, an unchanged part kept, a proposal on an open choice', () => {
-  const checkouts = { memoro: '/w/runner/work/programme-turn-prog/memoro', 'memoro-cli': '/w/runner/work/programme-turn-prog/memoro-cli' };
-  const plain = programmePlanPrompt({ programme: 'prog', dir: '/p/prog', repos: ['memoro', 'memoro-cli'], checkouts });
-  assert.ok(plain.includes('cut programme prog from README.md, with nobody present'));
-  assert.ok(plain.includes('Its directory is `/p/prog`'));
-  assert.ok(plain.includes('`/p/prog/README.md`'), 'README.md is the source');
-  assert.ok(plain.includes('`mc programs show prog`'));
-  for (const path of Object.values(checkouts)) assert.ok(plain.includes(`\`${path}\``), path);
-  assert.ok(plain.includes('mc goal areas <repo>'));
-  assert.doesNotMatch(plain, /mc martin horizon show/u, 'no horizon command without a horizon');
-  assert.match(plain, /one goal per part/u);
-  assert.match(plain, /labelled with `Part <n>`/u, 'a goal names its part by a labelled document');
-  assert.match(plain, /Solution, Design and Proved by/u, 'a goal copies the part, it does not invent');
-  assert.match(plain, /no solution, design or decision of your own/u);
-  assert.match(plain, /a part unchanged since then keeps its goals/u);
-  assert.match(plain, /a goal already built gets a new goal for the difference/u);
-  assert.match(plain, /mc martin propose --text prog\/README\.md --file <brief>/u, 'an open choice leaves a proposal');
-  assert.match(plain, /mc programs after/u);
-  assert.match(plain, /mc ask` on the goal that needs it/u);
-  // Martin, 2026-11-21: the turn promotes what it cuts. A prompt that let a goal stay draft left it behind running builds.
-  assert.match(plain, /write its stand on every rule area with `mc goal obligation set`/u);
-  assert.match(plain, /move it to build with `mc goal stage <programme>\/<goal> build`: every goal of the cut is in build when you end/u);
-  assert.doesNotMatch(plain, /leave it draft/u);
-  assert.doesNotMatch(plain, /--kind/u);
-  assert.match(plain, /Do not implement a goal, process proposals or commit/u);
-  const horizon = programmePlanPrompt({ programme: 'prog', dir: '/p/prog', horizon: 'h', repos: ['memoro'], checkouts: { memoro: '/c/memoro' } });
-  assert.ok(horizon.includes('`mc martin horizon show h`'));
-  const checkIn = programmePlanCheckInPrompt({ minutes: 20, count: 2 });
-  assert.ok(checkIn.includes('Programme planning check-in after 20 minutes (2)'));
-  assert.match(checkIn, /Keep cutting README\.md: one or more goals per part, each naming its part/u);
-  assert.match(checkIn, /Write each goal's stand on every rule area and move it to build/u);
+// Retired with the planning session (order mc-parts-are-goals, Part 1): 'programmePlanPrompt cuts from README.md: its
+// source, part-named goals, copied sections, an unchanged part kept, a proposal on an open choice' protected what the
+// headless plan session was told: README.md as its source, one goal per part named by a labelled document, nothing
+// invented, every goal moved to build, and its check-in. No session cuts an order now; what a session on a goal the
+// runner cut is told is below.
+test('the build, repair and mend prompts of a goal that is a part give the part under its heading line, and the build is told which section of its role applies; any other goal is briefed as before', () => {
+  const args = { name: 'p/g', dir: '/goal', worktree: '/goal/repo', branch: 'goal/g' };
+  const brief = 'PART 2 — Two, as README.md has it now\n\n### Part 2 — Two\n\nSolution: the second thing.\n\n# p\n\n## Order\n\nIn sequence.\n';
+  const lead = 'The goal is Part 2 of its programme\'s order and holds no text of its own. This is the part, and after it the order\'s sections outside its parts, as README.md has them now:\n\n';
+  const role = 'Your goal is a part of an order: the section "A goal that is a part" of your role applies, and what the role says about criteria, obligations, evidence records and goal defects does not.';
+  const build = goalPrompt({ ...args, brief, part: 2 });
+  assert.ok(build.endsWith(`${lead}${brief.trimEnd()}`), build);
+  assert.ok(build.includes(`Your role says the rest. ${role}\n\n`), 'the build is told which section of its role applies');
+  const repair = goalRepairPrompt({ ...args, brief, part: 2, verdict: 'head: repo abc123\nchange: NOT OK — the refusal is missing\n' });
+  for (const text of [role, `${lead}${brief.trimEnd()}`, 'This is a repair build. Read /goal/REVIEW.md.', 'change: NOT OK — the refusal is missing']) assert.ok(repair.includes(text), text);
+  const mend = goalMendPrompt({ ...args, stage: 'merge', brief, part: 2 });
+  assert.ok(mend.endsWith(`${lead}${brief.trimEnd()}`), mend);
+  assert.equal(mend.includes('A goal that is a part'), false, 'the mend role has no such section');
+  for (const told of [build, repair]) assert.doesNotMatch(told, /as `mc goal show` renders it/u);
+  const other = goalPrompt({ ...args, brief: '# Title\n\nCRITERIA 0/1\n' });
+  assert.ok(other.endsWith('Your role says the rest.\n\nThe goal, as `mc goal show` renders it:\n\n# Title\n\nCRITERIA 0/1'), other);
+  assert.equal(goalPrompt(args), 'You are a session on the goal p/g. Its directory is `/goal`, with GOAL.json and LOG.md; your worktree is `/goal/repo`, on branch `goal/g`. Your role says the rest.');
+});
+
+// Order mc-parts-are-goals, Parts 2 and 3: the review of a goal that is a part asks one question and writes one line.
+test('the review prompt of a goal that is a part names the role\'s section for it and asks for no write-back, seen or untouched line; a later round still names the previous heads and the NOT OK line; any other goal is asked as before', () => {
+  const args = { name: 'p/g', dir: '/goal', worktree: '/goal/repo', branch: 'goal/g', pr: 1, head: 'def456' };
+  const brief = 'PART 2 — Two, as README.md has it now\n\n### Part 2 — Two\n\nSolution: the second thing.\n\n# p\n';
+  // What the runner would hand a goal of the old form: none of it is said to the review of a part.
+  const asked = { tripped: [{ area: 'repo/system', repo: 'repo', files: ['src/a.js'] }], trippedError: 'areas unreadable', seen: ['repo/app'], seenError: 'areas unreadable', writeBack: true };
+  const first = goalReviewPrompt({ ...args, ...asked, brief, part: 2 });
+  assert.ok(first.startsWith('You review the goal p/g. Its directory is `/goal`, with GOAL.json and LOG.md; its worktree is `/goal/repo`, on branch `goal/g`. Its pull request is #1, at head def456: that head is what you judge. Your role says the rest. The goal is a part of an order: the section "A goal that is a part" of your role applies, and what the role says about criteria, obligations, areas, seen and write-back lines does not.\n\nThe goal is Part 2 of its programme\'s order'), first);
+  assert.ok(first.endsWith(brief.trimEnd()), 'then the part');
+  assert.doesNotMatch(first, /`write-back`|write-back: |`seen |seen repo\/app|untouched <area>|repo\/system|areas unreadable|shots\//u, 'no write-back, seen or untouched line is asked');
+  const later = goalReviewPrompt({ ...args, ...asked, brief, part: 2, verdict: 'head: repo abc123\npart: NOT OK — the refusal is not printed; src/a.js\n' });
+  assert.ok(later.includes('does not.\n\nThe previous review judged:\nhead: repo abc123\nIts NOT OK items:\npart: NOT OK — the refusal is not printed; src/a.js\n\nThe goal is Part 2'), later);
+  assert.doesNotMatch(later, /write-back: OK|untouched <area>|shots\//u);
+  // The order's last goal, Documentation, is reviewed the same way: its role section named, no write-back line asked.
+  const task = 'DOCUMENTATION — the last goal of programme p\n\nEvery part of the order has landed.\n\n# p\n';
+  const last = goalReviewPrompt({ ...args, ...asked, brief: task, documentation: true });
+  assert.ok(last.includes('Your role says the rest. The goal is the last goal of an order, Documentation: the section "A goal that is a part" of your role applies, and what the role says about criteria, obligations, areas, seen and write-back lines does not.\n\nThe goal is the last goal of its programme\'s order, Documentation, and holds no text of its own. This is its task, and after it the order as README.md has it now:\n\nDOCUMENTATION — the last goal of programme p'), last);
+  assert.doesNotMatch(last, /`write-back`|write-back: |untouched <area>|shots\//u);
+  const other = goalReviewPrompt({ ...args, ...asked, brief: '# Title\n' });
+  for (const text of ['write an `untouched <area>` line for each:\nrepo/system: src/a.js', 'seen repo/app: OK — shots/<name>.png', 'REVIEW.md also holds one `write-back` line', 'The goal, as `mc goal show` renders it:']) assert.ok(other.includes(text), text);
+  assert.equal(other.includes('A goal that is a part'), false);
 });
 
 describe('the agy-stream reader (fixtures in tests/fixtures/agy, synthesised from the documentation: see its README)', () => {

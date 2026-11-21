@@ -48,8 +48,8 @@ anything else is a programme order or a repair programme. A text Martin holds
 changes only on his word.
 
 Planning at the desk is done in programme orders. A goal is the build's
-construction for dividing an order into buildable pieces: the planner cuts
-goals from a ready programme's page, and the desk meets a goal only when it
+construction for dividing an order into buildable pieces: code cuts one goal
+per part of a ready programme's page, and the desk meets a goal only when it
 has stopped (waiting in status `Martin`, wrong, or stuck).
 
 ## Opening
@@ -234,7 +234,7 @@ preparation, decisions and the interactive desk. Its schema is
 `source_at`. Kinds are `goal` (`<programme>/<goal>`), `main-red`
 (`main-red:<repo>/<id>`), `decision` (`decision:<at>`), `lesson`
 (`lesson:<name>`, written only by `mc martin lesson brief`, never by sync), `text`
-(`text:<the text>`, written only by `mc martin propose`, never by sync) and `programme` (`programme:<programme>`, written only by the runner when a programme's planning turn has failed twice; see below) and `manager` (`manager:<slug>`, written by the manager's removed horizon turn and never now; an old one closes by source, see below) and `archive` (`archive:<programme>`, written only by the runner when a finished programme's write-back reading found a gap, failed twice or found restricted data; see below). A goal's source time
+(`text:<the text>`, written only by `mc martin propose`, never by sync) and `programme` (`programme:<programme>`, written only by the runner when the cut of a ready programme into goals has failed twice; see below) and `manager` (`manager:<slug>`, written by the manager's removed horizon turn and never now; an old one closes by source, see below) and `archive` (`archive:<programme>`, written only by the runner when a finished programme's write-back reading found a gap, failed twice or found restricted data; see below). A goal's source time
 is the time of its current question: its newest structured ask (`Martin is asked:`), else its newest goal-defect or runner-stop entry (`goal defect:`, `no progress:`), else the entry that set it `Martin`. A later question is a distinct item; a later entry that only carries status `Martin` — an account, a takeover note, a criterion rewrite — is not a question, supersedes nothing and opens nothing. A `decision:<at>` item opens for a new ledger row of `mc ask` whose chosen key differs from the recommendation and for every unread row (`answered_by: "session"`), with the answer's who and why ([mc-jev.md](mc-jev.md), *The ledger*).
 Fields are `schema`, `version`, `id`, `kind`, `reference`, `source_at`,
 `opened_at`, `state`, `sort`, `reversible`, `due_at` and `outcome`; a text item
@@ -263,16 +263,16 @@ resolution. One absence is resolution: a goal whose directory has left `goals/` 
 established later question; a main-red closes only on readable state showing
 that its entry no longer waits. Chores syncs once each round.
 
-A `programme` item is the programme planning turn's second failure
-([mc-run.md](mc-run.md#programme-planning-turn)): the first is `prepared` with a
+A `programme` item is the second failure of a ready order's cut into goals
+([mc-run.md](mc-run.md#the-cut-of-a-ready-order)): the first is `prepared` with a
 model-free `prepared.md`, a later one `for-martin` (sort mechanical, not
 reversible, no due time) with a Swedish `brief.md`. Its source is the
-programme's record, directory and goals, and the turn's state file
+programme's record, directory and goals, and the cut's state file
 `runner/programme-turn/<programme>.json`. Sync closes it by source when the
 goals name every part of its README.md, its record no longer reads valid and
 `ready` (an old `open` reads ready), or its directory is gone; an unreadable state file is reported and keeps it open (an
 unreadable record reads invalid and closes it). A decision session answers it at its source: it repairs what failed within
-reach and closes it `--by decision`, so the runner plans again, and a text of
+reach and closes it `--by decision`, so the runner cuts again, and a text of
 Martin's that would have to change goes to a brief. The opening lists one decided
 under the programme's name, and a `for-martin` one, being mechanical, among the
 stuck items of **Not ready**: it is the runner's, not his.
@@ -434,7 +434,7 @@ the state is `reached`.
 today, binding decisions, numbered gaps with reading locations, and what is
 not decided. Playback prerequisites cite gap numbers. Anything not yet
 designed (including “polished”) belongs under not decided and is settled in
-a programme document, never by the planner. Horizon show prints the basis
+a programme document, never by a session that builds it. Horizon show prints the basis
 path after playback; code does not parse, migrate or automatically read it.
 
 **Changing the wording.** The playback of an open horizon is changed by editing

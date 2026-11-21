@@ -3,9 +3,11 @@
  * the first preferred.
  *
  * `build` is the one list a goal's build sessions run on; goals have no class. The role
- * lists — `review`, `finish`, `mend`, `plan`, `manager` and `decision` — each route their
+ * lists — `review`, `finish`, `mend`, `manager` and `decision` — each route their
  * own unattended role (ruling 59 § 2 for review; the 2026-11-09 ruling for the others).
- * None of them falls back to `build`.
+ * None of them falls back to `build`. There was a `plan` list for the headless plan session
+ * that cut a ready order; the cut is code now (Martin, 2026-11-21), so a file that still
+ * holds the list reads, the list is ignored, and it is not written back.
  *
  * A file written when builds had the classes `fast`, `medium` and `large` reads its
  * `build` as its `large` list, else `medium`, else `fast` (the one Martin kept, 2026-11-21);
@@ -14,7 +16,7 @@
  * A file whose `review` is one candidate object, as every catalog was before
  * review became a list, reads as a list of that one candidate; it is written
  * back as a list the first time `mc model` changes the file. A file that lacks
- * `finish`, `mend`, `plan`, `manager` or `decision` reads that list from the defaults, and
+ * `finish`, `mend`, `manager` or `decision` reads that list from the defaults, and
  * is written back with every list the first time `mc model` changes it.
  *
  * It is a file the person owns — `~/mc/runner/models.json` — and mc writes it
@@ -51,13 +53,15 @@ export const BUILD_LISTS = Object.freeze(['build']);
 /** The retired work classes, read from an older file as `build` and never written. */
 export const LEGACY_CLASSES = Object.freeze(['large', 'medium', 'fast']);
 /** The role lists, each routing its own unattended role. `set` replaces one whole. */
-export const ROLE_LISTS = Object.freeze(['review', 'finish', 'mend', 'plan', 'manager', 'decision']);
+export const ROLE_LISTS = Object.freeze(['review', 'finish', 'mend', 'manager', 'decision']);
+/** The list of the removed headless plan session: read from an older file and ignored, never written. */
+const RETIRED_LISTS = Object.freeze(['plan']);
 /** Every list the catalog holds. `mc model add` and `remove` take any of them. */
 export const LISTS = Object.freeze([...BUILD_LISTS, ...ROLE_LISTS]);
 /** The lists a file may lack, which then read as their defaults. `review` is required, as it always was. */
-const DEFAULTED_LISTS = Object.freeze(['build', 'finish', 'mend', 'plan', 'manager', 'decision']);
+const DEFAULTED_LISTS = Object.freeze(['build', 'finish', 'mend', 'manager', 'decision']);
 export const TOOLS = Object.freeze(implementedTools());
-const DOCUMENT_KEYS = Object.freeze(['schema', 'version', ...LISTS, ...LEGACY_CLASSES, 'provider_priority']);
+const DOCUMENT_KEYS = Object.freeze(['schema', 'version', ...LISTS, ...RETIRED_LISTS, ...LEGACY_CLASSES, 'provider_priority']);
 export const PROVIDER_PRIORITIES = Object.freeze(providerPriorities());
 const CANDIDATE_KEYS = Object.freeze(['tool', 'model', 'effort']);
 const LOCK_POLL_MS = 50;
@@ -78,7 +82,6 @@ export const DEFAULT_CATALOG = Object.freeze({
   review: Object.freeze([candidate('agy', 'gemini-4-argon-high', 'high'), candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.2-sol', 'medium')]),
   finish: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.2-sol', 'high')]),
   mend: Object.freeze([candidate('codex', 'gpt-6.2-sol', 'high'), candidate('claude', 'opus', 'medium')]),
-  plan: Object.freeze([candidate('codex', 'gpt-6.2-sol', 'high'), candidate('claude', 'opus', 'high')]),
   manager: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.2-sol', 'medium')]),
   decision: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.2-sol', 'high')]),
 });

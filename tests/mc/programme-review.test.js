@@ -36,7 +36,7 @@ import { currentRepairReview } from '../../src/mc/repair-review.js';
 import { reopenRepair, repairReleaseState } from '../../src/mc/repair-release.js';
 import { archivedProposal, readRepairSource, settleRepairSources } from '../../src/mc/repair-sources.js';
 import { repairGoalAdmission } from '../../src/mc/repair-reconcile.js';
-import { finishTurn, programmeDue } from '../../src/mc/programme-turn.js';
+import { programmeDue, REPAIR_NOT_CUT } from '../../src/mc/programme-turn.js';
 import { realLock } from '../../src/mc/runner-lock.js';
 import { goalJson } from './_helpers/goal-file.js';
 
@@ -195,7 +195,8 @@ test('mc repair re-reviews a revision, releases it, and resumes source archival 
   const record = () => readRecord(dir).record;
   const released = record().repair.release.revision;
   const due = programmeDue({ programme: 'restore', home, list: listDirsOf, read: readTextOrNull, state: { status: 'none' } });
-  assert.equal(due.revision, released);
+  assert.deepEqual([due.due, due.reason, due.notice], [false, REPAIR_NOT_CUT, `restore: ${REPAIR_NOT_CUT}`], 'the release is unreconciled, and no code cuts a repair release');
+  assert.match(released, /^[a-f0-9-]{36}$/u);
   assert.equal(record().state, 'ready');
 
   rmSync(join(target, '..'));
@@ -428,7 +429,7 @@ for (const edit of ['binding design', 'shared End', 'interrupted cut', 'interrup
     const first = record().repair.release.revision;
     const sources = record().repair.sources;
     const planner = plan();
-    assert.equal(readsDue().revision, first);
+    assert.deepEqual([readsDue().due, readsDue().reason], [false, REPAIR_NOT_CUT], 'a released order nobody has reconciled is not cut by code');
     for (const args of [
       newArgs('restore'), ['document', 'add', 'p/restore', '--label', 'Part 1', '--path', pagePath],
       ['set', 'p/restore', 'goal', '--text', 'Restore settled row order.'],
@@ -446,7 +447,7 @@ for (const edit of ['binding design', 'shared End', 'interrupted cut', 'interrup
     } else {
       const firstReconciled = await reconcile();
       assert.equal(firstReconciled.code, 0, firstReconciled.err);
-      assert.equal(finishTurn({ ...seams, revision: first }).kind, 'cut');
+      assert.equal(readsDue().reason, 'its release is reconciled');
       assert.equal(admitted().release.revision, first);
     }
 
@@ -501,7 +502,7 @@ for (const edit of ['binding design', 'shared End', 'interrupted cut', 'interrup
     assert.equal(readFileSync(goalPath, 'utf8'), goalBeforeResume);
     assert.equal(readFileSync(pagePath, 'utf8'), order, 'resume does not rewrite the reviewed order');
     assert.notEqual(first, second);
-    assert.equal(readsDue().revision, second, 'even though Part 1 already has a runnable goal');
+    assert.equal(readsDue().reason, REPAIR_NOT_CUT, 'the new release is unreconciled, even though Part 1 already has a runnable goal');
     assert.match(admitted().problems[0], /not reconciled/u);
     const unchanged = await reconcile();
     assert.equal(unchanged.code, 1);

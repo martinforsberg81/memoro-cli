@@ -29,7 +29,7 @@ described once, in memoro's (or memoro-cli's) `docs/technical/`: the only
 description of what the app does, with contracts, rules and budgets that hold
 for every programme. What is being built — decisions, findings and design while
 the work is under way — is in `~/mc/programs/<programme>/`: its README and
-goals. When a goal lands, its work writes the functionality into
+goals. The programme's last goal writes the functionality into
 `docs/technical/`, and the programme README drops what `docs/technical/` now
 describes. No session writes `docs/project/`; it is history. A goal narrows
 these for its own work and never contradicts them. Where one of them answers a

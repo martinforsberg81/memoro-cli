@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
 import { jevContext, refusedMove, run, usage } from '../../../src/mc/commands/goal.js';
-import { addGoalWorktree, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, renderGoalText, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
+import { addGoalWorktree, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, renderGoal, renderGoalText, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
 import { BUILD_ROLES, tsvHeader, tsvRow } from '../../../src/mc/run-plan.js';
 import { seenAreas } from '../../../src/mc/review-verdict.js';
 import { runModule } from '../../../src/mc-verbs.js';
@@ -2206,7 +2206,7 @@ test('mc goal new without MC_HEADLESS holds the draft from creation: the hold is
   const entries = parseLog(f.store[`${DIR}/LOG.md`]);
   assert.equal(entries.length, 1, 'one entry');
   assert.match(entries[0].comment, /^held from creation/u);
-  assert.match(f.out(), /^  held from creation: mc goal stage mc\/plain build moves it on and frees it; mc goal release mc\/plain removes the hold: a draft naming a part of a ready programme is then finished by the programme planning turn, any other draft stays its writer's$/mu);
+  assert.match(f.out(), /^  held from creation: mc goal stage mc\/plain build moves it on and frees it; mc goal release mc\/plain removes the hold, and the draft stays its writer's to finish$/mu);
   assert.equal(stateOf(f), 'draft · ready');
 });
 
@@ -3665,4 +3665,154 @@ test('goal new refuses headless recordless creation but admits signed, legacy, a
     assert.equal(await run(newArgv, f.deps), 0, f.err());
     assert.equal(parseGoal(f.store[`${HOME}/mc/goals/fresh/GOAL.json`]).stage, 'draft');
   }
+});
+
+/* --------------------------------- a goal that is a part of an order (order mc-parts-are-goals, Parts 1 and 2) */
+
+const ORDER_AT = `${HOME}/mc/README.md`;
+const ORDER = '# mc — an order\n\nRepositories: memoro-cli, memoro.\n\n## Parts\n\n### Part 1 — One\n\n### Part 2 — Two & more\n\nSolution: the second thing.\n\n## Order\n\nOne, then two.\n';
+/** GOAL.json of the goal the runner cuts for Part 2 of ORDER: version 2, `part` 2, no criterion and no other text. */
+const partGoal = (fields = {}) => renderGoal({ version: 2, stage: 'build', status: 'ready', phase: 2, part: 2, repos: ['memoro-cli', 'memoro'], created: '2026-11-01T20:00:00Z', prs: [], title: 'Two & more', success_criteria: [], documents: [{ label: 'Part 2', path: ORDER_AT }], ...fields });
+const PART_LOG = '## 2026-11-01T19:00Z · runner · build · ready\n\nDone: cut from Part 2 of README.md\n';
+const partFiles = (extra = {}, fields = {}) => ({ [`${DIR}/GOAL.json`]: partGoal(fields), [`${DIR}/LOG.md`]: PART_LOG, [ORDER_AT]: ORDER, ...extra });
+const NO_DEFECT = 'mc: a build session reports no goal defect — write your reading in the log and build on it: mc goal log --comment "Read as: …"\n';
+
+test('a goal that is a part carries its part number through parse and render, after its phase; a version 1 goal may not carry one', () => {
+  const text = partGoal();
+  const goal = parseGoal(text);
+  assert.deepEqual([goal.part, goal.phase, goal.success_criteria, goal.outcome, goal.change, goal.obligations], [2, 2, [], [], [], []]);
+  assert.equal(renderGoal(goal), text, 'a parsed goal renders back to the same text');
+  assert.deepEqual(Object.keys(JSON.parse(text)).slice(0, 7), ['schema', 'version', 'stage', 'status', 'phase', 'part', 'repos']);
+  assert.equal(goalSession({ ...goal, log: [] }), 'build', 'the runner starts it without a criterion');
+  assert.equal(goalSession({ ...parseGoal(goalMinimalV2({ success_criteria: [] })), log: [] }), null, 'a goal of the old form with no criterion is still not started');
+  assert.deepEqual(parseGoal(withGoal(text, { part: 0 })).problems, ['part: the number of the part of the order the goal is, a whole number from 1, not 0']);
+  assert.deepEqual(parseGoal(withGoal(GOAL_TEXT, { part: 1 })).problems, ['part: unknown key']);
+  assert.equal('part' in parseGoal(goalMinimalV2()), false, 'a goal without the key has none');
+});
+
+test('a build session\'s mc goal defect on a goal that is a part is refused, exit 2, and leaves it build · ready; a goal of the old form and every other writer are as before', async () => {
+  for (const argv of [DEFECT, ['defect', 'mc/plain', '--part', 'Proved by', '--found', 'the test file is missing'], ['defect']]) {
+    const f = fixture({ files: partFiles(), env: BUILD });
+    assert.equal(await run(argv, f.deps), 2, argv.join(' '));
+    assert.equal(f.err(), NO_DEFECT, argv.join(' '));
+    assert.equal(f.out(), '');
+    assert.equal(stateOf(f), 'build · ready');
+    assert.deepEqual([f.store[`${DIR}/GOAL.json`], f.store[`${DIR}/LOG.md`]], [partGoal(), PART_LOG], 'nothing is written');
+  }
+  const old = fixture({ files: inStage('build'), env: BUILD });
+  assert.equal(await run(DEFECT, old.deps), 0, old.err());
+  assert.equal(stateOf(old), 'build · Martin', 'a goal written before keeps its defect report');
+  const person = fixture({ files: partFiles(), env: {} });
+  assert.equal(await run(['defect', 'mc/plain', '--part', 'Part 2', '--found', 'the desk sees a fault'], person.deps), 0, person.err());
+  assert.equal(stateOf(person), 'build · Martin', 'a person still reports one by name');
+});
+
+// Fault replayed: the published-head lines of `evidenceRefusal` skipped for a goal that is a part — the move with an
+// unpublished head is then made, and the `unpublished` assertion below fails on its exit code.
+test('a build session moves a goal that is a part to review with a clean worktree and a published head and no criterion; a dirty worktree or an unpublished head refuses it', async () => {
+  const handover = ['log', '--done', 'Part 2 built and published at bbbbbbbbbbbb.', '--comment', 'Proved: the second thing holds — mc gate tests/x.test.js — GREEN\nRead as: "more" is unclear — built as one more line', '--next', 'Review.', '--stage', 'review'];
+  for (const argv of [...MOVES_TO_REVIEW, handover]) {
+    const f = await callWith(argv, partFiles());
+    assert.equal(f.code, 0, `${argv.join(' ')}: ${f.err()}`);
+    assert.equal(stateOf(f), 'review · ready', argv.join(' '));
+    assert.equal(f.store[`${DIR}/.evidence.json`], undefined, 'no evidence record is asked for or written');
+  }
+  const entry = parseLog((await callWith(handover, partFiles())).store[`${DIR}/LOG.md`]).at(-1);
+  assert.deepEqual([entry.role, entry.stage, entry.done, entry.next], ['build', 'review', 'Part 2 built and published at bbbbbbbbbbbb.', 'Review.']);
+  assert.equal(entry.comment, 'Proved: the second thing holds — mc gate tests/x.test.js — GREEN\nRead as: "more" is unclear — built as one more line', 'the handover entry keeps its Read as line');
+
+  const dirty = worktreeGit({ heads: { ...TWO_HEADS }, dirty: ['memoro'] });
+  const unpublished = worktreeGit({ heads: { ...TWO_HEADS } });
+  delete unpublished.published.memoro;
+  const behind = worktreeGit({ heads: { ...TWO_HEADS, memoro: sha('c') }, published: { ...TWO_HEADS } });
+  for (const [label, git, said] of [
+    ['dirty', dirty, /mc\/plain is not moved to review — its worktrees are not clean at a published head —\n {2}memoro has uncommitted changes — commit them, then publish that head with mc publish --no-merge\n$/u],
+    ['unpublished', unpublished, /memoro: goal\/plain is not published \(no refs\/remotes\/origin\/goal\/plain\) — publish it with mc publish --no-merge/u],
+    ['behind', behind, /memoro: HEAD cccccccccccc is not the published goal\/plain \(bbbbbbbbbbbb\) — publish it with mc publish --no-merge/u],
+  ]) {
+    for (const argv of MOVES_TO_REVIEW) {
+      const f = await callWith(argv, partFiles(), { git });
+      assert.equal(f.code, 1, `${label}: ${argv.join(' ')}`);
+      assert.match(f.err(), said, label);
+      assert.doesNotMatch(f.err(), /criterion|evidence/u, `${label}: nothing is asked of a goal that holds no criterion`);
+      assert.equal(stateOf(f), 'build · ready', label);
+      assert.equal(f.store[`${DIR}/LOG.md`], PART_LOG, `${label}: nothing written`);
+    }
+  }
+  const absent = await callWith(MOVES_TO_REVIEW[0], partFiles(), { absent: [`${DIR}/memoro`] });
+  assert.equal(absent.code, 1);
+  assert.match(absent.err(), /memoro has no worktree at /u);
+  // A goal written before keeps today's refusals: no criterion is refused, and a dirty worktree is not asked about at the move.
+  const bare = await callWith(MOVES_TO_REVIEW[0], v2Files({}, { success_criteria: [] }));
+  assert.equal(bare.code, 1);
+  assert.match(bare.err(), /mc\/plain is not moved to review — mc\/plain has no criterion — mc goal criterion add mc\/plain/u);
+  assert.equal((await callWith(MOVES_TO_REVIEW[0], v2Files(fullEvidence()), { git: worktreeGit({ heads: { ...TWO_HEADS }, dirty: ['memoro'] }) })).code, 0);
+});
+
+// Order mc-parts-are-goals, Part 3: the programme's last goal is cut from the order as a part's goal is, and is treated as one.
+test('the documentation goal carries its mark through parse and render, is shown as its task and the order whole, moves to review with no criterion, and takes no defect from a build session', async () => {
+  const text = partGoal({ part: undefined, documentation: true, phase: 3, title: 'Documentation', documents: [{ label: 'The order', path: ORDER_AT }] });
+  const goal = parseGoal(text);
+  assert.deepEqual([goal.documentation, goal.part, goal.phase, goal.success_criteria], [true, undefined, 3, []]);
+  assert.equal(renderGoal(goal), text, 'a parsed goal renders back to the same text');
+  assert.deepEqual(Object.keys(JSON.parse(text)).slice(0, 7), ['schema', 'version', 'stage', 'status', 'phase', 'documentation', 'repos']);
+  assert.equal(goalSession({ ...goal, log: [] }), 'build', 'the runner starts it without a criterion');
+  assert.deepEqual(parseGoal(withGoal(text, { documentation: false })).problems, ['documentation: true on the last goal of an order and absent on every other, not false']);
+  assert.deepEqual(parseGoal(withGoal(GOAL_TEXT, { documentation: true })).problems, ['documentation: unknown key']);
+  const files = () => ({ ...partFiles(), [`${DIR}/${GOAL_FILE}`]: text });
+
+  const f = fixture({ files: files() });
+  assert.equal(await run(['show', 'mc/plain'], f.deps), 0, f.err());
+  assert.ok(f.out().startsWith(`mc/plain · build · ready · phase 3 · memoro-cli, memoro · criteria 0/0 · created 2026-11-01T20:00:00Z\n\nDOCUMENTATION — the last goal of programme mc\n\nEvery part of the order has landed. Read the order below, the LOG.md of every goal of the programme (in ${HOME}/mc/goals/.archive/ and goals/), with its "Read as:" lines, and what landed: the pull requests named in ${HOME}/mc/goals/goal_log.md and their commits on origin/main.\n\nWrite docs/technical/ in each repository of the programme so that it describes what now runs:`), f.out());
+  assert.ok(f.out().includes(`say why in the log and end.\n\n${ORDER}\nLOG\n`), 'then the order whole, every part in it');
+
+  const moved = await callWith(MOVES_TO_REVIEW[0], files());
+  assert.equal(moved.code, 0, moved.err());
+  assert.equal(stateOf(moved), 'review · ready');
+  const dirty = await callWith(MOVES_TO_REVIEW[0], files(), { git: worktreeGit({ heads: { ...TWO_HEADS }, dirty: ['memoro'] }) });
+  assert.equal(dirty.code, 1);
+  assert.match(dirty.err(), /its worktrees are not clean at a published head —\n {2}memoro has uncommitted changes/u);
+
+  const build = fixture({ files: files(), env: BUILD });
+  assert.equal(await run(DEFECT, build.deps), 2);
+  assert.equal(build.err(), NO_DEFECT);
+  assert.equal(stateOf(build), 'build · ready');
+});
+
+test('mc goal show of a goal that is a part prints its header, then its part and the shared sections as README.md has them now; mc goal list says when its part has left the order', async () => {
+  const f = fixture({ files: partFiles() });
+  assert.equal(await run(['show', 'mc/plain'], f.deps), 0, f.err());
+  const shown = f.out();
+  assert.ok(shown.startsWith('mc/plain · build · ready · phase 2 · memoro-cli, memoro · criteria 0/0 · created 2026-11-01T20:00:00Z\n\nPART 2 — Two & more, as README.md has it now\n\n### Part 2 — Two & more\n\nSolution: the second thing.\n\n# mc — an order\n\nRepositories: memoro-cli, memoro.\n'), shown);
+  assert.ok(shown.includes('## Order\n\nOne, then two.\n\nLOG\n'), 'the shared sections, then the log as for any goal');
+  assert.doesNotMatch(shown, /OUTCOME|OBLIGATIONS|CRITERIA 0\/0\n|none yet|### Part 1/u, 'no rendered goal text and no other part');
+  assert.match(shown, /\nWORKTREES\n/u);
+  // The part is read as it stands at each call.
+  f.store[ORDER_AT] = ORDER.replace('Solution: the second thing.', 'Solution: the second thing, said better.');
+  const before = f.out().length;
+  assert.equal(await run(['show', 'mc/plain'], f.deps), 0);
+  assert.ok(f.out().slice(before).includes('Solution: the second thing, said better.\n\n# mc — an order'));
+
+  const listed = async (g) => { const from = g.out().length; assert.equal(await run(['list', 'mc'], g.deps), 0, g.err()); return g.out().slice(from).trim().split('\n'); };
+  assert.deepEqual(await listed(f), ['mc · phase 2 · in progress', '  mc/plain · memoro-cli,memoro · build · ready · criteria 0/0 · 0 sessions · —'], 'a goal that is a part is not "no criteria — not started"');
+  f.store[ORDER_AT] = ORDER.replace(/### Part 2 — Two & more[\s\S]*?(?=## Order)/u, '');
+  assert.equal((await listed(f))[1], '  mc/plain · memoro-cli,memoro · build · ready · criteria 0/0 · 0 sessions · its part has left the order — restore Part 2 in README.md or drop the goal');
+  const gone = f.out().length;
+  assert.equal(await run(['show', 'mc/plain'], f.deps), 0);
+  assert.ok(f.out().slice(gone).includes('\n\nits part has left the order — restore Part 2 in README.md or drop the goal\n'));
+  assert.equal(stateOf(f), 'build · ready', 'nothing is dropped by code');
+  // A landed goal whose part is edited away afterwards says nothing of it.
+  const landed = fixture({ files: partFiles({ [ORDER_AT]: f.store[ORDER_AT] }, { stage: 'done' }) });
+  assert.equal((await listed(landed))[1], '  mc/plain · memoro-cli,memoro · done · ready · criteria 0/0 · 0 sessions · —');
+});
+
+test('a programme whose goals are parts takes any phase: mc goal new and mc goal phase leave the holes that part numbers leave', async () => {
+  const f = fixture({ files: partFiles() });
+  assert.equal(await run(['new', 'mc/by-hand', '--repo', 'memoro', '--title', 'T', '--phase', '5'], f.deps), 0, f.err());
+  assert.equal(goalField(f.store[`${HOME}/mc/goals/by-hand/GOAL.json`], 'phase'), 5);
+  assert.equal(await run(['phase', 'mc/by-hand', '7'], f.deps), 0, f.err());
+  assert.deepEqual([goalField(f.store[`${HOME}/mc/goals/by-hand/GOAL.json`], 'phase'), goalField(f.store[`${DIR}/GOAL.json`], 'phase')], [7, 2], 'nothing is renumbered');
+  const plain = fixture({ files: seededGoal() });
+  assert.equal(await run(['new', 'mc/later', '--repo', 'memoro', '--title', 'T', '--phase', '5'], plain.deps), 2);
+  assert.match(plain.err(), /phase 5 would leave a hole/u, 'any other programme keeps the rule');
 });

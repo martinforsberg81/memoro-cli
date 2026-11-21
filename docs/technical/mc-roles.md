@@ -62,11 +62,11 @@ There are two catalogues, and they are looked up in that order:
 
 What canon holds today: five stage/goal roles, each one file, plus the Martin desk, preparation, decision and ask-reader roles and the three that
 stay apart (Martin, 2026-11-03, goal `plan-session-roles`: a role says what
-the session is for; a verb file says how a verb is used). Plan supports interactive planning and the runner's programme planning turn. Mend retains its former delivery recovery work (Martin, 2026-11-07 and 2026-11-09). The finish role was removed on 2026-11-15: a rejected goal returns to build, and `finish` is a name kept for old records (their stage, their run rows, the `finish` model list).
+the session is for; a verb file says how a verb is used). Plan supports interactive planning; the runner starts no plan session, and cuts a ready order by code. Mend retains its former delivery recovery work (Martin, 2026-11-07 and 2026-11-09). The finish role was removed on 2026-11-15: a rejected goal returns to build, and `finish` is a name kept for old records (their stage, their run rows, the `finish` model list).
 
 | role | model | started as | who launches it |
 |---|---|---|---|
-| `plan-session` | opus | `plan` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; the runner also runs it as the programme planning turn of a ready programme |
+| `plan-session` | opus | `plan` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; the runner never starts it |
 | `programme-review` | sonnet | `programme-review` | `mc programs review`, called by Martin's interactive session for an advisory reading or by the assigned repair author for a release receipt; never scheduled by the runner; review catalogue/author exclusion, 30-minute limit and no cap ([mc-plan.md](mc-plan.md#programme-state-and-advisory-reading)) |
 | `ask-reader` | opus | `ask-reader` | `mc ask`, when jev did not settle a question: one fresh headless read-only session, in a read-only copy of the asker's worktree, on the `decision` list (not the asker's own model when another can run), limit 10 minutes; never the runner. It may use only `mc goal show\|list\|areas` and `mc ask answer`, and its run row (kind `ask-reader`) counts under the desk's daily ceiling ([mc-jev.md](mc-jev.md) § *The reader*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build`, a repair build when a review rejected it ([mc-goals.md](mc-goals.md) § *Repair and mend*) |
@@ -256,6 +256,23 @@ ends at an item boundary only when done, blocked, or cheaper to continue in a
 fresh session. A review judges the goal's criteria and PR head; it never
 builds. `roles.test.js` holds the selected parts and their shared instructions.
 
+An overlay is chosen by the role's name and part, never by the form of the
+goal. A goal that is a part of an order ([mc-goals.md](mc-goals.md#a-goal-that-is-a-part))
+is therefore built with the same `build-session:goal` part, which carries one
+section for it, *A goal that is a part*: read the whole part and the log, write
+each reading of something unclear as a `Read as:` line and build on it, report
+no goal defect, hand over with one entry, and in a repair fix each rejected
+line and every other place with the same fault. The prompt of such a goal says
+that this section applies and that what the role says about criteria,
+obligations, evidence records and goal defects does not (`goalPrompt`,
+`run-plan.js`). The `review-session:goal` part carries a section of the same
+name: one question, does the build do what the part says, and a `REVIEW.md` of
+the head lines and one `part` line; its prompt says that what the role says
+about criteria, obligations, areas, seen and write-back lines does not apply
+(`goalReviewPrompt`). Both sections also serve the order's last goal,
+Documentation: a build on a part writes no `docs/technical/` page, that goal
+does, and its review asks whether the pages describe what the programme built.
+
 Planning aims for a goal a build session can reasonably hand to independent
 review in one turn, not a new limit. When a build continues, its goal log records
 the concrete implemented or verified result and a specific remaining task in
@@ -275,11 +292,10 @@ a producer is in build in a dependent phase; a brief with unresolved planning
 prerequisites stays draft. Within that it has, in
 principle, full freedom to move the programme toward the aim, a goal's branch
 included: it may finish a goal's work itself when that is quicker than a new
-build session. That freedom is interactive. The runner runs the same role headless only as
-the programme turn of a ready programme
-([mc-run.md](mc-run.md#programme-planning-turn); Martin, 2026-11-15 and
-2026-11-21), with `MC_HEADLESS=1` and `MC_PROGRAMME`: it cuts every part of
-README.md into a goal and moves each to build. It names
+build session. That freedom is interactive. The runner does not run the role:
+code cuts a ready order into one goal per part, with no session
+([mc-run.md](mc-run.md#the-cut-of-a-ready-order); Martin, 2026-11-21), and the
+role's section *The headless programme turn* says only that. It names
 the headless roles and what each owns, so it knows the goal's text is its
 own and a headless session's `Martin` is a question for it. A goal
 is what the runner builds, a means toward the aim. `refusedMove`
@@ -458,7 +474,7 @@ accompanies programme-owned launches; `MC_GOAL` identifies a goal. Desks are
 `martin` and the eye's `intake`; `manager` is launched headless, by the runner or by a person. The launch clears inherited session
 identity first so the child cannot inherit the caller's job by accident.
 Runner roles are `build-session:goal`, `review-session:goal`
-and `mend-session`; `plan` serves interactive planning and the programme planning turn.
+and `mend-session`; `plan` serves interactive planning only.
 
 `sessionIdentity` (`src/mc/session-role.js`) reads MC_ROLE first, then
 MC_GOAL, then cwd. Programme directories identify plan sessions; their

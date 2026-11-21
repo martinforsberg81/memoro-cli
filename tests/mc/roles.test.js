@@ -420,6 +420,26 @@ describe('the build role', () => {
     }
   });
 
+  // Order mc-parts-are-goals, Part 2: a goal that is a part is read, decided and handed over by its build session.
+  it('tell a build on a goal that is a part to read it and build on its reading, that it reports no goal defect, and that a repair repairs the same fault everywhere', () => {
+    const text = told(BUILD_ROLES.goal).replace(/\s+/gu, ' ');
+    assert.ok(text.includes('## A goal that is a part'), 'the section the prompt of such a goal names');
+    assert.ok(text.includes('Where the part is unclear, contradicts itself or contradicts the code, choose the reading that gives the user what Closes, Solution and Design describe, write it in the log as a line beginning `Read as:`, and build on it.'));
+    assert.ok(text.includes('You report no goal defect: mc refuses `mc goal defect` from a build session on such a goal.'));
+    assert.ok(text.includes('In a repair, repair each rejected line of `REVIEW.md` and every other place in your change that has the same fault.'));
+    assert.ok(text.includes('Read the whole part and `LOG.md` first.'));
+    assert.ok(text.includes('The move asks only for a clean worktree in every repository of the goal and a published head.'));
+    assert.match(told(BUILD_ROLES.goal), /Done: Part <n> built and published at <sha>\.\nComment: Proved: <the Proved by sentence it answers> — <command> — <result>\nRead as: <what was unclear> — <the reading built>\nNext: Review\./u, 'the handover entry, in the order\'s form');
+  });
+
+  // Order mc-parts-are-goals, Part 2: the review prompt of a goal that is a part names this section, and mc asks for the line it gives.
+  it('tell a review of a goal that is a part to ask whether the build does what the part says and to write the one part line', () => {
+    const text = told(REVIEW_ROLE).replace(/\s+/gu, ' ');
+    assert.ok(text.includes('## A goal that is a part'), 'the section the prompt of such a goal names');
+    assert.ok(text.includes('You ask one question: does the build do what the part says?'));
+    assert.ok(text.includes('one line: `part: OK`, or `part: NOT OK — <what the part says that the build does not do, and where>`.'), 'the line checkVerdict asks for');
+  });
+
   it('write what every build shares once', () => {
     const carriers = readdirSync(canonRolesDir()).filter((file) => file.endsWith('.md'))
       .filter((file) => ONE_BRANCH.test(readFileSync(join(canonRolesDir(), file), 'utf8')));

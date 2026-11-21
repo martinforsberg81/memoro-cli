@@ -6,7 +6,8 @@
  * a goal's and have no variant. `plan` is read for the rows and lane files the
  * runner wrote before 2026-11-07, the interactive plan session, the rows of
  * the next-draft planning sessions the runner ran from 2026-11-09 to
- * 2026-11-21, and the runner's programme planning turn.
+ * 2026-11-21, and the rows of the programme planning turn it ran until the
+ * cut of a ready order became code.
  *
  * Everything a person reads names a session this way: the page, `mc --json`,
  * the runner's lane files and `runs.tsv`. `runs.tsv` has one `kind` column

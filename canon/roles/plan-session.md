@@ -58,70 +58,9 @@ to `mc martin`.
 
 ## The headless programme turn
 
-The plan session runs once: it takes the whole programme and cuts it into
-phases and goals, and all of them are then ready (Martin, 2026-11-21).
-
-When `MC_HEADLESS=1` and `MC_PROGRAMME` names a programme, you are that
-programme's planning turn: its record is `ready`, and `README.md` is the
-programme document. The launch prompt gives the programme directory, the
-horizon command when the record names a horizon, and read checkouts of the
-served repositories, detached at origin/main. Read `README.md` and
-`mc programs show <programme>`; open code only to name the files a part already
-implies. Change nothing in the checkouts, commit nothing and create no branch.
-
-The turn is short: the programme document is the plan, and you only carry it over.
-Cut one goal per part, in the Order's sequence as phases. The part's Closes
-says what is wrong today: it is the goal's `problem` item (basis `reported`),
-never its outcome. The goal's outcome is what is true once that is closed, in
-the words of the part's Solution and Design; its change is the part's Solution,
-its intended result the part's Design, one criterion per Proved by line with
-one check each, and the goal names its part: a document whose path is `README.md` of this programme,
-labelled `Part <n>`. You add nothing the part does not say: no investigation,
-no solution, design or decision of your own about what is delivered or how it
-looks, no proposal, and no extra items beyond what the verbs require. The builder
-settles the construction.
-
-Finish each goal and move it to `build`. Write its stand on every rule area
-(`mc goal areas <repo>` lists them; `mc goal obligation set <programme>/<goal>
-<area> --stand touched|untouched --text "…"`), saying only what the part says:
-`touched` where the part's Solution or Design changes the area, `untouched`
-elsewhere. Then `mc goal stage <programme>/<goal> build`. Every goal of the
-cut is in `build · ready` when you end; none is left in draft. A goal that
-waits for another is held by its phase alone: the phase order of a sequential
-programme, or `mc programs after` in a programme whose record states its
-phases. The runner starts a goal in build only when its phase is open.
-
-You do not verify the acceptance setup. The order carries an acceptance
-procedure with usable setup, which the desk checked before it set the order
-ready, and the build session establishes the check, the required capability
-and the named input in its own worktree; what it finds missing is its
-acceptance obstacle or a goal defect.
-
-Where goals exist from an earlier cut, a part unchanged since then keeps its
-goals; for a changed part a goal not yet in build is rewritten and moved to
-build, and a goal already built gets a new goal for the difference. A draft an
-earlier turn left is finished the same way.
-
-A line that asks for verification by Martin, on a Mac or on a device is never
-cut as a criterion (Martin, 2026-11-21): such verification is information in
-the horizon's basis, and an order that still carries one is left at the desk
-the same way as an open choice.
-
-Where a part leaves open a choice of what is delivered or how it looks, which
-the document neither shows nor routes, or has a step that waits on Martin
-between ready and done (a look, an acceptance, a trial, a word), do not make
-it or cut it as a waiting goal: leave it at the desk with
-`mc martin propose --text <programme>/README.md --file <brief>`, the brief in the
-desk's three parts (what the document says, what is missing, what was found), and
-end. A question that is not such a choice goes through goal-bound `mc ask` on the goal
-that needs it: jev, then a reader, answers it, and the other goals go on. Do not
-implement a goal or process proposals.
-
-The turn ends when you stop. It succeeds when goals name every part of
-README.md and none of them is still a ready, free draft. Any other ending counts as a
-failure: the runner runs the turn again while a part has no goal or a draft
-naming a part is ready and free (not held, not decision-claimed), and the
-second failure opens a desk item.
+There is none: code cuts a ready order, and no session does. The runner makes
+one goal for each part of `README.md` that has none, and every session on such
+a goal is given the part as it stands (mc-run.md, *The cut of a ready order*).
 
 Read the code and relevant `docs/technical/` contracts, programme README and design first. Apply the rules that already answer a question; what is left follows `tasks/asking-martin.md`. A technical gap within existing direction is resolved by planning and recorded. After an answer, amend the canonical standard and affected programme/goal contracts consistently.
 
@@ -221,7 +160,6 @@ A person opens a plan session to write goals: `mc goal new …` makes the draft
 while the brief is being written. Use `mc goal stage <p>/<g> build` when the
 brief is complete. A draft made in an interactive session is held from
 creation; moving it to `build` frees it, and `mc goal release` removes the hold
-without moving it. A released draft that names a part of a ready programme is
-finished by the programme turn; any other draft stays its writer's to finish.
+without moving it. A released draft stays its writer's to finish.
 
 @verb goal

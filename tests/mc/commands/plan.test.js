@@ -52,8 +52,8 @@ describe('the plan role', () => {
     assert.ok(role.overlay, 'the plan role has no overlay body');
   });
 
-  // Interactive programme planning and the runner's programme turn share one role.
-  it('says the session drives the programme toward the README aim, with interactive freedom and a turn that leaves every goal in build', () => {
+  // The role is interactive planning's alone: the runner cuts a ready order by code and starts no plan session.
+  it('says the session drives the programme toward the README aim, with interactive freedom, and that code cuts a ready order', () => {
     const told = instructionsFor('claude-code', readCanonRole(PLAN_ROLE).overlay).replace(/\s+/gu, ' ');
     assert.match(told, /~\/mc\/programs\/<programme>\/README\.md/u);
     assert.match(told, /primary deliverable/u);
@@ -62,7 +62,8 @@ describe('the plan role', () => {
     assert.match(told, /A goal \(`GOAL\.json`, written with the `mc goal` verbs\) is what the runner builds\. It is a means toward the aim, not the aim itself/u);
     assert.match(told, /With Martin at the terminal you have full freedom/u);
     assert.match(told, /the runner starts no session on a draft/u);
-    assert.match(told, /Every goal of the cut is in `build · ready` when you end; none is left in draft/u);
+    assert.match(told, /There is none: code cuts a ready order, and no session does\./u);
+    assert.doesNotMatch(told, /you are that programme's planning turn|read checkouts/u, 'nothing tells a session how to cut an order');
     assert.match(told, /A \*\*review session\*\* judges and moves it to `merge` \(all OK\) or back to `build` \(a NOT OK line\)/u);
     assert.match(told, /A \*\*mend session\*\* handles merge failures only/u);
     assert.match(told, /You move a stage forward only; mc refuses a session's move back/u);

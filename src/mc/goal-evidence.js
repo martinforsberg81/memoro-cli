@@ -16,6 +16,7 @@
 import { join } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
+import { cutFromOrder } from './goal-parts.js';
 import { goalBranch, readTextOrNull } from './goals.js';
 
 export const EVIDENCE_FILE = '.evidence.json';
@@ -148,7 +149,9 @@ export function publishedHeads({ goal, dir, name, git, states }) {
  * Why a build session's move to review is refused for want of evidence, or null: every problem named on its own line.
  * A repository with no worktree; a worktree whose HEAD is not the published one (naming `mc publish --no-merge`); a
  * criterion with no record or a record at another head (naming its check to run again); and, for a version 2 goal, a
- * preserve item or touched obligation with no record. The untouched obligations are not asked.
+ * preserve item or touched obligation with no record. The untouched obligations are not asked. A goal cut from an
+ * order (`cutFromOrder`) has none of those records: it is asked for a worktree per repository with nothing uncommitted and the
+ * published head, and nothing else.
  */
 export function evidenceRefusal({ goal, dir, name, git, exists, read }) {
   const { items, problem } = readEvidence(dir, read);
@@ -156,6 +159,8 @@ export function evidenceRefusal({ goal, dir, name, git, exists, read }) {
   const states = worktreeHeads({ goal, dir, git, exists });
   const lines = [];
   for (const state of states.filter((one) => !one.present)) lines.push(`${state.repo} has no worktree at ${state.path} — a build session moves a goal to review from its worktrees, one per repository`);
+  // A goal cut from an order has no record to be stale: its move asks for a clean worktree and a published head.
+  if (cutFromOrder(goal)) for (const state of states.filter((one) => one.dirty)) lines.push(`${state.repo} has uncommitted changes — commit them, then publish that head with mc publish --no-merge`);
   for (const one of publishedHeads({ goal, dir, name, git, states })) {
     if (one.published === null) lines.push(`${one.repo}: ${one.branch} is not published (no refs/remotes/origin/${one.branch}) — publish it with mc publish --no-merge`);
     else if (one.published !== one.head) lines.push(`${one.repo}: HEAD ${short(one.head)} is not the published ${one.branch} (${short(one.published)}) — publish it with mc publish --no-merge`);
@@ -173,7 +178,8 @@ export function evidenceRefusal({ goal, dir, name, git, exists, read }) {
   const { preserve, areas } = evidenceIds(goal);
   for (const id of preserve) if (!items[id]) lines.push(`${id} has no evidence — mc goal evidence ${name} ${id} --text "…"`);
   for (const area of areas) if (!items[`obligation ${area}`]) lines.push(`obligation ${area} has no evidence — mc goal evidence ${name} ${area} --text "…"`);
-  return lines.length ? `no evidence at the head it publishes —\n  ${lines.join('\n  ')}` : null;
+  if (!lines.length) return null;
+  return `${cutFromOrder(goal) ? 'its worktrees are not clean at a published head' : 'no evidence at the head it publishes'} —\n  ${lines.join('\n  ')}`;
 }
 
 /**

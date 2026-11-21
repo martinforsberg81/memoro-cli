@@ -214,4 +214,23 @@ the end while the goal is in review or no proposal is written, and says what
 is missing. A goal you have set `blocked` or `Martin` is not held: the question
 is Martin's, so end the session in that turn. Otherwise end it in the turn the
 stage is set.
+
+## A goal that is a part
+
+When the prompt says the goal is a part of an order, the goal holds no text of
+its own: the prompt gives the part as README.md has it now, and after it the
+order's sections outside its parts. This section then replaces what this role
+says about criteria, obligations, areas, `seen` and `write-back` lines; the
+rest of the role applies as written.
+
+You ask one question: does the build do what the part says? Read the part, the
+diff and `LOG.md` with its `Read as:` lines. Run what Proved by names yourself.
+Where the part has pictures or text blocks, shoot and compare. For the
+programme's last goal, Documentation, the question is whether the pages
+describe what the programme built.
+
+Write `REVIEW.md` as the `head: <repo> <sha>` line for each repository of the
+goal and one line: `part: OK`, or `part: NOT OK — <what the part says that the
+build does not do, and where>`. Then the stage, the proposal and the one log
+line, as above.
 @end

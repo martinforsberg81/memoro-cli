@@ -264,7 +264,7 @@ test('an entry written before the state was recorded counts as prepared, so the 
   assert.equal(listLessons({ env: f.env }).length, 1);
 });
 
-test('the decision prompt of a programme item names the programme directory and the planning turn\'s state file', async t => {
+test('the decision prompt of a programme item names the programme directory and the state file of its cut', async t => {
   const f = fixture(t);
   const dir = join(f.root, 'programs', 'prog'); mkdirSync(join(dir, 'goals'), { recursive: true });
   writeFileSync(join(dir, 'PROGRAMME.json'), JSON.stringify({ schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' }));
@@ -277,8 +277,9 @@ test('the decision prompt of a programme item names the programme directory and 
   await f.runner().pass();
   assert.match(f.seen, new RegExp(`Decide desk item ${item.id}\\.`, 'u'));
   assert.ok(f.seen.includes(`Programme: prog. Programme directory: ${dir}.`), 'the programme directory');
-  assert.ok(f.seen.includes(join(f.root, 'runner', 'programme-turn', 'prog.json')), 'the turn state file');
-  assert.match(f.seen, /close --by decision so the runner plans the programme again/u);
+  assert.ok(f.seen.includes(join(f.root, 'runner', 'programme-turn', 'prog.json')), 'the state file of the cut');
+  assert.match(f.seen, /close --by decision so the runner cuts the programme again/u);
+  assert.doesNotMatch(f.seen, /planning|session log/u, 'no session cut the order, so none is named');
   assert.doesNotMatch(f.seen, /No goal identity is assigned/u);
   assert.equal(f.state(item).state, 'closed');
 });

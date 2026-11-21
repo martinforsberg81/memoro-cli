@@ -206,3 +206,63 @@ describe('mc programs after: the usage and which programmes take it', () => {
     } finally { a.done(); }
   });
 });
+
+// Order mc-parts-are-goals, Part 1: a part waits for the part before it unless it says it runs in parallel with it,
+// and the record is written from that.
+describe('an order gives what its parts wait for', () => {
+  const order = (...lines) => `# prog\n\nRepositories: memoro-cli.\n\n## Parts\n\n${lines.map((line, at) => `### Part ${at + 1} — P${at + 1}\n\n${line}\n`).join('\n')}`;
+  const desk = (a) => ({ ...a.env, MC_ROLE: 'martin' });
+  const DRAFT = { ...STATED, version: 2, state: 'draft' };
+  const page = (a) => join(a.home, 'prog', 'README.md');
+  const LINE = 'In parallel with the previous part.';
+
+  it('mc programs state ready writes the dependencies from the parts, keyed by part, in the write that sets the state, the phase of the last goal among them, and mc programs after works as before', async () => {
+    const a = area(DRAFT);
+    try {
+      writeFileSync(page(a), order('Closes: a.', 'Closes: b.', LINE, 'Closes: d.'));
+      const result = await call(['state', 'prog', 'ready'], desk(a));
+      assert.equal(result.code, 0, result.err);
+      assert.deepEqual([recordOf(a.home).state, recordOf(a.home).phases], ['ready', { order: 'stated', after: { 2: [1], 3: [1], 4: [2, 3], 5: [4] } }]);
+      assert.deepEqual(Object.keys(recordOf(a.home)), Object.keys(STATED), 'every key in its place');
+      // A changed line is written by setting the order ready again.
+      writeFileSync(page(a), order('Closes: a.', LINE, 'Closes: c.'));
+      assert.equal((await call(['state', 'prog', 'ready'], desk(a))).code, 0);
+      assert.deepEqual(recordOf(a.home).phases, { order: 'stated', after: { 3: [1, 2], 4: [3] } });
+      // The fixture's goals are in phases 1, 2 and 3: the verb states a dependency of theirs as it does on any stated programme.
+      const stated = await call(['after', 'prog', '3', '1'], a.env);
+      assert.deepEqual([stated.code, stated.err], [0, '']);
+      assert.deepEqual(recordOf(a.home).phases, { order: 'stated', after: { 3: [1], 4: [3] } });
+      // Setting it draft reads no part.
+      writeFileSync(page(a), order('Closes: a gap.'));
+      assert.equal((await call(['state', 'prog', 'draft'], desk(a))).code, 0);
+      assert.deepEqual(recordOf(a.home).phases, { order: 'stated', after: { 3: [1], 4: [3] } });
+    } finally { a.done(); }
+  });
+
+  it('a programme whose goals a plan session wrote keeps the dependencies that session stated when it is set ready again', async () => {
+    // Fault protected: the phases of such goals are not part numbers, so writing the parts' order would start them in the wrong order.
+    const a = area({ ...DRAFT, phases: { order: 'stated', after: { 3: [1] } } });
+    try {
+      writeFileSync(page(a), order('Closes: a.', 'Closes: b.'));
+      const goal = join(a.home, 'prog', 'goals', 'g1', 'GOAL.json');
+      writeFileSync(goal, goalJson({ phase: 1, documents: [{ label: 'Part 2', path: page(a) }] }));
+      assert.equal((await call(['state', 'prog', 'ready'], desk(a))).code, 0);
+      assert.deepEqual([recordOf(a.home).state, recordOf(a.home).phases], ['ready', { order: 'stated', after: { 3: [1] } }]);
+    } finally { a.done(); }
+  });
+
+  it('a record that stated no phases gets them from the parts, and a document with no part is set ready as before', async () => {
+    const plain = area({ ...RECORD, version: 2, state: 'draft' });
+    try {
+      writeFileSync(page(plain), order('Closes: a.', 'Closes: b.'));
+      assert.equal((await call(['state', 'prog', 'ready'], desk(plain))).code, 0);
+      assert.deepEqual(recordOf(plain.home).phases, { order: 'stated', after: { 2: [1], 3: [2] } });
+    } finally { plain.done(); }
+    const a = area(DRAFT);
+    try {
+      writeFileSync(page(a), '# prog\n\nNo parts yet.\n');
+      assert.equal((await call(['state', 'prog', 'ready'], desk(a))).code, 0);
+      assert.deepEqual([recordOf(a.home).state, recordOf(a.home).phases], ['ready', { order: 'stated' }]);
+    } finally { a.done(); }
+  });
+});

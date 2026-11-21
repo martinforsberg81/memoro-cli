@@ -8,8 +8,7 @@
  * - `repair` for a repair build (a goal a review rejected; `finish` in rows from before);
  * - `review` for a goal in review;
  * - `build` for a goal in build;
- * - `plan` for the planning turn of a ready programme (it cuts every part into a goal in build), and `archive` (the same rank) for the write-back
- *   reading of a programme with a record whose goals are all finished;
+ * - `archive` for the write-back reading of a programme with a record whose goals are all finished;
  * - `manager` for the unattended manager's curation turn, last of all.
  *
  * Goals are gated before picking: `goalWork` uses `goalSession`, the goal's
@@ -20,7 +19,7 @@
  * project-shaped build/review items remain accepted legacy inputs to this
  * picker; they do not describe today's runner candidates.
  *
- * Merge-failure and main-red mend go first, then decision, a repair build, review, build, then the programme planning turn, then the manager's turns. Within the earliest runnable rank, repository fairness reserves a
+ * Merge-failure and main-red mend go first, then decision, a repair build, review, build, then the programme archive, then the manager's turns. Within the earliest runnable rank, repository fairness reserves a
  * share (`ceil(lanes / repositories)`) before programme priority, highest first.
  * Carry, resumed work and oldest wait break remaining ties. A carried build
  * never jumps ahead of a review or recovery. A repository with work in the
@@ -37,7 +36,7 @@ function rankOf(item) {
   if (item.kind === 'decision') return 1;
   if (item.kind === 'repair' || item.kind === 'finish') return 2;
   if (item.kind === 'review') return 3;
-  if (item.kind === 'plan' || item.kind === 'archive') return 6;
+  if (item.kind === 'archive') return 6;
   if (item.kind === 'manager') return 7;
   return item.variant === 'goal' ? 5 : 4;
 }
@@ -48,7 +47,7 @@ const priorityOf = (item) => Number.isSafeInteger(item.priority) && item.priorit
  * `{ items, held, lanes, carry }` → the item to start, or null. `lanes` is
  * the machine-wide lane cap, not a per-repository allowance.
  *
- * `items`: `{ name, repo, kind: 'review'|'repair'|'finish'|'mend'|'decision'|'build'|'plan', variant: 'project'|'goal'|null,
+ * `items`: `{ name, repo, kind: 'review'|'repair'|'finish'|'mend'|'decision'|'build'|'archive'|'manager', variant: 'project'|'goal'|null,
  * since, resumed, priority }` — caller-approved candidates. `variant: 'project'` and
  * project build/review kinds are retained for compatibility, although
  * `run.js` also supplies goal-less main-red mends. `held`: one repository per
