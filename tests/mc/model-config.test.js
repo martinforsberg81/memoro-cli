@@ -102,8 +102,8 @@ test('a file without the role lists reads them as the defaults; mc model lists e
   try {
     const models = readModels(c.env);
     assert.deepEqual(models.finish, [{ tool: 'claude', model: 'opus', effort: 'high' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }]);
-    assert.deepEqual(models.mend, [{ tool: 'claude', model: 'sonnet', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'medium' }]);
-    assert.deepEqual(models.plan, [{ tool: 'claude', model: 'opus', effort: 'high' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }]);
+    assert.deepEqual(models.mend, [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }, { tool: 'claude', model: 'opus', effort: 'medium' }]);
+    assert.deepEqual(models.plan, [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }, { tool: 'claude', model: 'opus', effort: 'high' }]);
     assert.deepEqual(models.manager, [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'medium' }]);
     const listed = (await c.verb('list')).out;
     for (const list of ['build', 'review', 'finish', 'mend', 'plan', 'manager']) assert.match(listed, new RegExp(`\\n${list}\\n {2}1 `, 'u'));
@@ -165,7 +165,7 @@ test('a catalog without build or any retired class reads the default build list;
   try {
     assert.deepEqual(readModels(none.env).build, [
       { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' },
-      { tool: 'claude', model: 'sonnet', effort: 'high' },
+      { tool: 'claude', model: 'opus', effort: 'high' },
     ]);
     assert.deepEqual(readModels(onlyMedium.env).build, [{ tool: 'claude', model: 'sonnet', effort: 'high' }]);
   } finally { none.done(); onlyMedium.done(); }

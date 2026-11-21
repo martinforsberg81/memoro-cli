@@ -4760,7 +4760,7 @@ const where = (f, name) => ['stage', 'status'].map((key) => goalField(f.files[`$
 test('only a build routes on the goal\'s class: finish, mend and plan run on their own lists, never on fast, in the goal\'s worktree', async () => {
   const HAIKU_ONLY = { ...structuredClone(TEST_CATALOG), build: [{ tool: 'claude', model: 'haiku', effort: 'high' }] };
   // repair (the finish list): opus high / sol high; mend: sonnet medium / sol medium (TEST_CATALOG), whichever has room.
-  for (const [stage, role, claudeModel] of [['repair', 'build-session:goal', 'opus'], ['merge', 'mend-session', 'sonnet']]) {
+  for (const [stage, role, claudeModel] of [['repair', 'build-session:goal', 'opus'], ['merge', 'mend-session', 'opus']]) {
     for (const tool of ['claude', 'codex']) {
       const f = goalFixture({ stuck: stage === 'merge' ? { stage, log: redMerge } : { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
       f.deps.catalog = () => structuredClone(HAIKU_ONLY);
@@ -4781,7 +4781,7 @@ test('only a build routes on the goal\'s class: finish, mend and plan run on the
       assert.equal(result.ran, 1, `${stage} on ${tool}`);
       const [call] = f.calls.sessions;
       assert.equal(call.env.MC_ROLE, role);
-      assert.equal(call.env.MC_MODEL, tool === 'claude' ? claudeModel : 'gpt-6.2-sol', `${stage} is not on the build list's haiku`);
+      assert.equal(call.env.MC_MODEL, tool === 'claude' ? claudeModel : 'gpt-6.2-sol', `${stage} runs on its own list`);
       assert.equal(call.env.MC_TOOL, tool);
       assert.equal(call.cwd, `${GOALS}/stuck/memoro`, 'in the goal\'s worktree, not the programme directory');
       assert.deepEqual([call.env.MC_REPO, call.env.MC_WORKAREA], ['memoro', `${GOALS}/stuck/memoro`]);
@@ -6402,7 +6402,7 @@ test('a queued main-red request precedes build, review and finish, launches goal
     assert.equal(call.env.MC_ROLE, 'mend-session');
     assert.equal(call.env.MC_GOAL, undefined);
     assert.equal(call.env.MC_PROGRAMME, undefined);
-    assert.equal(call.env.MC_MODEL, 'sonnet', 'the mend list default, not a build class model');
+    assert.equal(call.env.MC_MODEL, 'opus', 'the mend list default, not the build list');
     assert.ok(call.unsetEnv.includes('MC_GOAL'));
     assert.match(call.prompt, /You are a main-red mend session/u);
     assert.match(call.prompt, /missing browser/u);
@@ -6572,7 +6572,7 @@ test('a queued deploy repair is offered at the main-red mend\'s rank and launche
     assert.equal(call.env.MC_HEADLESS, '1');
     assert.equal(call.env.MC_DEPLOY_MEND, pick.deployMend.id);
     assert.equal(call.env.MC_GOAL, undefined);
-    assert.equal(call.env.MC_MODEL, 'sonnet', 'class fast');
+    assert.equal(call.env.MC_MODEL, 'opus', 'the mend list default');
     assert.match(call.prompt, /wrangler fell over/u);
     assert.match(call.prompt, /Never run mc deploy/u);
     assert.equal(f.entries()[0].state, 'running');

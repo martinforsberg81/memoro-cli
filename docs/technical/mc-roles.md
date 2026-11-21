@@ -77,7 +77,7 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 | `martin` | opus | `martin` | `mc martin`, foreground in `~/mc/martin/`; never the runner |
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
 | `decision` | opus | `decision` | runner lane or a person’s `mc decision [<id>]`, unattended on its own `decision` list; full goal desk authority within headless hooks ([mc-martin.md](mc-martin.md)) |
-| `desk-prepare` | sonnet | `desk-prepare` | chores or the person’s `mc martin prepare`, one fresh headless evidence-only turn per new item on the `medium` list; no goal identity or mutation authority ([mc-martin.md](mc-martin.md)) |
+| `desk-prepare` | sonnet | `desk-prepare` | chores or the person’s `mc martin prepare`, one fresh headless evidence-only turn per new item on the `build` list; no goal identity or mutation authority ([mc-martin.md](mc-martin.md)) |
 | `learning` | opus | `learning` | `mc learning` or chores, one headless session on the `decision` list in `~/mc/martin/lessons/`. It updates factual area information and records dispositions, never creates a programme or goal ([mc-martin.md](mc-martin.md) § *Lessons and the learning pass*) |
 | `repair` | opus | `repair` | `mc repair`, with `MC_ROLE=repair` and `MC_HEADLESS=1`. It reads one defect to propose a bounded functionality repair or record why none is established. |
 

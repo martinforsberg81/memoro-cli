@@ -74,11 +74,11 @@ const candidate = (tool, model, effort) => Object.freeze({ tool, model, effort }
 
 /** What an absent catalog reads as, and what a file lacking one of the defaulted lists reads for it. */
 export const DEFAULT_CATALOG = Object.freeze({
-  build: Object.freeze([candidate('codex', 'gpt-6.2-sol', 'high'), candidate('claude', 'sonnet', 'high')]),
+  build: Object.freeze([candidate('codex', 'gpt-6.2-sol', 'high'), candidate('claude', 'opus', 'high')]),
   review: Object.freeze([candidate('agy', 'gemini-4-argon-high', 'high'), candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.2-sol', 'medium')]),
   finish: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.2-sol', 'high')]),
-  mend: Object.freeze([candidate('claude', 'sonnet', 'medium'), candidate('codex', 'gpt-6.2-sol', 'medium')]),
-  plan: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.2-sol', 'high')]),
+  mend: Object.freeze([candidate('codex', 'gpt-6.2-sol', 'high'), candidate('claude', 'opus', 'medium')]),
+  plan: Object.freeze([candidate('codex', 'gpt-6.2-sol', 'high'), candidate('claude', 'opus', 'high')]),
   manager: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.2-sol', 'medium')]),
   decision: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.2-sol', 'high')]),
 });
@@ -133,7 +133,7 @@ export function effortContradiction(text) {
 /** A candidate typed on the command line, `tool:model:effort`, checked whole. */
 export function parseCandidate(text) {
   const parts = String(text).split(':');
-  if (parts.length !== 3) throw new ModelConfigError(`"${text}" is not tool:model:effort, e.g. claude:haiku:high`);
+  if (parts.length !== 3) throw new ModelConfigError(`"${text}" is not tool:model:effort, e.g. claude:opus:high`);
   const value = { tool: parts[0], model: parts[1], effort: parts[2] };
   const problems = candidateProblems(value);
   if (problems.length) throw new ModelConfigError(`"${text}": ${problems.join('; ')}`);
@@ -143,7 +143,7 @@ export function parseCandidate(text) {
 /** Which candidate a `remove` names, `tool:model`, checked whole. */
 export function parseTarget(text) {
   const parts = String(text).split(':');
-  if (parts.length !== 2) throw new ModelConfigError(`"${text}" is not tool:model, e.g. codex:gpt-6-luna`);
+  if (parts.length !== 2) throw new ModelConfigError(`"${text}" is not tool:model, e.g. codex:gpt-6.2-sol`);
   const problems = identityProblems(parts[0], parts[1]);
   if (problems.length) throw new ModelConfigError(`"${text}": ${problems.join('; ')}`);
   return { tool: parts[0], model: parts[1] };
