@@ -1,6 +1,6 @@
 # One execution boundary for interactive mc sessions
 
-`mc plan`, `mc manager`, `mc martin` and other interactive roles use `src/mc/work-open.js`
+`mc martin` and other interactive roles use `src/mc/work-open.js`
 for foreground, background, resumed and replaced conversations. All paths pass
 through `interactiveAccessOptions` in `src/mc/interactive-access.js` and the
 tool's `launchSpec().args()`.
@@ -18,7 +18,7 @@ already runs on the host and needs no additional execution flag. Approval
 policies remain independent: mc adds neither approval bypass nor an automatic
 escalation after failure. Headless runner access is unchanged.
 
-Normal commands suffice: `mc plan haptic-feedback`. The temporary
+Normal commands suffice: `mc martin`. The temporary
 `MC_CODEX_WORKSPACE` switch introduced in #1152 is removed and has no effect.
 This replaces that per-tool opt-in design, following
 `mc-tool-neutral-execution-access`. It does not edit user configuration or widen
@@ -36,8 +36,7 @@ If the host denies creation of the planning area, Martin desk or private
 Codex or Claude session directory, the entrance exits 1 and names the denied
 operation and the directory whose permissions to check. When a private
 directory's name has not been allocated, the diagnostic names its parent.
-A planning README template remains optional. Failure to create it still
-allows the planning session to open. Provider approvals and provider-reported
+Provider approvals and provider-reported
 sandbox setup errors keep their own messages.
 
 The [configured Codex client](mc-server.md#codex-client) also checks the

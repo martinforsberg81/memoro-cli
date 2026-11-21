@@ -1,9 +1,9 @@
 # mc dormant — one world on the surface
 
 Work is a goal: GOAL.json and LOG.md under a programme, with repository
-worktrees on its branch. `mc run` starts headless build, review and plan
-sessions; `mc plan` and `mc martin` are the person's
-interactive entrances. `mc` is the page. No resident model keeps sessions
+worktrees on its branch. `mc run` starts headless build and review
+sessions; `mc martin` is the person's
+interactive entrance. `mc` is the page. No resident model keeps sessions
 moving or invents work for them.
 
 ## What replaced the resident PM
@@ -11,8 +11,8 @@ moving or invents work for them.
 The resident PM, its research assistant and session watch programme were
 removed after ruling mc-1 (2026-08-26). The page replaced competing boards.
 Goal phases now order work, and stages choose its next kind of session.
-A blocked goal waits on a person, with its question in LOG.md; a brief or
-interactive plan session can take that question to Martin. There is no
+A blocked goal waits on a person, with its question in LOG.md; the desk
+takes that question to Martin. There is no
 file of answered decisions for the runner to turn into work.
 
 Projects went on 2026-11-03; [mc-goals.md § From a project](mc-goals.md#from-a-project)

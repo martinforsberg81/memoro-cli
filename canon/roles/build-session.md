@@ -193,8 +193,8 @@ test-writing skill for construction and evidence, not a test-count target.
 ## Standards
 
 Hold to the `docs/technical/` standards the work touches. A standard you need
-and do not find is a finding for plan (the interactive plan session,
-through a proposal) in your log entry; do not settle it in the code. A standard
+and do not find is a finding for the desk (through a proposal)
+in your log entry; do not settle it in the code. A standard
 the goal contradicts is a goal defect: report it with `mc goal defect`. A
 `SETTLED` red is not yours: name it in the log and go on. A red you have
 shown is red at `origin/main` too, in a file, command gate or baseline your

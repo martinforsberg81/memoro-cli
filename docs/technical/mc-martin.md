@@ -284,7 +284,7 @@ An `archive` item is the programme archive turn's
 of the archive since the last item opens it `for-martin` (sort mechanical, not
 reversible, no due time) with a Swedish `brief.md`; restricted data under
 `~/mc/restricted/<programme>/` opens one `for-martin` with sort `reserved`
-naming `mc plan <programme> --archive`. Its source is the programme's directory
+naming `mc programs archive <programme>`. Its source is the programme's directory
 and goals and the state file `runner/archive-turn/<programme>.json`. Sync closes
 it by source only when the programme directory is gone from the programmes home or
 `goals/` holds a live goal; a directory gone while the state names a destination

@@ -119,8 +119,8 @@ test('headlessArgs: codex new and resumed launches take the Codex model and effo
   assert.equal(unnamed.some((arg) => arg.startsWith('model_reasoning_effort')), false, 'no effort named, no override');
 });
 
-test('headlessArgs: every role including plan has native delegation, fresh and resumed, stream and single-turn', () => {
-  for (const name of ['build-session:goal', 'review-session:goal', 'mend-session', 'plan', 'manager', 'intake']) {
+test('headlessArgs: every role has native delegation, fresh and resumed, stream and single-turn', () => {
+  for (const name of ['build-session:goal', 'review-session:goal', 'mend-session', 'manager', 'intake']) {
     const role = readCanonRole(name);
     assert.ok(role, name);
     for (const resume of [null, 'sid']) {

@@ -185,7 +185,7 @@ on automatic remeasurement. Machine time cuts must not judge the change.
 
 Martin, 2026-11-09: merge recovery is attached to the failed PR and repository,
 not restricted to a goal. A failed eligible merge must be recoverable by mend
-whether it came from a goal, interactive planning, Manager or a direct merge
+whether it came from a goal, the desk, Manager or a direct merge
 request. Goal metadata supplies additional contract and lifecycle context;
 its absence must not suppress recovery or require inventing a goal.
 

@@ -83,10 +83,8 @@ install` syncs them once too.
 
 Reads the hook JSON (`cwd`) on stdin. Its first line names the session's role
 and programme: `MC_ROLE` first, then `MC_GOAL`, then cwd
-under the work root for a session opened by hand. In `~/mc/programs/mc/` it
-names the plan session for `mc`, says `mc plan` is the person's entrance and
-that this session never runs it, and points to `mc goal`. A goal subtree is
-never classified as its parent programme's plan session. See
+under the work root for a session opened by hand. A programme's directory,
+`~/mc/programs/mc/`, names no role; a goal subtree names that goal's build session. See
 [session identity](mc-roles.md#session-identity-is-not-only-an-instruction-argument).
 When the role is unknown, the first line names the variables and cwd it checked.
 This identity is printed even without a known repository.

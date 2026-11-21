@@ -8,8 +8,8 @@
 `src/mc/review-verdict.js` (`checkVerdict`, `trippedAreas`),
 `src/mc/hooks.js` (`reviewStopDecision`), `canon/roles/build-session.md`
 (its `goal` part), `canon/roles/review-session.md` (its `goal` part),
-`canon/roles/mend-session.md`,
-`canon/roles/plan-session.md` and `canon/verbs/goal.md`
+`canon/roles/mend-session.md`
+and `canon/verbs/goal.md`
 
 A goal is mc's one unit of work, two files and a worktree: `GOAL.json`, the brief as
 data, and `LOG.md`. It has no steps, no register and no owner. A build session
@@ -17,7 +17,7 @@ does the work, records each criterion it has checked as met, and publishes its
 pull request; a review session on another model runs the checks and decides;
 OK queues it for the merger, not OK sends it back to build, where a repair
 build session fixes what review found and sends it to review again; the goal is `done` when it lands, and it
-lands only with every criterion met. Only a merge failure (conflict, failed candidate check or moved judged head) starts mend. Legacy blocked work outside merge is reconciled to Martin without a diagnostic session (Martin, 2026-11-08). Interactive plan remains `mc plan`; the runner starts no session on a draft, and it cuts a ready order by code, one goal in build per part, built as the part is written (*A goal that is a part*).
+lands only with every criterion met. Only a merge failure (conflict, failed candidate check or moved judged head) starts mend. Legacy blocked work outside merge is reconciled to Martin without a diagnostic session (Martin, 2026-11-08). `mc plan` is gone (Martin, 2026-11-21); the runner starts no session on a draft, and it cuts a ready order by code, one goal in build per part, built as the part is written (*A goal that is a part*).
 
 A goal has two fields where it had one status (Martin, 2026-11-03: *"Status
 måste innehålla även processen så att den inte går tillbaka."* *"Det kan
@@ -111,7 +111,7 @@ One worktree per repository the goal names, made at the goal's first use: the
 runner makes it before the first session on the goal (build, review
 or mend), and `mc goal new` makes none. `mc tidy` releases a checkout no
 session can use; its branch stays, and the next use re-adds it on that branch.
-Anyone may work in one: a person, the interactive plan session, or the
+Anyone may work in one: a person, the desk, or the
 runner's sessions on the goal. `<programme>` must be a directory under
 `~/mc/programs/`; `<programme>` and `<goal>` are lower-case letters, digits and
 hyphens. mc keeps nothing else for a goal.
@@ -304,7 +304,7 @@ Next: what the next session should do
   when set; `<stage> · <status>` is where the goal is after the entry. An entry
   written before stages has `· <status>` alone, and is read with no stage.
   `· by <role>` names the writer from `MC_ROLE` alone: `build`, `review`,
-  `plan`, `manager`, else the role's name before its `:`. `MC_TOOL=person` or an
+  `manager`, else the role's name before its `:`. `MC_TOOL=person` or an
   unset `MC_TOOL` does not suppress it; no role, or a word containing whitespace,
   writes none. This attribution does not change stage/person authorization.
   It is not the stage: a build
@@ -469,7 +469,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   `Evidence:` line when given (redacted like any log text); the stage does not
   change. It asks nobody (no jev, no ledger) and offers no options: there is no
   choice, the text is wrong. A build or review session may report it
-  only for its own goal and only in its own stage; a person and the plan role
+  only for its own goal and only in its own stage; a person and the desk roles
   may name any unfinished goal. A finished goal (`done`, `dropped`) is refused
   (exit 1); a mend session, and a build or review session on a goal in
   another stage, are refused (exit 2); a call without `--part` or `--found`,
@@ -597,8 +597,8 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 - **`done [<p>/<g>] [--reason "…"]`** — stage `done`, a person's (or plan's) act;
   the merger sets it when the pull request lands.
 - **`drop [<p>/<g>] --reason "…"`** — abandons delivery: stage `dropped`, never
-  `done`; it holds no later phase back. The reason is required. Only a person, interactive Martin, decision
-  or a plan session drops a goal. After persisting the stage, the command closes
+  `done`; it holds no later phase back. The reason is required. Only a person, interactive Martin or decision
+  drops a goal. After persisting the stage, the command closes
   open PRs owned only by this goal, removes their queued/red merge work, and
   archives immediately when the shared archive safety checks pass. PRs carried
   by another unfinished goal remain open and queued, with that ownership noted.
@@ -655,8 +655,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 - **Forward only, each stage its owner, except the desk roles** (`refusedMove`). A session is a
   caller with `MC_GOAL` set and `MC_TOOL` not `person`. Ordinary sessions cannot move a
   stage backward. A person, interactive `MC_ROLE=martin` or unattended `MC_ROLE=decision` may; the entry names
-  the actor (`moved back from merge to review by martin`). The interactive plan session (`MC_ROLE=plan`)
-  makes any forward move and sets any status. A mend session (`mend-session`) exists only for merge failures and requeues a goal already in `merge` with `mc goal stage merge`; every stage move is refused. Build moves `build` to `review`, may set `blocked` for compatibility, or set `Martin` directly for what asking-martin names (a reserved act, or a goal defect). Review moves `review` to `merge` or `build`, may set `Martin` directly, and requires REVIEW.md in its fixed form, with every line OK for `merge` and a NOT OK line for `build`. Nobody moves a goal into `finish`: `mc goal stage finish` is refused, naming `mc goal stage build`. A session other than plan is refused `review` while a
+  the actor (`moved back from merge to review by martin`). A mend session (`mend-session`) exists only for merge failures and requeues a goal already in `merge` with `mc goal stage merge`; every stage move is refused. Build moves `build` to `review`, may set `blocked` for compatibility, or set `Martin` directly for what asking-martin names (a reserved act, or a goal defect). Review moves `review` to `merge` or `build`, may set `Martin` directly, and requires REVIEW.md in its fixed form, with every line OK for `merge` and a NOT OK line for `build`. Nobody moves a goal into `finish`: `mc goal stage finish` is refused, naming `mc goal stage build`. A session is refused `review` while a
   criterion is not met, or while the goal has none: `mc: mc/g is not moved to
   review — criterion 2 is not met — run its check and record it with mc goal
   criterion met mc/g 2` (`unmetGoalWords`). A build session's move to review is also refused without
@@ -702,9 +701,8 @@ GOAL.json and removes the GOAL.md:
   judged them — and any other `met: false`.
 
 A GOAL.md whose front matter does not read, or one beside a GOAL.json, is
-left as it is and named on stderr (exit 1). The plan session in `mc` runs the
-conversion for every programme once, then rewrites the checks and translates
-the Swedish prose by hand.
+left as it is and named on stderr (exit 1). The conversion was run for every programme once, and the checks and
+the Swedish prose rewritten by hand.
 
 ## From a project
 
@@ -847,8 +845,8 @@ programme:
   (its phases run in sequence and `mc goal phase` orders its goals), an invalid
   record (`mc programs show` says why), a phase in which the programme has no
   goal that parses, and a statement that would make a cycle (the message names
-  its phases). A person, interactive Martin, and the manager and plan roles may
-  call it, the last two also with `MC_HEADLESS=1`; every other role and a caller
+  its phases). A person, interactive Martin and the manager role may
+  call it, the last also with `MC_HEADLESS=1`; every other role and a caller
   with `MC_GOAL` and no `MC_ROLE` is refused, the message naming the role. A
   stated dependency stops no running session: it takes effect at the runner's
   next pick.
@@ -871,9 +869,9 @@ programme:
   waited for it open. Dropping is a person's, interactive Martin's, the
   decision role's or plan's act, and whoever drops it decides knowingly.
 - **An invalid record** is read neither as stated nor as sequential: it holds
-  every phase of its programme. The runner starts no goal and no plan session in
+  every phase of its programme. The runner starts no goal in
   it and says so once per programme while it lasts (`<prog>: its record
-  (PROGRAMME.json) is invalid — no goal or plan session is started in it until
+  (PROGRAMME.json) is invalid — no goal is started in it until
   it is repaired (…; mc programs show <prog>)`). `mc goal list` prints `<prog> ·
   record invalid — no phase is open` above the phases, each unfinished phase
   `waiting`; the page holds every unfinished goal and says `record invalid` on
@@ -1011,8 +1009,8 @@ and merge-failure mend rank as finish ranked, before review; no pre-merge mend e
 
 ## Repair and mend
 
-The broad headless plan role was retired on 2026-11-07. Interactive planning
-remains `mc plan`, and the runner plans with no session: it cuts a ready order
+The broad headless plan role was retired on 2026-11-07 and the interactive
+one, `mc plan`, on 2026-11-21. The runner plans with no session: it cuts a ready order
 by code (*A goal that is a part*). Goal delivery recovery stays with two roles:
 
 - **A repair build** (`MC_ROLE=build-session:goal`, `canon/roles/build-session.md`)
@@ -1446,7 +1444,7 @@ move exits 1 and writes nothing.
 
 Each stage has one owner, and a goal passes each once:
 
-- `draft` — an interactive plan session writes the goal. Its writer moves it
+- `draft` — the desk, or a person, writes the goal by hand. Its writer moves it
   to `build` when it is complete (*Completeness gate*); the runner starts no
   session on a draft (*Drafts*). A goal the runner cuts from a ready order is
   never a draft: it is written in `build · ready` (*A goal that is a part*).

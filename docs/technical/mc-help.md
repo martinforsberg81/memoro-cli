@@ -19,7 +19,7 @@ starts an operation or asks for authentication. A script's own flags after
 
 The page is `mc`: a number shows a goal. The overview draws programme work
 trees inline under their horizons or in Other. `mc goal` writes the
-brief, criteria, phase, stage and log; `mc plan` and `mc martin` are the person's interactive entrances
+brief, criteria, phase, stage and log; `mc martin` is the person's interactive entrance
 (`mc helper` is the eye and has none); `mc manager` is headless only
 (`mc manager --headless --prompt`, [mc-manager.md](mc-manager.md)) and the runner starts it itself. A session already
 running uses its own verbs, not an entrance that starts another session.

@@ -28,7 +28,7 @@ counts what is there by area and system and orders by name.
 - Not `~/mc/intake/`: that is raw material that waits for a person; writing
   there asks someone to work it out again from less than you had.
 - Never touch a proposal already waiting unless your task is to consume it.
-  The same rule holds for every writer: build, review, plan, intake and the desks (manager, martin).
+  The same rule holds for every writer: build, review, intake and the desks (manager, martin).
 - A proposal is taken in by an order: the desk names it in the programme
   document it serves, and moves it to the area's `proposals/archive/` with
   first line `Utfall: ordered in <programme>`. One the desk declines goes there

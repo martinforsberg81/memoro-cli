@@ -130,15 +130,14 @@ content on main (or its tip a merged pull request's head). Removed with
 for all of them; an lsof that fails keeps every one.
 
 **I — a planning area's own checkouts** (`memoro/`, `memoro-cli/`, made by
-`mc plan`; until 2026-11-07 also by the runner before a headless plan session)
+`mc plan` until it went on 2026-11-21; until 2026-11-07 also by the runner before a headless plan session)
 go when no planning session of their programme is running — a foreground
 `mc plan` record whose process lives, or a process standing in the programme's
 directory — and they have been untouched for 72 hours (younger only in a
 pressure pass). Whether the programme has open goals does not matter. The
 checkout is judged by the release verdict as X judges it, but no process may
 stand anywhere in the programme's directory, since a planning session stands
-there and not in the checkout. Removed the same way as X, and `mc plan
-<programme>` adds it back when it next opens the programme. An lsof that fails
+there and not in the checkout. Removed the same way as X; nothing adds it back. An lsof that fails
 keeps every one, with its error.
 
 **P — unused draft goal worktrees.** In layout 2, a registered checkout at
@@ -181,7 +180,7 @@ other checks remain identical. Invalid or unreadable metadata, ignored local
 state, active work, unknown ownership, or changed preview evidence means keep.
 Nested cache targets are omitted when the checkout itself is selected. The
 `node_modules/` narrowing of the ignored-files guard was made by a plan session
-on 2026-11-07 and stands; a plan session may narrow a tidy guard when the rule's
+on 2026-11-07 and stands; the desk may narrow a tidy guard when the rule's
 never-removed boundary is kept (Martin, 2026-11-08).
 
 **W — what is left under `~/mc/work/`.** The workareas were retired on

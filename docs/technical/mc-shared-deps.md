@@ -92,9 +92,9 @@ checkout to memoro's per-lockfile cache under
 package, about 250 KB a checkout where a full `npm ci` was 510 MB. A repository
 without the script gets `state: 'no-attach-script'` and nothing runs. The attach
 is reported, never fatal: a failure is one line from the verb that made the
-worktree, and the worktree is still the deliverable. `mc plan` and
-`mc deps bump` attach through `addWorktree`; the runner passes `attach: false` because it
-attaches before each goal build or review itself. `mc plan` also re-attaches a planning checkout that already stands each time its programme is opened, since that checkout is reused and its lockfile can move on main.
+worktree, and the worktree is still the deliverable.
+`mc deps bump` attaches through `addWorktree`; the runner passes `attach: false` because it
+attaches before each goal build or review itself.
 
 An exit of 0 is not taken for an attachment: `attachRepoDeps` reports
 `attached` only when the script left `node_modules/.memoro-deps.json`, which

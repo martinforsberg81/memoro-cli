@@ -1,49 +1,29 @@
-# mc plan — a programme's interactive session
+# Programmes — the record, the order and their states
 
-Linux SSH interactive launches keep their provider alive past the terminal ([Claude background session or Codex app-server](mc-interactive-sessions.md)); macOS retains the existing foreground terminal.
-
-```
-mc plan [<programme>] [--new|--resume [<id>]] [--codex|--claude] [--model <model>]
-mc plan <programme> --archive
-```
-
-This is the person's entrance, not a command for a session already planning.
-`src/mc/commands/plan.js` refuses recognised session identity or coding-agent
-markers before choosing a programme or creating anything. Inside a session,
-goals change through `mc goal new`, `mc goal set`, `mc goal item`, `mc goal obligation` and `mc goal criterion add`.
-Help remains available.
+`mc plan`, the interactive plan session a person opened on a programme, was
+removed on 2026-11-21 (Martin). `mc plan` is an unknown command, there is no
+plan role, and no session writes a goal. The desk (`mc martin`) writes a
+programme's order and sets it ready, [code cuts a ready order](mc-run.md#the-cut-of-a-ready-order)
+into one goal per part, and a goal written by hand is written with the
+`mc goal` verbs. The archive by hand is `mc programs archive <programme>`.
 
 ## A programme, and why it is not a workarea
 
 A programme is a bounded implementation plan, archived when its work is finished. Its plan is in
-`~/mc/programs/<programme>/README.md`. Its interactive session starts in that
-directory, with a worktree of each known repository beside it on
-`plan/<programme>`. The directory also holds `goals/<goal>/`, each goal with
+`~/mc/programs/<programme>/README.md`. The directory also holds `goals/<goal>/`, each goal with
 its own GOAL.json, LOG.md and repository worktrees on `goal/<goal>`.
-The runner never builds in the programme session's checkouts.
+A directory may still hold a worktree of a repository on `plan/<programme>`
+that a plan session left; `mc tidy` releases it ([mc-tidy.md](mc-tidy.md)).
+Layout 1's planning root remains supported ([mc-layout.md](mc-layout.md)).
 
-`ensurePlanArea` fetches before creating missing worktrees from `origin/main`.
-Existing checkouts are reused and dependencies reattached. Missing repositories
-are said and skipped; no checkout at all is a failure. Layout 1's planning
-root remains supported ([mc-layout.md](mc-layout.md)).
-
-When `mc plan` opens a programme whose planning directory has no `README.md`,
-it writes the fenced page from `canon/tasks/references/programme-readme.md`
-before the session starts, and the opening prompt says it is a template to
-fill in. An existing README is never touched by the command; its next plan
-session reconciles it with the bounded template. The page has What it is for,
+The page of a programme without a record
+(`canon/tasks/references/programme-readme.md`) has What it is for,
 End, Decisions, Phases and Where things are. Enduring direction belongs to area
 pages. For a legacy programme, preserve its held Aim in the appropriate area
 without silently changing its meaning, finish active work in place, write back
 and archive. Its enduring direction need not be declared over. Without a valid
 record use the supported manual archive route; an established valid record can
 use the runner route subject to its checks.
-
-With no programme named, `chooseProgramme` offers a numbered list, a new name,
-or an empty answer to leave. A pipe gets usage instead of a question. The
-list combines programmes read from the repositories (`listProgrammes`) and
-open planning areas on disk (`openPlanAreas`). A programme can be reopened
-before it has documents on main, or after all its goals have been archived.
 
 ## A programme with a record
 
@@ -99,7 +79,7 @@ reviewed release rule.
 
 A record cannot name both a horizon and an area. A repair programme (`--area`)
 orders a set of small adjustments to one area as one document, whose goals
-are written by hand in `mc plan` (its page has no parts for code to cut); an area may have several repair programmes open, and one may
+are written by hand at the desk with the `mc goal` verbs (its page has no parts for code to cut); an area may have several repair programmes open, and one may
 hold several live goals. No programme needs a horizon: Martin decides what is
 taken up and in which form, and only a change small enough to run through
 directly skips the document (Martin, 2026-11-16).
@@ -123,8 +103,8 @@ for the part before it unless it holds the line `In parallel with the previous
 part.`; `mc programs state <programme> ready` writes the record's
 `phases.after` from that, with the phase of the last goal, Documentation,
 after the last parts. A programme with
-no record, or with an invalid one, is never cut; `mc plan` stays the person's
-entrance.
+no record, or with an invalid one, is never cut; its goals are written by hand
+at the desk.
 
 The slug is not checked against the desk's horizons: mc stores what it is
 given. Its reader says `none`, `valid` or `invalid` with the problems; a
@@ -137,7 +117,7 @@ separately, never wrapping the record writer in a nested acquisition.
 `state` is read by the cut of a ready order (only `ready` is cut),
 and by the archive turn, and the list and the page show it. Only the runner
 sets it to `done` (`setRecordState`), once it has archived the programme
-([mc-run.md](mc-run.md#programme-archive-turn)); `mc plan <programme> --archive`
+([mc-run.md](mc-run.md#programme-archive-turn)); `mc programs archive <programme>`
 archives a programme of either kind, as in
 [Archiving a programme](#archiving-a-programme), and leaves `state` as it finds it.
 
@@ -155,7 +135,7 @@ is the phase that waits) and replaces what it waited for; `--none` removes it.
 It writes only `phases`, through the record's module, refuses a cycle and a
 programme that is not stated or whose record is invalid (exit 1), and a
 malformed call or a caller not allowed (exit 2); the person, the interactive
-Martin role, the manager and the plan role may call it, the last two also
+Martin role and the manager may call it, the last also
 unattended. Its form and refusals are in [mc-goals.md](mc-goals.md#stated-order).
 
 `create` makes `~/mc/programs/<programme>/` with `PROGRAMME.json` (state
@@ -301,7 +281,7 @@ role reads. Changed evidence or concurrent order changes cannot be committed
 from a stale reading.
 
 Ordinary `state` is not a release or a resume of an order still owned by repair.
-`mc plan` and `mc goal new` refuse its draft and a stale ready order (exit 1).
+`mc programs archive` and `mc goal new` refuse its draft and a stale ready order (exit 1).
 `mc goal new` refuses a released order too: the runner cuts its goals, one for
 each released part ([the cut of a ready order](mc-run.md#the-cut-of-a-ready-order)).
 Ordinary desk-created area repairs keep their existing route.
@@ -404,37 +384,30 @@ With landed work the record is ready for write-back only, under the decline's
 own revision. Without landed work it is done without a write-back. Decline
 cannot open a planning or delivery turn.
 
-## What the session is told
-
-`planLaunch` names the programme, asks it to read the aim first, names the
-checkouts and their branches, and waits for Martin. In layout 2 it names the
-goals beside them and `mc goal` as their writer. A `goal/<goal>` branch
-belongs to that goal's worktree; a planning branch is `plan/<slug>`.
-The prompt predicts no deliverable, pull request or landing route.
+## An interactive session of a role
 
 ### Resume selection and provenance
 
 `openInWorkArea` discovers conversations from the tools' native stores under
 its area root. In layout 2 that includes descendant goal worktrees: newest
-same-tool conversation alone is **not** a safe plan-session selection.
-For a role-aware entrance (including `mc plan`), automatic selection walks
+same-tool conversation alone is **not** a safe selection for a role.
+For a role-aware entrance (`mc martin`), automatic selection walks
 newest first within the requested tool and resumes only positive evidence of
-the same normalized role **and** programme. `plan` and `plan-session` are the
-same identity; `brief` and `manager` share the existing identity alias too.
+the same normalized role **and** programme. `brief` and `manager` are the
+same identity.
 Cwd, labels, user messages, and the environment for the new launch do not
-prove a historical conversation's authority. A compatible older plan can win
+prove a historical conversation's authority. A compatible older conversation can win
 over a newer descendant review. Unscoped ordinary work-area opens retain
 their existing selection; they do not establish role provenance.
 
 Skipped candidates are explained on stderr. With no compatible conversation,
 the opener starts fresh with the requested role instructions and opening
-prompt. `--new` always starts fresh. `mc plan <programme> --resume` offers a numbered
+prompt. `--new` always starts fresh. `--resume` offers a numbered
 list of compatible conversations from both tools (filtered by an explicit
 `--codex` or `--claude`). `--resume <id>` selects an ID or unique prefix.
 An explicit resume never falls back to a new conversation; a missing or
 ambiguous ID fails and cancellation opens nothing. An explicitly selected incompatible or
-unknown conversation is refused, with a fresh-session route (`mc plan
-<programme> --new` for planning); it is not silently replaced by another id.
+unknown conversation is refused, with a fresh-session route; it is not silently replaced by another id.
 A named id still selects its own tool; tool/model flags retain their existing
 precedence. Compatible continuation has no introductory user message.
 
@@ -467,34 +440,32 @@ role hint is not historical instruction provenance.
 
 ### Instruction channel
 
-Instructions are `all-sessions.md` plus the `plan-session` overlay, assembled
+Instructions are `all-sessions.md` plus the role's overlay, assembled
 by `instructionsFor`. Role-aware launches use Claude's
 `--append-system-prompt` and Codex's `-c developer_instructions=<JSON string>`;
 the latter carries the launch marker beside the instructions. They are native
 instruction configuration, supplied on fresh launches **and compatible
 resumes**, not ordinary resume text purporting to override historical
 developer instructions. The older `-c instructions=` path elsewhere is not
-accepted as plan provenance. In particular, Claude's system configuration is
+accepted as role provenance. In particular, Claude's system configuration is
 reapplied rather than assumed to live in its transcript. The isolated tests
 verify discovery and launch composition, not a paid provider turn.
 
-Launches set `MC_ROLE=plan` (the shared identity also accepts `plan-session`)
-and `MC_PROGRAMME`, clearing inherited goal/step/headless identity as before.
+Launches set `MC_ROLE` to the role and, when a programme is named,
+`MC_PROGRAMME`, clearing inherited goal/step/headless identity as before.
 Decision logs record requested and identified role/programme, evidence source,
 conversation id and resume/exclude/fresh/refusal, without copying transcript
 or prompt content. Session ownership and headless restrictions are unchanged.
 
-The plan session owns the coherent programme README/design, prerequisite investigation/decisions, phases, complete goal briefs and executable checks; a finished brief moves to build once its acceptance procedure and setup are verified. It may also investigate,
-write goals, build and land work itself, or take over a goal's branch when
-that costs less than a new build session. This broad freedom belongs to interactive planning with Martin at the terminal. The runner starts no session on a draft, and no headless session plans: [code cuts a ready order](mc-run.md#the-cut-of-a-ready-order) into one goal in build per part (Martin, 2026-11-21);
-a goal in `finish` gets a finish session and a red merge a mend session (a
-merge failure only; a `blocked` goal before merge is Martin's), each with its own role ([mc-goals.md](mc-goals.md) § *Finish
+The desk owns the coherent programme README/design, prerequisite investigation/decisions and the order. The runner starts no session on a draft, and no session plans: [code cuts a ready order](mc-run.md#the-cut-of-a-ready-order) into one goal in build per part (Martin, 2026-11-21);
+a red merge gets a mend session (a
+merge failure only; a `blocked` goal before merge is Martin's), with its own role ([mc-goals.md](mc-goals.md) § *Finish
 and mend*).
 See [mc-goals.md](mc-goals.md).
 
 ## Writing goals
 
-`goal-verb.md`, included by the role, describes the verbs. The goal carries
+`canon/verbs/goal.md` describes the verbs. The goal carries
 the goal's numbered parts, its documents and its criteria with their checks.
 Stages move forward; `ready` or `blocked` is a separate status. Phases order
 work across the programme: in a sequential programme all goals of a lower phase
@@ -506,15 +477,6 @@ its goals — its README (`canon/tasks/references/programme-readme.md`), the
 decisions put to Martin in one sitting, the cut into phases, and every
 verified goal set in `build`, and a consumer awaiting its producer kept in draft — is
 `canon/tasks/designing-a-programme.md` (Martin, 2026-11-08).
-
-A plan session writes a review or build follow-up as a goal without asking
-Martin when its investigation is complete and its change applies a decided
-standard (a `docs/technical/` document or a programme ruling) or repairs a
-defect against one (Martin, 2026-11-08). What it still asks him is what `canon/tasks/asking-martin.md` names, through
-`mc ask` as that page says (`mc goal martin` is gone). The
-reason: plan sessions put "write this goal now" questions to jev, which could
-not settle them (on 2026-11-08, 67 jev calls showed `settled` below 0.70 on 20
-such questions).
 
 A goal names no class and no pinned provider; its build sessions run on the
 catalog's `build` list. The catalog and observed capacity choose
@@ -529,7 +491,7 @@ The catalog's first review candidate is read first whenever it can run; the auth
 
 ## Archiving a programme
 
-`mc plan <programme> --archive` is a person's act, or the interactive Martin
+`mc programs archive <programme>` is a person's act, or the interactive Martin
 role's on his word at the desk (no other session and no headless role may call
 it), and the only way to archive a programme without a record. The runner archives finished goals, and it archives
 the programme above them only when the programme has a valid record: once every
@@ -537,7 +499,7 @@ goal is done or dropped, at least one is done and no restricted data is
 held, it calls the same `archiveProgramme` itself and sets the record's `state`
 to `done` ([mc-run.md](mc-run.md#programme-archive-turn)). `archiveProgramme`
 (`src/mc/archive-programme.js`) refuses any goal not done or dropped and
-anything the planning area's release forecast would keep, and any entry under
+anything the release forecast of the programme directory's worktrees would keep, and any entry under
 `~/mc/restricted/<programme>/` without a README.md. It checks before changing
 anything.
 
@@ -546,7 +508,7 @@ files that code or tests still read. It removes the other files and adds a
 `closed` row for the programme in `project_log.md` in a docs-only pull
 request. If all files are kept, there is nothing to remove and no row or PR
 is created. An existing archive PR is reused. Only after those
-PRs land are the planning worktrees released. In layout 2
+PRs land are the worktrees a plan session left in the directory released. In layout 2
 `~/mc/restricted/<programme>/` is then removed, each entry's README.md first
 copied to the programme's `evidence/<entry>/RESTRICTED-README.md`
 ([mc-layout.md § Data outside the repositories](mc-layout.md#data-outside-the-repositories)),
@@ -557,16 +519,16 @@ identity, tracked paths and inspected main commits in the programme directory.
 It takes the tree from the archive merge commit or, when every file is kept,
 from the main commit inspected for that decision.
 The rename carries that receipt to the shelf; older shelves need not have one.
-When no planning directory is left (an older archive shelved it, or there was
+When no programme directory is left (an older archive shelved it, or there was
 none) and every file under `docs/project/<programme>/` is kept, the receipt is
 written to `~/mc/archive/programs/<programme>/`, made if absent; so running
-`--archive` again on a programme shelved before receipts takes it off the page
+`mc programs archive` again on a programme shelved before receipts takes it off the page
 and `mc programs list` (Martin, 2026-11-20).
-A failure to land the repository change leaves the planning area intact so
+A failure to land the repository change leaves the programme directory intact so
 a later attempt can continue. A failed receipt fetch leaves that repository's
 membership unproven.
 
-`--archive` refuses session-selection flags and requires an explicit name.
+`mc programs archive` requires an explicit name.
 No-record programmes are not automatically archived or migrated. The manual
 command can archive one after work and write-back without declaring its enduring
 direction over. For a valid record, the runner checks its end and safety as
@@ -580,15 +542,12 @@ the programme.
 
 ## How it is tested
 
-`tests/mc/commands/plan.test.js` covers the paths, refusal inside a session,
-programme picker, prompt, role body and the real discovery/launcher composition
-for fresh, compatible resume and `--new`, with provider spawn replaced.
-It also covers `a new programme gets its README from the programme template`
-and `an existing README is left as it is`.
 `tests/mc/work-open.test.js` uses isolated Codex rollouts and Claude stores
 and launch evidence for descendant review, wrong programme, unknown identity,
 explicit refusal, aliases and compatible continuation.
-`tests/mc/archive-programme.test.js` covers archive refusals and ordering.
+`tests/mc/help.test.js` holds that `mc plan` is answered as an unknown command.
+`tests/mc/archive-programme.test.js` covers archive refusals and ordering,
+and who may call `mc programs archive`.
 
 ## Acceptance setup at build
 

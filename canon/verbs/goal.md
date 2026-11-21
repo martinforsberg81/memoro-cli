@@ -4,7 +4,7 @@ A goal is a directory, `~/mc/programs/<programme>/goals/<goal>/`: `GOAL.json`
 (the goal's numbered parts, its documents, and success criteria, each with a
 check and a `met`) and `LOG.md` (one entry per session). A worktree per
 repository on branch `goal/<goal>` is made at the goal's first use: the runner
-makes it before the first session on the goal (a plan, build, review or
+makes it before the first session on the goal (a build, review or
 mend session), and `mc tidy` releases it when no session can use it. Its branch
 stays, and the next use re-adds it as it was. `mc goal --help` is the reference;
 `mc goal show <programme>/<goal>` renders one goal, each criterion with ✓/✗ and
@@ -48,7 +48,7 @@ its check, and each worktree's state.
   Read the entry back with `mc goal show` before moving the stage.
 - **Stage and status.** A goal is `<stage> · <status>`: stage `draft → build
   → review → merge → done` (or `dropped`), status `ready`, `blocked` or `Martin`. The stage only moves forward, but for a review's move from review to build, each stage with one owner: the
-  plan session writes it in `draft` and moves it to `build`; a build
+  desk writes it in `draft` and moves it to `build` (a goal the runner cuts starts in `build`); a build
   session moves it to `review` or may set Martin; a review session moves it to
   `merge` (`mc goal stage merge` sends all registered PRs to merge, when every
   line of REVIEW.md is OK) or back to `build` (`mc goal stage build`, when a line
@@ -71,7 +71,7 @@ its check, and each worktree's state.
 - **Taking over a goal interactively.** Always read the goal's current stage,
   its last entry in LOG.md (the blocking reason, or Martin's question, and
   REVIEW.md when present), and the instructions for that stage before acting:
-  `draft` uses [plan-session](../roles/plan-session.md), `build` uses
+  `draft` uses [writing-a-goal](../tasks/writing-a-goal.md), `build` uses
   [build-session](../roles/build-session.md), `review` uses
   [review-session](../roles/review-session.md), and a red
   `merge` (a merge failure, the only case mend takes) uses [mend-session](../roles/mend-session.md) with
@@ -89,11 +89,11 @@ its check, and each worktree's state.
   canonically, reconciles the goal, then finishes or explicitly returns/hands it off.
   In a headless session, follow the assigned role: build/review resolve their own acceptance obstacles and report a wrong goal with `mc goal defect`; only merge failure uses mend. An actual choice uses goal-bound `mc ask` in its current stage with exactly what is needed (the one way to ask, `mc goal martin` being gone); the call answers inside itself and the session continues with the answer. What reaches Martin is in [asking-martin](../tasks/asking-martin.md).
 - **Refused.** mc refuses every session except the interactive Martin and unattended decision roles a backward move, naming both stages
-  — a person (`MC_TOOL=person`, or none) and interactive Martin or decision may move a stage back, with truthful attribution. It refuses `done` from every session but plan, and also refuses Martin's administrative `done`; `dropped` is allowed for plan or interactive Martin or decision, any
+  — a person (`MC_TOOL=person`, or none) and interactive Martin or decision may move a stage back, with truthful attribution. It refuses `done` from every session, Martin's administrative `done` too; `dropped` is allowed for interactive Martin or decision, any
   move but `build → review` from a build session, any but `review →
   merge|build` from a review, `merge` or `build` from a review without a REVIEW.md in its fixed form,
   `finish` from everyone (a name kept for old records), every stage move from a mend session, and
-  `review` from a session other than plan while a criterion is not met. The
+  `review` from a session while a criterion is not met. The
   runner starts no delivery session on `draft · ready`, no session on `Martin`, or a build session
   on a goal with no criterion, and the merger does not land a goal with one
   unmet.
@@ -112,7 +112,7 @@ its check, and each worktree's state.
 
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --title "…"` makes one, always in draft: GOAL.json and
   LOG.md, and no worktree (the runner makes it at first use). A draft made without `MC_HEADLESS=1` is held from creation: `mc goal stage` to `build` frees it, and `mc goal release` removes the hold without moving it, and the draft stays its writer's to finish. `mc goal drop
-  --reason "…"` abandons delivery; only plan, interactive Martin, decision or a person may drop. The stage is
+  --reason "…"` abandons delivery; only interactive Martin, decision or a person may drop. The stage is
   persisted before cleanup. Exclusive open PRs are closed, their merge rows
   cancelled, and the goal is archived immediately when safe. Shared PRs stay
   open and queued. Failed or unsafe cleanup stays visible and retries through
@@ -123,7 +123,7 @@ its check, and each worktree's state.
   `build · ready` for each part of README.md that has none, and one more, last, that writes `docs/technical/`. Such a goal holds no text: `mc goal show` prints its
   part as README.md has it now, its sessions are given the same, and a build session reports no goal defect on
   it. A goal whose part has left the order starts no session, and `mc goal list` says so. A goal in build
-  starts when its phase is open. Interactive mc plan remains the person's entrance; a draft written there
+  starts when its phase is open. A draft written by hand at the desk
   is its writer's to finish.
 
 The unattended `decision` desk role has Martin's goal mutation authority,

@@ -1,7 +1,7 @@
 # mc layout — where programmes and runner areas are
 
-`mc layout [--json]` prints the layout number and three roots: planning
-sessions, legacy execution areas, and dependency-update areas. It is a reading,
+`mc layout [--json]` prints the layout number and three roots: programme
+directories, legacy execution areas, and dependency-update areas. It is a reading,
 not a migration. `src/mc/commands/layout.js` and `src/mc/paths.js` supply it.
 
 ## Current structure
@@ -12,7 +12,7 @@ not a migration. `src/mc/commands/layout.js` and `src/mc/paths.js` supply it.
   PROGRAMME.json                    its record, when it has one (mc-plan.md)
   PROGRAMME-REVIEW.md                advisory reading findings
   .programme-review-launch.json     bounded in-flight launch binding, hashed token, pid/start
-  memoro/  memoro-cli/               plan/<programme> worktrees
+  memoro/  memoro-cli/               plan/<programme> worktrees a plan session left (mc plan is gone)
   goals/<goal>/
     GOAL.json  LOG.md                brief, state and session log
     memoro/  memoro-cli/             goal/<goal> worktrees, as repos declares
@@ -78,9 +78,9 @@ account-bearing manifests, production-derived bytes. Rules, also in
   `evidence/<date>-<topic>/`, never the bytes, storage keys or account ids.
 - Only an interactive session creates, moves or deletes an entry. Headless
   sessions only read a copy they are pointed at.
-- The entry is deleted when its README's condition holds, by the plan session
-  that owns it, which records the deletion in the programme. When the
-  programme is archived, `mc plan <programme> --archive` removes
+- The entry is deleted when its README's condition holds, by the desk,
+  which records the deletion in the programme. When the
+  programme is archived, `mc programs archive <programme>` removes
   `~/mc/restricted/<programme>/` and keeps each README as
   `evidence/<entry>/RESTRICTED-README.md` in the archived programme; it refuses
   while an entry has no README.md.
@@ -148,7 +148,7 @@ a caller takes the field for what it does:
 - `path` — where git plumbing runs: `fetch`, `show`, `rev-parse`, `log`,
   `branch`, `merge-base`, `worktree add|list|prune|repair`, and `gh`. The bare
   directory, or the primary checkout. Most callers take this one (`mc deploy`,
-  `mc language`, `mc asc`, `mc plan`, `mc goal`, `mc deps`,
+  `mc language`, `mc asc`, `mc goal`, `mc deps`,
   tidy, the runner).
 - `checkout` — a working tree on `main`, for reading a file or running a
   porcelain command: `self/<name>` when it exists, else the primary checkout,

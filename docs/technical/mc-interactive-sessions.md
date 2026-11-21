@@ -6,7 +6,7 @@ The provider mechanics below also serve that server half.
 
 ## Platform boundary
 
-On Linux, an interactive `mc plan <programme>` or `mc martin`
+On Linux, an interactive `mc martin`
 launched through SSH keeps its provider alive past
 the terminal: a Claude Code background session, or a Codex `app-server` of its
 own. Eligibility requires Linux, `SSH_CONNECTION` or `SSH_TTY`, an interactive
@@ -30,7 +30,7 @@ Use the same entrance after reconnecting, for example:
 
 ```sh
 ssh tc
-mc plan <programme> --claude
+mc martin --claude
 ```
 
 A desk is the work root, area, normalized role and programme. Several sessions
@@ -52,7 +52,7 @@ holder adds it to the `--bg` start it runs. It is not recorded per session, and
 no Claude setting is written under `~/.claude`. Headless runs, runner goal
 sessions, helper intake and collect, and Codex get no flag.
 
-`--bg` is decided by the invocation of `mc plan` or `mc martin`,
+`--bg` is decided by the invocation of `mc martin`,
 never remembered per session.
 
 - Without `--bg`, nothing changes: the terminal attaches, `Ctrl+Z` detaches,
@@ -97,7 +97,7 @@ programme. Additional sessions take the lowest unused suffix: ` 2`, ` 3`, …
 Claude receives the name through `--name` and as the `--remote-control` value;
 Codex keeps it in its session record.
 Roles normalize as for session identity:
-`brief` is `manager`, and `plan-session` is `plan`.
+`brief` is `manager`.
 
 Every folder mc opens Claude in is trusted before Claude starts, foreground
 or background; no session waits on, or is refused for, Claude's trust prompt
@@ -308,7 +308,7 @@ agy (Antigravity CLI) declares `PERSISTENT_DRIVER: 'terminal'`,
 `SERVER_SESSION { mechanism: 'tty', name: 'Antigravity' }`, `BACKGROUND: false`
 and `REMOTE_CONTROL: false`. Its session is the process in the terminal that
 started it: there is no join, no PTY host, no tmux and no remote control, and
-`mc plan`, `mc martin` and the server's `mc session` take it through
+`mc martin` and the server's `mc session` take it through
 `openInWorkArea` like the other tools, with `--agy` (or `agy` where a tool name
 is taken) naming it.
 
