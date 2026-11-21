@@ -134,7 +134,7 @@ export function goalFromMarkdown(text) {
     else (sections.length ? sections.at(-1).lines : lead).push(line);
   }
   const met = fields.status === 'review' || fields.status === 'done';
-  const goal = { ...(LEGACY_STATUSES.includes(fields.status) ? stageOfLegacy(fields.status) : { status: fields.status }), repos: list(fields.repos), class: fields.class, created: fields.created || null, prs: list(fields.prs),
+  const goal = { ...(LEGACY_STATUSES.includes(fields.status) ? stageOfLegacy(fields.status) : { status: fields.status }), repos: list(fields.repos), created: fields.created || null, prs: list(fields.prs),
     title: title || 'untitled', goal: paragraphs(lead), contract: [], out_of_scope: [], success_criteria: [], documents: [] };
   for (const section of sections) {
     const key = section.name.toLowerCase();

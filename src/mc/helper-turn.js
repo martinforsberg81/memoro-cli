@@ -329,19 +329,19 @@ export async function runHelperTurn({
   let routeWhy = null;
   let routeBilling = null;
   let savedPriority = 'auto';
-  // A tool whose intake model comes only from the catalog's fast list (`INTAKE_FROM_CATALOG`) is routed by it.
+  // A tool whose intake model comes only from the catalog's build list (`INTAKE_FROM_CATALOG`) is routed by it.
   const fromCatalog = (name) => declared(name, 'INTAKE_FROM_CATALOG') != null;
   if (!model && (!tool || fromCatalog(tool))) {
     const catalog = (deps.catalog || (() => readModels(env)))();
     savedPriority = catalog.providerPriority ?? 'auto';
     if (tool) {
-      routeCandidate = (catalog.fast || []).find((candidate) => candidate.tool === toolShortName(tool)) || null;
+      routeCandidate = (catalog.build || []).find((candidate) => candidate.tool === toolShortName(tool)) || null;
     } else if (!tool && savedPriority !== 'auto') {
       const roleCandidates = [
         { tool: 'claude', model: role.model || 'sonnet', effort: 'medium' },
-        ...(catalog.fast || []).filter((candidate) => fromCatalog(candidate.tool)),
+        ...(catalog.build || []).filter((candidate) => fromCatalog(candidate.tool)),
       ];
-      const chosen = chooseCandidate({ cls: 'fast', catalog: { fast: roleCandidates }, capacity: (deps.capacity || (() => readCapacity({ root: runnerDir(env) })))(), now, priority: savedPriority });
+      const chosen = chooseCandidate({ cls: 'build', catalog: { build: roleCandidates }, capacity: (deps.capacity || (() => readCapacity({ root: runnerDir(env) })))(), now, priority: savedPriority });
       routeCandidate = chosen.candidate;
       routeWhy = chosen.why;
       routeBilling = chosen.billing;

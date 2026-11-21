@@ -746,7 +746,7 @@ Queued files of one repository and finder run together, at merge-failure mend
 priority within the existing lane total. A retry retains its original batch,
 branch `mend/main-<repo>-<digest>` and worktree under `runner/work/`; new files
 never join a used branch. The initial branch starts from fetched origin/main.
-The session uses the mend role's default catalog list and class fast, without
+The session uses the mend role's default catalog list without
 GOAL.json, LOG.md or proposals. It classifies the error, repairs a regression
 in the owning code/fixture or declares and provisions a host prerequisite in
 `docs/technical/testing.md` with the provider installer (non-interactive sudo

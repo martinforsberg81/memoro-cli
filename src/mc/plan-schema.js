@@ -22,10 +22,6 @@ export const EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'm
 export const CLAUDE_MODELS = Object.freeze(['haiku', 'opus']);
 export const CODEX_MODELS = Object.freeze(['gpt-6.2-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'gpt-6.1-sol']);
 
-/**
- * The work classes (ruling 59): `fast`, `medium` and `large` for a build, which mc
- * resolves to a model when the session starts, and `review`, the review
- * session's class.
- */
-export const WORK_CLASSES = Object.freeze(['fast', 'medium', 'large']);
+/** The list a build runs on, and `review`, the review session's list. A goal has no class. */
+export const BUILD_CLASS = 'build';
 export const REVIEW_CLASS = 'review';

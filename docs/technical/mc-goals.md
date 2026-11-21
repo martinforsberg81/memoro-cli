@@ -130,7 +130,6 @@ written, and a write that would make one is refused with the field named.
   "status": "ready",
   "phase": 2,
   "repos": ["memoro-cli", "memoro"],
-  "class": "fast",
   "created": "2026-11-01T20:00:00Z",
   "prs": ["memoro#14761", "memoro-cli#1238"],
   "title": "Title",
@@ -158,7 +157,7 @@ written, and a write that would make one is refused with the field named.
   phase 1; `renderGoal` always writes it.
 - `repos` — repository names in order. The first is where a session starts,
   and the lane that serves it takes the goal.
-- `class` — `fast`, `medium` or `large`, routed through the model catalog (ruling 59) for the goal's build sessions only; review, mend and next-draft plan run on their own catalog lists, whatever the class (`docs/technical/mc-run.md`, *Work classes and capacity*).
+- A goal has no `class` (Martin, 2026-11-21): its build sessions run on the model catalog's `build` list; review, mend and next-draft plan run on their own catalog lists (`docs/technical/mc-run.md`, *The build list and capacity*). A GOAL.json written with a `class` still reads; the key is ignored and not written back.
 - `created` — an ISO instant written by `mc goal new`, or null.
 - `prs` — the pull requests that carry the goal's work, as `<repo>#<n>`.
   `mc publish` writes the one it opens or updates (*Done when its work has
@@ -188,7 +187,7 @@ is read, written and shown exactly as above. Version 2 has the same header
 ```json
 {
   "schema": "mc-goal", "version": 2, "stage": "build", "status": "ready", "phase": 1,
-  "repos": ["memoro-cli"], "class": "large", "created": "2026-11-14T10:00:00Z", "prs": [], "title": "Title",
+  "repos": ["memoro-cli"], "created": "2026-11-14T10:00:00Z", "prs": [], "title": "Title",
   "aim": ["Why the goal exists."],
   "outcome": ["What is true when it lands."],
   "problem": [{ "id": "B1", "text": "What is wrong.", "basis": "measured" }],
@@ -480,7 +479,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   stands in for the argument. Plan, a person and the learning role may run it;
   so may a build, review or mend session, which only reads.
 
-- **`new <p>/<g> --repo <r>[,<r>] --class fast|medium|large --title "…" [--phase <n>] [--stage draft] [--structure 1|2]`** — makes a
+- **`new <p>/<g> --repo <r>[,<r>] --title "…" [--phase <n>] [--stage draft] [--structure 1|2]`** — makes a
   goal, refused unless its flags are valid and its names are new.
   The learning role is refused every mutation (exit 2); it uses `mc learning` for dispositions.
   Before fetching or writing, a draft programme record refuses (exit 1):
@@ -659,7 +658,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   drop and any-stage authority. Neither can make a criterion met administratively
   or bypass review, acceptance, publication or merge evidence. `MC_HEADLESS=1`
   Martin authority is refused; decision authority is allowed, but headless deploy, admin, production-data and credential hooks remain enforced. Decision may use `mc ask` at any active stage, not just the stage of a delivery role. Its mutations log `by decision`; criterion rewrites remain unmet until checked. Build, review and mend retain their ordinary limits.
-- **`show <p>/<g>`** — a status line (`<p>/<g> · stage · status · phase <n> · repos · class ·
+- **`show <p>/<g>`** — a status line (`<p>/<g> · stage · status · phase <n> · repos ·
   criteria <met>/<all> · created …`, with `· prs …` when set), the goal as text (*Seen, not only stored*), the
   [BUILD OUTCOME summary](#goaljson) when available, the last three log entries,
   and each worktree's changed files, commits past `origin/main` and last commit date.
@@ -685,7 +684,7 @@ lines, then Markdown. `mc goal convert [<programme>]` (`src/mc/goal-convert.js`,
 the one reader of GOAL.md left) turns each one not under `goals/.archive/` into
 GOAL.json and removes the GOAL.md:
 
-- the front matter's `repos`, `class`, `created` and `prs` become
+- the front matter's `repos`, `created` and `prs` become
   fields, and its `status` a stage (*Converting a status into a stage*); the `# ` line is the title;
 - `## Goal` is `goal`, `## Contract` is `contract` and `## Out of scope` is
   `out_of_scope`, a paragraph per block between blank lines;
@@ -725,8 +724,7 @@ turns a live project into goals:
 - the step's `title` is the goal's title, its `instruction` the goal, its
   `done_when` a criterion — the title, checked by `done_when`. The project's
   contract, out of scope and documents go to every goal, its success criteria
-  to the last, `met` as STATE.json held them. `class` is the step's work class,
-  or the plan's, or `large`;
+  to the last, `met` as STATE.json held them. No class is set;
 - a `built` or `landing` step with a pull request is a goal in `review ·
   ready` carrying it, its criterion met; a `blocked` step is `build · blocked`,
   its first LOG.md entry the blocker; any other is `build · ready`. The first
@@ -946,12 +944,12 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    (`remakeUnbuiltBranches`).
 3. **Launch.** A goal in `build` gets a build session with the `build-session:goal`
    role (`canon/roles/build-session.md`, its `goal` and shared build parts), in
-   the first repository's worktree, with the goal's class routing, model and
+   the first repository's worktree, with the `build` list's routing, model and
    billing as any headless session has them. A goal in `review` gets a review session with
    the `review-session:goal` role instead, on a review candidate (`mc
    model`). Review ranks usable subscriptions by provider priority, then headroom; ties avoid the build model, then follow catalog order. The catalog's first review candidate is the first choice whenever it can run (not refused, not exhausted, launchable); the ranking applies when it cannot, or when its model built the goal. Within the ranking, build-model diversity is a tie rule, not a reason to abandon a preferred provider or roomier subscription. With no
    candidate on its plan it uses the API
-   reserve as a class does (`docs/technical/mc-run.md`, *Work classes and
+   reserve as a build does (`docs/technical/mc-run.md`, *The build list and
    capacity*). The models are compared as the catalog spells them, which is
    how `MC_MODEL` writes them into the heading. The review is told its pull
    request and head: the open pull request on `goal/<goal>`, asked of GitHub
@@ -961,7 +959,7 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    `build · ready` with a runner entry that names the missing pull request
    the first time, and to `review · Martin` the second (a review session's entry
    between the two resets the count). A repair build gets a build session on the
-   `finish` catalog list (a list name kept; it is not the goal's class); merge failures alone get a mend session (`mend-session`) on the mend list; next-draft planning runs on the plan list. None of them uses the goal's class, and none borrows a class's candidates when its own list has none usable. Legacy blocked goals outside merge are reconciled to Martin, retaining prior evidence without a diagnostic launch. `MC_ROLE`,
+   `finish` catalog list (a list name kept; it is not the `build` list); merge failures alone get a mend session (`mend-session`) on the mend list; next-draft planning runs on the plan list. None of them uses the `build` list, and none borrows its candidates when its own list has none usable. Legacy blocked goals outside merge are reconciled to Martin, retaining prior evidence without a diagnostic launch. `MC_ROLE`,
    `MC_GOAL`, `MC_REPO`, `MC_WORKAREA` and `MC_TOOL` are set for every kind.
    If the role's file is missing on the machine, the goal is skipped.
 4. **Silent build.** A build session that leaves no entry gets one from the
@@ -1047,7 +1045,7 @@ below (Martin, 2026-11-09). Goal delivery recovery stays with two roles:
   launch. Build/review own their acceptance repairs.
 
 Both run in the goal's first repository's worktree, a repair build on the finish list
-and mend on the mend list (never the goal's class), with billing like a build, with `MC_GOAL`, `MC_REPO` and
+and mend on the mend list (never the `build` list), with billing like a build, with `MC_GOAL`, `MC_REPO` and
 `MC_WORKAREA` set; their `mc goal stage merge` writes the merge handoff file
 that ends the session and releases its lane. Neither performs what is refused to an unattended session:
 deploy, production data, credentials or admin override. The programme turns

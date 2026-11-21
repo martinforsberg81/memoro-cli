@@ -96,8 +96,8 @@ export const ARCHIVE_DIR = '.archive';
 export const GOAL_LOG_FILE = 'goal_log.md';
 /** The role a goal's review session runs with: `canon/roles/review-session.md`, its `goal` part. */
 export const REVIEW_ROLE = 'review-session:goal';
-/** `class` is the work class a goal's session runs on (ruling 59), as a step's is. */
-export const CLASSES = ['fast', 'medium', 'large'];
+/** A goal has no class: builds run on the catalog's `build` list. A GOAL.json written with one still reads; it is ignored and not written back. */
+export const LEGACY_GOAL_KEYS = Object.freeze(['class']);
 
 /**
  * The labelled lines a log entry may carry, and the field each one names. An
@@ -124,7 +124,7 @@ export const LEGACY_AFTER = 'after';
 
 /** GOAL.json's keys, in the order it is written. */
 export const GOAL_KEYS = Object.freeze([
-  'schema', 'version', 'stage', 'status', 'phase', 'repos', 'class', 'created', 'prs',
+  'schema', 'version', 'stage', 'status', 'phase', 'repos', 'created', 'prs',
   'title', 'goal', 'contract', 'out_of_scope', 'success_criteria', 'documents',
 ]);
 /** The prose fields `mc goal set` writes, by the word it takes for each. */
@@ -177,7 +177,7 @@ export function validateGoal(value, { draft = false } = {}) {
   const problems = [];
   // A goal written before phases has `after`: `mc goal convert` (or the runner) gives it its phase.
   const version = value.version === 2 ? 2 : 1;
-  for (const key of unknownKeys(value, version === 2 ? GOAL_KEYS_V2 : GOAL_KEYS)) problems.push(key === LEGACY_AFTER ? `${key}: goals run in phases now — mc goal convert gives it one` : `${key}: unknown key`);
+  for (const key of unknownKeys(value, [...(version === 2 ? GOAL_KEYS_V2 : GOAL_KEYS), ...LEGACY_GOAL_KEYS])) problems.push(key === LEGACY_AFTER ? `${key}: goals run in phases now — mc goal convert gives it one` : `${key}: unknown key`);
   if (value.schema !== GOAL_SCHEMA) problems.push(`schema: must be "${GOAL_SCHEMA}"`);
   if (!GOAL_VERSIONS.includes(value.version)) problems.push(`version: must be ${GOAL_VERSIONS.join(' or ')}`);
   // A goal written before stages has only a status (`open`, `review`, …): `mc goal convert` (or the runner) gives it its stage.
@@ -186,7 +186,6 @@ export function validateGoal(value, { draft = false } = {}) {
     if (!STAGES.includes(readStage(value.stage))) problems.push(`stage: one of ${STAGES.join(', ')}, not ${value.stage ?? 'missing'}`);
     if (!STATUSES.includes(value.status)) problems.push(`status: one of ${STATUSES.join(', ')}, not ${value.status ?? 'missing'}`);
   }
-  if (!CLASSES.includes(value.class)) problems.push(`class: ${CLASSES.join(' or ')}, not ${value.class ?? 'missing'}`);
   if (!Array.isArray(value.repos) || value.repos.length === 0) problems.push('repos: at least one repository, the first being where a session starts');
   else for (const repo of value.repos) if (typeof repo !== 'string' || !NAME_RE.test(repo)) problems.push(`repos: ${repo} is not a repository name — lower-case letters, digits and hyphens`);
   if (value.created !== undefined && value.created !== null && !(typeof value.created === 'string' && Number.isFinite(Date.parse(value.created)))) problems.push('created: an ISO instant, or null');
@@ -230,7 +229,7 @@ export function parseGoal(text) {
   const prs = [];
   for (const ref of (value.prs ?? []).map(parsePrRef)) if (!prs.some((other) => other.repo === ref.repo && other.pr === ref.pr)) prs.push(ref);
   const head = {
-    version: value.version, stage: readStage(value.stage), status: value.status, phase: value.phase ?? 1, repos: [...value.repos], class: value.class, created: value.created ?? null,
+    version: value.version, stage: readStage(value.stage), status: value.status, phase: value.phase ?? 1, repos: [...value.repos], created: value.created ?? null,
     prs, title: value.title.trim(),
   };
   if (value.version === 2) return { ...head, ...partsOf(value) };
@@ -249,7 +248,7 @@ export function parseGoal(text) {
 export function renderGoal(goal) {
   const version = goal.version === 2 ? 2 : GOAL_VERSION;
   const head = {
-    schema: GOAL_SCHEMA, version, stage: readStage(goal.stage), status: goal.status, phase: goal.phase ?? 1, repos: goal.repos, class: goal.class,
+    schema: GOAL_SCHEMA, version, stage: readStage(goal.stage), status: goal.status, phase: goal.phase ?? 1, repos: goal.repos,
     created: goal.created ?? null, prs: (goal.prs ?? []).map((item) => (typeof item === 'string' ? item : prRef(item))),
     title: goal.title,
   };
@@ -392,7 +391,7 @@ export function programsGoals({ home = programsHome(), list = listDirsOf, read =
       const parsed = parseGoal(text);
       const base = { programme, goal, dir, log, verdict: read(join(dir, REVIEW_FILE)) };
       if (parsed.problems) {
-        goals.push({ ...base, stage: null, status: null, phase: null, repos: [], class: null, created: null, prs: [], title: null, goal_text: [], contract: [], out_of_scope: [], success_criteria: [], documents: [], problems: parsed.problems });
+        goals.push({ ...base, stage: null, status: null, phase: null, repos: [], created: null, prs: [], title: null, goal_text: [], contract: [], out_of_scope: [], success_criteria: [], documents: [], problems: parsed.problems });
       } else {
         const { goal: goalText, ...rest } = parsed;
         goals.push({ ...base, ...rest, goal_text: goalText ?? [], problems: [] });

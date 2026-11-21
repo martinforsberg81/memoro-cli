@@ -54,7 +54,11 @@ test('parseGoal reads GOAL.json: its fields, prose as paragraphs, criteria and d
   assert.equal(goal.stage, 'build');
   assert.equal(goal.status, 'ready');
   assert.deepEqual(goal.repos, ['memoro-cli', 'memoro']);
-  assert.equal(goal.class, 'large');
+  // A GOAL.json written when goals had a class still reads: the class is ignored, and a write drops it.
+  const legacy = parseGoal(withGoal(GOAL_TEXT, { class: 'large' }));
+  assert.equal(legacy.problems, undefined);
+  assert.equal(legacy.class, undefined);
+  assert.doesNotMatch(renderGoal(legacy), /"class"/u);
   assert.equal(goal.created, '2026-11-01T20:00:00Z');
   assert.equal(goal.title, 'Make the goal plain');
   assert.deepEqual(goal.goal, ['Two files and a worktree.']);
@@ -79,8 +83,6 @@ test('parseGoal names each problem by its field: not JSON, a stage, status or cl
     assert.equal(parseGoal(withGoal(GOAL_TEXT, { stage: undefined, status: old })).problems.join(), `stage: missing — goals have a stage now; mc goal convert gives this ${old} goal one`, old);
     if (old !== 'blocked') assert.match(parseGoal(withGoal(GOAL_TEXT, { status: old })).problems.join(), /^status: one of ready, blocked/u, `${old} beside a stage`);
   }
-  assert.equal(parseGoal(withGoal(GOAL_TEXT, { class: 'medium' })).class, 'medium');
-  assert.match(parseGoal(withGoal(GOAL_TEXT, { class: 'huge' })).problems.join(), /class: fast or medium or large, not huge/u);
   assert.match(parseGoal(withGoal(GOAL_TEXT, { repos: [] })).problems.join(), /repos: at least one repository/u);
   assert.match(parseGoal(withGoal(GOAL_TEXT, { repos: ['Memoro_CLI'] })).problems.join(), /repos: Memoro_CLI is not a repository name/u);
   assert.match(parseGoal(withGoal(GOAL_TEXT, { schema: 'mc-plan' })).problems.join(), /schema: must be "mc-goal"/u);
@@ -242,7 +244,7 @@ test('programsGoals lists every goal under every programme, in listing order, wi
   const { list, read } = model({
     '/p/mc/goals/plain/GOAL.json': GOAL_TEXT,
     '/p/mc/goals/plain/LOG.md': LOG_TEXT,
-    '/p/mc/goals/second/GOAL.json': withGoal(GOAL_TEXT, { class: 'fast' }),
+    '/p/mc/goals/second/GOAL.json': withGoal(GOAL_TEXT, { }),
     '/p/mc/goals/notes/LOG.md': LOG_TEXT,
     '/p/other/goals/broken/GOAL.json': 'no json here\n',
     '/p/other/goals/broken/LOG.md': LOG_TEXT,
@@ -251,14 +253,12 @@ test('programsGoals lists every goal under every programme, in listing order, wi
   assert.deepEqual(goals.map((g) => `${g.programme}/${g.goal}`), ['mc/plain', 'mc/second', 'other/broken']);
   assert.equal(stageWords(goals[0]), 'build · ready');
   assert.deepEqual(goals[0].repos, ['memoro-cli', 'memoro']);
-  assert.equal(goals[0].class, 'large');
   assert.equal(goals[0].title, 'Make the goal plain');
   assert.equal(goals[0].dir, '/p/mc/goals/plain');
   assert.equal(goals[0].log.length, 3);
   assert.deepEqual(goals[0].problems, []);
   assert.deepEqual(goals[0].goal_text, ['Two files and a worktree.']);
   assert.equal(goals[0].success_criteria.length, 1);
-  assert.equal(goals[1].class, 'fast');
   assert.match(goals[2].problems.join(), /^GOAL\.json is not JSON/u);
   assert.equal(goals[2].status, null);
   assert.equal(goals[2].stage, null);
@@ -421,7 +421,7 @@ test('waitsOnPerson: Martin, in any stage that is not finished', () => {
 /** A goal as `programsGoals` gives it, for the phase tests. */
 const listed = (name, stage, phase = 1, extra = {}) => {
   const [programme, goal] = name.split('/');
-  return { programme, goal, dir: `/p/${programme}/goals/${goal}`, stage, status: 'ready', phase, repos: ['memoro-cli'], class: 'large', log: [], problems: [], success_criteria: [{ criterion: 'x', check: 'y', met: false }], ...extra };
+  return { programme, goal, dir: `/p/${programme}/goals/${goal}`, stage, status: 'ready', phase, repos: ['memoro-cli'], log: [], problems: [], success_criteria: [{ criterion: 'x', check: 'y', met: false }], ...extra };
 };
 
 test('a goal without a phase in GOAL.json is read as phase 1, and renderGoal writes it', () => {

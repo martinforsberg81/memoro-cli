@@ -15,7 +15,7 @@ const HOME = '/p';
 const ROOT = '/w';
 const ENV = { MC_WORK_ROOT: ROOT };
 const RECORD = JSON.stringify({ schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' });
-const goalFile = (stage, repo = 'memoro-cli') => renderGoal({ stage, status: 'ready', repos: [repo], class: 'large', title: 'G', goal: ['g'], success_criteria: [{ met: true, criterion: 'x', check: 'y' }] });
+const goalFile = (stage, repo = 'memoro-cli') => renderGoal({ stage, status: 'ready', repos: [repo], title: 'G', goal: ['g'], success_criteria: [{ met: true, criterion: 'x', check: 'y' }] });
 
 /** An in-memory store: `files` by path; `list` of a directory is its entry names. */
 function store(files = {}) {

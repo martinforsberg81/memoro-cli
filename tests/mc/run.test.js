@@ -31,6 +31,9 @@ import * as agyAdapter from '../../src/adapters/antigravity-cli.js';
 import { expandRoleIncludes, sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/model-capacity.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
+
+/** The catalog these runner cases run on: the build list is claude opus then codex sol, as `large` was; the role lists are the defaults. */
+const TEST_CATALOG = { ...DEFAULT_CATALOG, build: [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }] };
 import { goalField, goalJson, goalJsonV2, withGoal } from './_helpers/goal-file.js';
 import { run as goalCommand } from '../../src/mc/commands/goal.js';
 import { run as martinCommand } from '../../src/mc/commands/martin.js';
@@ -229,7 +232,7 @@ function fixture({ root = '/w', plans = {}, queue = '', session, gh = {}, dirty 
     shelve: (dir, programme, project) => { calls.shelved.push([dir, programme, project]); return `/w/archive/projects/${programme}/${project}`; },
     // The model catalog and the capacity snapshot (ruling 59): the defaults, and the snapshot a test
     // starts from, read and written back through `deps.capacity`.
-    catalog: () => structuredClone(DEFAULT_CATALOG),
+    catalog: () => structuredClone(TEST_CATALOG),
     capacity: capacityHandle(capacity),
     pid: 4242,
     addWorktree: ({ name, repo }) => {
@@ -510,7 +513,7 @@ test('chores syncs a waiting goal item without adding a run row', async (t) => {
   assert.deepEqual(f.calls.sessions.slice(callsBefore),[], 'chores starts no session');
 });
 
-test('chores prepares the three oldest items on medium, bounds a round, and waits without a candidate', async (t) => {
+test('chores prepares the three oldest items on the build list, bounds a round, and waits without a candidate', async (t) => {
   for (const mode of ['three', 'four', 'unavailable']) {
     const root = mkdtempSync(join(tmpdir(), 'mc-prepare-round-'));
     t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -524,7 +527,7 @@ test('chores prepares the three oldest items on medium, bounds a round, and wait
     });
     // Sync really precedes preparation; do not seed the store before chores.
     f.deps.syncDeskItems = () => items.toReversed().forEach(item => writeDeskItem(item, { env: f.deps.env }));
-    f.deps.catalog = () => ({ ...DEFAULT_CATALOG, medium: [{ tool: 'codex', model: 'gpt-6.1-terra', effort: 'high' }, { tool: 'claude', model: 'sonnet', effort: 'high' }], large: [{ tool: 'claude', model: 'opus', effort: 'medium' }] });
+    f.deps.catalog = () => ({ ...TEST_CATALOG, build: [{ tool: 'codex', model: 'gpt-6.1-terra', effort: 'high' }, { tool: 'claude', model: 'sonnet', effort: 'high' }] });
     if (mode === 'unavailable') {
       f.deps.capacity.write(capacityWith({ claude: 1 }));
       f.deps.billing = { readApi: () => ({ claude: false, codex: false }) };
@@ -554,10 +557,10 @@ test('chores prepares the three oldest items on medium, bounds a round, and wait
     await runner.chores();
     const expected = mode === 'unavailable' ? [] : items.slice(0, 3).map(item => item.id);
     assert.deepEqual(calls.map(call => call.cwd.split('/').at(-1)), expected);
-    assert.deepEqual(calls.map(call => [call.env.MC_TOOL, call.env.MC_MODEL]), expected.map(() => ['claude', 'sonnet']), 'first usable medium candidate, never large');
+    assert.deepEqual(calls.map(call => [call.env.MC_TOOL, call.env.MC_MODEL]), expected.map(() => ['claude', 'sonnet']), 'first usable build candidate');
     const rows = String(f.files[runner.paths.runs]).split('\n').map(line => line.split('\t')).filter(row => row[2] === 'desk-prepare');
     assert.deepEqual(rows.map(row => row[1]), expected);
-    assert.deepEqual(rows.map(row => row.slice(14, 20)), expected.map(() => ['sonnet', 'medium', 'claude', 'high', 'plan', '0.2500']));
+    assert.deepEqual(rows.map(row => row.slice(14, 20)), expected.map(() => ['sonnet', 'build', 'claude', 'high', 'plan', '0.2500']));
     assert.deepEqual(listDeskItems({ env: f.deps.env, state: 'prepared' }).map(item => item.id), expected);
     assert.deepEqual(listDeskItems({ env: f.deps.env, state: 'new' }).map(item => item.id), items.slice(expected.length).map(item => item.id));
     if (mode === 'four') {
@@ -625,7 +628,7 @@ test('chores starts one learning session with five open lessons: its role, headl
   assert.equal(l.calls.length, 1);
   const [call] = l.calls;
   assert.equal(call.env.MC_ROLE, 'learning'); assert.equal(call.env.MC_HEADLESS, '1');
-  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], [DEFAULT_CATALOG.decision[0].tool, DEFAULT_CATALOG.decision[0].model], 'the first usable decision candidate');
+  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], [TEST_CATALOG.decision[0].tool, TEST_CATALOG.decision[0].model], 'the first usable decision candidate');
   for (const name of ['MC_GOAL', 'MC_PROGRAMME']) assert.equal(call.env[name], undefined);
   assert.equal(call.cwd, join(l.root, 'martin', 'lessons'));
   assert.ok(call.args[call.args.indexOf('--append-system-prompt') + 1].includes(readCanonRole('learning').overlay), "the role's words");
@@ -879,7 +882,7 @@ test('learning guards both entrances and records accurate, held, repair and lega
     const proposal = join(env.MC_WORK_ROOT, 'areas', AREA, 'proposals', '2026-08-29-mc-defect.md');
     l.put(proposal, 'The code retries when it should stop. Evidence: src/actual.mjs.\n');
     assert.equal((await l.act(learningCommand, ['record', defect.name, '--proposal', proposal], child)).code, 0);
-    assert.equal((await l.act(goalCommand, ['new', 'fixture/not-allowed', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Do not order'], child)).code, 2);
+    assert.equal((await l.act(goalCommand, ['new', 'fixture/not-allowed', '--repo', 'memoro-cli', '--title', 'Do not order'], child)).code, 2);
     assert.equal((await l.act(programmesCommand, ['create', 'not-allowed', '--end', 'Do not order'], child)).code, 2);
   });
   await l.chores();
@@ -2819,7 +2822,7 @@ test('current-<repo>.json exists only while the session is in flight, and runner
   const { model, effort, advisor } = current;
   assert.ok(model, 'the model the class was routed to');
   assert.deepEqual(current, {
-    name: 'goal:prog/alpha', step: null, kind: 'build', variant: 'goal', programme: 'prog', repo: 'memoro', lane: 0, tool: 'claude', model, effort, advisor, class: 'large', billing: 'plan', check_in_minutes: 60, check_ins: 0,
+    name: 'goal:prog/alpha', step: null, kind: 'build', variant: 'goal', programme: 'prog', repo: 'memoro', lane: 0, tool: 'claude', model, effort, advisor, billing: 'plan', check_in_minutes: 60, check_ins: 0,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: `${GOALS}/alpha/memoro`, role: goalRole,
   });
   assert.deepEqual(JSON.parse(during['/w/runner/runner.json']), { pid: 4242, started: '2026-08-29T10:00:00Z', args: [], takeover: true });
@@ -3953,45 +3956,19 @@ test('a failed attach is said, and the session still runs', async () => {
   assert.match(f.files['/w/runner/log/runner.log'], /goal:prog\/c: dependencies could not be attached — npm error boom/u);
 });
 
-test('one live runner rereads provider priority for fresh fast and large launches', async () => {
+test('one live runner rereads provider priority for fresh build launches', async () => {
   const f = goalFixture({ flexible: {} });
   let priority = 'codex';
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), providerPriority: priority,
-    fast: [DEFAULT_CATALOG.fast[0], DEFAULT_CATALOG.fast[1]],
-    large: [DEFAULT_CATALOG.large[0], { tool: 'codex', model: 'gpt-6-luna', effort: 'high' }],
+  f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), providerPriority: priority,
+    build: [TEST_CATALOG.build[0], { tool: 'codex', model: 'gpt-6-luna', effort: 'high' }],
   });
   f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.9 }));
-  f.files[`${GOALS}/flexible/GOAL.json`] = withGoal(f.files[`${GOALS}/flexible/GOAL.json`], { class: 'fast' });
   const runner = createRunner({ deps: f.deps });
   await runner.pass({ repo: 'memoro' });
   assert.deepEqual([f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['codex', 'gpt-6-luna']);
   priority = 'claude';
-  f.files[`${GOALS}/flexible/GOAL.json`] = withGoal(f.files[`${GOALS}/flexible/GOAL.json`], { class: 'large' });
   await runner.pass({ repo: 'memoro' });
   assert.deepEqual([f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['claude', 'opus']);
-});
-
-test('a medium build launches its first usable medium candidate and never falls back when that list is empty', async () => {
-  const f = goalFixture({ medium: {} });
-  f.files[`${GOALS}/medium/GOAL.json`] = withGoal(f.files[`${GOALS}/medium/GOAL.json`], { class: 'medium' });
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG),
-    fast: [{ tool: 'claude', model: 'haiku', effort: 'high' }],
-    medium: [{ tool: 'claude', model: 'sonnet', effort: 'high' }, { tool: 'codex', model: 'gpt-6.1-terra', effort: 'high' }],
-    large: [{ tool: 'claude', model: 'opus', effort: 'medium' }],
-  });
-  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
-  assert.equal(f.calls.sessions.length, 1);
-  assert.deepEqual([f.calls.sessions[0].env.MC_TOOL, f.calls.sessions[0].env.MC_MODEL, runRows(f.files).at(-1).effort],
-    ['claude', 'sonnet', 'high']);
-
-  const empty = goalFixture({ medium: {} });
-  empty.files[`${GOALS}/medium/GOAL.json`] = withGoal(empty.files[`${GOALS}/medium/GOAL.json`], { class: 'medium' });
-  empty.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG),
-    fast: [{ tool: 'claude', model: 'haiku', effort: 'high' }], medium: [],
-    large: [{ tool: 'claude', model: 'opus', effort: 'medium' }],
-  });
-  assert.equal((await createRunner({ deps: empty.deps }).pass({ repo: 'memoro' })).ran, 0);
-  assert.equal(empty.calls.sessions.length, 0, 'an empty medium list waits, not launch on fast or large');
 });
 
 /** The `rate_limit_event` as it stood in `~/mc/runner/log/*.jsonl` on 2026-10-11. */
@@ -4027,7 +4004,7 @@ test('a codex session records no plan windows, and neither does a claude stream 
   for (const codex of [true, false]) {
     const f = goalFixture({ r: {} });
     // A catalog whose large class is codex alone routes the goal to codex.
-    if (codex) f.deps.catalog = () => ({ ...DEFAULT_CATALOG, large: [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }] });
+    if (codex) f.deps.catalog = () => ({ ...TEST_CATALOG, build: [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }] });
     if (codex) f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.1 }));
     const patches = [];
     f.deps.billing = { readMode: () => 'plan', readState: () => ({}), patchState: (patch) => { patches.push(patch); } };
@@ -4091,7 +4068,7 @@ test('an available plan launches directly and removes ambient provider keys', as
 test('an agy goal session launches without the Gemini keys or its own dropped variable, and a Claude one keeps AGY_ADC_AUTH out of its drop list', async () => {
   const { f, calls } = onBilling('plan');
   f.deps.env = { ...f.deps.env, GEMINI_API_KEY: 'g-from-the-runner', GOOGLE_API_KEY: 'o-from-the-runner', AGY_ADC_AUTH: 'adc' };
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), large: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
+  f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), build: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
   const launch = f.deps.launch;
   f.deps.launch = (tool) => (tool === 'agy' ? { ok: true, id: 'antigravity-cli', shortName: 'agy', adapter: agyAdapter, spec: { bin: '/bin/agy' } } : launch(tool));
   await createRunner({ deps: f.deps }).pass();
@@ -4110,7 +4087,7 @@ test('an agy goal session launches without the Gemini keys or its own dropped va
 
 test('a full Codex plan uses the same gateway route', async () => {
   const { f, calls } = onBilling('plan');
-  f.deps.catalog = () => ({ ...DEFAULT_CATALOG, large: [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }] });
+  f.deps.catalog = () => ({ ...TEST_CATALOG, build: [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }] });
   f.deps.capacity.read = () => capacityWith({ codex: 1 });
   await createRunner({ deps: f.deps }).pass();
   assert.equal(calls[0].call.bin, process.execPath);
@@ -4239,7 +4216,7 @@ test('a lane with no runnable step starts the oldest open goal', async () => {
   const [row] = runRows(f.files);
   assert.equal(row.name, 'goal:prog/older');
   assert.equal(row.kind, 'build-goal');
-  assert.equal(row.class, 'large');
+  assert.equal(row.class, 'build');
   assert.equal(row.note, 'success');
   assert.deepEqual(Object.keys(f.files).filter((path) => path.startsWith('/w/runner/projects/')), [], 'nothing in the register');
 });
@@ -4781,12 +4758,11 @@ const redMerge = `## 2026-08-28T10:00Z · runner · merge · ready\n\nDone: ${re
 const where = (f, name) => ['stage', 'status'].map((key) => goalField(f.files[`${GOALS}/${name}/GOAL.json`], key)).join(' · ');
 
 test('only a build routes on the goal\'s class: finish, mend and plan run on their own lists, never on fast, in the goal\'s worktree', async () => {
-  const HAIKU_ONLY = { ...structuredClone(DEFAULT_CATALOG), fast: [{ tool: 'claude', model: 'haiku', effort: 'high' }] };
-  // repair (the finish list): opus high / sol high; mend: sonnet medium / sol medium (DEFAULT_CATALOG), whichever has room.
+  const HAIKU_ONLY = { ...structuredClone(TEST_CATALOG), build: [{ tool: 'claude', model: 'haiku', effort: 'high' }] };
+  // repair (the finish list): opus high / sol high; mend: sonnet medium / sol medium (TEST_CATALOG), whichever has room.
   for (const [stage, role, claudeModel] of [['repair', 'build-session:goal', 'opus'], ['merge', 'mend-session', 'sonnet']]) {
     for (const tool of ['claude', 'codex']) {
       const f = goalFixture({ stuck: stage === 'merge' ? { stage, log: redMerge } : { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
-      f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { class: 'fast' });
       f.deps.catalog = () => structuredClone(HAIKU_ONLY);
       let capacity = capacityWith({ claude: tool === 'claude' ? 0.1 : 0.9 });
       capacity = applyObservation(capacity, 'codex', {
@@ -4805,7 +4781,7 @@ test('only a build routes on the goal\'s class: finish, mend and plan run on the
       assert.equal(result.ran, 1, `${stage} on ${tool}`);
       const [call] = f.calls.sessions;
       assert.equal(call.env.MC_ROLE, role);
-      assert.equal(call.env.MC_MODEL, tool === 'claude' ? claudeModel : 'gpt-6.2-sol', `${stage} on a fast goal is not haiku`);
+      assert.equal(call.env.MC_MODEL, tool === 'claude' ? claudeModel : 'gpt-6.2-sol', `${stage} is not on the build list's haiku`);
       assert.equal(call.env.MC_TOOL, tool);
       assert.equal(call.cwd, `${GOALS}/stuck/memoro`, 'in the goal\'s worktree, not the programme directory');
       assert.deepEqual([call.env.MC_REPO, call.env.MC_WORKAREA], ['memoro', `${GOALS}/stuck/memoro`]);
@@ -4813,29 +4789,25 @@ test('only a build routes on the goal\'s class: finish, mend and plan run on the
     }
   }
   const planned = goalFixture({ a: { stage: 'draft' } });
-  planned.files[`${GOALS}/a/GOAL.json`] = withGoal(planned.files[`${GOALS}/a/GOAL.json`], { class: 'fast' });
   planned.deps.catalog = () => structuredClone(HAIKU_ONLY);
   planned.deps.capacity.write(capacityWith({ claude: 0.1 }));
   await createRunner({ deps: planned.deps }).pass();
   assert.deepEqual([planned.calls.sessions[0].env.MC_ROLE, planned.calls.sessions[0].env.MC_MODEL], ['plan', 'opus'], 'next-draft planning runs on the plan list');
   const built = goalFixture({ b: { stage: 'build' } });
-  built.files[`${GOALS}/b/GOAL.json`] = withGoal(built.files[`${GOALS}/b/GOAL.json`], { class: 'fast' });
   built.deps.catalog = () => structuredClone(HAIKU_ONLY);
   built.deps.capacity.write(capacityWith({ claude: 0.1 }));
   await createRunner({ deps: built.deps }).pass({ repo: 'memoro' });
-  assert.equal(built.calls.sessions[0].env.MC_MODEL, 'haiku', 'a build still follows its class');
+  assert.equal(built.calls.sessions[0].env.MC_MODEL, 'haiku', 'a build follows the build list');
 });
 
 test('a repair whose finish list has no usable subscription never borrows a class: its own API reserve, or it waits', async () => {
   const f = goalFixture({ stuck: { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
-  f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { class: 'fast' });
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), finish: [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }] });
+  f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), finish: [{ tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }] });
   f.deps.capacity.write(capacityWith({ claude: 0.1 }));
   f.answer = plans(f, 'stuck', 'review');
   assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
   assert.deepEqual([f.calls.sessions[0].env.MC_TOOL, f.calls.sessions[0].env.MC_MODEL], ['codex', 'gpt-6.2-sol'], 'the repair\'s own reserve, though haiku has room');
   const off = goalFixture({ stuck: { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
-  off.files[`${GOALS}/stuck/GOAL.json`] = withGoal(off.files[`${GOALS}/stuck/GOAL.json`], { class: 'fast' });
   off.deps.catalog = f.deps.catalog;
   off.deps.capacity.write(capacityWith({ claude: 0.1 }));
   off.deps.billing = { ...off.deps.billing, readApi: () => ({ claude: true, codex: false }) };
@@ -4900,7 +4872,7 @@ test('a goal in finish · ready returns to build with a log entry before any ses
 test('one runner applies changed provider priority to finish and mend launches', async () => {
   const f = goalFixture({ stuck: { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
   let priority = 'codex';
-  f.deps.catalog = () => ({ ...DEFAULT_CATALOG, providerPriority: priority });
+  f.deps.catalog = () => ({ ...TEST_CATALOG, providerPriority: priority });
   let capacity = capacityWith({ claude: 0.1 });
   capacity = applyObservation(capacity, 'codex', { windows: { primary: windowAt(0.9) }, models: [{ id: 'gpt-6.2-sol', efforts: ['high'] }] }, ROUTING_NOW);
   f.deps.capacity.write(capacity);
@@ -5319,7 +5291,7 @@ const LOCKED_RESERVE = Object.freeze({ status: RESERVE_UNAVAILABLE_EXIT, stdout:
 const CLAUDE_RESERVE = Object.freeze({ tool: 'claude', model: 'sonnet', effort: 'high' });
 const CODEX_RESERVE = Object.freeze({ tool: 'codex', model: 'gpt-6-luna', effort: 'high' });
 function reserveFixture(f, lists, api = {}) {
-  f.deps.catalog = () => ({ ...DEFAULT_CATALOG, ...lists });
+  f.deps.catalog = () => ({ ...TEST_CATALOG, ...lists });
   f.deps.capacity.write(capacityWith({ claude: 1, codex: 1 }));
   f.deps.billing = { ...f.deps.billing, readApi: () => api };
   return f;
@@ -5327,7 +5299,7 @@ function reserveFixture(f, lists, api = {}) {
 
 test('a locked API reserve spends no build or review retry and reopens only after the hold', async () => {
   for (const [kind, f, goal, list] of [
-    ['build', goalFixture({ checking: {} }), 'checking', 'large'],
+    ['build', goalFixture({ checking: {} }), 'checking', 'build'],
     ['review', reviewFixture(), 'judged', 'review'],
   ]) {
     reserveFixture(f, { [list]: [CLAUDE_RESERVE] });
@@ -5359,7 +5331,7 @@ test('a locked API reserve spends no build or review retry and reopens only afte
 });
 
 test('a plan pick that rereads as credits cannot launch a held API reserve', async () => {
-  const f = reserveFixture(goalFixture({ resume: {} }), { large: [CLAUDE_RESERVE] });
+  const f = reserveFixture(goalFixture({ resume: {} }), { build: [CLAUDE_RESERVE] });
   f.answer = () => LOCKED_RESERVE;
   const runner = createRunner({ deps: f.deps });
   assert.equal((await runner.pass()).ran, 0);
@@ -5409,7 +5381,7 @@ test('decision reconsideration can use another enabled reserve, and an explicitl
 
 test('a reserve refusal during a switch race spends neither planning nor archive reading attempts', async () => {
   for (const [list, f, state] of [
-    ['plan', programmeFixture(), TURN_STATE], ['large', archiveFixture({ body: null }), ARCHIVE_STATE],
+    ['plan', programmeFixture(), TURN_STATE], ['build', archiveFixture({ body: null }), ARCHIVE_STATE],
   ]) {
     reserveFixture(f, { [list]: [CLAUDE_RESERVE] });
     f.answer = () => ({ status: RESERVE_DISABLED_EXIT, stdout: '', stderr: 'mc: claude API is off' });
@@ -5439,7 +5411,7 @@ test('a locked reserve returns both goal-less mends to their queues without spen
 test('a locked reserve leaves scheduled desk preparation and learning eligible', async t => {
   const l = learningFixture(t, { ages: [7] });
   const { f } = l;
-  reserveFixture(f, { medium: [CLAUDE_RESERVE], decision: [CLAUDE_RESERVE] });
+  reserveFixture(f, { build: [CLAUDE_RESERVE], decision: [CLAUDE_RESERVE] });
   const marker = learningMarkerPath(f.deps.env);
   const at = '2026-08-28T09:00:00Z';
   const id = deskItemId('goal', 'prog/held', at);
@@ -5509,7 +5481,7 @@ test('a goal in review gets a review session: the goal-review role, the review m
   const [call] = f.calls.sessions;
   assert.equal(call.env.MC_ROLE, 'review-session:goal');
   assert.equal(call.env.MC_GOAL, 'prog/judged');
-  assert.equal(call.env.MC_MODEL, DEFAULT_CATALOG.review[0].model);
+  assert.equal(call.env.MC_MODEL, TEST_CATALOG.review[0].model);
   assert.match(call.args.join('\n'), /ROLE review-session:goal/u);
   assert.match(call.prompt, /pull request is #31, at head abc1234def5678/u);
   assert.equal(call.env.MC_REVIEW_HEAD, HEAD, 'the head its mc goal stage merge queues');
@@ -5521,10 +5493,10 @@ test('a goal in review gets a review session: the goal-review role, the review m
 
 test('a goal whose every review candidate is its build model is reviewed on that model, not left waiting', async () => {
   // The review catalog's model and the build session's are the same: claude opus.
-  const only = DEFAULT_CATALOG.review.find((candidate) => candidate.tool === 'claude');
+  const only = TEST_CATALOG.review.find((candidate) => candidate.tool === 'claude');
   const sameModel = builtBy(`claude ${only.model}`, '2026-08-20T10:00Z');
   const f = reviewFixture({ log: sameModel });
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [only] });
+  f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), review: [only] });
   f.answer = judges(f, 'merge');
   const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
   assert.equal(r.name, 'goal:prog/judged');
@@ -5562,7 +5534,7 @@ const OPUS_REVIEW = { tool: 'claude', model: 'opus', effort: 'high' };
 const LUNA_REVIEW = { tool: 'codex', model: 'gpt-6-luna', effort: 'high' };
 /** A catalog whose review list is codex sol then claude opus, and a billing whose codex API is `codexApi`. */
 function reviewList(f, { codexApi = false } = {}) {
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [SOL_REVIEW, OPUS_REVIEW] });
+  f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), review: [SOL_REVIEW, OPUS_REVIEW] });
   f.deps.billing = { readMode: () => 'plan', readState: () => ({}), patchState: () => {}, readApi: () => ({ claude: false, codex: codexApi }) };
   return f;
 }
@@ -5590,7 +5562,7 @@ test('a goal built on the first review candidate is reviewed by the next one whe
 test('goal review rereads the catalog: priority outranks headroom when the first candidate built it, and the first choice outranks priority', async () => {
   const f = reviewFixture({ log: builtBy('codex gpt-6-luna') });
   let priority = 'codex';
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), providerPriority: priority, review: [LUNA_REVIEW, OPUS_REVIEW] });
+  f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), providerPriority: priority, review: [LUNA_REVIEW, OPUS_REVIEW] });
   f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.9 }));
   f.answer = judges(f, 'review');
   const runner = createRunner({ deps: f.deps });
@@ -5608,7 +5580,7 @@ test('goal review rereads the catalog: priority outranks headroom when the first
 
 test('a goal review with no candidate on plan goes to the API reserve, and waits while that API is off', async () => {
   const f = reviewList(reviewFixture({ log: builtBy('claude haiku') }));
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), providerPriority: 'codex', review: [SOL_REVIEW, OPUS_REVIEW] });
+  f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), providerPriority: 'codex', review: [SOL_REVIEW, OPUS_REVIEW] });
   f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 1, refuse: { claude: '2026-08-29T13:00:00Z' } }));
   assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
   assert.equal(f.calls.sessions.length, 0);
@@ -7489,7 +7461,7 @@ test('programme turn: on agy the turn asks the registry — no check-in, its own
   const f = programmeFixture();
   wireDesk(f);
   // The programme turn routes the plan list (Martin, 2026-11-16), so agy stands on it.
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), plan: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
+  f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), plan: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
   const launch = f.deps.launch;
   f.deps.launch = (tool) => (tool === 'agy' ? { ok: true, id: 'antigravity-cli', shortName: 'agy', adapter: agyAdapter, spec: { bin: '/bin/agy' } } : launch(tool));
   let current = null;
@@ -7761,7 +7733,7 @@ test('curation turn: a failed turn waits for the cadence and opens no item; a pr
   const locked = managerFixture({ now: ROUTING_NOW.toISOString() });
   const prior = curationSeed('2026-08-27T09:00:00Z', { memoro: 'previous' });
   locked.f.files[CURATION_STATE] = prior;
-  reserveFixture(locked.f, { large: [CLAUDE_RESERVE] });
+  reserveFixture(locked.f, { build: [CLAUDE_RESERVE] });
   locked.f.answer = () => LOCKED_RESERVE;
   await createRunner({ deps: locked.f.deps }).pass({ repo: 'memoro' });
   assert.equal(managerSessions(locked.f).length, 1);
@@ -7903,7 +7875,7 @@ test('programme archive: a NOT OK reading archives nothing, opens a prepared des
 
 /** The archive reading routed to agy's Argon (the large list's first entry), as the programme turn is on the plan list. */
 function archiveOnAgy(f) {
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), large: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
+  f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), build: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
   const launch = f.deps.launch;
   f.deps.launch = (tool) => (tool === 'agy' ? { ok: true, id: 'antigravity-cli', shortName: 'agy', adapter: agyAdapter, spec: { bin: '/bin/agy' } } : launch(tool));
 }

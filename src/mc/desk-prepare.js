@@ -1,4 +1,4 @@
-/** One fresh medium-class evidence turn per new desk item; no decisions. */
+/** One fresh build-list evidence turn per new desk item; no decisions. */
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { requireCapability, resolveLaunch } from '../adapters/index.js';
@@ -24,9 +24,9 @@ export const PREPARE_LIMIT = 3;
 export const PREPARE_TIMEOUT_MS = 15 * 60_000;
 
 /** The same catalog policy as routeClass; never borrow another list. */
-function mediumRoute(env, now) {
+function buildRoute(env, now) {
   const catalog = readModels(env);
-  return chooseCandidate({ cls: 'medium', catalog, capacity: readCapacity({ root: runnerDir(env) }), now, priority: catalog.providerPriority ?? 'auto' });
+  return chooseCandidate({ cls: 'build', catalog, capacity: readCapacity({ root: runnerDir(env) }), now, priority: catalog.providerPriority ?? 'auto' });
 }
 
 // The runner lock guards only claim/release, never the asynchronous turn. A
@@ -63,7 +63,7 @@ export async function prepareDeskItem({ id, env = process.env, now = () => new D
     if (readDeskItem(id, { env })?.state !== 'new') return { started: false, reason: 'item is no longer new' };
     const budget = (deps.budget || deskBudget)({ env, now: now() });
     if (budget.held) return { started: false, held: true, reason: deskBudgetReason(budget) };
-    const route = deps.route ? deps.route('medium') : mediumRoute(env, now());
+    const route = deps.route ? deps.route('build') : buildRoute(env, now());
     if (!route?.ok || !route.candidate) return { started: false, reason: route?.reason || 'no usable medium candidate' };
     const candidate = route.candidate;
     const launch = (deps.launch || resolveLaunch)(candidate.tool);
@@ -92,7 +92,7 @@ export async function prepareDeskItem({ id, env = process.env, now = () => new D
       const reason = deps.reserveAdmission.denied(refusal);
       (deps.logRun || (row => appendRun(row, env)))({ ts: now().toISOString(), name: id, kind: 'desk-prepare',
         exit: result.status, seconds: Math.round((now().getTime() - started.getTime()) / 1000), pr: '-', note: reason,
-        model: candidate.model, cls: 'medium', tool: candidate.tool, effort: candidate.effort, billing: billing.billing });
+        model: candidate.model, cls: 'build', tool: candidate.tool, effort: candidate.effort, billing: billing.billing });
       return { started: false, reason };
     }
     const summary = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, now: now(), model: candidate.model });
@@ -114,7 +114,7 @@ export async function prepareDeskItem({ id, env = process.env, now = () => new D
     catch (error) { reason = `${reason}; the failure was not counted: ${error.message || String(error)}`; }
     const row = { ...summary, ts: now().toISOString(), name: id, kind: 'desk-prepare', exit: result.status ?? 1,
       seconds: Math.round((now().getTime() - started.getTime()) / 1000), pr: '-', note: prepared ? 'prepared' : reason,
-      model: candidate.model, cls: 'medium', tool: candidate.tool, effort: candidate.effort, billing: billing.billing };
+      model: candidate.model, cls: 'build', tool: candidate.tool, effort: candidate.effort, billing: billing.billing };
     (deps.logRun || (row => appendRun(row, env)))(row);
     return { started: true, ok: prepared, ...summary, ...quotaFields(summary, launch), reason: prepared ? null : reason };
   } finally { release(); }

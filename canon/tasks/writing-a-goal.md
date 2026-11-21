@@ -10,7 +10,7 @@ and know when it is done? If not, it is not a goal yet.
 A goal is numbered parts. Each answers one question the build session has, and the review checks the change against the same part: what a goal
 names is reviewed, what it does not name is not. [The parts](references/goal-design.md#the-parts) says what each holds.
 
-1. `mc goal new <programme>/<goal> --repo memoro|memoro-cli --class fast|medium|large --title "…" [--phase <n>]` — the skeleton, always in
+1. `mc goal new <programme>/<goal> --repo memoro|memoro-cli --title "…" [--phase <n>]` — the skeleton, always in
    `draft` (nothing happens to it there; `--stage build` is refused), and in phase 1 unless `--phase` says another.
 2. `mc goal set <p>/<g> aim|outcome|latitude|protection --text "…"` — why it is done, what is true when it is done, what the build chooses, what is tested.
 3. `mc goal item add <p>/<g> problem|premise|decision|change|preserve|risk|out-of-scope --text "…"` with the part's flags (`mc goal --help`). It
@@ -48,9 +48,8 @@ phases is [designing a programme](designing-a-programme.md): a complete brief en
 - **What waits on Martin:** only what [asking-martin](asking-martin.md) names, resolved before build and recorded as a decision item.
 - **Test protection:** `protection` names protected behaviours, failure consequences, the cheapest credible test level, existing tests to reuse
   and the fault to replay, and states the evidence the build must produce, or why no new automated test is warranted. Follow [writing-tests.md](writing-tests.md); not every fix needs one.
-- **Class:** `fast` when the goal says exactly what changes, where and in what order; `medium` when the solution is chosen, `change` names the
-  components, and the build works out their change; `large` only for work that must choose between designs the goal could not choose for.
-  Never a concrete model.
+- **Model:** a goal names none and has no class; builds run on the catalog's `build` list. Write the goal so the build can do it without
+  choosing between designs the goal could not choose for.
 - **Out of scope:** each item names its owner: another goal, another programme, or nobody.
 - **Proposals consumed:** the programme document names them and the desk has archived them in their area
   ([proposals](proposals.md)); carry into the goal everything it needs from them.

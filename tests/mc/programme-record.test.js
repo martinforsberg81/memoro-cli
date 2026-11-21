@@ -188,7 +188,7 @@ describe('mc programs create and state', () => {
       const callGoal = async () => {
         const out = [];
         const err = [];
-        const code = await goal(['new', 'alpha/first', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'First'], {
+        const code = await goal(['new', 'alpha/first', '--repo', 'memoro-cli', '--title', 'First'], {
           home: a.home, env: a.env, now: () => NOW, known: () => ['/home/m/memoro-cli.git'],
           git: (cwd, args) => (args[0] === 'show-ref' ? { ok: false, stdout: '', stderr: '' } : { ok: true, stdout: '', stderr: '' }),
           stdout: { write: (text) => out.push(text) }, stderr: { write: (text) => err.push(text) },
@@ -279,7 +279,7 @@ describe('mc programs create and state', () => {
         const callGoal = async (name) => {
           const out = [];
           const err = [];
-          const code = await goal(['new', `alpha/${name}`, '--repo', 'memoro-cli', '--class', 'fast', '--title', name], {
+          const code = await goal(['new', `alpha/${name}`, '--repo', 'memoro-cli', '--title', name], {
             home: a.home, env: a.env, now: () => NOW, known: () => ['/home/m/memoro-cli.git'],
             git: (cwd, args) => (args[0] === 'show-ref' ? { ok: false, stdout: '', stderr: '' } : { ok: true, stdout: '', stderr: '' }),
             stdout: { write: (text) => out.push(text) }, stderr: { write: (text) => err.push(text) },
@@ -896,7 +896,7 @@ describe('internal repair order drafting', () => {
       put(join(dir, RECORD_FILE), JSON.stringify(admitted));
       const deps = { env: a.env, cwd: a.root, known: AREA_DEPS.known, git: () => ({ ok: true, stdout: '', stderr: '' }),
         stderr: { write: text => err.push(text) } };
-      assert.equal(await goal(['new', 'internal-repair/restore', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Restore'], deps), 1);
+      assert.equal(await goal(['new', 'internal-repair/restore', '--repo', 'memoro-cli', '--title', 'Restore'], deps), 1);
       assert.equal(await plan(['internal-repair'], { ...deps, repos: [], ensure: unexpected }), 1);
       assert.equal(err.filter(text => /repair programme internal-repair needs review/u.test(text)).length, 2);
       assert.deepEqual(readdirSync(join(dir, 'goals')), []);

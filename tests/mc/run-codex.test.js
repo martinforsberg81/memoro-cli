@@ -69,7 +69,7 @@ function stub(dir, name) {
 
 /**
  * The world the runner is started in: a stub codex, a repository with an
- * origin, and one open goal of class `fast` under the work root's
+ * origin, and one open goal under the work root's
  * `programs/mc/goals/cx/`, whose worktree is a real worktree of it on
  * `goal/cx`.
  */
@@ -99,14 +99,14 @@ function codexWorld(t) {
   git(repo, 'fetch', '-q', 'origin');
   const dir = join(work, 'programs', 'mc', 'goals', 'cx');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'GOAL.json'), goalJson({ repos: ['memoro-cli'], class: 'fast', title: 'cx' }));
+  writeFileSync(join(dir, 'GOAL.json'), goalJson({ repos: ['memoro-cli'], title: 'cx' }));
   writeFileSync(join(dir, 'LOG.md'), '');
   const worktree = join(dir, 'memoro-cli');
   git(repo, 'worktree', 'add', '-q', '-b', 'goal/cx', worktree, 'origin/main');
   assert.match(readFileSync(join(worktree, '.git'), 'utf8'), /gitdir: .*\/\.git\/worktrees\//u);
 
-  // Claude refused for an hour, codex seen with room: the default catalog puts
-  // claude first for `fast`, so the goal runs on codex.
+  // Claude refused for an hour, codex seen with room: the default build list
+  // starts on codex, and claude would be refused anyway, so the goal runs on codex.
   const now = Date.now();
   const later = new Date(now + 3 * 3600_000).toISOString();
   mkdirSync(join(work, 'runner'), { recursive: true });
@@ -115,7 +115,7 @@ function codexWorld(t) {
     version: 1,
     providers: {
       claude: { observed_at: new Date(now).toISOString(), windows: { five_hour: { fraction_used: 0.1, resets_at: later }, seven_day: { fraction_used: 0.1, resets_at: later } }, models: null, refusal_until: new Date(now + 3600_000).toISOString(), failure: null },
-      codex: { observed_at: new Date(now).toISOString(), windows: { primary: { fraction_used: 0.2, resets_at: later }, secondary: null }, models: [{ id: 'gpt-6-luna', efforts: ['high'] }], refusal_until: null, failure: null },
+      codex: { observed_at: new Date(now).toISOString(), windows: { primary: { fraction_used: 0.2, resets_at: later }, secondary: null }, models: [{ id: 'gpt-6.2-sol', efforts: ['high'] }], refusal_until: null, failure: null },
     },
   }));
 
@@ -137,7 +137,7 @@ function codexWorld(t) {
   return { env, work, argvFile, worktree };
 }
 
-test('a fast goal on a refused claude runs on codex through the adapter, and lands in runs.tsv and runner.log', async (t) => {
+test('a goal on a refused claude runs on codex through the adapter, and lands in runs.tsv and runner.log', async (t) => {
   const { env, work, argvFile, worktree } = codexWorld(t);
   // The disk and the memory are the host's: a full disk or a loaded machine
   // would refuse the session this test is about, so both read as room enough.
@@ -157,18 +157,18 @@ test('a fast goal on a refused claude runs on codex through the adapter, and lan
     { name: 'goal:mc/cx', kind: 'build-goal', exit: '0', pr: '-', turns: '-', input: '1200', output: '340', cacheRead: '900', cacheWrite: '-', session: 'codex-thread-42', note: 'success,no-log' },
   );
   assert.match(seconds, /^\d+$/u);
-  // The cost is the totals at gpt-6-luna's list price: 300 uncached input at
-  // $0.10, 900 cached at $0.01 and 340 output at $0.50 per million = $0.000209.
-  assert.deepEqual(cells.slice(14), ['gpt-6-luna', 'fast', 'codex', 'high', 'plan', '0.0002']);
+  // The cost is the totals at gpt-6.2-sol's list price: 300 uncached input at
+  // $2, 900 cached at $0.10 and 340 output at $10 per million = $0.00409.
+  assert.deepEqual(cells.slice(14), ['gpt-6.2-sol', 'build', 'codex', 'high', 'plan', '0.0041']);
 
   // The launch, in runner.log where a night is read back from.
   const log = readFileSync(join(work, 'runner', 'log', 'runner.log'), 'utf8');
-  assert.match(log, /goal:mc\/cx: build starting \(codex gpt-6-luna · effort high, no check-in, no stall guard\) · class fast: known \(codex has 80 % headroom\)/u);
+  assert.match(log, /goal:mc\/cx: build starting \(codex gpt-6\.2-sol · effort high, no check-in, no stall guard\) · build list: known \(codex has 80 % headroom\)/u);
   assert.match(log, /goal:mc\/cx: build done rc=0 \d+s turns=- note=success,no-log/u);
 
   // The argument list the process was actually started with.
   const argv = readFileSync(argvFile, 'utf8').split(ARG_SEP).slice(0, -1);
-  assert.deepEqual(argv.slice(0, 8), ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'gpt-6-luna', '-c', 'model_reasoning_effort=high']);
+  assert.deepEqual(argv.slice(0, 8), ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'gpt-6.2-sol', '-c', 'model_reasoning_effort=high']);
   assert.equal(argv.includes('--effort'), false);
   assert.equal(argv.includes('--advisor'), false);
   // The shared text and the role overlay ride on codex's own instructions

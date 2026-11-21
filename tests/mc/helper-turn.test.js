@@ -119,7 +119,7 @@ describe('the helper turn', () => {
     let seen;
     let priority = 'codex';
     const overrides = {
-      catalog: () => ({ providerPriority: priority, fast: [{ tool: 'codex', model: 'gpt-6-luna', effort: 'high' }] }),
+      catalog: () => ({ providerPriority: priority, build: [{ tool: 'codex', model: 'gpt-6-luna', effort: 'high' }] }),
       capacity: () => capacity,
       launch: (tool) => ({ ...LAUNCH, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: getAdapter(tool === 'codex' ? 'codex' : 'claude-code') }),
       session: async (call) => { seen = call; return { status: 0, stdout: CLAUDE_JSON, stderr: '' }; },
@@ -140,7 +140,7 @@ describe('the helper turn', () => {
       windows: { primary: { fraction_used: 0.1, resets_at: '2026-08-29T13:00:00Z' } },
       models: [{ id: 'gpt-6-luna', efforts: ['high'] }],
     }, NOW);
-    const { result } = await turn({ catalog: () => ({ providerPriority: 'codex', fast: [{ tool: 'codex', model: 'gpt-6-luna', effort: 'high' }] }), capacity: () => capacity }, { tool: 'claude' });
+    const { result } = await turn({ catalog: () => ({ providerPriority: 'codex', build: [{ tool: 'codex', model: 'gpt-6-luna', effort: 'high' }] }), capacity: () => capacity }, { tool: 'claude' });
     assert.equal(result.tool, 'claude');
     assert.equal(result.model, 'sonnet');
   });
@@ -620,8 +620,8 @@ it('preserves the API reserve decision for an unusable subscription and refuses 
   }, now);
   for (const observation of [
     { models: [] },
-    { models: [{ id: 'gpt-6-luna', efforts: ['low'] }] },
-    { models: [{ id: 'gpt-6-luna', efforts: ['high'] }], observed_at: '2026-11-01T18:00:00Z' },
+    { models: [{ id: 'gpt-6.2-sol', efforts: ['low'] }] },
+    { models: [{ id: 'gpt-6.2-sol', efforts: ['high'] }], observed_at: '2026-11-01T18:00:00Z' },
   ]) {
     const capacity = applyObservation(fullClaude, 'codex', {
       windows: { primary: { fraction_used: 0.1, resets_at: '2026-11-05T22:00:00Z' } },
@@ -644,7 +644,7 @@ it('preserves the API reserve decision for an unusable subscription and refuses 
     assert.equal(calls.length, 1);
     assert.equal(calls[0].bin, process.execPath, 'API reserve must not launch the unusable subscription directly');
     assert.match(calls[0].args[0], /billing-gateway-session\.js$/u);
-    assert.deepEqual(calls[0].args.slice(1, 4), ['codex', 'gpt-6-luna', '/fake/provider']);
+    assert.deepEqual(calls[0].args.slice(1, 4), ['codex', 'gpt-6.2-sol', '/fake/provider']);
     assert.equal(result.billing, 'credits');
     assert.match(result.routeWhy, /API reserve/u);
     writeBillingApi('codex', false, { root });

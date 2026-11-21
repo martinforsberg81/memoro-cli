@@ -33,7 +33,7 @@ import { estimateCost } from './prices.js';
  * the alias the session was launched on, `-` on every row that is not a
  * session and on every row written before it. `class`, `tool`, `effort` and
  * `billing` (ruling 59) follow it for the same reason: what the session was
- * routed to, the work class it was asked for (`-` for a concrete plan), and
+ * routed to, the list it was asked for (older rows hold a work class) (`-` for a concrete plan), and
  * the billing it ran on. Rows written before them have no such cells.
  */
 export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note', 'land_seconds', 'model', 'class', 'tool', 'effort', 'billing', 'cost'];

@@ -110,8 +110,7 @@ its check, and each worktree's state.
   the planner may create goals while reconciling the current release, or
   interactive Martin may create them in a taken-over draft.
 
-- **New and gone.** `mc goal new <programme>/<goal> --repo … --class
-  fast|medium|large --title "…" ` makes one, always in draft: GOAL.json and
+- **New and gone.** `mc goal new <programme>/<goal> --repo … --title "…"` makes one, always in draft: GOAL.json and
   LOG.md, and no worktree (the runner makes it at first use). A draft made without `MC_HEADLESS=1` is held from creation: `mc goal stage` to `build` frees it, and `mc goal release` hands the draft to headless planning. `mc goal drop
   --reason "…"` abandons delivery; only plan, interactive Martin, decision or a person may drop. The stage is
   persisted before cleanup. Exclusive open PRs are closed, their merge rows

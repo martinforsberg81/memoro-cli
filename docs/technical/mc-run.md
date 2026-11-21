@@ -309,7 +309,7 @@ role or tool skips launch; a worktree failure is recorded in LOG.md. The
 prompt includes the rendered goal (its numbered parts, its documents and criteria), and the
 role tells the session to read LOG.md first.
 
-- A build uses `build-session:goal` and the goal's `fast`, `medium` or `large` class.
+- A build uses `build-session:goal` on the catalog's `build` list; a goal has no class.
   It gates, commits and publishes with `--no-merge`. It ends with `mc goal log`,
   moving to review only once every criterion has been checked and met.
 - A review uses `review-session:goal`, the open PR and its head. It judges,
@@ -321,7 +321,7 @@ role tells the session to read LOG.md first.
   untouched areas the diff tripped. A review that dies still in review
   is retried once, then waits directly on Martin if it dies again.
 - A repair build uses `build-session:goal` on the `finish` catalog list, not
-  the goal's class, on a goal in `build · ready` that a review rejected. Its
+  the `build` list, on a goal in `build · ready` that a review rejected. Its
   prompt names REVIEW.md and the NOT OK ids (or says the file is in the old form).
   The run row's kind is `repair`; it ranks as finish did. It fixes what review
   found, gates, publishes and moves the goal to review.
@@ -361,7 +361,7 @@ says so in one line. Sessions already running are otherwise untouched.
 
 `mc model priority [auto|codex|claude|agy]` saves one global provider preference in
 `runner/models.json`; an absent value is `auto`. The runner rereads it for each
-fresh class-routed build, review and plan launch, including headless programme
+fresh build, review and plan launch, including headless programme
 planning, while an already-running conversation is unchanged. A preferred
 provider wins among usable subscriptions regardless of relative headroom or
 review build-model avoidance; within that provider the existing capacity and
@@ -377,7 +377,7 @@ provider models; manual explicit tool/model choices and interactive `mc plan`
 and `mc manager` retain their selections. The page displays this setting and
 its menu's `priority auto|codex|claude|agy` command writes through `mc model`.
 
-Class routing supplies the tool, model and effort. The shared internal
+Catalog routing supplies the tool, model and effort. The shared internal
 `SESSION_DEFAULTS` fallback still has these rows (`step` is an internal key,
 not a unit of runnable work):
 
@@ -386,7 +386,7 @@ not a unit of runnable work):
 | step | `opus` | `medium` | none |
 | review | `opus` | `high` | none |
 
-- **`tool:`** — `claude` by default in shared settings; class routing selects
+- **`tool:`** — `claude` by default in shared settings; catalog routing selects
   the candidate's tool. A missing tool is a visible refusal.
 - **`model:`** — `opus` by default in shared settings; a goal's model comes
   from its catalog candidate, not from a field in its brief.
@@ -505,15 +505,15 @@ plan request, the next launch uses its API key through the local billing gateway
 This applies to every current MC session path: build, review, repair, mend,
 helper, and interactive sessions. An ordinary interactive `mc plan` still lets
 Martin choose the tool and model; billing follows that choice. A repair build or
-mend session runs on its own catalog list (finish, mend; `finish` is the list's name, kept), never the goal's
-class, and is billed as any other session. `mc run --billing` shows both providers' next routes, and names an agy model
+mend session runs on its own catalog list (finish, mend; `finish` is the list's name, kept), never the
+`build` list, and is billed as any other session. `mc run --billing` shows both providers' next routes, and names an agy model
 that refused and its reset (*Quota scope*). The MC page shows
 one billing line.
 
 The API reserve is switched per provider:
 `mc run --billing <claude|codex> <on|off>`. Off, a spent plan stays the plan —
 the session meets the plan's own refusal and the runner waits it out — and a
-class-routed goal routed to the reserve waits instead of starting. The wrapper reads
+catalog-routed goal routed to the reserve waits instead of starting. The wrapper reads
 the switch again before it opens the key, so a launch decided before the switch
 was turned off never reaches the API. A running session keeps its billing.
 Absent, both are on.
@@ -647,14 +647,15 @@ refusals. The provider snapshot in `model-capacity.json` supplies both
 providers' plan usage. A plan refusal is written for the next launch; crossing
 billing boundaries starts a cold cache context.
 
-## Work classes and capacity (ruling 59)
+## The build list and capacity (ruling 59)
 
-A goal names a work class, `fast`, `medium` or `large`, not a model, and the class
-routes the goal's build sessions only. Every other unattended role runs on its
-own catalog list, whatever the goal's class: `review`, `finish` (a repair build), `mend`, `plan`
+A goal names no model and no class (Martin, 2026-11-21: the classes `fast`, `medium`
+and `large` are removed): its build sessions run on the catalog's one `build` list.
+Every other unattended role runs on its
+own catalog list: `review`, `finish` (a repair build), `mend`, `plan`
 (the runner's next-draft planning and the programme turn that cuts a ready
 programme's README.md into goals; Martin, 2026-11-16), `manager` (an unattended manager turn
-without an explicit tool or model) and `decision` (desk items). A role list never borrows a class's
+without an explicit tool or model) and `decision` (desk items). A role list never borrows `build`'s
 candidates: with none of its own usable and its API off, the session waits
 (Martin, 2026-11-09). Interactive `mc plan` and `mc martin` keep their own
 selection. The route
@@ -689,31 +690,29 @@ chosen, and review falls through to the next.
 **The catalog** is Martin's. `mc model` is its only writer, and the file is
 written whole or not at all:
 
-- `mc model [list] [--json]` — the candidates of fast, medium, large, review, finish,
+- `mc model [list] [--json]` — the candidates of build, review, finish,
   mend, plan, manager and decision, each a numbered list in catalog order, and whether
   they come from the file or the defaults.
 - `mc model priority [auto|codex|claude]` — show or change the provider
   preference for unattended launches; an absent setting means `auto`.
-- `mc model add fast|medium|large|review <tool>:<model>:<effort>` — appends a candidate;
+- `mc model add build|review <tool>:<model>:<effort>` — appends a candidate;
   `add` takes finish, mend, plan, manager and decision as well.
-- `mc model remove fast|medium|large|review <tool>:<model>` — removes the candidate
+- `mc model remove build|review <tool>:<model>` — removes the candidate
   with exactly that tool and model; a list keeps at least one. `remove` takes
   every list as `add` does.
 - `mc model set review <tool>:<model>:<effort>` — replaces the whole review
   list with that one candidate; `set` takes finish, mend, plan, manager and decision as
-  well, never a work class.
+  well, never `build`.
 
-With no file, the defaults are: `fast`, `claude:haiku:high` then
-`codex:gpt-6-luna:high`; `large`, `claude:opus:medium` then
-`codex:gpt-6.2-sol:high`; `medium`, `claude:sonnet:high` then
-`codex:gpt-6.1-terra:high`; review, `agy:gemini-4-argon-high:high`, then
+With no file, the defaults are: `build`, `codex:gpt-6.2-sol:high` then
+`claude:sonnet:high`; review, `agy:gemini-4-argon-high:high`, then
 `claude:opus:medium`, then `codex:gpt-6.2-sol:medium`; finish, `claude:opus:high` then
 `codex:gpt-6.2-sol:high`; mend, `claude:sonnet:medium` then
 `codex:gpt-6.2-sol:medium`; plan, `claude:opus:high` then
 `codex:gpt-6.2-sol:high`; manager, `claude:opus:medium` then
 `codex:gpt-6.2-sol:medium`; decision, `claude:opus:high` then
 `codex:gpt-6.2-sol:high`. A file without finish, mend, plan, manager or decision reads
-that list from the defaults; a file without `medium` also reads its default.
+that list from the defaults; a file without `build` also reads its default. A file written with the retired classes `fast`, `medium` and `large` reads `build` as its `large` list (else `medium`, else `fast`) and is written back with `build` and none of them the first time `mc model` changes it.
 Missing defaulted lists are written back with every list the first time
 `mc model` changes it. A file whose
 `review` is one candidate object, as files were before review was a list, reads
@@ -793,7 +792,7 @@ never zero.
   response.
 - The retired cadence was: Codex was read once an hour from the chore pass.
 
-**The choice at launch.** `chooseCandidate` judges each candidate of the class
+**The choice at launch.** `chooseCandidate` judges each candidate of the list
 at that instant:
 
 - *refused* — its provider, or its own model, refused, and the refusal has not
@@ -819,14 +818,14 @@ review uses its provider's API without changing model. The API model must be
 available to that provider's API account; MC does not maintain a separate API
 model catalog in this version.
 
-**Refusals and the wait.** A class-routed session is never switched to another
+**Refusals and the wait.** A catalog-routed session is never switched to another
 provider while it runs. If its provider refuses it, the refusal is recorded for the next launch,
-and the next pick routes the goal again in a fresh session on the same branch. If the catalog has no candidate for the class, the
+and the next pick routes the goal again in a fresh session on the same branch. If the catalog has no candidate for the list, the
 goal is skipped as `no-capacity`: it stays `ready`, and the next pick routes it again. The reason names each candidate and
 why. The chooser also returns `retry_at`, the earliest instant an answer can
 change; the runner does not act on it yet.
 
-**Audit.** A class-routed goal's `runs.tsv` row carries `class`, `tool`, `effort`, and
+**Audit.** A catalog-routed goal's `runs.tsv` row carries `class` (the column keeps its name; a build writes `build`, other kinds `-`; older rows hold `fast`, `medium` or `large`), `tool`, `effort`, and
 `billing` (`plan` or `credits`), and `model` is the model of the candidate it was
 routed to. The session's `.json` `modelUsage` is the exact record of which models
 ran and what they used.
@@ -1009,7 +1008,7 @@ is invalid and a state file that is unreadable are each said once in
 `runner.log`; a programme that simply is not due is silent.
 
 **The session.** One turn runs per programme and it is named `programme:<p>` in
-the claim and the current record, kind `plan`, class large, with a `runs.tsv`
+the claim and the current record, kind `plan`, routed on the `build` list as `large` was, with a `runs.tsv`
 row and the programme directory as its cwd. Role `plan`, `MC_HEADLESS=1`,
 `MC_PROGRAMME=<p>` and no `MC_GOAL`; routing, admission, provider refusals,
 offline holds, STOP and UPDATE are those of every session. It never uses a
@@ -1130,7 +1129,7 @@ is due when all hold:
   is retried, below).
 
 **The reading.** One headless read-only session per programme, role
-`archive-reader` ([mc-roles.md](mc-roles.md)), kind `plan`, class large, with a
+`archive-reader` ([mc-roles.md](mc-roles.md)), kind `plan`, routed on the `build` list as `large` was, with a
 `runs.tsv` row, the programme directory as its cwd, `MC_HEADLESS=1`,
 `MC_PROGRAMME=<p>` and no `MC_GOAL`; routing, admission, offline holds, STOP and
 UPDATE are those of every session. It commits nothing. The served repositories of
@@ -1223,7 +1222,7 @@ longer in the programmes home and is no candidate. The cases are in
 
 The runner starts the headless manager ([mc-manager.md](mc-manager.md)) for one
 turn, curation, with nobody present. It is one session of the `manager` role,
-class large, named `manager:curation` in the claim, the current record and
+routed on the `build` list as `large` was, named `manager:curation` in the claim, the current record and
 `runs.tsv`; routing, admission, provider refusals, offline holds, STOP and
 UPDATE are those of every session. It holds the claim `manager`, so only one
 runs at a time, and it comes last in the pick, after the programme planning
@@ -1273,7 +1272,7 @@ preserving a used batch on retries. Before launch fetch origin and use the
 same branch-worktree helper as goals to make
 `runner/work/mend-main-<repo>-<digest>/<repo>` on
 `mend/main-<repo>-<digest>` from origin/main. Keep that branch and tree on retry.
-`runMainMend` runs `mend-session` with its default catalog list and class fast,
+`runMainMend` runs `mend-session` on the mend list, with no class,
 normal capacity/billing, disk and memory admission, current-lane ownership,
 scratch and session logs. Goal/programme identity is unset. The main-red prompt
 carries the files, errors, base and finder, each red test's place and stack, the
@@ -1303,7 +1302,7 @@ A technical deploy stop ([`mc-deploy.md`](mc-deploy.md), *A stop that is repaire
 `runner/deploy-mend.json`, offered at the main-red mend's rank by `deployMendWork` (an idle lane notices it on the control
 poll through `deployMendTicket`). `runDeployMend` is `runMainMend`'s machinery for both repositories: worktrees of memoro-cli
 and memoro on `mend/deploy-<digest>` from each `origin/main`, the session in memoro-cli's, `MC_ROLE=mend-session`,
-`MC_DEPLOY_MEND=<id>`, class fast. Two attempts; a dead runner's `running` request is a failed attempt. `settleDeployMends`
+`MC_DEPLOY_MEND=<id>`, on the mend list. Two attempts; a dead runner's `running` request is a failed attempt. `settleDeployMends`
 (every `SETTLE_EVERY_MS`, with `settleMainMends`) restores a published handoff, reads each landed pull request's merge commit,
 marks the request repaired, and runs the **one retry** in the runner's own process through `run` of `commands/deploy.js`
 (holder `runner for …`, `retry: true`, no `MC_HEADLESS`), only when the runner's code (`runner.json` `commit`) and the pick
