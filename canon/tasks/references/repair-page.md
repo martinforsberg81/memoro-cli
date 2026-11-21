@@ -2,7 +2,7 @@
 
 The shape of the README of a programme that has a record (`PROGRAMME.json`,
 made by `mc programs create`): a bounded piece of work that serves a horizon
-and ends, or a repair: a set of small adjustments of one area, from which the planner cuts its goals. `mc programs create` writes this page with the name, the end and the
+and ends, or a repair: a set of small adjustments of one area, from which the runner cuts its goals. `mc programs create` writes this page with the name, the end and the
 horizon filled in; the plan session fills in the rest and keeps it
 ([designing a programme](../designing-a-programme.md)). It has no Aim, Measures
 or Gap: the enduring aim belongs to the area pages, and the programme points to

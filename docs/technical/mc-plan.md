@@ -302,6 +302,8 @@ from a stale reading.
 
 Ordinary `state` is not a release or a resume of an order still owned by repair.
 `mc plan` and `mc goal new` refuse its draft and a stale ready order (exit 1).
+`mc goal new` refuses a released order too: the runner cuts its goals, one for
+each released part ([the cut of a ready order](mc-run.md#the-cut-of-a-ready-order)).
 Ordinary desk-created area repairs keep their existing route.
 
 For a repair-owned draft, programme review requires the live entrance's
@@ -345,7 +347,8 @@ proposal version until archival succeeds, so a retry can archive what was
 ordered while retaining any newer waiting evidence. Moving original intake
 or proposal pointers does not change the released manifest.
 
-Once reconciled, delivery writes are for that revision. A stale session keeps
+The runner cuts a release and records it as reconciled; no session and no
+verb does. Once reconciled, delivery writes are for that revision. A stale session keeps
 its local work but cannot register a PR, publish a handoff or move a goal
 forward under a new release. Goal review records the released revision and
 the authorized PR heads before queueing. A later release requires a new

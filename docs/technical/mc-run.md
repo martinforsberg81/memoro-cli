@@ -241,8 +241,8 @@ The phase rule and the stage transitions are in [mc-goals.md](mc-goals.md).
 Repair-owned drafts, stops and stale releases are held at selection and
 rechecked during goal admission, including goals that already read
 `build · ready`. Ordinary state values do not clear the hold. Build needs
-the current release and its reconciliation; no code cuts or reconciles a
-repair release (*The cut of a ready order*).
+the current release and its reconciliation, which the runner's cut records
+(*The cut of a ready order*).
 The terminal starts `mc repair`. The runner takes over after release.
 
 ## Lanes
@@ -1019,23 +1019,41 @@ goal of each part it waits for is done, dropped or archived (`phaseOpen`). The
 phases of a programme that holds a goal cut from its order are never renumbered
 (`partProgramme`): archiving the goal of Part 1 leaves Part 2 in phase 2.
 
-**Repair releases.** A released repair order is not cut by code. Its
-reconciliation (`repair-reconcile.js`) compares each goal's authored contract
-with the released part, and a goal that is a part has no contract of its own.
-`programmeDue` answers `not cut: repair releases are cut by hand until
-reconciliation reads goals that are parts`, and the runner says it once per
-programme. Until then the goals of a release are written and the release is
-reconciled by hand, under the planner's identity (`MC_ROLE=plan`,
-`MC_HEADLESS=1`, `MC_PROGRAMME`, `MC_REPAIR_REVISION`) or by a desk takeover.
-The comparison is unchanged: each part's README section, shared delivery
-clauses and the released digests of its binding files; a changed contract must
-be back in draft or build without carried criterion marks; an unfinished merge
-handoff returns to build; removed parts retire their unfinished work; landed
-goals are kept as evidence. The runner checks both the programme manifest and
-the reconciled goal contract before delivery, and passes the revision to the
-session. A result from a superseded session does not advance the goal. Merge
-recovery and completion require the current repair handoff as well as the
-current manifest and goal contract.
+**Repair releases.** A released repair order is cut by the same code, from
+its released snapshot (the README and binding files the release bound) and
+not from `README.md` as it stands. It is due while its record is `ready`, its
+release is current and not reconciled, no `programme` desk item is open and
+its state file reads; it needs no stated order, and the goals it holds do not
+decide it. Under the one runner lock the cut makes a goal for each released
+part that has none and the documentation goal, their `documents` pointing at
+the programme's `README.md`, and then changes the record once
+(`reconcileRepair`, `repair-reconcile.js`): the release is recorded as
+reconciled (`repair.reconciled`: the revision, the reason `cut by code: one
+goal per released part`, the digest of each part and each goal with the parts
+it names), and `phases.after` is written from the snapshot's parts
+(`partsOrder`). No session and no identity is asked; `mc programs reconcile`
+is gone, and `mc goal new` is refused in a released repair order. A
+reconciliation that refuses is a cut that failed, counted as below.
+
+A goal cut from the order holds no text, and its sessions read the snapshot of
+the current release, so reconciliation asks less of it than of an authored
+goal. The documentation goal names no part and is accepted. A released part
+that changed needs no change to its goal; where that goal is in review or
+merge the runner first returns it to build with the entry `its released part
+changed — back to build`. A part a later release removed does not refuse: its
+unfinished goal is left out of the reconciled goals, so no session and no
+delivery is admitted for it, and the desk drops it. An authored goal keeps
+every rule: each part's README section, shared delivery clauses and the
+released digests of its binding files are compared; a changed contract must
+be back in draft or build without carried criterion marks; removed parts
+retire their unfinished work; landed goals are kept as evidence. For every
+goal an unfinished merge handoff of an earlier release must be back in build
+before the release reconciles. A programme whose goals are all authored gets
+no goal from the cut and keeps the dependencies its record states. The runner
+checks both the programme manifest and the reconciled goal contract before
+delivery, and passes the revision to the session. A result from a superseded
+session does not advance the goal. Merge recovery and completion require the
+current repair handoff as well as the current manifest and goal contract.
 
 **Legacy goals.** A goal whose `documents` names no part of `README.md` is
 never rewritten and never cut again: its programme is not due while it is
@@ -1055,8 +1073,9 @@ pick. The second opens a desk item of kind `programme`, reference
 is `for-martin`, sort `mechanical`, `reversible: false`, `due_at: null`, with a
 `brief.md` in Swedish. Nothing is cut while an item is open. A failure is
 counted again only after the item closed. The item closes by source when
-goals name every part of `README.md`, the record no longer reads valid and
-ready, or the directory is gone, and by decision otherwise
+goals name every part of `README.md` (for a repair order: when its release is
+reconciled), the record no longer reads valid and ready, or the directory is
+gone, and by decision otherwise
 ([mc-martin.md](mc-martin.md#durable-desk-items)). A state file that cannot be
 read cuts nothing and counts nothing; the runner says it once in `runner.log`,
 the desk sync reports it and the item stays open.

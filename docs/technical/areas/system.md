@@ -39,9 +39,9 @@ On main now:
   change held wording or create a repair order.
 - [`mc repair`](../mc-plan.md#repair-drafts) takes an evidenced defect through
   independent review to a released order, or records a scope stop at
-  the desk. The release binds the reviewed order and its evidence. No code
-  cuts or reconciles a release yet: its goals are written and reconciled by
-  hand ([the cut of a ready order](../mc-run.md#the-cut-of-a-ready-order)).
+  the desk. The release binds the reviewed order and its evidence. The runner
+  cuts a release into one goal per part and records it as reconciled
+  ([the cut of a ready order](../mc-run.md#the-cut-of-a-ready-order)).
 - A review that finds a goal not OK returns it to build for a repair build, up
   to two automatic repairs for the current brief; a further failed verdict
   holds delivery for an automatic desk decision ([goal stages](../mc-goals.md)).

@@ -107,8 +107,8 @@ its check, and each worktree's state.
   `mc programs show <programme>`. Headless creation without a record refuses
   (exit 1): a goal there is made at the desk. Both happen before fetch/write.
   An ordinary programme Martin has set ready enables goal new. For repair,
-  the planner may create goals while reconciling the current release, or
-  interactive Martin may create them in a taken-over draft.
+  the runner cuts the goals of a release and `new` is refused; interactive
+  Martin may create goals in a taken-over draft.
 
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --title "…"` makes one, always in draft: GOAL.json and
   LOG.md, and no worktree (the runner makes it at first use). A draft made without `MC_HEADLESS=1` is held from creation: `mc goal stage` to `build` frees it, and `mc goal release` removes the hold without moving it, and the draft stays its writer's to finish. `mc goal drop
