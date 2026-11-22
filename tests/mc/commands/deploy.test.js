@@ -3368,6 +3368,13 @@ describe('mc deploy — production never moves backwards', () => {
     assert.ok(git.calls.some((call) => call.args.join(' ') === `rev-list --first-parent ${MID}..${TIP}`));
   });
 
+  it('a live_commit verified as <sha>-dirty is that sha: a pinned tree does not hide the commit it was built from', async () => {
+    const git = fakeGit({ counts: COUNTS, chain: (range) => (range === `${MID}..${TIP}` ? [TIP] : null) });
+    const plan = await planOf({ git, runs: [greenRun(TIP)], lastDeploy: () => ({ sha: MID, live_commit: `${MID}-dirty`, live_build: '900', ended: '2026-11-14T10:00:00Z' }) });
+    assert.deepEqual([plan.last.sha, plan.live, plan.backwards], [MID, MID, null]);
+    assert.equal(plan.sha, TIP);
+  });
+
   it('a row that verified nothing has no live_commit, and its sha is what is live', async () => {
     const git = fakeGit({ counts: COUNTS, chain: (range) => (range === `${MID}..${TIP}` ? [TIP] : null) });
     const plan = await planOf({ git, runs: [greenRun(TIP)], lastDeploy: () => ({ sha: MID, live_commit: '', ended: '2026-11-14T10:00:00Z' }) });

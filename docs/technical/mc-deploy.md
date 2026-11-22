@@ -75,7 +75,8 @@ path through `defaultRepos(env)`, the same reading the page uses.
    is public, tiny (`{ commit, build, build_time }`) and asked with `no-store`.
    The row is preferred because it is mc's own record of what mc shipped. Of the
    row, `live_commit` (what the script verified live) is read first, then `sha`;
-   `/api/version` is the last resort. With the live commit unknown, only the tip
+   `/api/version` is the last resort. A live commit verified as `<sha>-dirty`
+   (a tree with stamped pins) is read as `<sha>`, the commit it was built from. With the live commit unknown, only the tip
    is a candidate. **Production never moves backwards:** a pick that is the live
    commit, or has it not as an ancestor, is refused — also under `--accept-red`,
    and again under the register's lock at final admission.
