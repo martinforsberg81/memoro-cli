@@ -422,14 +422,20 @@ describe('mc language run', () => {
     if (existsSync(logPath())) assert.ok(!readFileSync(logPath(), 'utf8').includes(TOKEN), 'mc.log never carries it');
   });
 
-  it('refuses before any write when the key is not in the keychain', async () => {
+  it('with no key kept, a writing act runs on wrangler\'s login: the marker, never a token', async () => {
     const memoro = fakeMemoro();
-    const stderr = sink();
-    const code = await run(['run', 'sv-test-cutover'], runDeps({ stderr, getSecret: async () => null, spawnAct: memoro.spawnAct }));
-    assert.equal(code, 1);
-    assert.match(stderr.text(), /mc language key set/u);
-    assert.equal(memoro.calls.length, 0);
-    assert.equal(readRuns(env)[0].outcome, 'refused');
+    const stdout = sink();
+    const { ask } = answers('y', 'y', 'y', 'y', 'y');
+    const code = await run(['run', 'sv-test-cutover'], runDeps({ ask, stdout, getSecret: async () => null, spawnAct: memoro.spawnAct }));
+    assert.equal(code, 0);
+    assert.match(stdout.text(), /wrangler's login, the one mc deploy uses/u);
+    const credentialed = memoro.calls.filter((call) => call.env.MEMORO_D1_WRITE_AUTH === 'wrangler-login');
+    assert.ok(credentialed.length > 0, 'the credentialed acts get the marker');
+    for (const call of memoro.calls) {
+      assert.equal(call.env.CLOUDFLARE_API_TOKEN, undefined);
+      assert.equal(call.env.CLOUDFLARE_ACCOUNT_ID, undefined);
+    }
+    assert.ok(memoro.calls.some((call) => call.env.MEMORO_D1_WRITE_AUTH === undefined), 'an act that names no credential gets no marker');
   });
 
   it('refuses before any write when the key does not read', async () => {

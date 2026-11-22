@@ -46,7 +46,7 @@ Exit codes:
 - **0** — a reading with every read answered, the cache shown, a key kept,
   or a run whose every act held.
 - **1** — a reading with a failed read, a refusal (a deploy or a run going
-  on, a dirty or diverged `main`, no wrangler, no key), a deviation, a `no`,
+  on, a dirty or diverged `main`, no wrangler), a deviation, a `no`,
   or a keychain that would not write.
 - **2** — a bad argument, a token not piped in, or no terminal to ask at.
 - **130** — a run stopped by ^C.
@@ -127,7 +127,7 @@ runs an act whose shape it would misread. It is not a second validator.
    - then this run's record is written.
 4. **Preflight**, before anything is written:
    - an act that names a credential mc does not hold refuses;
-   - a missing key refuses;
+   - with no key kept, the writes run on wrangler's login (§ The key);
    - the first credentialed act's check is run with the key, to show that
      the key reads;
    - every `local` act is checked;
@@ -178,7 +178,18 @@ relaxed, because that act may have written part of what it was writing.
 
 ## The key
 
-The Cloudflare token and its account are kept under `cloudflare-d1-edit-token`
+A run's writes use **wrangler's login on this machine**, the authority
+`mc deploy` already uses (Martin, 2026-11-22: the scripts run where the
+authority already is). With no key kept, the child of an act whose
+`credentials` names `cloudflare-d1-edit` gets `MEMORO_D1_WRITE_AUTH=wrangler-login`
+and no `CLOUDFLARE_*`; memoro's `lib/cloudflare-credentials.js` then reads the
+token from `wrangler auth token --json` and the one account from
+`wrangler whoami --json`, and reads the token again once when a call is
+refused, since an OAuth token lives about an hour. Nothing is set up for it
+beyond `wrangler login`.
+
+A key may still be kept instead, and is then used in place of the login. The
+Cloudflare token and its account are kept under `cloudflare-d1-edit-token`
 and `cloudflare-account-id`, in the keychain or, on a machine with none, in
 `~/.memoro/secrets.json` (mode 0600). The key is **never an argument**:
 
@@ -189,7 +200,8 @@ and `cloudflare-account-id`, in the keychain or, on a machine with none, in
 Nothing prints the key or writes it to a log. Every child starts with mc's
 environment minus the runtime secrets and minus every `CLOUDFLARE_*`. Only the
 child of an act whose `credentials` names `cloudflare-d1-edit` gets
-`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` when a key is kept, and the
+login marker otherwise.
 
 ## The grammar promotion
 
