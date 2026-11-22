@@ -350,13 +350,13 @@ describe('mc language run', () => {
     assert.equal(memoro.calls.length, 0);
   });
 
-  it('runs every act in order with a question before every write, and records it', async () => {
+  it('runs every act in order with a question before every production write, and records it', async () => {
     const memoro = fakeMemoro();
-    const { ask, asked } = answers('y', 'yes', 'y');
+    const { ask, asked } = answers('yes', 'y');
     const stdout = sink();
     const code = await run(['run', 'sv-test-cutover'], runDeps({ stdout, ask, spawnAct: memoro.spawnAct }));
     assert.equal(code, 0, stdout.text());
-    assert.deepEqual(asked, ['ingest-local: write to local? [y/N]', 'purge-forms: write to production? [y/N]', 'sync-forms: write to production? [y/N]']);
+    assert.deepEqual(asked, ['purge-forms: write to production? [y/N]', 'sync-forms: write to production? [y/N]']);
     assert.deepEqual(executes(memoro.calls), ['ingest.js', 'purge.mjs', 'sync.mjs']);
     for (const call of memoro.calls) assert.equal(call.cwd, worktree);
     const out = stdout.text();
@@ -450,10 +450,10 @@ describe('mc language run', () => {
 
   it('a no at the question records declined, runs nothing more and exits 1', async () => {
     const memoro = fakeMemoro();
-    const { ask, asked } = answers('y', 'n');
+    const { ask, asked } = answers('n');
     const code = await run(['run', 'sv-test-cutover'], runDeps({ ask, spawnAct: memoro.spawnAct }));
     assert.equal(code, 1);
-    assert.equal(asked.length, 2);
+    assert.equal(asked.length, 1);
     assert.deepEqual(executes(memoro.calls), ['ingest.js']);
     const [record] = readRuns(env);
     assert.equal(record.outcome, 'stopped');
@@ -472,10 +472,52 @@ describe('mc language run', () => {
     assert.match(stderr.text(), /forms-read — Production is not what this manifest was written against/u);
     assert.match(stderr.text(), /mc language resume/u);
     assert.deepEqual(executes(memoro.calls), ['ingest.js']);
-    assert.equal(asked.length, 1);
+    assert.equal(asked.length, 0, 'the local build is not asked, and the deviation comes before the first production write');
     assert.equal(readRuns(env)[0].outcome, 'stopped');
     // `rows` was missing all along — advisory — and sync's `pending` advisory never stopped either run.
     assert.match(stdout.text(), /advisory: about fifty/u);
+  });
+
+  it('on Martin\'s word it runs with no terminal, asks nothing, prints and records the word', async () => {
+    const memoro = fakeMemoro();
+    const stdout = sink();
+    let asked = 0;
+    const word = 'Ja, kör (Martin, at the desk)';
+    const code = await run(['run', 'sv-test-cutover', '--word', word], runDeps({
+      stdout, interactive: () => false, ask: () => { asked += 1; return 'n'; }, spawnAct: memoro.spawnAct,
+    }));
+    assert.equal(code, 0, stdout.text());
+    assert.equal(asked, 0, 'no question reaches the terminal');
+    assert.deepEqual(executes(memoro.calls), ['ingest.js', 'purge.mjs', 'sync.mjs']);
+    assert.match(stdout.text(), /purge-forms: write to production\? \[y\/N\] y — on Martin's word: Ja, kör/u);
+    assert.equal(readRuns(env)[0].word, word);
+  });
+
+  it('on Martin\'s word a write that already holds is not run again, and a deviation still stops', async () => {
+    const holds = fakeMemoro({ state: { local: 100 } });
+    assert.equal(await run(['run', 'sv-test-cutover', '--word', 'kör'], runDeps({ interactive: () => false, spawnAct: holds.spawnAct })), 0);
+    assert.deepEqual(executes(holds.calls), ['purge.mjs', 'sync.mjs']);
+    const deviates = fakeMemoro({ state: { forms: 99 } });
+    assert.equal(await run(['run', 'sv-test-cutover', '--word', 'kör'], runDeps({ interactive: () => false, spawnAct: deviates.spawnAct })), 1);
+    assert.deepEqual(executes(deviates.calls), ['ingest.js']);
+  });
+
+  it('an empty word is refused before anything is read', async () => {
+    const memoro = fakeMemoro();
+    const stderr = sink();
+    assert.equal(await run(['run', 'sv-test-cutover', '--word', ' '], runDeps({ stderr, interactive: () => false, spawnAct: memoro.spawnAct })), 2);
+    assert.match(stderr.text(), /--word takes what Martin said/u);
+    assert.equal(memoro.calls.length, 0);
+  });
+
+  it('a local act whose check does not hold yet is built, not a stop', async () => {
+    const memoro = fakeMemoro({ answer: { 'ingest.js --verify': (world) => ({ source: { present: world.local > 0 }, counts: { forms: world.local } }) } });
+    const stdout = sink();
+    const { ask } = answers('y', 'y');
+    const code = await run(['run', 'sv-test-cutover'], runDeps({ stdout, ask, spawnAct: memoro.spawnAct }));
+    assert.equal(code, 0, stdout.text());
+    assert.match(stdout.text(), /ingest-local is local and does not hold yet — building it/u);
+    assert.deepEqual(executes(memoro.calls), ['ingest.js', 'purge.mjs', 'sync.mjs']);
   });
 
   it('a write whose expectations already hold is offered, default no, and the run goes on', async () => {

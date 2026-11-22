@@ -15,7 +15,9 @@ What the verb adds is everything around the scripts:
   unresolved selectors, forms, grammar waiting, anchors — before anything is
   written, and a cache of it that the page and `mc deploy --dry-run` read
   offline;
-- **one question before every write**, with no flag that skips it;
+- **one question before every production write** at a terminal, or
+  **Martin's word** given once for the whole run (`--word`), which the record
+  keeps;
 - **the key**, held in this machine's keychain, given to one child at a time
   and never to anything else;
 - **the record**, written before the first child starts and completed act by
@@ -24,8 +26,11 @@ What the verb adds is everything around the scripts:
 - **one writer at a time**: a language run and a deploy never write to
   production at once.
 
-It is Martin's verb, as `mc deploy` is. The runner never calls it, and no role
-tells a build session to. Only the verb, its help,
+It runs on Martin's word: at his terminal, or from the desk with
+`--word "<what he said>"` when he has said the language goes to production
+(Martin, 2026-11-22: "OM vi har bestämt att vi ska skicka nya språk till prod
+så ska det räcka att jag säger det till dig. Rensa alla konstiga spärrar.").
+The runner never calls it, and no role tells a build session to. Only the verb, its help,
 its record, the page and `mc deploy --dry-run` name its subcommands, and the
 last two name them only as the next thing to type.
 
@@ -48,7 +53,8 @@ Exit codes:
 - **1** — a reading with a failed read, a refusal (a deploy or a run going
   on, a dirty or diverged `main`, no wrangler), a deviation, a `no`,
   or a keychain that would not write.
-- **2** — a bad argument, a token not piped in, or no terminal to ask at.
+- **2** — a bad argument, a token not piped in, an empty `--word`, or no
+  terminal to ask at and no `--word`.
 - **130** — a run stopped by ^C.
 
 ## The reading
@@ -138,21 +144,26 @@ runs an act whose shape it would misread. It is not a second validator.
      write, printing the act's `if_not`;
    - an `advisory` one is printed and never enforced.
 
-   For an act that writes:
+   A `local` act writes nothing outside this machine: a check that does not
+   hold yet is what its execute builds, so it is built, unasked, and its
+   `expect.execute` is what stops the run.
+
+   For an act that writes to production:
    - the question comes first, the act's own or `<id>: write to <target>?
-     [y/N]`;
+     [y/N]`; on Martin's word it is answered yes, printed with his word;
    - then `execute` runs;
    - then its report is compared with `expect.execute`.
 
    When what an act writes already holds, the question is whether to run it
-   anyway.
+   anyway; on Martin's word the answer is no.
 
 `--dry-run` runs every check up to the first production write, says what it
 would run, and stops. The acts after it cannot be checked until that write has
 happened.
 
-Without a terminal, `run`, `resume` and `promote` exit 2 before reading
-anything. A dry run needs no terminal.
+Without a terminal and without `--word`, `run`, `resume` and `promote` exit 2
+before reading anything; an empty `--word` exits 2. A dry run needs neither.
+With `--word` the run record has a `word` field holding it.
 
 ## The record and `resume`
 
