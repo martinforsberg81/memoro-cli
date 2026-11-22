@@ -143,6 +143,9 @@ export {
 export const REPO = 'memoro';
 
 const short = (sha) => (sha ? String(sha).slice(0, 7) : null);
+// The commit a live version names. A deploy that stamps pins into its tree is
+// verified as `<sha>-dirty`; the commit it was built from is the sha before it.
+const liveCommitOf = (ref) => (ref ? String(ref).replace(/-dirty$/u, '') : ref);
 
 export function parseDeployArgs(argv) {
   // `mc deploy take-back …` is a verb of its own (deploy-take-back.js); `mc deploy` itself gains no flag.
@@ -434,7 +437,7 @@ export async function deployPlan({
   const row = lastDeploy(env);
   let last = null;
   if (row) {
-    const ref = row.live_commit || row.sha;
+    const ref = liveCommitOf(row.live_commit || row.sha);
     last = {
       sha: ref, short: short(ref), build: (row.live_commit ? row.live_build : '') || row.build || null,
       at: row.ended || row.started || null, source: 'deploys.tsv',
@@ -448,7 +451,7 @@ export async function deployPlan({
     const version = await fetchVersion(env);
     if (version?.commit) {
       last = {
-        sha: version.commit, short: short(version.commit), build: version.build ?? null,
+        sha: liveCommitOf(version.commit), short: short(version.commit), build: version.build ?? null,
         at: version.build_time || null, source: 'api/version',
       };
     }
@@ -1044,7 +1047,7 @@ export async function run(argv, deps = {}) {
     // The ancestor rule once more, against the last deployed row as it stands now: a deploy that
     // landed since the reading may have moved production past this pick.
     const standing = (deps.lastDeploy || lastDeployRow)(env);
-    const standingRef = standing ? (standing.live_commit || standing.sha) : null;
+    const standingRef = standing ? liveCommitOf(standing.live_commit || standing.sha) : null;
     if (standingRef) {
       const standingFull = git(path, ['rev-parse', '--verify', `${standingRef}^{commit}`]);
       const forward = Boolean(standingFull) && standingFull !== plan.sha
