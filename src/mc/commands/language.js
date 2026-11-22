@@ -221,7 +221,7 @@ async function key(argv, { stdout, stderr, deps }) {
   }
   stdout.write(`token    ${token ? 'held' : 'not held'}\n`);
   stdout.write(`account  ${account || 'not held'}\n`);
-  if (!token || !account) stdout.write('mc: printf %s "<token>" | mc language key set --account <id>\n');
+  if (!token || !account) stdout.write("mc: no key kept — a run's writes use wrangler's login, the one mc deploy uses\n");
   return 0;
 }
 
@@ -572,6 +572,11 @@ async function overview(argv, { stdout, stderr, env, deps }) {
 /** The one credential a manifest may name, and the keychain entries behind it. */
 export const CREDENTIAL = 'cloudflare-d1-edit';
 
+/** What a writing act's environment says when it runs on wrangler's login
+ * (memoro `scripts/language-library/lib/cloudflare-credentials.js`). */
+export const LOGIN_VARIABLE = 'MEMORO_D1_WRITE_AUTH';
+export const LOGIN_VALUE = 'wrangler-login';
+
 const YES = /^y(es)?$/iu;
 const said = (answer) => YES.test(String(answer || '').trim());
 
@@ -809,7 +814,7 @@ async function conductHeld({
   // and without any CLOUDFLARE_* — the key is added to one child at a time.
   const { env: bare, removed } = withoutCloudflare(scrubRuntimeSecretsFromEnv(env));
   if (removed.length || Object.keys(env).some((key) => key.startsWith('CLOUDFLARE_'))) {
-    stdout.write('mc: CLOUDFLARE_* set in this shell are ignored — the key comes from the keychain\n');
+    stdout.write('mc: CLOUDFLARE_* set in this shell are ignored — the key comes from the keychain or wrangler\'s login\n');
   }
   ctx.bare = bare;
 
@@ -823,12 +828,16 @@ async function conductHeld({
   if (needed.length) {
     const getSecret = deps.getSecret || realGetSecret;
     const [token, account] = [await getSecret(TOKEN_SECRET), await getSecret(ACCOUNT_SECRET)];
-    if (!token || !account) {
-      stderr.write('mc: the Cloudflare key is not in the keychain — printf %s "<token>" | mc language key set --account <id>; nothing was run\n');
-      return stop(REFUSED, 'no key in the keychain', 1);
+    if (token && account) {
+      ctx.key = { token, account };
+      ctx.scrub = scrubber([token]);
+    } else {
+      // No key kept: the writes run on wrangler's login, the authority
+      // `mc deploy` already uses on this machine (Martin, 2026-11-22). memoro's
+      // scripts read the token from wrangler when the act's environment says so.
+      ctx.key = { login: true };
+      stdout.write("mc: the writes run on wrangler's login, the one mc deploy uses\n");
     }
-    ctx.key = { token, account };
-    ctx.scrub = scrubber([token]);
     const first = manifest.acts.find((act) => act.credentials.includes(CREDENTIAL));
     // A check that runs without the key (`check_without_key`, the promotion's)
     // cannot show that the key reads: its execute is the first to use it.
@@ -959,9 +968,14 @@ async function conductHeld({
  * `check_without_key` — stderr teed to the terminal and the run's log. */
 async function child(ctx, act, argv) {
   const env = { ...ctx.bare };
+  delete env[LOGIN_VARIABLE];
   if (ctx.key && act.credentials.includes(CREDENTIAL) && !(act.check_without_key && argv === act.check)) {
-    env.CLOUDFLARE_API_TOKEN = ctx.key.token;
-    env.CLOUDFLARE_ACCOUNT_ID = ctx.key.account;
+    if (ctx.key.login) {
+      env[LOGIN_VARIABLE] = LOGIN_VALUE;
+    } else {
+      env.CLOUDFLARE_API_TOKEN = ctx.key.token;
+      env.CLOUDFLARE_ACCOUNT_ID = ctx.key.account;
+    }
   }
   mkdirSync(languageDir(ctx.env), { recursive: true });
   const onStderr = (chunk) => {
