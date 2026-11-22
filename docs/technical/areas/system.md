@@ -58,6 +58,8 @@ On main now:
   validates against main ([programme archive turn](../mc-run.md#programme-archive-turn),
   [archiving a programme](../mc-plan.md#archiving-a-programme)).
 - A waiting deploy reserves the next opening for a full run when a different commit is being measured. It can still join a measurement of its own commit.
+- [Deploy](../mc-deploy.md) reads a live commit reported with a `-dirty` suffix from stamped pins as the source commit it was built from; the no-backwards check still applies.
+- [Language cutover](../mc-language.md) can run from the desk on Martin's recorded word without a terminal. An unmet local build step runs without asking; production expectations still stop the run, and a write that already holds is not repeated. If no key is kept, the credentialed child uses Wrangler's existing login.
 - The helper preserves anonymous app suggestions in intake before it acknowledges
   them. The drain catalogues them through jev and keeps the original files in
   area suggestion stores; it creates no proposal, programme or goal.
