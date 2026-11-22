@@ -296,7 +296,7 @@ function fakeStep({ fails = {}, head = SHA, download = ZIP, downloads = {} } = {
   return step;
 }
 
-function builder({ fails, head, worktreeExists = false, readBackApp = app(), download } = {}) {
+function builder({ fails, head, worktreeExists = false, readBackApp = app(), download, removed = [] } = {}) {
   const env = {
     MC_WORK_ROOT: mkdtempSync(join(tmpdir(), 'mc-ios-device-work-')),
     MC_HOME: mkdtempSync(join(tmpdir(), 'mc-ios-device-home-')),
@@ -315,6 +315,7 @@ function builder({ fails, head, worktreeExists = false, readBackApp = app(), dow
   const deps = {
     env, stdout, stderr, step,
     exists: () => worktreeExists,
+    remove: (dir) => removed.push(dir),
     takeGateLock: (args) => { lane.push(['take', args.mode, args.lane]); return { ok: true, took: true }; },
     releaseGateLock: (args) => { lane.push(['release', args.lane]); },
     runningRound: () => null,
@@ -357,10 +358,22 @@ describe('buildIos — the builder', () => {
     const b = builder({ worktreeExists: true });
     assert.equal(await buildIos(b.job, b.deps), 0);
     const { worktree } = buildPaths(b.env);
-    assert.deepEqual(b.step.calls.slice(0, 2).map((c) => c.argv), [
+    assert.deepEqual(b.step.calls.slice(2, 4).map((c) => c.argv), [
       ['git', '-C', worktree, 'checkout', '--detach', '--force', SHA],
       ['git', '-C', worktree, 'clean', '-ffdx'],
     ]);
+  });
+
+  it('adds afresh a worktree whose link to the checkout is broken, instead of stopping', async () => {
+    const removed = [];
+    const b = builder({ worktreeExists: true, removed, fails: { 'git worktree check': { output: 'fatal: not a git repository' } } });
+    assert.equal(await buildIos(b.job, b.deps), 0, b.stderr.text);
+    const { worktree } = buildPaths(b.env);
+    assert.deepEqual(removed, [worktree]);
+    assert.deepEqual(b.step.calls.map((c) => c.label).slice(0, 4), [
+      'git worktree check', 'git repository check', 'git worktree prune', 'git worktree add',
+    ]);
+    assert.match(b.stdout.text, /was not a worktree of \/repos\/memoro — added afresh/u);
   });
 
   it('takes its repository lane as ios-build and the row goes running → installed', async () => {

@@ -992,7 +992,24 @@ export async function buildIos(job, deps = {}) {
     // (b) The worktree, on exactly the commit, with nothing generated left:
     // `clean -ffdx` takes `ios/` and `node_modules` with it.
     const git = (label, args, quiet = false) => run(label, ['git', ...args], { cwd: repoPath, quiet, stoppedAt: 'worktree', timeoutMs: 10 * MIN });
-    const moves = exists(worktree)
+    // A directory there that is not a worktree of this checkout (its link
+    // broken because the checkout moved or was cloned again, or never one) is
+    // taken away and added afresh; `checkout` in it would only fail.
+    const commonDir = async (label, dir) => {
+      const r = await git(label, ['-C', dir, 'rev-parse', '--path-format=absolute', '--git-common-dir'], true);
+      return r.ok ? r.output.trim() : '';
+    };
+    let present = exists(worktree);
+    if (present) {
+      const own = await commonDir('git worktree check', worktree);
+      const repo = await commonDir('git repository check', repoPath);
+      if (!own || !repo || own !== repo) {
+        (deps.remove || ((dir) => rmSync(dir, { recursive: true, force: true })))(worktree);
+        stdout.write(`mc: ${worktree} was not a worktree of ${repoPath} — added afresh\n`);
+        present = false;
+      }
+    }
+    const moves = present
       ? [['git checkout', ['-C', worktree, 'checkout', '--detach', '--force', sha]], ['git clean', ['-C', worktree, 'clean', '-ffdx']]]
       : [['git worktree prune', ['-C', repoPath, 'worktree', 'prune']], ['git worktree add', ['-C', repoPath, 'worktree', 'add', '--detach', worktree, sha]]];
     for (const [label, args] of moves) {
