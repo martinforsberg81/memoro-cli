@@ -132,16 +132,17 @@ export const ROUTES = {
   },
   run: {
     booleans: ['--dry-run'],
+    strictValues: ['--word'],
     check: ({ positional: [name, ...extra] }) => (!name || extra.length ? 'mc language run takes one manifest, e.g. sv-forms-cutover' : null),
   },
   resume: {
     booleans: ['--from-head'],
-    strictValues: ['--manifest'],
+    strictValues: ['--manifest', '--word'],
     check: ({ positional }) => (positional.length
       ? `mc language resume takes no argument (${positional[0]}) — --manifest <name> picks one` : null),
   },
   promote: {
-    strictValues: ['--langs'],
+    strictValues: ['--langs', '--word'],
     check: ({ positional, flags }) => (positional.length || (flags.langs != null && !LANGS.test(flags.langs))
       ? 'mc language promote takes --langs <list>, e.g. --langs sv,fr, or nothing for every language' : null),
   },
@@ -580,6 +581,16 @@ export const LOGIN_VALUE = 'wrangler-login';
 const YES = /^y(es)?$/iu;
 const said = (answer) => YES.test(String(answer || '').trim());
 
+/** The questions answered by Martin's word: a write is yes, and running a
+ * write that already holds again is no. Each answer is printed. */
+function wordAnswers(word) {
+  return (prompt, { stdout = process.stdout } = {}) => {
+    const answer = /anyway\?/u.test(prompt) ? 'n' : 'y';
+    stdout.write(`${prompt} ${answer} — on Martin's word: ${word}\n`);
+    return answer;
+  };
+}
+
 /** The value at a dotted path — `languages.sv.forms`, `rows.0.n` — or undefined. */
 export function valueAt(json, path) {
   let at = json;
@@ -685,11 +696,13 @@ async function runVerb(argv, io) {
     return 2;
   }
   const dryRun = scanned.flags['dry-run'];
-  if (!dryRun && !(io.deps.interactive || realInteractive)(io.env)) {
-    io.stderr.write('mc: mc language run asks before every write, and there is no terminal here to ask — run it in one; nothing was read\n');
+  const word = wordOf(scanned, io);
+  if (word === false) return 2;
+  if (!dryRun && !word && !(io.deps.interactive || realInteractive)(io.env)) {
+    io.stderr.write('mc: mc language run asks before every write, and there is no terminal here to ask — run it in one, or give Martin\'s word with --word "<what he said>"; nothing was read\n');
     return 2;
   }
-  return conduct({ name, dryRun }, io);
+  return conduct({ name, dryRun, word }, io);
 }
 
 async function resumeVerb(argv, io) {
@@ -698,8 +711,10 @@ async function resumeVerb(argv, io) {
     io.stderr.write(`mc: ${scanned.error}\n${usage()}`);
     return 2;
   }
-  if (!(io.deps.interactive || realInteractive)(io.env)) {
-    io.stderr.write('mc: mc language resume asks before every write, and there is no terminal here to ask — run it in one; nothing was read\n');
+  const word = wordOf(scanned, io);
+  if (word === false) return 2;
+  if (!word && !(io.deps.interactive || realInteractive)(io.env)) {
+    io.stderr.write('mc: mc language resume asks before every write, and there is no terminal here to ask — run it in one, or give Martin\'s word with --word "<what he said>"; nothing was read\n');
     return 2;
   }
   const wanted = scanned.flags.manifest;
@@ -711,7 +726,7 @@ async function resumeVerb(argv, io) {
     return 1;
   }
   const built = prior.manifest === PROMOTE ? promoteManifest(prior.lang === ALL ? null : prior.lang) : null;
-  return conduct({ name: prior.manifest, manifest: built, prior, fromHead: scanned.flags['from-head'] }, io);
+  return conduct({ name: prior.manifest, manifest: built, prior, fromHead: scanned.flags['from-head'], word }, io);
 }
 
 /**
@@ -721,7 +736,7 @@ async function resumeVerb(argv, io) {
  * naming one on disk.
  */
 async function conduct({
-  name, manifest: built = null, dryRun = false, prior = null, fromHead = false,
+  name, manifest: built = null, dryRun = false, prior = null, fromHead = false, word = null,
 }, { stdout, stderr, env, deps }) {
   const path = (deps.repos || defaultRepos(env)).find((repo) => repo.name === REPO)?.path;
   if (!path) {
@@ -738,7 +753,7 @@ async function conduct({
   // A run holds the tree from its fast-forward until its last act has exited.
   try {
     return await conductHeld({
-      name, built, dryRun, prior, fromHead, worktree: prepared.worktree, git, alive,
+      name, built, dryRun, prior, fromHead, word, worktree: prepared.worktree, git, alive,
     }, { stdout, stderr, env, deps });
   } finally {
     prepared.release();
@@ -747,7 +762,7 @@ async function conduct({
 
 /** `conduct` from the prepared worktree on — the part the holder is held for. */
 async function conductHeld({
-  name, built, dryRun, prior, fromHead, worktree, git, alive,
+  name, built, dryRun, prior, fromHead, word, worktree, git, alive,
 }, { stdout, stderr, env, deps }) {
   if (!(deps.exists || existsSync)(join(worktree, 'node_modules', '.bin', 'wrangler'))) {
     stderr.write(`mc: no wrangler in ${worktree} — run npm ci there; nothing was read\n`);
@@ -785,7 +800,7 @@ async function conductHeld({
     }
     const closed = closeAbandoned({ alive }, env);
     const run = startRun({
-      manifest: name, lang: manifest.lang, sha, holder, pid: deps.pid ?? process.pid, dryRun, resumes: prior?.started || null,
+      manifest: name, lang: manifest.lang, sha, holder, pid: deps.pid ?? process.pid, dryRun, resumes: prior?.started || null, word,
     }, env);
     return { run, closed };
   }, { name: 'language-run' });
@@ -800,7 +815,7 @@ async function conductHeld({
   const ctx = {
     stdout, stderr, env, deps, manifest, worktree, run, dryRun,
     spawnAct: deps.spawnAct || spawnActDefault,
-    ask: deps.ask || realAsk,
+    ask: word ? wordAnswers(word) : (deps.ask || realAsk),
     dim: stdout.isTTY ? (text) => `\x1b[2m${text}\x1b[0m` : (text) => text,
     scrub: (text) => text,
     logFile: join(languageDir(env), `${runStem(run)}.log`),
@@ -881,7 +896,12 @@ async function conductHeld({
     const read = await checkAct(ctx, act, { relax });
     if (read.interrupted) return stop(STOPPED, `interrupted by ${read.interrupted} at ${act.id} check`, 130);
     if (read.end) return stop(read.end.outcome, read.end.note, read.end.code);
-    if (!read.ok) return deviated(ctx, act, stop);
+    // A local act writes nothing outside this machine: a check that does not
+    // hold yet is what its execute is for, and the execute's own
+    // expectations are what stop the run.
+    const localToBuild = !read.ok && act.target === 'local' && act.execute !== null && !dryRun;
+    if (!read.ok && !localToBuild) return deviated(ctx, act, stop);
+    if (localToBuild) stdout.write(`    ${act.id} is local and does not hold yet — building it\n`);
     if (act.execute === null) continue;
 
     if (dryRun) {
@@ -911,7 +931,7 @@ async function conductHeld({
         stdout.write(`    ${act.id} not run — already true\n`);
         continue;
       }
-    } else if (!said(ctx.ask(act.question?.(read.json) || `${act.id}: write to ${act.target}? [y/N]`, { stdout }))) {
+    } else if (act.target !== 'local' && !said(ctx.ask(act.question?.(read.json) || `${act.id}: write to ${act.target}? [y/N]`, { stdout }))) {
       actEnd(run, actStart(run, { id: act.id, phase: 'execute' }, env), { outcome: 'declined', note: 'answered no at the question' }, env);
       stdout.write(`mc: ${act.id} was not run — nothing more was written; mc language resume asks again\n`);
       return stop(STOPPED, `declined at ${act.id}`, 1);
@@ -1169,9 +1189,29 @@ async function promoteVerb(argv, io) {
     io.stderr.write(`mc: ${scanned.error}\n${usage()}`);
     return 2;
   }
-  if (!(io.deps.interactive || realInteractive)(io.env)) {
-    io.stderr.write('mc: mc language promote asks before it writes, and there is no terminal here to ask — run it in one; nothing was read\n');
+  const word = wordOf(scanned, io);
+  if (word === false) return 2;
+  if (!word && !(io.deps.interactive || realInteractive)(io.env)) {
+    io.stderr.write('mc: mc language promote asks before it writes, and there is no terminal here to ask — run it in one, or give Martin\'s word with --word "<what he said>"; nothing was read\n');
     return 2;
   }
-  return conduct({ name: PROMOTE, manifest: promoteManifest(langs) }, io);
+  return conduct({ name: PROMOTE, manifest: promoteManifest(langs), word }, io);
+}
+
+/**
+ * Martin's word for the run (--word "<what he said>"), or null without one,
+ * or false for an empty one. With it the run asks nothing: every write's
+ * question is answered by his word, which the record keeps, and "run it
+ * anyway?" for a write that already holds is answered no. Martin, 2026-11-22:
+ * "OM vi har bestämt att vi ska skicka nya språk till prod så ska det räcka att
+ * jag säger det till dig." The checks and their stops are unchanged.
+ */
+function wordOf(scanned, io) {
+  const word = scanned.flags.word;
+  if (word == null) return null;
+  if (!String(word).trim()) {
+    io.stderr.write('mc: --word takes what Martin said, in his words\n');
+    return false;
+  }
+  return String(word).trim();
 }

@@ -76,12 +76,13 @@ export function readRuns(env = process.env) {
 /** The record of a run that has begun. Written before anything is started. */
 export function startRun({
   manifest, lang, sha = '', holder = '', pid = process.pid, started = new Date().toISOString(),
-  dryRun = false, resumes = null,
+  dryRun = false, resumes = null, word = null,
 }, env = process.env) {
   const run = {
     manifest, lang, sha, started, ended: null, pid, holder, outcome: RUNNING,
     dry_run: dryRun, resumes, note: '', acts: [],
   };
+  if (word) run.word = word;
   return writeRun(run, env);
 }
 
