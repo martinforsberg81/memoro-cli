@@ -93,10 +93,15 @@ function realCheckout({ repos, dir }) {
   for (const { repo, path } of repos) {
     const into = join(dir, repo);
     mkdirSync(into);
-    const archive = spawnSync('git', ['-C', path, 'archive', '--format=tar', 'origin/main'], { maxBuffer: 1 << 30 });
-    if (archive.status !== 0) return { ok: false, reason: `git archive of ${repo} failed: ${String(archive.stderr || archive.error?.message || '').trim()}` };
-    const unpacked = spawnSync('tar', ['-x', '-C', into], { input: archive.stdout });
-    if (unpacked.status !== 0) return { ok: false, reason: `unpacking ${repo} failed: ${String(unpacked.stderr || '').trim()}` };
+    // The tree goes through a file, not a buffer: memoro's archive outgrew any
+    // sensible maxBuffer (1.09 GB on 2026-11-22), and spawnSync then fails with
+    // ENOBUFS and an empty stderr.
+    const tarFile = join(dir, `.${repo}.tar`);
+    const archive = spawnSync('git', ['-C', path, 'archive', '--format=tar', '-o', tarFile, 'origin/main']);
+    if (archive.status !== 0) return { ok: false, reason: `git archive of ${repo} failed: ${String(archive.stderr || '').trim() || archive.error?.message || `exit ${archive.status}`}` };
+    const unpacked = spawnSync('tar', ['-x', '-f', tarFile, '-C', into]);
+    rmSync(tarFile, { force: true });
+    if (unpacked.status !== 0) return { ok: false, reason: `unpacking ${repo} failed: ${String(unpacked.stderr || '').trim() || unpacked.error?.message || `exit ${unpacked.status}`}` };
   }
   spawnSync('chmod', ['-R', 'a-w', dir]);
   return { ok: true };
