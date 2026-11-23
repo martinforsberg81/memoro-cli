@@ -1722,6 +1722,12 @@ async function shipJob(job, deps = {}) {
   let holding = false;
   let fastForwarded = false;
   let releaseHolder = null;
+  const detachRelease = () => {
+    if (job.release && releaseHolder && git(worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']) === job.release.branch &&
+        git(worktree, ['switch', '--detach']) === null) {
+      stderr.write(`mc: could not detach the deploy worktree from ${job.release.branch}\n`);
+    }
+  };
   try {
     progress.report('waiting', 'Waiting for deployment lane');
     holding = await holdBuildLane(job, { ...deps, stdout });
@@ -1890,9 +1896,7 @@ async function shipJob(job, deps = {}) {
       const options = { ...deps, env, root: job.root, path: job.path || worktree, git };
       // Leave the branch available for a merge-failure mend, while the
       // post-deploy check can still place this tree at the shipped commit.
-      if (git(worktree, ['switch', '--detach', shipping]) === null) {
-        stderr.write(`mc: could not detach the deploy worktree from ${job.release.branch}\n`);
-      }
+      detachRelease();
       // The provider result is durable even if the forge is offline. The
       // runner will finish the same row and return PR, not run the deploy again.
       let published = changeRelease(job.release, options, (r) => ({
@@ -1963,6 +1967,7 @@ async function shipJob(job, deps = {}) {
     }, env);
     throw error;
   } finally {
+    detachRelease();
     releaseHolder?.();
     if (holding) (deps.releaseGateLock || releaseGateLock)({ root: job.lockRoot || mcHome(env), lane: BUILD_LANE });
   }
