@@ -13,9 +13,8 @@ Every programme is a bounded implementation plan; enduring direction belongs to 
 A recorded programme uses [the programme document](references/programme-document.md);
 a repair uses [the repair page](references/repair-page.md);
 a programme without a record uses [the programme page](references/programme-readme.md).
-For legacy pages, preserve the held Aim in the appropriate area without changing its meaning.
-Finish active work where it stands; archive it even if the enduring direction continues.
-Use the supported manual route without a record, or the valid-record route when already established.
+Preserve a legacy page's held Aim in its area without changing its meaning. Finish active
+work where it stands; archive as described below even if the enduring direction continues.
 
 ## Files
 
@@ -42,20 +41,18 @@ Use the supported manual route without a record, or the valid-record route when 
 
 ## Goal design
 
-1. A recorded desk order is cut by code once the desk sets it ready: one goal per part, built from the part as it stands. Elsewhere cut fully investigated, measured and designed work into [goals](references/goal-design.md) headless sessions can build to the end. Settle decisions before writing the goal.
+1. Once the desk sets a recorded order ready, the [runner](../../docs/technical/mc-run.md#the-cut-of-a-ready-order) cuts a build goal for each part that has none, from the part as it stands, with no session.
+   Elsewhere settle decisions first, then cut fully investigated, measured and designed work into [goals](references/goal-design.md) headless sessions can build to the end.
 2. Order by prerequisites and shared files. In an order a part waits for the part before it unless it holds the line `In parallel with the previous part.`, and ready writes the record from that. A programme whose record states its phases and has no order runs independent phases side by side: state a prerequisite with `mc programs after`. Elsewhere independent goals share a phase and dependent goals go later. In both a prerequisite is a phase dependency, never a note.
 3. Move every complete goal to `build`; a draft is never started. A consumer needing a producer
    goes to `build` in a dependent phase.
 
 ## When a goal lands
 
-The programme's last goal, Documentation, writes landed functionality to
-`docs/technical/`. The runner archives a programme with a valid record once every goal is
-merged or dropped; otherwise use the supported manual archive route.
-Landed sections leave the README.
+The programme's last goal, Documentation, writes landed functionality to `docs/technical/`.
+Remove landed sections from README. The runner archives a programme with a valid record once
+every goal is merged or dropped; otherwise use the supported manual archive route.
 
 ## Faithful scope correction and handoff
 
 Investigate until facts and remaining uncertainty are established. Separate technical gaps planning can resolve from what [asking-martin](asking-martin.md) names as his; the rest is decided and recorded. On clarification, amend the README/design, standards, briefs and criteria consistently; change only clarified scope and preserve other requirements/prerequisites unless Martin changes them. Deferring consumer features does not imply deferring provider, data or DPA prerequisites. Before handoff reconcile README, briefs, phases and actual stages; name remaining gaps. Do not hand unresolved prerequisites to build with a ceremonial LOG.md hold.
-
-Code cuts a ready order, with no session: the runner makes one goal in build for each part that has none; see mc-run.md, The cut of a ready order.
