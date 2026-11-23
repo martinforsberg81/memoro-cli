@@ -179,6 +179,21 @@ export async function fetchVersionDefault(serverUrl, { fetchImpl = globalThis.fe
   } catch { return null; }
 }
 
+/** The directories macOS's own tools are in, in the order a login shell has them. */
+export const SYSTEM_TOOL_DIRS = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'];
+
+/**
+ * `env` with macOS's own tool directories ahead of the rest of PATH. The IPA
+ * export runs `/usr/bin/rsync` (openrsync), which starts its other end as
+ * `rsync` from PATH; a Homebrew rsync 3.x there rejects `-E`
+ * (`--extended-attributes: unknown option`) and the export ends in
+ * "exportArchive Copy failed" (2026-11-23, build 46).
+ */
+export function systemToolsFirst(env = process.env) {
+  const rest = String(env.PATH || '').split(':').filter((dir) => dir && !SYSTEM_TOOL_DIRS.includes(dir));
+  return { ...env, PATH: [...SYSTEM_TOOL_DIRS, ...rest].join(':') };
+}
+
 /** Said when production's stamp carries `-dirty`: what is read, and why. */
 function dirtyWarning(live) {
   return `production says ${short(live)}-dirty — its deploy tree had uncommitted files; read as ${short(live)}, the commit it was built from`;
@@ -925,7 +940,7 @@ export async function buildIos(job, deps = {}) {
       'xcodebuild', '-exportArchive', '-archivePath', paths.archive,
       '-exportOptionsPlist', join(worktree, declaration.export_options), '-exportPath', paths.exportDir,
       '-allowProvisioningUpdates',
-    ], { timeoutMs: 30 * MIN, stoppedAt: 'export' });
+    ], { timeoutMs: 30 * MIN, stoppedAt: 'export', env: systemToolsFirst(env) });
     if (!exported.ok) return xcodeFailed('xcodebuild -exportArchive', exported, 30 * MIN, 'export');
 
     // (i) The IPA itself, unpacked and read back again: an export that

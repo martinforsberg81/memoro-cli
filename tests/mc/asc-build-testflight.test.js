@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path';
 import { run } from '../../src/mc/commands/asc.js';
 import {
   archivedApp, archivePaths, atRev, buildIos, buildPaths, deliveryId, listBuilds, pruneArchives, reasonLine, runSync,
-  keysRunCommand,
+  keysRunCommand, systemToolsFirst,
 } from '../../src/mc/ios-build.js';
 import { readIosBuilds, recordStart } from '../../src/mc/ios-builds.js';
 
@@ -399,6 +399,10 @@ describe('buildIos --testflight — the builder', () => {
       'xcodebuild', '-exportArchive', '-archivePath', archive,
       '-exportOptionsPlist', join(worktree, 'ios/ExportOptions.plist'), '-exportPath', exportDir, '-allowProvisioningUpdates',
     ]);
+    // The export finds macOS's own rsync before a Homebrew one: openrsync starts its other end from PATH.
+    assert.deepEqual(call('xcodebuild -exportArchive').env.PATH.split(':').slice(0, 4), ['/usr/bin', '/bin', '/usr/sbin', '/sbin']);
+    assert.deepEqual(systemToolsFirst({ PATH: '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin', HOME: '/h' }),
+      { PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin', HOME: '/h' });
     assert.deepEqual(call('upload').argv.slice(0, 4), [process.execPath, call('upload').argv[1], 'keys', 'run']);
     assert.deepEqual(call('upload').argv.slice(4), [join(worktree, 'scripts/upload.mjs'), ipaPath(b.env)]);
     assert.equal(call('upload').cwd, worktree);
