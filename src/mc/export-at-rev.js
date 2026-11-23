@@ -7,7 +7,7 @@
  * `scripts/` out with `exportAtRev`. `ios-build.js` re-exports both.
  */
 import { spawnSync } from 'node:child_process';
-
+import { runTool } from './child-async.js';
 import { run as runGit } from './git.js';
 
 /**
@@ -35,6 +35,22 @@ export function exportAtRev(repoPath, rev, path, dir) {
   const tar = spawnSync('tar', ['-x', '-C', dir], { input: archive.stdout, timeout: 60_000 });
   if (tar.error || tar.status !== 0) {
     return `tar -x: ${reasonLine(tar.error?.message || String(tar.stderr || '')) || `exit ${tar.status}`}`;
+  }
+  return null;
+}
+
+/** Same binary export for callers that must not block on child processes. */
+export async function exportAtRevAsync(repoPath, rev, path, dir) {
+  const options = { timeoutMs: 60_000 };
+  const packed = await runTool('git', ['-C', repoPath, 'archive', '--format=tar', rev, '--', path], {
+    ...options, stdoutBuffer: true, maxBuffer: 1024 * 1024 * 1024,
+  });
+  if (packed.error || packed.status !== 0) {
+    return `git archive ${rev} ${path}: ${reasonLine(packed.error?.message || packed.stderr) || `exit ${packed.status}`}`;
+  }
+  const tar = await runTool('tar', ['-x', '-C', dir], { ...options, input: packed.stdout });
+  if (tar.error || tar.status !== 0) {
+    return `tar -x: ${reasonLine(tar.error?.message || tar.stderr) || `exit ${tar.status}`}`;
   }
   return null;
 }

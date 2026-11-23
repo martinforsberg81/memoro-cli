@@ -35,8 +35,9 @@ const GRACE_MS = 1000;
  * does for `runShell`: a round's ceiling must not leave `npm ci` running.
  * `group` opts a bounded session into the same detached process-group cleanup
  * as runShell, so the provider and its tool children share the deadline.
+ * `stdoutBuffer` preserves binary stdout; stderr remains text.
  */
-export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal = null, graceMs = GRACE_MS, group = false, input = null } = {}) {
+export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal = null, graceMs = GRACE_MS, group = false, input = null, stdoutBuffer = false } = {}) {
   return collect(() => {
     const child = spawn(tool, args, { cwd, env: env || process.env, detached: group, stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
     if (input !== null) {
@@ -46,7 +47,7 @@ export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, tim
       child.stdin.end(input);
     }
     return child;
-  }, { maxBuffer, timeoutMs, signal, graceMs, group });
+  }, { maxBuffer, timeoutMs, signal, graceMs, group, stdoutBuffer });
 }
 
 /**
@@ -63,7 +64,7 @@ export function runShell(command, { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs 
  * the leader of the child's own process group, which a full run records so
  * that what the command leaves standing in its worktree is ended with it.
  */
-function collect(start, { maxBuffer, timeoutMs, signal, graceMs, group = false, onSpawn = null }) {
+function collect(start, { maxBuffer, timeoutMs, signal, graceMs, group = false, onSpawn = null, stdoutBuffer = false }) {
   return new Promise((resolve) => {
     const out = [];
     const err = [];
@@ -80,7 +81,7 @@ function collect(start, { maxBuffer, timeoutMs, signal, graceMs, group = false, 
       if (timer) clearTimeout(timer);
       if (escalation) clearTimeout(escalation);
       signal?.removeEventListener('abort', onAbort);
-      resolve({ status: error ? null : status, signal: exitSignal ?? null, stdout: text(out), stderr: text(err), error });
+      resolve({ status: error ? null : status, signal: exitSignal ?? null, stdout: stdoutBuffer ? Buffer.concat(out) : text(out), stderr: text(err), error });
     };
 
     let child = null;

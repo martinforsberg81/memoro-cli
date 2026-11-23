@@ -869,17 +869,17 @@ export function noCriteria(goal) {
 
 /**
  * A worktree of the repository at `bare` at `path`, on `branch`: from
- * origin/main, or on that branch as it is when it already exists. Gives git's
+ * the given start (origin/main by default), or on that branch as it is when it already exists. Gives git's
  * answer with `branch` and `existed` beside it. A directory deleted by hand
  * stays registered with git, which then refuses to add its branch anywhere, so
  * an existing branch is added after a prune.
  */
-export function addBranchWorktree({ git, bare, path, branch }) {
+export function addBranchWorktree({ git, bare, path, branch, start = 'origin/main' }) {
   const existed = git(bare, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]).ok;
   if (existed) git(bare, ['worktree', 'prune']);
   const added = git(bare, existed
     ? ['worktree', 'add', '-q', path, branch]
-    : ['worktree', 'add', '-q', '-b', branch, path, 'origin/main']);
+    : ['worktree', 'add', '-q', '-b', branch, path, start]);
   return { ...added, branch, existed };
 }
 

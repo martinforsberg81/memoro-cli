@@ -37,7 +37,10 @@ import { isNetworkFailure } from './network-failure.js';
 import { currentHolder } from './work-identity.js';
 import { log } from './logger.js';
 import { gateRedFiles } from './merge-red.js';
-import { mcHome } from './paths.js';
+import { mcHome, workRoot } from './paths.js';
+import { repoNameOf } from './repos.js';
+import { isReleaseBase, releaseMergeAdmission, releaseReadingChange } from './release-merge.js';
+import { openRelease } from './deploy-release.js';
 import { recordLandingMainRed } from './selector-miss.js';
 import { runGate, verdictPhrase } from './repo-gate.js';
 import { sourceLinkedInstallations } from './repo-status.js';
@@ -100,6 +103,7 @@ export async function runMergeRound({
   // Stops the round from outside (`runGate`'s signal): the round ends `gone`.
   signal = null,
   beforeMerge = async () => true,
+  readTakeBack = undefined,
   expectedHead = null,
   // The pause between reads of GitHub's head (see `headAsGitHubSeesIt`); a
   // test passes a no-op rather than waiting five seconds a read.
@@ -125,6 +129,11 @@ export async function runMergeRound({
   const run = (tool) => (args, options = {}) => runTool(tool, args, { cwd: options.cwd, env });
   const askGit = git || ((args, options = {}) => runGitAsync(options.cwd, args, { env }));
   const askGh = gh || run('gh');
+  const repo = repoNameOf(repoPath);
+  const releaseRoot = workRoot(env);
+  const admitRelease = ({ number, head, base }) => base
+    ? releaseMergeAdmission({ root: releaseRoot, repo, pr: number, head, base })
+    : {};
 
   const report = {
     schema: MERGE_SCHEMA,
@@ -184,10 +193,13 @@ export async function runMergeRound({
 
   try {
     const verdict = await gate({
-      repoPath, pr: numbers[0], prs: batch ? numbers : null, holder, root, env, git: askGit, gh: askGh, suite, onProgress, clock, holdLease: false, mode, signals, signal,
+      repoPath, pr: numbers[0], prs: batch ? numbers : null, holder, root, env, git: askGit, gh: askGh, suite, onProgress, clock, holdLease: false, mode, signals, signal, admitPr: admitRelease,
     });
     report.gate = verdict;
     report.pr = { ...report.pr, ...verdict.pr };
+    const admitted = admitRelease(report.pr);
+    if (admitted.stop) return finish(admitted.stop, admitted.reason);
+    if (batch && admitted.release) return finish('merge', 'release repairs take one pull request per round');
     if (batch) report.batch.gate_ok = Boolean(verdict.ok);
     if (!verdict.ok && batch && FALLBACK_STOPS.includes(verdict.stopped_at)) {
       // The batch could not be measured as one, or measured red. Which pull
@@ -254,6 +266,7 @@ export async function runMergeRound({
     if (!nowAt) return finish('drift', `could not read ${base} before merging`);
     let groundNote = `${base} unmoved`;
     if (nowAt !== verdict.base?.commit) {
+      if (admitted.release) return finish('drift', `${base} moved while the release repair was measured — nothing merged`);
       const from = verdict.base?.commit;
       const held = groundStillHolds({
         base,
@@ -266,6 +279,12 @@ export async function runMergeRound({
       if (!held.ok) return finish('drift', held.reason);
       groundNote = held.note;
       say(`${base} moved to ${short(nowAt)} while the gate ran — ${held.note}`);
+    }
+
+    if (admitted.release) {
+      if (nowAt !== admitted.release.head) return finish('drift', `${base} does not match the recorded release head — nothing merged`);
+      const change = await releaseReadingChange({ path: repoPath, candidate: verdict.candidate_commit, release: admitted.release, read: readTakeBack });
+      if (change) return finish('merge', `mc: ${repo}#${report.pr.number} changes what can be taken back (${change}) — a release repair may not; repair the red without it`);
     }
 
     // And the lease, re-read rather than assumed. A `--force` release mid-round
@@ -348,6 +367,22 @@ export async function runMergeRound({
       if (allowed !== true) return typeof allowed === 'string'
         ? finish('repair-release', allowed)
         : finish('dropped', `#${number} belongs only to a dropped goal; delivery is abandoned`);
+      if (admitted.release || (repo === 'memoro' && openRelease(releaseRoot))) {
+        // Recheck the forge's target, not just the head SHA: changing the
+        // base does not change the head. The release state is re-read last.
+        const target = await askGh(['pr', 'view', String(number), '--json', 'baseRefName'], { cwd: repoPath });
+        let branch;
+        try { if (target.status === 0) branch = JSON.parse(target.stdout).baseRefName; } catch { /* no answer */ }
+        if (!branch && isNetworkFailure(target.stderr)) return finish('offline', `could not recheck the base of #${number} (${trim(target.stderr)}) — nothing merged`);
+        if (branch && branch !== report.pr.base) {
+          const changed = admitRelease({ ...report.pr, base: branch });
+          if (changed.stop) return finish(changed.stop, changed.reason);
+        }
+        if (branch !== report.pr.base) return finish('drift', `could not confirm that #${number} still has its measured base — nothing merged`);
+        const current = admitRelease(report.pr);
+        if (current.stop) return finish(current.stop, current.reason);
+        if (current.release && current.release.head !== nowAt) return finish('drift', `${base} moved while the release repair was measured — nothing merged`);
+      }
       const merged = await askGh(['pr', 'merge', String(number), '--squash', ...(pin ? ['--match-head-commit', pin] : [])], { cwd: repoPath });
       if (merged.status !== 0) {
         // A failed call is not a failed merge. On #10844 GitHub took the call,
@@ -448,12 +483,13 @@ export async function runMergeRound({
     report.merged_into = verdict.pr.base;
     report.default_branch = await defaultBranch(askGit, repoPath);
     report.off_default = Boolean(report.default_branch) && report.merged_into !== report.default_branch;
+    if (admitted.release) report.release_mend = true;
     if (!batch) say(`merged #${verdict.pr.number} into ${report.merged_into} as ${short(report.merge_commit)}`);
-    if (report.off_default) {
+    if (report.off_default && !report.release_mend) {
       say(`WARNING: ${report.merged_into} is not the default branch (${report.default_branch}) — this landed on a branch, not on ${report.default_branch}`);
     }
 
-    report.deploy = await deployPull({ git: askGit, repoPath, env, say, installs });
+    if (!report.release_mend) report.deploy = await deployPull({ git: askGit, repoPath, env, say, installs });
     const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, { root, env }), clock });
     report.log_path = written.path;
     report.log_line = written.line;

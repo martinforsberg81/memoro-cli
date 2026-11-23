@@ -116,7 +116,8 @@ import {
 import { fullRunVerdict, gateRecord, measureGate, pickCommit, reds, suiteLines, suiteWords, withMendsNow } from '../deploy-gate.js';
 import { outputRoot, settleOutputs } from '../gate-output.js';
 import { FINISHED as MAIN_FINISHED, readMainMends, requestMainRepair } from '../main-repair.js';
-import { repairFromStop } from '../nightly-loop.js';
+import { repairFromStop, repairReleaseRun } from '../nightly-loop.js';
+import { mainRecord } from '../selector-miss.js';
 import {
   preparationLogPath, preparationServes, preparationState, patchPreparation, readPreparation, STAGE_WORDS,
   writePreparation,
@@ -852,6 +853,9 @@ export async function run(argv, deps = {}) {
   // below are refs, and refs are shared by every worktree of the repository,
   // so they stay here. Only the spawn's cwd moves.
   const git = deps.git || tryGit;
+  const queueCutRed = (release) => repairReleaseRun({ name: REPO, path }, release, release.cut_run, {
+    root, historyRoot: deps.gate?.root ?? mcHome(env), ...(deps.mend || {}), ...(deps.mainRepair ? { repair: deps.mainRepair } : {}),
+  });
   if (pending?.push_pending) {
     const alive = deps.alive || processAlive;
     if (pending.push_pid && alive(pending.push_pid)) {
@@ -859,9 +863,10 @@ export async function run(argv, deps = {}) {
       return 0;
     }
     const prior = settleCut(pending, { root, env, path, git, admit, dryRun: opts.dryRun || opts.follow });
-    if (prior.release) return opts.follow
-      ? followRelease(prior.release, { root, stdout, deps, opts })
-      : reportOpenRelease(prior.release, { stdout, opts });
+    if (prior.release) {
+      if (!opts.dryRun && !opts.follow) queueCutRed(prior.release);
+      return opts.follow ? followRelease(prior.release, { root, stdout, deps, opts }) : reportOpenRelease(prior.release, { stdout, opts });
+    }
     if (prior.error) {
       stderr.write(`mc: ${prior.error} — nothing was deployed\n`);
       return 1;
@@ -1070,6 +1075,7 @@ export async function run(argv, deps = {}) {
       if (!isRed(verdict)) return { error: `no recorded red or stalled full run of ${plan.short}; nothing cut` };
       const measured = { ...full, ...verdict, commit: plan.tip };
       const intent = beginCut({ root, plan, full: measured, holder: holder.name,
+        claimFiles: mainRecord(historyRoot, REPO, plan.tip)?.files,
         gate: gateRecord({ full: measured }), reading, now: () => new Date(deps.clock?.() ?? Date.now()) });
       return { intent, measured };
     });
@@ -1082,6 +1088,7 @@ export async function run(argv, deps = {}) {
       stderr.write(`mc: ${settled.error || 'the release cut could not be recorded'} — nothing was deployed\n`);
       return 1;
     }
+    queueCutRed(settled.release);
     return sayCut(result.measured, settled.release, { includeReading });
   };
   if (recordedCut) return attemptCut(observed, true);

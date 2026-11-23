@@ -19,6 +19,7 @@ import { docsMergeLines, docsOnly, prFiles, runDocsMerge } from '../docs-merge.j
 import { dequeue, mergesPath, parseQueue } from '../merge-queue.js';
 import { beforeMergeLine, FINISHED, goalReferences, goalsBeforeMerge, programsGoals } from '../goals.js';
 import { repairPrBinding } from '../repair-delivery.js';
+import { releaseFastPathRefusal } from '../release-merge.js';
 import { programsHome, workRoot } from '../paths.js';
 import { dropPr } from '../page-cache.js';
 import { realLock } from '../runner-lock.js';
@@ -161,6 +162,8 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
     stderr.write(`mc: gh could not read #${opts.pr}\n`);
     return 1;
   }
+  const releaseProblem = releaseFastPathRefusal({ root: workRoot(deps.env), repo: repoNameOf(repoPath), pr: opts.pr, head: view.headRefName, base: view.baseRefName });
+  if (releaseProblem) { stderr.write(`${releaseProblem}\n`); return 1; }
   if (view.state !== 'OPEN' && view.state !== 'MERGED') {
     stderr.write(`mc: #${opts.pr} is closed, not merged — nothing to land\n`);
     return 1;

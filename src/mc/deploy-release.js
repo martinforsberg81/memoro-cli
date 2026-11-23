@@ -13,6 +13,7 @@ const when = (at) => String(at || '').slice(0, 16).replace('T', ' ');
 
 export const releaseBranch = (sha) => `release/${short(sha)}`;
 export const releaseRef = (branch) => `origin/${branch}`;
+export const canRepairRelease = (record) => Boolean(record && ['red', 'measuring'].includes(record.state));
 
 export function releasePath(root) {
   return join(root, 'runner', 'deploy-release.json');
@@ -28,9 +29,11 @@ export function readClosedRelease(root, record) {
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 
-export function readRelease(root) {
+export function readRelease(root, read = (path) => readFileSync(path, 'utf8')) {
   try {
-    const record = JSON.parse(readFileSync(releasePath(root), 'utf8'));
+    const text = read(releasePath(root));
+    if (text == null) return null;
+    const record = JSON.parse(text);
     if (record?.schema === SCHEMA && record.cut?.sha && record.branch === releaseBranch(record.cut.sha)) return record;
     throw new Error('invalid release record');
   } catch (error) {
@@ -39,15 +42,15 @@ export function readRelease(root) {
   }
 }
 
-export function writeRelease(root, release) {
+export function writeRelease(root, release, write = writeJsonAtomic) {
   // A watcher of the old release still needs its result if a new cut
   // replaces the current record before its next read.
-  if (release.closed === 'merged' || release.closed === 'dropped') writeJsonAtomic(closedPath(root, release), release);
-  writeJsonAtomic(releasePath(root), { ...release, schema: SCHEMA });
+  if (release.closed === 'merged' || release.closed === 'dropped') write(closedPath(root, release), release);
+  write(releasePath(root), { ...release, schema: SCHEMA });
 }
 
-export function openRelease(root) {
-  const record = readRelease(root);
+export function openRelease(root, read) {
+  const record = readRelease(root, read);
   return record && !record.closed && !record.push_pending ? record : null;
 }
 
@@ -76,7 +79,7 @@ export function confirmCutTip(path, git, sha) {
 
 /** The intent and its settlement take the register's lock, not the network
  * calls between them. A lost process leaves enough to recover an exact push. */
-export function beginCut({ root, plan, full, holder, gate, reading, now = () => new Date() }) {
+export function beginCut({ root, plan, full, holder, gate, reading, claimFiles = [], now = () => new Date() }) {
   const sha = plan.tip;
   const branch = releaseBranch(sha);
   const at = now().toISOString();
@@ -84,7 +87,7 @@ export function beginCut({ root, plan, full, holder, gate, reading, now = () => 
   const record = {
     branch, cut: { sha, at }, head: sha, live: plan.live, state: 'red', state_at: at,
     row: { started: at, sha }, holder, reds, repairs: [], merge_back: null,
-    cut_run: full.run, claimed_reds: reds, take_back: plan.take_back,
+    cut_run: full.run, claimed_reds: [...new Set([...reds, ...claimFiles])], take_back: plan.take_back,
     take_back_cells: reading, gate, push_pending: true, push_pid: process.pid,
   };
   writeRelease(root, record);

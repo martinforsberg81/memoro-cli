@@ -8,6 +8,7 @@ import { dequeue, mergesPath, parseQueue } from './merge-queue.js';
 import { realLock } from './runner-lock.js';
 import { mcHome, workRoot } from './paths.js';
 import { mainRedPath } from './selector-miss.js';
+import { canRepairRelease, openRelease, writeRelease } from './deploy-release.js';
 
 /** Final states: a later red of the file is a new entry, and the entry's worktree is the runner's to remove. */
 export const FINISHED = ['landed', 'dropped'];
@@ -31,7 +32,7 @@ export function readMainMends({ root = workRoot(), repo, read = readTextOrNull }
 export function mainRepairWaits(goal, state) {
   return goal.repos.flatMap((repo) => {
     try {
-      const ids = readMainMends({ ...state, repo }).filter((entry) => ['queued', 'running', 'published'].includes(entry.state)).map((entry) => entry.id);
+      const ids = readMainMends({ ...state, repo }).filter((entry) => !entry.release_branch && ['queued', 'running', 'published'].includes(entry.state)).map((entry) => entry.id);
       return ids.length ? [{ repo, ids }] : [];
     } catch { return []; } // The runner reports unreadable repair state when it picks main-red work.
   });
@@ -72,7 +73,8 @@ export function shapeMainRedTest(test) {
  */
 export const suiteMemberKey = (name) => `suite:${name}`;
 
-export function requestMainRepair({ repo, base, files, tests = [], commands = [], checks = [], suites = [], pr = null, contains = null, now = () => new Date(), ...state }) {
+export function requestMainRepair({ repo, base, files, tests = [], commands = [], checks = [], suites = [], pr = null, contains = null, now = () => new Date(), release = null, root = workRoot(), ...options }) {
+  const state = { ...options, root };
   try {
     const red = [...new Set(files || [])].filter(Boolean).sort();
     const members = [...red.map(file => ({ file })), ...commands.map(command => ({
@@ -81,12 +83,32 @@ export function requestMainRepair({ repo, base, files, tests = [], commands = []
     ...checks.map(check => ({ file: check.key, check }))];
     if (!repo || !base || !members.length) return { skipped: 'nothing to repair' };
     return updateMainMends({ ...state, repo }, (entries) => {
+      // The runner lock also guards the cut. Read the release and update its
+      // claims in the same critical section as the mend rows.
+      const active = repo === 'memoro' ? openRelease(root, state.read) : null;
+      if (release && (!canRepairRelease(active) || active.branch !== release || active.head !== base)) {
+        return { skipped: 'no matching release head taking repairs' };
+      }
+      const names = [...new Set(members.map(({ file }) => file))];
+      const claimed = new Set(active?.claimed_reds || []);
+      if (!release && names.every((file) => claimed.has(file))) return { skipped: `all reds are claimed by ${active.branch}` };
+      if (release) {
+        const reds = [...new Set([...(active.state === 'red' ? active.reds : []), ...names])];
+        if (active.state !== 'red' || reds.length !== active.reds.length || names.some((file) => !claimed.has(file))) {
+          writeRelease(state.root, { ...active, state: 'red', state_at: active.state === 'red' ? active.state_at : now().toISOString(),
+            reds, claimed_reds: [...new Set([...claimed, ...names])] }, state.write);
+        }
+      }
       const created = []; const open = []; const finished = []; const stale = []; const staleMembers = [];
+      const sameTarget = (entry) => release
+        ? entry.release_branch === release && entry.release_started === active.row.started
+        : !entry.release_branch;
       for (const { file, command, check, suite } of members) {
         // A check member is once-only on its key in any state: a finished one is returned, never made again.
-        const pending = entries.find((entry) => entry.file === file && (check || !FINISHED.includes(entry.state)));
-        if (pending) { (check && FINISHED.includes(pending.state) ? finished : open).push(pending.id); continue; }
-        const latest = [...entries].reverse().find((entry) => entry.file === file);
+        const pending = entries.find((entry) => sameTarget(entry) && entry.file === file &&
+          (check || !FINISHED.includes(entry.state) || (release && entry.base === base)));
+        if (pending) { (FINISHED.includes(pending.state) ? finished : open).push(pending.id); continue; }
+        const latest = entries.findLast((entry) => sameTarget(entry) && entry.file === file);
         if (!check && latest?.state === 'landed' && latest.landed_commit && contains) {
           let includesRepair = null;
           try { includesRepair = contains(latest.landed_commit, base); } catch { /* unknown ancestry opens a fresh entry */ }
@@ -94,6 +116,7 @@ export function requestMainRepair({ repo, base, files, tests = [], commands = []
         }
         const id = randomUUID();
         entries.push({ id, file, tests: tests.filter((test) => test.file === file), base,
+          ...(release ? { release_branch: release, release_started: active.row.started } : {}),
           ...(command ? { command } : {}),
           ...(suite ? { suite: { name: suite.name, exit: suite.exit ?? null, verdict: [...(suite.verdict || [])], output_path: suite.output_path || null, sha: suite.sha || null } } : {}),
           ...(check ? { check: { part: check.part, why: check.why, sha: check.sha, started: check.started, verdict: check.verdict, taken_back: Boolean(check.taken_back),
@@ -103,9 +126,13 @@ export function requestMainRepair({ repo, base, files, tests = [], commands = []
         created.push(id);
       }
       // `finished`: check members already made and since landed or dropped (a check member is once-only, in any state).
-      return { created, open, ...(checks.length ? { finished } : {}), stale, ...(stale.length ? { stale_members: staleMembers } : {}) };
+      return { created, open, ...(checks.length || release ? { finished } : {}), stale, ...(stale.length ? { stale_members: staleMembers } : {}) };
     });
   } catch (error) { return { skipped: error?.message || String(error) }; }
+}
+
+export function belongsToRelease(entry, release) {
+  return Boolean(release && entry.release_branch === release.branch && entry.release_started === release.row.started);
 }
 
 /** The key of a check member: one per red part of one release's check. */
@@ -134,11 +161,21 @@ export function publishMainMend({ repo, branch, pr, ...state }) {
 }
 
 /** Transient requeues are handled by the merger, not counted as failed attempts. */
-export function answerMainMend({ repo, pr, landed, reason, commit = null, ...state }) {
+export function answerMainMend({ repo, pr, landed, reason, commit = null, baseBranch = null, final = false, now = () => new Date(), root = workRoot(), ...options }) {
+  const state = { ...options, root };
   return updateMainMends({ ...state, repo }, (entries) => {
     const answered = entries.filter((entry) => entry.pr === Number(pr) && ['published', 'running'].includes(entry.state));
+    const release = answered.some((entry) => entry.release_branch) ? openRelease(root, state.read) : null;
+    const repair = answered.find((entry) => belongsToRelease(entry, release));
+    // Write this first: recovery may hear about the same squash again, but it
+    // must not miss the new head or move it backwards on an already noted PR.
+    if (repair && landed && baseBranch === repair.release_branch && commit && !release.repairs.includes(Number(pr))) {
+      writeRelease(state.root, { ...release, head: commit, state: 'measuring', state_at: now().toISOString(),
+        reds: [], repairs: [...release.repairs, Number(pr)] }, state.write);
+    }
     for (const entry of answered) {
-      if (landed) { entry.state = 'landed'; if (commit) entry.landed_commit = commit; }
+      if (landed && (!entry.release_branch || baseBranch === entry.release_branch)) { entry.state = 'landed'; if (commit) entry.landed_commit = commit; }
+      else if (final) { entry.state = 'dropped'; entry.reason = reason; }
       else failMainMend(entry, reason);
     }
     return answered;
@@ -177,14 +214,18 @@ function suiteMemberText(entry) {
 }
 
 export function mainMendPrompt({ repo, entries, branch, worktree, history = [], root = mcHome(), exists = () => false }) {
+  const release = entries[0].release_branch;
+  const baseFlag = release ? ` --base ${release}` : '';
+  const subject = release ? "the release's red" : "main's red";
+  const scope = release ? `mc gate --base origin/${release}` : 'bare mc gate';
   const files = entries.filter(entry => !entry.command && !entry.check && !entry.suite).map(entry => entry.file);
   const checks = [
     ...(files.length ? [`mc gate --fresh ${files.join(' ')}`] : []),
     ...entries.filter(entry => entry.command).map(entry => `mc gate --fresh --command ${entry.command.id || entry.command.packageScript}`),
   ];
   const proof = checks.length
-    ? `Prove ${checks.join(' and ')} GREEN (none of these checks SETTLED), then bare mc gate.`
-    : 'Prove the repair with mc gate on the files you changed (none of these checks SETTLED), then bare mc gate.';
+    ? `Prove ${checks.join(' and ')} GREEN (none of these checks SETTLED), then ${scope}.`
+    : `Prove the repair with mc gate on the files you changed (none of these checks SETTLED), then ${scope}.`;
   const pathFor = (entry) => mainRedPath(root, repo, entry.base);
   const testsFor = (entry) => (entry.tests || []).map((test) => {
     const detail = test.detail || [];
@@ -207,12 +248,13 @@ export function mainMendPrompt({ repo, entries, branch, worktree, history = [], 
       (prior.length ? `${prior.join('\n')}\n` : '');
   };
   return `You are a main-red mend session, headless, with no goal. Work in ${worktree} on ${branch}.\n` +
-    `Repair main's red in ${repo}, found by ${entries[0].finder}. Read the main-red section of your mend role; write no GOAL.json, LOG.md or proposal.\n` +
+    `Repair ${subject} in ${repo}, found by ${entries[0].finder}. Read the main-red section of your mend role; write no GOAL.json, LOG.md or proposal.\n` +
+    (release ? `Your base is origin/${release}, not main. Do not merge main or change the release's take-back reading.\n` : '') +
     entries.map(memberText).join('\n') +
     `\nRead where each assertion failed before you run anything. A red that is green alone at the same commit is not ended as unreproducible: when the recorded failure names a missing executable, browser, library or service, classify it as the main-red section says; otherwise the test depends on load, timing or order, and the repair is to the test or the code it exposes.\n` +
     `\nPrevious outcome: ${entries[0].reason || 'first attempt'}; session log: ${entries[0].session_log || 'none'}.\n` +
     answersOf(entries) +
-    `${proof} No wide selection is required for landing. Commit and mc publish --title "Repair main's red: ${entries.map((entry) => entry.file).join(', ')}" --body-file <file in MC_SCRATCH>. The body records cause and gate evidence. End after publication; the runner records the outcome. Another red member is not yours.`;
+    `${proof} No wide selection is required for landing. Commit and mc publish${baseFlag} --title "Repair ${subject}: ${entries.map((entry) => entry.file).join(', ')}" --body-file <file in MC_SCRATCH>. The body records cause and gate evidence. End after publication; the runner records the outcome. Another red member is not yours.`;
 }
 
 /** Status readers retain unreadable-state evidence instead of calling it an empty queue. */

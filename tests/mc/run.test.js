@@ -11,6 +11,7 @@ import { attemptDeadline, deployCheckTick, killGroup, statePath as deployCheckSt
 import { DEPLOYED as DEPLOY_ROW, readDeploys, recordEnd, recordStart } from '../../src/mc/deploys.js';
 import { answerHeldDeployMend, publishDeployMend, readDeployMends, recordRepaired, requestDeployRepair } from '../../src/mc/deploy-repair.js';
 import { answerHeldMend, answerMainMend, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
+import { releaseBranch, writeRelease } from '../../src/mc/deploy-release.js';
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { newRecord, readRecord, writeRecord } from '../../src/mc/programme-record.js';
 import { interruptedRepairCut } from '../../src/mc/repair-cut.js';
@@ -6124,6 +6125,54 @@ test('a queued main-red request precedes build, review and finish, launches goal
   assert.deepEqual(f.mainEntries().map((entry) => [entry.state, entry.pr]), [['published', 42], ['published', 42]]);
   assert.equal(f.files['/w/programs/main-health/goals'], undefined);
   assert.equal(Object.keys(f.files).some((path) => path.startsWith('/w/programs/main-health/')), false);
+});
+
+test('a release mend starts from the release on origin, not from main', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-run-release-mend-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const origin = join(root, 'origin.git');
+  const seed = join(root, 'seed');
+  const git = (path, ...args) => {
+    const ran = gitRun(path, args);
+    assert.equal(ran.status, 0, `git ${args.join(' ')}: ${ran.stderr}`);
+    return ran.stdout.trim();
+  };
+  git(root, 'init', '-q', '--bare', origin);
+  git(root, 'init', '-q', '-b', 'main', seed);
+  git(seed, 'commit', '-q', '--allow-empty', '-m', 'cut');
+  const cut = git(seed, 'rev-parse', 'HEAD');
+  const branch = releaseBranch(cut);
+  git(seed, 'branch', branch);
+  git(seed, 'commit', '-q', '--allow-empty', '-m', 'main carried on');
+  const main = git(seed, 'rev-parse', 'HEAD');
+  git(seed, 'remote', 'add', 'origin', origin);
+  git(seed, 'push', '-q', 'origin', 'main', branch);
+
+  const f = goalFixture({}, { root });
+  const write = f.deps.writeJson;
+  const state = { root, repo: 'memoro', read: f.deps.read, write, lock: f.deps.lock };
+  const at = f.deps.now().toISOString();
+  const file = 'tests/red.test.js';
+  writeRelease(root, { branch, cut: { sha: cut, at }, row: { sha: cut, started: at }, head: cut, state: 'red',
+    reds: [file], claimed_reds: [file], repairs: [], cut_run: { commit: cut, red: [file] } }, write);
+  const substitute = f.deps.git;
+  f.deps.git = (cwd, args) => {
+    if (cwd !== '/home/memoro') return substitute(cwd, args);
+    const ran = gitRun(seed, args);
+    return { ...ran, ok: ran.status === 0 };
+  };
+  const cwdExists = f.deps.exists;
+  f.deps.exists = (path) => cwdExists(path) || existsSync(path);
+  const runner = createRunner({ deps: f.deps });
+  f.answer = (call) => {
+    assert.equal(git(call.cwd, 'rev-parse', 'HEAD'), cut);
+    assert.equal(git(call.cwd, 'rev-parse', 'origin/main'), main);
+    assert.match(call.prompt, new RegExp(`mc publish --base ${branch}`, 'u'));
+    publishMainMend({ ...state, branch: git(call.cwd, 'branch', '--show-current'), pr: 42 });
+    return okSession()(call);
+  };
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, f.log.join('\n'));
+  assert.deepEqual(readMainMends(state).map(({ base, state, pr }) => [base, state, pr]), [[cut, 'published', 42]]);
 });
 
 test('the third main-red attempt waits on Martin with its session log and keeps the same branch', async () => {
