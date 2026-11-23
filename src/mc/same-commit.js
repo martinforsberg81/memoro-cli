@@ -17,6 +17,22 @@ export const SHA_MIN = 7;
  * short matches too much to mean anything, so two readings that disagree in
  * length there are reported as they are.
  */
+export const DIRTY_SUFFIX = '-dirty';
+
+/**
+ * The commit a `/api/version` reading names, without the `-dirty` memoro's
+ * `scripts/inject-version.mjs` appends when the deploy tree had uncommitted
+ * files: `{ sha, dirty }`. A stamp with the suffix is not a ref git can
+ * resolve, so `mc deploy` and `mc asc build` read the commit it was built from
+ * and say that the tree was dirty (2026-11-23: a deploy that pinned container
+ * images stamped `68a6623…-dirty`, and both verbs stopped).
+ */
+export function stampedCommit(value) {
+  const text = String(value || '').trim();
+  const dirty = text.endsWith(DIRTY_SUFFIX);
+  return { sha: dirty ? text.slice(0, -DIRTY_SUFFIX.length) : text, dirty };
+}
+
 export function sameCommit(a, b) {
   const one = String(a || '').toLowerCase();
   const two = String(b || '').toLowerCase();

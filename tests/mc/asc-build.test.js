@@ -166,6 +166,15 @@ describe('mc asc build — the question', () => {
     assert.match(out, /origin\/main has native changes production does not run yet \(cap-config\/x\.swift, @capacitor\/core 6\.0\.0→6\.1\.0\) — mc deploy first, then build/u);
   });
 
+  it('reads a live commit stamped <sha>-dirty as <sha>, and says so', async () => {
+    const { repo, second } = makeRepo();
+    const { code, out, err } = await ask({ repo, live: `${second}-dirty`, shipped: second });
+    assert.equal(code, 0, err);
+    assert.match(out, new RegExp(`production says ${second.slice(0, 7)}-dirty — its deploy tree had uncommitted files; read as ${second.slice(0, 7)}`, 'u'));
+    assert.match(out, new RegExp(`production runs: ${second.slice(0, 7)}\\n`, 'u'));
+    assert.match(out, /no native change since build 38 — mc deploy is enough/u);
+  });
+
   it('is exit 1 when production does not answer', async () => {
     const { repo, first } = makeRepo();
     const { code, err } = await ask({ repo, live: null, shipped: first });

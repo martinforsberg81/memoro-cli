@@ -38,6 +38,7 @@ import { stripAnsi } from '../lib/prompt.js';
 import { IOS_BUILD_MODE } from './await-deploy.js';
 import { defaultRepos } from './brief-collect.js';
 import { holdBuildLane } from './commands/deploy.js';
+import { stampedCommit } from './same-commit.js';
 import { BUILD_LANE, releaseGateLock } from './gate-lock.js';
 import { run as runGit } from './git.js';
 import { exportAtRev, reasonLine } from './export-at-rev.js';
@@ -178,6 +179,11 @@ export async function fetchVersionDefault(serverUrl, { fetchImpl = globalThis.fe
   } catch { return null; }
 }
 
+/** Said when production's stamp carries `-dirty`: what is read, and why. */
+function dirtyWarning(live) {
+  return `production says ${short(live)}-dirty — its deploy tree had uncommitted files; read as ${short(live)}, the commit it was built from`;
+}
+
 function changeList({ paths, packages }) {
   return [...paths, ...packages].join(', ');
 }
@@ -209,11 +215,13 @@ export async function iosQuestion({
   const { declaration } = read;
 
   const version = await fetchVersion(declaration.server_url, { env });
-  const live = version?.commit_full || null;
+  const stamp = stampedCommit(version?.commit_full);
+  const live = stamp.sha || null;
   if (!live) {
     stderr.write('mc: production did not answer /api/version — cannot say what the app would meet\n');
     return 1;
   }
+  if (stamp.dirty) warnings.push(dirtyWarning(live));
   if (git(repoPath, ['rev-parse', '--verify', '--quiet', `${live}^{commit}`]) === null) {
     stderr.write(`mc: production runs ${short(live)}, a commit ${repoPath} does not have — cannot diff against it\n`);
     return 1;
@@ -474,8 +482,10 @@ export async function devicePreflight({
   if (!read.ok) return refuse(read.reason);
   const { declaration } = read;
   const version = await fetchVersion(declaration.server_url, { env });
-  const live = version?.commit_full || null;
+  const stamp = stampedCommit(version?.commit_full);
+  const live = stamp.sha || null;
   if (!live) return refuse('production did not answer /api/version — cannot say what the app would meet');
+  if (stamp.dirty) warnings.push(dirtyWarning(live));
   const target = resolveTarget({ repoPath, live, ref, git });
   if (!target.sha) return refuse(target.line);
   const checkout = memoroCheckout(env, repos || defaultRepos(env));
