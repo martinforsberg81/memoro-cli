@@ -161,8 +161,8 @@ export async function prepare(job, {
     const dir = outputDir(job.root, job.started);
     patch({ output_dir: dir });
     const measured = await measureGate({
-      sha: job.sha, path: job.path, acceptRed: Boolean(job.acceptRed), own: Boolean(job.ownWorktree), env, say,
-      outputDir: dir,
+      sha: job.sha, path: job.path, acceptRed: Boolean(job.acceptRed), own: Boolean(job.ownWorktree), branch: job.branch, env, say,
+      outputDir: dir, deferMainRepair: job.deferMainRepair,
       deps: deps.gate || {}, suites: deps.suites || {}, stage: (next) => { stage = next; return patch({ stage: next }); },
     });
     patch({ stage: 'done', ended: now().toISOString(), result: measured });

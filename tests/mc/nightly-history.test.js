@@ -9,7 +9,7 @@
  * — not in the reading, and not in the streak.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -17,7 +17,13 @@ import { describe, it } from 'node:test';
 import {
   HISTORY_LIMIT, nightlyHistoryPath, nightlyReading, readNightlyHistory, recordNightlyRun,
 } from '../../src/mc/nightly-history.js';
-import { fullRunTick } from '../../src/mc/nightly-loop.js';
+import { fullRun, fullRunTick, scheduledRound } from '../../src/mc/nightly-loop.js';
+import { fullRunVerdict } from '../../src/mc/deploy-gate.js';
+import { claimFullRun, releaseClaim } from '../../src/mc/full-run-claim.js';
+import { runGate } from '../../src/mc/repo-gate.js';
+import { git, makeBranchWithCommit } from './_helpers/git-fixture.js';
+import { fixture } from './_helpers/repo-fixture.js';
+import { fakeGitModel } from '../_fake-git-default.mjs';
 
 const REPO = '/repos/memoro';
 const home = () => mkdtempSync(join(tmpdir(), 'mc-nightly-history-'));
@@ -25,6 +31,75 @@ const home = () => mkdtempSync(join(tmpdir(), 'mc-nightly-history-'));
 const DAY = 24 * 60 * 60 * 1000;
 const START = Date.parse('2026-09-01T03:00:00Z');
 const day = (n) => new Date(START + n * DAY).toISOString();
+
+it('measures the named release, ahead of waiting main, and records the verdict by its sha', async (t) => {
+  // Only the checkout's tracked-tree healing is missing from the installed
+  // model; the independent real-Git run executes Git's own reset.
+  const model = fakeGitModel();
+  if (model) {
+    model.cmd_reset = function ({ dir, gitDir, argv }) {
+      assert.deepEqual(argv, ['--hard']);
+      const { repo, worktree, state } = this.worktreeOf(dir, gitDir);
+      this.checkout(repo, state, worktree, this.headSha(repo, state));
+      return '';
+    };
+    t.after(() => { delete model.cmd_reset; });
+  }
+  const fx = fixture({ name: 'release-full', gh: true });
+  t.after(fx.cleanup);
+  writeFileSync(join(fx.dir, 'package.json'), JSON.stringify({ name: 'repo', scripts: { test: 'node --test' } }));
+  git(fx.dir, 'add package.json');
+  git(fx.dir, 'commit -qm "Add suite manifest"');
+  git(fx.dir, 'push -q origin main');
+  git(fx.dir, 'symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main');
+  const main = git(fx.dir, 'rev-parse HEAD');
+  const branch = `release/${main.slice(0, 7)}`;
+  const marker = 'release head, not main\n';
+  makeBranchWithCommit(fx.dir, branch, 'release.txt', marker);
+  git(fx.dir, `checkout -q ${branch}`);
+  mkdirSync(join(fx.dir, '.mc'));
+  writeFileSync(join(fx.dir, '.mc', 'test.json'), JSON.stringify({
+    prepare: null, prepare_why: 'no dependencies', suite: 'node release-suite.js', suite_why: 'fixture release suite',
+  }));
+  git(fx.dir, 'add .mc/test.json');
+  git(fx.dir, 'commit -qm "Declare the release suite"');
+  git(fx.dir, 'checkout -q main');
+  git(fx.dir, `push -q origin ${branch}`);
+  const sha = git(fx.dir, `rev-parse ${branch}`);
+  const root = fx.mcHome;
+  const repo = { path: fx.dir, name: 'repo' };
+  const env = { ...process.env, ...fx.env, PATH: `${fx.bin}:${process.env.PATH}` };
+  const active = claimFullRun({ root, repo: repo.name, sha: main }).claim;
+  const checked = [];
+  let queued;
+  let measuredRef;
+  const ran = await fullRun(repo, {
+    root, env, ref: `origin/${branch}`, sha,
+    claims: { pid: 111, alive: () => true, sleep: () => {
+      releaseClaim(active, { root });
+      queued = claimFullRun({ root, repo: repo.name, sha: main, pid: 222, alive: () => true });
+    } },
+    repair: () => assert.fail('a named run cannot queue main-red work'),
+    round: (options) => scheduledRound({ ...options, gate: async (options) => {
+      const report = await runGate({ ...options, candidateCwds: () => [], suite: ({ cwd, command }) => {
+        const file = join(cwd, 'release.txt');
+        checked.push([existsSync(file) ? readFileSync(file, 'utf8') : null, command]);
+        return { code: 0, tap: 'TAP version 13\n1..1\nok 1 - fixture\n# tests 1\n# pass 1\n# fail 0\n' };
+      } });
+      measuredRef = report.base?.ref;
+      return report;
+    } }),
+  });
+  assert.equal(queued?.claimed, false, 'main did not jump the waiting release');
+  assert.equal(queued?.waitFor?.sha, sha);
+  assert.equal(measuredRef, `origin/${branch}`, ran.reason);
+  assert.deepEqual(checked, [[marker, 'node release-suite.js']]);
+  const { runs } = readNightlyHistory(fx.dir, { root });
+  assert.deepEqual(runs.map(({ commit, red }) => [commit, red]), [[sha, []]]);
+  assert.equal(fullRunVerdict(runs, sha).state, 'green');
+  assert.equal(fullRunVerdict(runs, main).state, 'none');
+  assert.equal(nightlyReading(fx.dir, { root }).measured, null, 'no named run stands for main');
+});
 
 /** One measured run: it reached its summary, and these names were red. */
 function measured(n, red, { commit = `${n}`.repeat(40).slice(0, 40), tests = 17_982 } = {}) {

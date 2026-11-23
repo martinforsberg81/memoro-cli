@@ -30,7 +30,7 @@ function workRoot() {
 }
 
 const upTo = (name) => DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf(name) + 1);
-/** The six headers the file had before the take-back columns, oldest first. */
+/** Historical headers, oldest first. */
 const OLDER = [
   upTo('pid').slice(0, -1), // before `pid`
   upTo('pid'),
@@ -38,17 +38,17 @@ const OLDER = [
   upTo('take_back_why'),
   upTo('versions_why'),
   upTo('check_why'), // the 23-column header: before the take-back's three
+  upTo('takes_back_why'),
+  upTo('output_path'),
 ];
 
 const rowFor = (header, n) => Object.fromEntries(header.map((name) => [name, name === 'started' ? `2026-11-1${n}T12:00:00.000Z` : `${name}-${n}`]));
 
-test('the check columns follow the versions and the take-back columns come last', () => {
+test('the check columns follow the versions and newer columns append after take-back', () => {
   assert.deepEqual(CHECK_COLUMNS, ['check', 'check_at', 'check_why']);
   assert.deepEqual(TAKES_BACK_COLUMNS, ['takes_back', 'takes_back_sha', 'takes_back_why']);
   // The gate's `output_path` (2026-11-16) was appended after them: a column is added at the end, never inserted.
-  assert.deepEqual(DEPLOYS_HEADER.slice(-4, -1), TAKES_BACK_COLUMNS);
-  assert.equal(DEPLOYS_HEADER.at(-1), 'output_path');
-  assert.equal(DEPLOYS_HEADER.length, 27);
+  assert.deepEqual(DEPLOYS_HEADER.slice(-5), [...TAKES_BACK_COLUMNS, 'output_path', 'release_branch']);
   assert.equal(DEPLOYS_HEADER.indexOf('versions_why') + 1, DEPLOYS_HEADER.indexOf('check'));
   assert.equal(DEPLOYS_HEADER.indexOf('check_why') + 1, DEPLOYS_HEADER.indexOf('takes_back'));
 });
@@ -74,7 +74,7 @@ test('a take-back row keeps its three cells, and the readers tell it and what it
 });
 
 for (const [index, header] of OLDER.entries()) {
-  test(`a file with the ${index + 1}${['st', 'nd', 'rd', 'th', 'th', 'th'][index]} older header is rewritten with the current one on the next write, rows kept`, () => {
+  test(`a file with the ${index + 1}${['st', 'nd', 'rd'][index] ?? 'th'} older header is rewritten with the current one on the next write, rows kept`, () => {
     const { env, cleanup } = workRoot();
     try {
       const rows = [rowFor(header, 1), rowFor(header, 2)];

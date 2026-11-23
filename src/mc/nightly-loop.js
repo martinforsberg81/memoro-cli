@@ -120,12 +120,13 @@ export const RETRY_NOW = Object.freeze(['gone', 'killed']);
  * the same name, or keep the merger out under another. No signal handlers of
  * its own (`signals: false`): the runner stops it through `signal`.
  */
-export async function scheduledRound({ repoPath, root = mcHome(), env = process.env, say = () => {}, signal = null, gate = runGate } = {}) {
+export async function scheduledRound({ repoPath, root = mcHome(), env = process.env, say = () => {}, signal = null, gate = runGate, ref = null, sha = null } = {}) {
   const holder = currentHolder();
   const lanes = fullRunLanes(env);
   recordRoundStart({ repo: repoPath, mode: NIGHTLY_MODE, holder: holder?.name || null, prs: [] }, { root });
   const report = await gate({
     repoPath, full: true, isolated: true, holdLease: false, signals: false, lanes, signal,
+    ...(ref ? { fullRef: ref, expectedSha: sha } : {}),
     // The suite's own runner reads the lanes from here (memoro's `runner.mjs`,
     // memoro-cli's `npm test`); the full run's lanes win over the runner's.
     holder, root, env: { ...env, MC_TEST_LANES: String(lanes) }, onProgress: say,
@@ -162,7 +163,7 @@ export function remoteHead(repoPath) {
  */
 export function fullRunDue(repo, { root = mcHome(), head = remoteHead, clock = () => Date.now(), retryMs = FULL_RUN_RETRY_MS } = {}) {
   const measured = nightlyReading(repo.path, { root }).measured;
-  const last = readNightlyHistory(repo.path, { root }).runs.at(-1) || null;
+  const last = readNightlyHistory(repo.path, { root }).runs.findLast((run) => !run.ref) || null;
   let sha = null;
   try { sha = head(repo.path); } catch { sha = null; }
   if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/u.test(sha)) sha = null;
@@ -206,6 +207,8 @@ function failedCommandsOf(report) {
  */
 export function runOfReport(repo, report, { startedAt = Date.now(), clock = () => Date.now() } = {}) {
   const failedCommands = failedCommandsOf(report);
+  const testReds = report.candidate?.red;
+  const incomplete = report.stopped_at === 'stalled' || report.cut_files?.length;
   return {
     repo: repo.name,
     path: repo.path,
@@ -221,11 +224,12 @@ export function runOfReport(repo, report, { startedAt = Date.now(), clock = () =
     reason: report.reason,
     // The files a run never finished, for the deploy's repair of the stop (`repairFromStop`).
     ...(report.cut_files?.length ? { cut_files: [...report.cut_files] } : {}),
+    ...(report.stalled_files?.length ? { stalled_files: [...report.stalled_files] } : {}),
     // The failing names, for whoever asks "since when". Names only: output
     // and stack traces turn a meter into an archive.
     red: failedCommands.length
-      ? [...(report.candidate?.red || []), ...failedCommands.map(command => `command:${command.packageScript}`)]
-      : report.candidate?.red || null,
+      ? [...(testReds || []), ...failedCommands.map(command => `command:${command.packageScript}`)]
+      : incomplete && !testReds?.length ? null : testReds ?? null,
     tests: report.candidate?.totals?.tests ?? null,
     ...(report.holders?.length ? { holders: report.holders } : {}),
   };
@@ -239,7 +243,7 @@ export function runOfReport(repo, report, { startedAt = Date.now(), clock = () =
 export async function fullRun(repo, {
   root = mcHome(), env = process.env, say = () => {}, narrate = say, round = scheduledRound,
   clock = () => Date.now(), signal = null, repair = requestMainRepair, repairFullRun = requestDeployRepair,
-  sha = null, claims = {}, handover = null, onMeasuring = null, deploy = false,
+  sha = null, ref = null, claims = {}, handover = null, onMeasuring = null, deploy = false, deferMainRepair = false,
 } = {}) {
   // One full run of a tree at a time, whoever starts it (`full-run-claim.js`):
   // a run already measuring this main — a deploy's, a hand-typed `--full`, the
@@ -247,11 +251,11 @@ export async function fullRun(repo, {
   // One whose process died without writing it is no answer, and this starts its
   // own.
   for (;;) {
-    const taken = claimFullRun({ repo: repo.name, sha, verb: 'full run', root, deploy, ...claims });
+    const taken = claimFullRun({ repo: repo.name, sha, ref, verb: 'full run', root, deploy: deploy || Boolean(ref), ...claims });
     if (taken.claimed) {
       onMeasuring?.(taken.claim);
       try {
-        return await measure(repo, { root, env, say, narrate, round, clock, signal, repair, repairFullRun });
+        return await measure(repo, { root, env, say, narrate, round, clock, signal, repair, repairFullRun, ref, sha, deferMainRepair });
       } finally {
         releaseClaim(taken.claim, { root, ...claims });
       }
@@ -266,14 +270,18 @@ export async function fullRun(repo, {
         ? `${repo.name} — waiting for the deploy preparation of ${otherSha} (pid ${taken.waitFor.pid}) before measuring ${target}`
         : `${repo.name} — a full run of ${otherSha} is using the full-run checkout (pid ${taken.waitFor.pid}); waiting for it before measuring ${target}`);
       await awaitClaim(taken.waitFor, { root, ...claims, signal: handover, onWait: (ms) => say(`${repo.name} — still waiting for the ${blocker} of ${otherSha} (pid ${taken.waitFor.pid}), ${Math.round(ms / 60000)} min so far`) });
-      if (handover?.aborted) return dropped(repo, say);
+      if (handover?.aborted) {
+        releaseClaim(taken.reservation, { root, ...claims });
+        return dropped(repo, say);
+      }
       continue;
     }
     const other = taken.joined;
     say(`${repo.name} — a full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} is already being measured (pid ${other.pid}, since ${other.started}); following it, not starting a second`);
     await awaitClaim(other, { root, ...claims, signal: handover, onWait: (ms) => say(`${repo.name} — still following the full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} (pid ${other.pid}), ${Math.round(ms / 60000)} min so far`) });
     if (handover?.aborted) return dropped(repo, say);
-    const last = readNightlyHistory(repo.path, { root }).runs.at(-1);
+    const last = readNightlyHistory(repo.path, { root }).runs.findLast((run) =>
+      (run.ref || null) === (other.ref || null) || (other.sha && run.commit === other.sha));
     if (last && Date.parse(last.at) >= Date.parse(other.started) - 1000) {
       say(`${repo.name} — the run being followed has ended`);
       return { ...last, repo: repo.name, path: repo.path, joined: true };
@@ -294,7 +302,7 @@ export async function fullRun(repo, {
  */
 export function repairFromRun(repo, report, run, {
   repair = requestMainRepair, say = () => {}, git = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' }),
-  repairFullRun = null, env = process.env,
+  repairFullRun = null, env = process.env, deferMainRepair = false,
 } = {}) {
   const failedCommands = failedCommandsOf(report);
   // What was asked of main's repair, for a caller that needs to say which: `{ asked, members }` per request.
@@ -306,7 +314,7 @@ export function repairFromRun(repo, report, run, {
   // red tests with their files (`measure`), a selected one its files as well.
   const redTests = report.candidate?.red_tests || [];
   const files = [...new Set([...(report.candidate?.red_files || []), ...redTests.map((test) => test.file)].filter(Boolean))].sort();
-  if (repair && Array.isArray(run.red) && run.commit && (files.length || failedCommands.length)) {
+  if (!deferMainRepair && repair && Array.isArray(run.red) && run.commit && (files.length || failedCommands.length)) {
     const tests = redTests.map(shapeMainRedTest);
     const asked = repair({ repo: repo.name, base: run.commit, files, tests,
       contains: (commit, base) => {
@@ -332,7 +340,7 @@ export function repairFromRun(repo, report, run, {
   // or a file that died without a word; it goes to the mend with what the run said of it.
   const cut = report.stopped_at === 'suite' ? report.cut_files || [] : [];
   const hung = [...new Set(report.stopped_at === 'stalled' ? report.stalled_files || [] : cut)].filter(Boolean).sort();
-  if (repair && run.commit && hung.length) {
+  if (!deferMainRepair && repair && run.commit && hung.length) {
     const error = [cut.length ? `did not finish in the full run: ${report.reason || 'output cut'}` : `never ended in the full run: ${report.reason || 'stalled'}`];
     const asked = repair({ repo: repo.name, base: run.commit, files: hung, tests: hung.map((file) => ({ file, name: null, error })),
       contains: (commit, base) => {
@@ -391,7 +399,7 @@ export function repairFromStop(repo, full, {
     stopped_at: full.state !== 'stalled' ? null : run.cut_files?.length ? 'suite' : 'stalled', reason: run.reason,
     candidate: { red_files: evidence?.files || [], red_tests: evidence?.tests || [] },
     extra_gates: commands.map((name) => ({ name, id: name, ok: false, command: null, exit_code: null, failure: `red in the full run of ${run.commit.slice(0, 7)}`, output_path: full.output || null })),
-    stalled_files: [],
+    stalled_files: run.stalled_files || [],
     cut_files: run.cut_files || [],
   };
   const requests = [];
@@ -424,13 +432,13 @@ function dropped(repo, say) {
 }
 
 async function measure(repo, {
-  root, env, say, narrate, round, clock, signal, repair, repairFullRun,
+  root, env, say, narrate, round, clock, signal, repair, repairFullRun, ref, sha, deferMainRepair,
 }) {
   const startedAt = clock();
   say(`${repo.name} — full run started`);
   let report = null;
   try {
-    report = await round({ repoPath: repo.path, root, env, say: narrate, signal });
+    report = await round({ repoPath: repo.path, root, env, say: narrate, signal, ...(ref ? { ref, sha } : {}) });
   } catch (error) {
     // What it must not do is look like a run that found no failures.
     const threw = {
@@ -444,16 +452,18 @@ async function measure(repo, {
       reason: error?.message || String(error),
       red: null,
       tests: null,
+      ...(ref ? { ref } : {}),
     };
     recordNightlyRun(threw, { root });
     say(`${repo.name}  stopped at threw  started ${threw.started_at}  `
-      + `took ${seconds(threw.duration_ms)}  main unknown — ${threw.reason}`);
+      + `took ${seconds(threw.duration_ms)}  ${ref || 'main'} unknown — ${threw.reason}`);
     // A round that threw is mc's own fault too: the deploy mend is asked, as for any FULL_RUN_FAULTS stop.
-    repairFromRun(repo, { stopped_at: 'threw', reason: threw.reason }, threw, { repair, say, repairFullRun, env });
+    if (!ref) repairFromRun(repo, { stopped_at: 'threw', reason: threw.reason }, threw, { repair, say, repairFullRun, env });
     return threw;
   }
 
   const run = runOfReport(repo, report, { startedAt, clock });
+  if (ref) run.ref = ref;
   // The history the page reads. It is written here rather than by the round,
   // because `mc test --full` typed by a person can be asked about a pull
   // request, and red names about somebody's branch in this file would make
@@ -461,7 +471,8 @@ async function measure(repo, {
   recordNightlyRun(run, { root });
   say(line(run));
 
-  repairFromRun(repo, report, run, { repair, say, repairFullRun, env });
+  // Named runs are consumed by the release, never offered as main-red work.
+  if (!ref) repairFromRun(repo, report, run, { repair, say, repairFullRun, env, deferMainRepair });
   return run;
 }
 
@@ -594,7 +605,7 @@ function line(run) {
     ? run.reason
     : `${run.tests ?? 0} tests, ${run.red?.length ?? 0} red`
       + (run.red?.length ? `: ${run.red.slice(0, 3).join(', ')}${run.red.length > 3 ? ` and ${run.red.length - 3} more` : ''}` : '');
-  return `${run.repo}  ${what}  started ${run.started_at}  took ${seconds(run.duration_ms)}  main ${where} — ${tail}`;
+  return `${run.repo}  ${what}  started ${run.started_at}  took ${seconds(run.duration_ms)}  ${run.ref || 'main'} ${where} — ${tail}`;
 }
 
 function seconds(ms) {

@@ -55,9 +55,10 @@ export function liveClaims({ root = mcHome(), alive = processAlive } = {}) {
 }
 
 /** Whether a run claimed as `claim` is the measurement a starter of `repo` at `sha` wants. */
-export function overlaps(claim, { repo, sha = null }) {
+export function overlaps(claim, { repo, sha = null, ref = null }) {
   if (claim.repo !== repo) return false;
-  return !sha || !claim.sha || claim.sha === sha;
+  if (sha && claim.sha) return claim.sha === sha;
+  return (claim.ref || null) === ref;
 }
 
 /**
@@ -69,18 +70,19 @@ export function overlaps(claim, { repo, sha = null }) {
  * the repository free.
  */
 export function claimFullRun({
-  repo, sha = null, verb = 'full run', root = mcHome(), alive = processAlive,
+  repo, sha = null, ref = null, verb = 'full run', root = mcHome(), alive = processAlive,
   lock = realLock, pid = process.pid, now = () => new Date(), deploy = false,
 }) {
   return lock(root, () => {
     const live = readAll(root).filter((claim) => alive(claim.pid));
-    const reservation = deploy && live.find((claim) => claim.waiting && claim.repo === repo && claim.pid === pid && claim.sha === sha);
+    const reservation = deploy && live.find((claim) => claim.waiting && claim.repo === repo && claim.pid === pid && claim.sha === sha && (claim.ref || null) === ref);
     const active = live.find((claim) => !claim.waiting && claim.repo === repo);
     const firstDeploy = live.find((claim) => claim.waiting && claim.repo === repo);
     const write = (claims) => writeJsonAtomic(claimsPath(root), { schema: CLAIMS_SCHEMA, claims }, { mode: 0o600 });
     const others = live.filter((claim) => claim !== reservation);
 
-    if (active && overlaps(active, { repo, sha })) {
+    const entry = () => ({ repo, sha, pid, started: now().toISOString(), verb, ...(ref ? { ref } : {}) });
+    if (active && overlaps(active, { repo, sha, ref })) {
       if (reservation) write(others);
       return { claimed: false, joined: active };
     }
@@ -88,22 +90,29 @@ export function claimFullRun({
     const waitFor = active || (firstDeploy !== reservation && firstDeploy);
     if (waitFor) {
       if (deploy && !reservation) {
-        write([...live, { repo, sha, pid, started: now().toISOString(), verb, waiting: true }]);
+        const queued = { ...entry(), waiting: true };
+        write([...live, queued]);
+        return { claimed: false, waitFor, reservation: queued };
       }
-      return { claimed: false, waitFor };
+      return { claimed: false, waitFor, ...(reservation ? { reservation } : {}) };
     }
 
-    const claim = { repo, sha, pid, started: now().toISOString(), verb };
+    const claim = entry();
     write([...others, claim]);
     return { claimed: true, claim };
   }, { name: 'full-run-claim' });
 }
 
 /** Give the claim back — the run has ended, whatever it found. */
+function sameClaim(a, b) {
+  return a.repo === b.repo && a.pid === b.pid && a.sha === b.sha && a.ref === b.ref
+    && a.started === b.started && a.waiting === b.waiting;
+}
+
 export function releaseClaim(claim, { root = mcHome(), lock = realLock, alive = processAlive } = {}) {
   if (!claim) return;
   lock(root, () => {
-    const rest = readAll(root).filter((other) => other.pid !== claim.pid || other.started !== claim.started)
+    const rest = readAll(root).filter((other) => !sameClaim(other, claim))
       .filter((other) => alive(other.pid));
     try { writeJsonAtomic(claimsPath(root), { schema: CLAIMS_SCHEMA, claims: rest }, { mode: 0o600 }); } catch { /* the pid's death releases it anyway */ }
   }, { name: 'full-run-claim' });
@@ -136,7 +145,7 @@ export async function awaitClaim(claim, {
   });
   for (;;) {
     if (signal?.aborted) return;
-    const held = readAll(root).some((other) => other.pid === claim.pid && other.started === claim.started && other.waiting === claim.waiting);
+    const held = readAll(root).some((other) => sameClaim(other, claim));
     if (!held || !alive(claim.pid)) return;
     await nap(pollMs);
     if (signal?.aborted) return;
