@@ -57,8 +57,9 @@ On main now:
   and attention reason, and a programme leaves the page only when that receipt
   validates against main ([programme archive turn](../mc-run.md#programme-archive-turn),
   [archiving a programme](../mc-plan.md#archiving-a-programme)).
-- A waiting deploy reserves the next opening for a full run when a different commit is being measured. It can still join a measurement of its own commit.
-- [Deploy](../mc-deploy.md) reads a live commit reported with a `-dirty` suffix from stamped pins as the source commit it was built from; the no-backwards check still applies.
+- [Deploy](../mc-deploy.md#the-release-branch) can ship a green pick from main directly. If nothing after live is green, a typed deploy can cut a red or stalled main tip into its own release branch, subject to the forward and take-back checks. The runner only continues a release that a typed deploy cut: it measures that head ahead of a waiting main measurement, routes its reds to release mends, and runs the gate suites at the exact release head before shipping.
+- After shipping from a release branch, the [return to main](../mc-deploy.md#merge-back-and-drop) preserves the shipped commit by ancestry. A return interrupted by a forge outage can resume without shipping again. The next deploy waits for the return, and any pin pull request is opened against main only afterwards.
+- Deploy reads a live commit reported with a `-dirty` suffix from stamped pins as the source commit it was built from; the no-backwards check still applies.
 - [Language cutover](../mc-language.md) can run from the desk on Martin's recorded word without a terminal. An unmet local build step runs without asking; production expectations still stop the run, and a write that already holds is not repeated. If no key is kept, the credentialed child uses Wrangler's existing login.
 - The helper preserves anonymous app suggestions in intake before it acknowledges
   them. The drain catalogues them through jev and keeps the original files in
@@ -109,6 +110,7 @@ On main now:
 - The `~/mc` layout: programmes, archive, the areas' proposals, horizons, runner state and the desk's items, as [mc-layout.md](../mc-layout.md) describes it.
 - `~/mc/martin/lessons/` — [lesson evidence](../mc-martin.md#lessons-and-the-learning-pass)
   used by the separate area-learning pass.
+- `~/mc/runner/deploy-release.json` and `~/mc/runner/deploy-releases/` — the [active and closed release records](../mc-deploy.md#cut-and-record), separate from the deploy-attempt ledger.
 - The [tailnet file server](../mc-server.md#files-on-the-tailnet) exposes the desk's designs,
   design work, horizons, items and lessons beside programme files, not the
   desk worktrees.
