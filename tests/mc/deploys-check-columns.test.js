@@ -74,7 +74,7 @@ test('a take-back row keeps its three cells, and the readers tell it and what it
 });
 
 for (const [index, header] of OLDER.entries()) {
-  test(`a file with the ${index + 1}${['st', 'nd', 'rd', 'th', 'th', 'th'][index]} older header is rewritten with the current one on the next write, rows kept`, () => {
+  test(`a file with the ${index + 1}${['st', 'nd', 'rd'][index] ?? 'th'} older header is rewritten with the current one on the next write, rows kept`, () => {
     const { env, cleanup } = workRoot();
     try {
       const rows = [rowFor(header, 1), rowFor(header, 2)];

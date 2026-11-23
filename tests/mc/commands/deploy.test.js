@@ -5002,10 +5002,13 @@ describe('mc deploy — cutting a measured release', () => {
     }, { root: fx.mcHome });
     const history = () => readNightlyHistory(fx.dir, { root: fx.mcHome }).runs;
     const output = io();
-    const calls = { full: [], ship: [], read: [], prepare: 0 };
+    const calls = { full: [], ship: [], read: [], pushes: [], prepare: 0 };
     const d = deps({
       ...output, env, releaseCutting: true, clock: () => Date.parse(at),
-      repos: [{ name: 'memoro', path: fx.dir }], git: tryGit,
+      repos: [{ name: 'memoro', path: fx.dir }], git: (cwd, args) => {
+        if (args[0] === 'push') calls.pushes.push(args.at(-1));
+        return tryGit(cwd, args);
+      },
       fetchVersion: async () => ({ commit: live, build: 10 }),
       nightly: noNightly, lastDeploy: () => null, holder: { name: 'the typed deploy' },
       gh: () => assert.fail('cutting or reporting a release does not call the forge'),
@@ -5044,7 +5047,8 @@ describe('mc deploy — cutting a measured release', () => {
     });
     const [row] = readDeploys(f.env);
     assert.deepEqual(release.row, { started: row.started, sha: row.sha });
-    assert.deepEqual([row.outcome, row.full_commit, row.full_verdict, row.take_back, row.holder], ['release-cut', f.tip, 'red', 'yes', 'the typed deploy']);
+    assert.deepEqual([row.outcome, row.full_commit, row.full_verdict, row.take_back, row.holder, row.release_branch],
+      ['release-cut', f.tip, 'red', 'yes', 'the typed deploy', f.branch]);
     assert.deepEqual(f.calls.read, [[f.live, f.tip]]);
     assert.deepEqual(f.history().map(({ commit, red }) => [commit, red]), [[f.tip, reds]]);
     const short = f.tip.slice(0, 7);
@@ -5071,6 +5075,7 @@ describe('mc deploy — cutting a measured release', () => {
     } });
     assert.deepEqual(readDeploys(f.env), [row]);
     assert.deepEqual(f.remoteReleases(), [`${f.tip}\trefs/heads/${f.branch}`]);
+    assert.deepEqual(f.calls.pushes, [`${f.tip}:refs/heads/${f.branch}`]);
   });
 
   it('measures a tip without history before cutting it', async (t) => {
