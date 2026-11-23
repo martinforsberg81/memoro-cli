@@ -862,12 +862,19 @@ limit. Each start writes `kind: learning` in `runs.tsv`; scheduled quota
 endings pause the runner. Dispositions, publication authority and desk figures
 are in [mc-martin.md](mc-martin.md#lessons-and-the-learning-pass).
 
-No external supervisor is needed. The runner's chore pass — the
-helper's collect, the intake drain, the tidying — ends with one more chore, the
-**full runs** (Martin, 2026-11-13; they follow main since 2026-11-15, with no
-once-a-day gate): every pass, `runNightly` asks `fullRunDue` of each repository and
-starts, without waiting for it, `mc test <repo> --full` for each repository whose
-origin/main moved since its last measured full run and that has no full run in
+**Release continuation** (`runRelease`) runs beside sessions and merge rounds.
+The chore pass advances an open [typed release](mc-deploy.md#the-release-branch)
+before asking which repositories need a full run of main. It starts no
+continuation under STOP or UPDATE or while one is already in progress. While
+the release needs measurement and has neither a technical stop nor a drop
+pending, `runNightly` defers starting a new full run of memoro's main. Other
+repositories' runs are unaffected.
+
+**The standing full runs** (Martin, 2026-11-13; they follow main since
+2026-11-15, with no once-a-day gate): every pass, `runNightly` asks `fullRunDue`
+of each eligible repository and starts `mc test <repo> --full`, without
+waiting for it, for each repository whose origin/main moved since its last
+measured full run and that has no full run in
 flight, as a meter beside the sessions and the merge rounds. One run per
 repository at a time across chore passes (the runner keeps the map). It takes no round lock and no lease and measures in its
 own checkout, so no merge round waits for it, at 2 test lanes
