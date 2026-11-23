@@ -2268,7 +2268,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   // A conflict on the release return owns the existing PR and branch, not a
   // goal or a new PR. Offer it through the same mend lane and resource checks.
   function releaseReturnMend() {
-    const release = openRelease(root, deps.read);
+    let release;
+    try { release = openRelease(root, deps.read); } catch { return null; } // continuation reports unreadable state
     if (!release?.merge_back || release.merge_landed || (release.return_attempts || 0) >= 3) return null;
     const job = deps.pendingMerges?.(root).find((item) => item.repo === 'memoro' && Number(item.pr) === release.merge_back && item.state === 'red');
     if (!job) return null;
@@ -2794,7 +2795,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   function matchingRelease(identity) {
     const release = openRelease(root, deps.read);
-    return release?.branch === identity?.branch && release?.cut.at === identity?.at && !release.drop_reason ? release : null;
+    return release && release.branch === identity?.branch && release.cut.at === identity?.at && !release.drop_reason ? release : null;
   }
 
   /** Settle one request: pull requests to landed, landed to repaired, repaired to the one retry, the retry to its end. */

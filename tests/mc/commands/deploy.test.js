@@ -5207,8 +5207,8 @@ describe('mc deploy — cutting a measured release', () => {
           state: returned ? 'MERGED' : 'OPEN', baseRefName: 'main', mergeCommit: { oid: returned },
         }) };
         if (args[1] === 'create' && head === 'pins/shipped') {
-          assert.deepEqual(fixtureGit(f.dir, 'diff --name-only origin/main...origin/pins/shipped'), 'pins.txt');
           events.push('pin');
+          assert.deepEqual(fixtureGit(f.dir, 'diff --name-only origin/main...origin/pins/shipped'), 'pins.txt');
           return { ok: true, stdout: 'https://example.test/pull/15832' };
         }
         assert.fail(`unexpected forge call: ${args.join(' ')}`);
@@ -5227,12 +5227,16 @@ describe('mc deploy — cutting a measured release', () => {
     assert.equal(await run([], d), 1);
     assert.equal(await run(['--accept-red', 'take these reds'], d), 1);
     assert.deepEqual(readDeploys(f.env).slice(-2).map(({ outcome, note }) => [outcome, note]), [['refused', line], ['refused', line]]);
-    fixtureGit(f.dir, `merge --no-ff -qm return ${f.branch}`);
-    returned = fixtureGit(f.dir, 'rev-parse HEAD');
-    fixtureGit(f.dir, 'push -q origin main');
-    assert.equal(fixtureGit(f.dir, `log -1 --format=%P ${returned}`).split(/\s+/u).length, 2);
-    fixtureGit(f.dir, `merge-base --is-ancestor ${head} ${returned}`);
-    await continueRelease(d);
+    assert.equal(await run(['--follow'], { ...d, sleep: async () => {
+      fixtureGit(f.dir, `merge --no-ff -qm return ${f.branch}`);
+      returned = fixtureGit(f.dir, 'rev-parse HEAD');
+      fixtureGit(f.dir, 'push -q origin main');
+      assert.equal(fixtureGit(f.dir, `log -1 --format=%P ${returned}`).split(/\s+/u).length, 2);
+      fixtureGit(f.dir, `merge-base --is-ancestor ${head} ${returned}`);
+      await continueRelease(d);
+      assert.equal(readRelease(f.root).closed, 'merged', f.output.out.stderr);
+    } }), 0);
+    assert.ok(f.output.out.stdout.endsWith(`mc: deployed ${head.slice(0, 7)} as build 27914 (${f.branch}, cut by a typed deploy 2026-11-23 01:10, 2 repairs)\nmc: ${f.branch} goes back to main through memoro#15830 (a merge commit)\n`));
     assert.deepEqual(events, ['return', [15830, f.branch], 'pin', ['memoro', '15832']], f.output.out.stderr + JSON.stringify(readRelease(f.root)));
     assert.equal(readRelease(f.root).closed, 'merged');
     assert.deepEqual(f.remoteReleases(), []);
