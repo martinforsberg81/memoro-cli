@@ -36,7 +36,7 @@ export function branchNamed(lines) {
  * (the pull request, once opened, stays open and its number is still returned).
  * Never throws.
  */
-export async function openBranchPr({ worktree, branch, short, repo, git, gh, merge, stdout, stderr }) {
+export async function openBranchPr({ worktree, branch, short, repo, git, gh, merge, stdout, stderr, recover = false }) {
   try {
     // The branch's own commit message is the title and description. The fetch
     // changes no checkout: it writes FETCH_HEAD and a remote-tracking ref.
@@ -48,7 +48,15 @@ export async function openBranchPr({ worktree, branch, short, repo, git, gh, mer
       const parts = messageParts(git(worktree, ['log', '-1', '--format=%B', 'FETCH_HEAD']));
       if (parts.title) { title = parts.title; body = parts.body || body; }
     }
-    const made = gh(['pr', 'create', '--base', 'main', '--head', branch, '--title', title, '--body', head ? markedBody(body, head) : body]);
+    let existing;
+    if (recover) {
+      const found = gh(['pr', 'list', '--state', 'all', '--base', 'main', '--head', branch, '--json', 'url,state']);
+      if (!found.ok) return { queued: false, error: found.text };
+      existing = JSON.parse(found.stdout).find((pr) => pr.state === 'OPEN' || pr.state === 'MERGED');
+      if (existing?.state === 'MERGED') return { number: Number(/\/pull\/(\d+)/u.exec(existing.url)?.[1]), queued: true };
+    }
+    const made = existing ? { ok: true, stdout: existing.url }
+      : gh(['pr', 'create', '--base', 'main', '--head', branch, '--title', title, '--body', head ? markedBody(body, head) : body]);
     const number = made.ok ? Number(/\/pull\/(\d+)/u.exec(made.stdout || '')?.[1]) || null : null;
     if (!number) return { number: null, ref: '', url: '', queued: false, error: `gh pr create failed: ${made.text || 'no pull request number in its answer'}` };
     const url = (/\S*\/pull\/\d+/u.exec(made.stdout || '') || [''])[0];

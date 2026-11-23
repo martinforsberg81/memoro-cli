@@ -28,7 +28,7 @@
  * the mends, the servers, the suites — is on `deps`, so the whole gate runs in
  * a test with nothing real behind it.
  */
-import { deployWorktreePath, placeWorktree, strayLines, takeHolder } from './deploy-worktree.js';
+import { deployWorktreePath, ensureReleaseWorktree, placeWorktree, strayLines, takeHolder } from './deploy-worktree.js';
 import { KEPT_HOLD_SECONDS, mainIdleSecondsOf, stopServer } from './dev-servers.js';
 import { verdictOf } from './gate-output.js';
 import { run as runGit } from './git.js';
@@ -173,10 +173,10 @@ function mendWords(entries) {
  */
 export async function measureFull({
   sha, path, env = process.env, dryRun = false, say = () => {}, deps = {}, root = mcHome(env), mendRoot = workRoot(env),
-  branch = null, deferMainRepair = false,
+  branch = null, recorded = null, deferMainRepair = false,
 }) {
   const history = deps.history || readNightlyHistory;
-  const found = fullRunVerdict(history(path, { root }).runs, sha);
+  const found = fullRunVerdict(recorded ? [recorded] : history(path, { root }).runs, sha);
   let { state, run } = found;
   let started = false;
 
@@ -240,18 +240,18 @@ export function withMendsNow(full, { env = process.env, deps = {} } = {}) {
  */
 export async function measureGate({
   sha, path, acceptRed = false, dryRun = false, env = process.env, say = () => {}, deps = {}, suites = {}, stage = () => {}, own = false,
-  outputDir = null, branch = null, deferMainRepair = false,
+  outputDir = null, branch = null, recorded = null, deferMainRepair = false,
 }) {
   stage('full-run');
   const full = await measureFull({
-    sha, path, env, dryRun, say, deps, root: deps.root, mendRoot: deps.mendRoot, branch, deferMainRepair,
+    sha, path, env, dryRun, say, deps, root: deps.root, mendRoot: deps.mendRoot, branch, recorded, deferMainRepair,
   });
   const unmeasured = full.state === 'unmeasured' || full.state === 'moved';
   const redFull = full.state === 'red' || full.state === 'stalled';
   if (unmeasured || (redFull && !dryRun && !acceptRed)) return { full, exercise: null };
-  stage('suites');
+  stage('suites', full);
   say(`mc: suites — starting a local server of ${short(sha)} and running what .mc/test.json declares`);
-  const exercise = await exerciseApp({ sha, env, say, deps: suites, own, outputDir, gateRef: branch ? sha : GATE_REF });
+  const exercise = await exerciseApp({ sha, env, say, deps: suites, own, outputDir, gateRef: branch ? sha : GATE_REF, branch, path });
   return { full, exercise };
 }
 
@@ -394,15 +394,15 @@ function gitIn(worktree, args) {
  * `not_on_tip` the names of the commit's suites the tip does not declare.
  */
 export async function exerciseApp({
-  sha, env = process.env, say = () => {}, deps = {}, own = false, outputDir = null, gateRef = GATE_REF,
+  sha, env = process.env, say = () => {}, deps = {}, own = false, outputDir = null, gateRef = GATE_REF, branch = null, path = null,
 }) {
   const d = {
     sharedWorktree, readDeclaration, ensureAppServer, ensureDevServer, runSuites, tokenFor, head: headOf, dirty: dirtyOf,
     gitIn, servingWorktree, mainHold, now: () => Date.now(), sleep: (ms) => new Promise((done) => { setTimeout(done, ms); }),
-    takeHolder, placeWorktree, serversFor, stopServer, deployWorktree: deployWorktreePath, alive: processAlive,
+    takeHolder, placeWorktree, ensureReleaseWorktree, serversFor, stopServer, deployWorktree: deployWorktreePath, alive: processAlive,
     ...deps,
   };
-  if (own) return exerciseOwn({ sha, env, say, deps, d, outputDir, gateRef });
+  if (own) return exerciseOwn({ sha, env, say, deps, d, outputDir, gateRef, branch, path });
   const worktree = d.sharedWorktree(env);
   if (!worktree) return cannot(NO_SHARED_WORKTREE);
   const dirtyNow = d.dirty(worktree);
@@ -443,7 +443,7 @@ export async function exerciseApp({
  * 4. whatever happened, the servers the exercise started are stopped and the holder is released;
  *    a server that was already there is left.
  */
-async function exerciseOwn({ sha, env, say, deps, d, outputDir, gateRef }) {
+async function exerciseOwn({ sha, env, say, deps, d, outputDir, gateRef, branch, path }) {
   const worktree = d.deployWorktree(env);
   // No bound on the wait: a holder that is alive is waited for and said each minute (`takeHolder`), a holder
   // that is gone is taken over, and elapsed time is never the reason the suites do not run (D6, D16).
@@ -457,7 +457,8 @@ async function exerciseOwn({ sha, env, say, deps, d, outputDir, gateRef }) {
       const asked = d.gitIn(cwd, args);
       return asked.status === 0 ? String(asked.stdout || '').trim() : null;
     });
-    const placed = d.placeWorktree({ worktree, sha, git });
+    if (branch && !d.ensureReleaseWorktree({ path, env, git, branch })) return cannot(`could not create mc's deploy worktree at ${worktree}`);
+    const placed = d.placeWorktree({ worktree, sha, git, ...(branch ? { branch } : {}) });
     if (!placed.ok) return cannot(`mc's own deploy worktree ${worktree} cannot be placed at ${short(sha)}, so no suite ran — ${placed.reason}`);
     if (placed.moved) say(`mc: suites — the deploy worktree ${worktree} stands at ${short(sha)} now (${placed.how === 'reset' ? 'moved back from' : 'fast-forwarded from'} ${short(placed.from)})`);
     for (const line of strayLines(placed.strays)) say(line);

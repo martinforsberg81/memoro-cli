@@ -12,6 +12,7 @@ import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeJsonAtomic } from './atomic-write.js';
 import { readDeploys } from './deploys.js';
+import { openRelease, writeRelease } from './deploy-release.js';
 import { readTextOrNull } from './goals.js';
 import { realLock } from './runner-lock.js';
 import { workRoot } from './paths.js';
@@ -92,6 +93,7 @@ export function updateDeployMends({ root = workRoot(), read = readTextOrNull, wr
 }
 
 export const openRequest = (entries) => entries.find((entry) => UNFINISHED.includes(entry.state)) || null;
+export const deployMendRelease = (entry) => entry.rows.findLast((row) => row.release)?.release || null;
 const newest = (entry) => entry.rows.map((row) => row.started).sort().at(-1);
 
 /**
@@ -101,12 +103,12 @@ const newest = (entry) => entry.rows.map((row) => row.started).sort().at(-1);
  * newest row. A failed write or copy never changes the deploy: this never throws.
  * `logs`: `[{ name, path }]`, copied to `runner/deploy-mend/<id>/<row.started>/`.
  */
-export function requestDeployRepair({ row, holder = '', acceptRed = false, logs = [], origin = 'deploy', repo = '', holders = [], now = () => new Date(), copy = copyFileSync, mkdir = mkdirSync, ...state }) {
+export function requestDeployRepair({ row, holder = '', acceptRed = false, release = null, logs = [], origin = 'deploy', repo = '', holders = [], now = () => new Date(), copy = copyFileSync, mkdir = mkdirSync, ...state }) {
   try {
     if (!row?.started) return { skipped: 'no row' };
     const root = state.root || workRoot();
     return updateDeployMends(state, (entries) => {
-      const open = openRequest(entries);
+      const open = entries.find((entry) => UNFINISHED.includes(entry.state) && deployMendRelease(entry)?.at === release?.cut.at);
       const target = open || { id: randomUUID(), rows: [], state: 'queued', failures: 0, created: now().toISOString() };
       if (target.rows.some((item) => item.started === row.started)) return { id: target.id, joined: true };
       // A checkout held again while the request about it is unfinished is the same fault: no second row, no second copy.
@@ -119,6 +121,7 @@ export function requestDeployRepair({ row, holder = '', acceptRed = false, logs 
       } catch { /* the copies are evidence, not the request */ }
       target.rows.push({ started: row.started, sha: row.sha || '', stopped_at: row.stopped_at || '', note: row.note || '',
         holder: holder || row.holder || '', accept_red: Boolean(acceptRed), copies, logs: kept,
+        ...(release ? { release: { branch: release.branch, at: release.cut.at } } : {}),
         // `full-run`: not a deploy but a full run that could not start; who held it is named for the session.
         ...(origin === 'full-run' ? { origin, repo: String(repo || ''), holders: (holders || []).map(({ pid, command = null, cwd = null }) => ({ pid, command, cwd })) } : {}),
         // A typed deploy refused because its full run could not start stays a deploy (its retry applies, D14);
@@ -176,12 +179,23 @@ export function publishDeployMend({ repo, branch, pr, ...state }) {
 }
 
 /** The merger's answer for a pull request: landed, or closed/red without landing (a failed attempt). */
-export function answerDeployMend({ repo, pr, landed, reason, ...state }) {
-  return updateDeployMends(state, (entries) => {
+export function answerDeployMend({ repo, pr, landed, reason, commit = null, baseBranch = null, root = workRoot(), now = () => new Date(), ...state }) {
+  return updateDeployMends({ root, ...state }, (entries) => {
     const answered = entries.filter((entry) => ['running', 'published'].includes(entry.state)
       && (entry.prs || []).some((item) => item.repo === repo && item.number === Number(pr) && item.state === 'open'));
     for (const entry of answered) {
-      if (landed) entry.prs.find((item) => item.repo === repo && item.number === Number(pr)).state = 'landed';
+      const target = repo === 'memoro' && deployMendRelease(entry);
+      if (target && landed) {
+        const release = openRelease(root, state.read);
+        if (!release || release.branch !== target.branch || release.cut.at !== target.at || baseBranch !== target.branch || !commit) {
+          failDeployMend(entry, 'the deploy repair did not land on its recorded release');
+          continue;
+        }
+        if (!release.repairs.includes(Number(pr))) writeRelease(root, {
+          ...release, head: commit, repairs: [...release.repairs, Number(pr)], state: 'measuring', state_at: now().toISOString(), reds: [],
+        }, state.write);
+      }
+      if (landed) Object.assign(entry.prs.find((item) => item.repo === repo && item.number === Number(pr)), { state: 'landed', ...(commit ? { merge: commit } : {}) });
       else failDeployMend(entry, reason);
     }
     return answered;
@@ -323,6 +337,7 @@ export function deployMendPrompt({ entry, branch, worktrees, root }) {
   return `You are a deploy-mend session, headless, with no goal (deploy-mend ${entry.id}). Read the deploy-mend section of your mend role.\n` +
     `${what}.\n${rows}\n` +
     `Work on ${branch} in ${worktrees.map((tree) => `${tree.repo}: ${tree.path}`).join(', ')}. Runner root: ${root}.\n` +
+    (deployMendRelease(entry) ? `Publish a memoro fix with mc publish --base ${deployMendRelease(entry).branch}; memoro-cli still targets main. Do not merge main into the release or change its take-back reading.\n` : '') +
     `Previous outcome: ${entry.reason || 'first attempt'}; session log: ${entry.session_log || 'none'}.\n` +
     `Write a proposal in ~/mc/areas/memoro-cli/system/proposals/ naming the fault of mc deploy's design. End with a published PR (mc publish) or mc repo mend deploy ${entry.id} repaired --reason "<what was repaired>". Never run mc deploy.`;
 }

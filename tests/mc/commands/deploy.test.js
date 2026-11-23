@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import {
-  deployPlan, deploySource, deployWorktreePath, leftoverStamps, parseDeployArgs, planLines, readScriptOutput, run,
+  continueRelease, deployPlan, deploySource, deployWorktreePath, leftoverStamps, parseDeployArgs, planLines, readScriptOutput, run,
   deployLogPath, followDeploy, ship, spawnDeployDefault, startDeployerDefault, startPreparerDefault,
   worktreeState, DISK_BUSY_WAIT_MS, takenBackFloor,
 } from '../../../src/mc/commands/deploy.js';
@@ -372,6 +372,9 @@ function deps(extra = {}) {
     // `MC_HEADLESS` is cleared: the suite itself may run in a headless session,
     // and a deploy there is refused before anything else (its own tests set it).
     env: { ...process.env, MC_WORK_ROOT: work, MC_HEADLESS: '' },
+    // Legacy main refusals still exercise the no-cut path (e.g. the old
+    // deploy's one retry). Release cases below explicitly enable cutting.
+    releaseCutting: false,
     gate: fake.gate,
     suites: fake.suites,
     // No gate round is in flight and no merger waits: a deployer that a test
@@ -5031,13 +5034,14 @@ describe('mc deploy — cutting a measured release', () => {
       },
       startDeployer: (job) => { calls.ship.push(job.sha); return { pid: process.pid, inline: () => 0 }; },
     });
-    return { branch, tip, older, live, env, root, record, history, output, calls, d, remoteReleases };
+    return { branch, tip, older, live, env, root, dir: fx.dir, record, history, output, calls, d, remoteReleases };
   }
 
   it('cuts at the red tip without measuring again; a second deploy reports the same release', async (t) => {
     const f = releaseFixture(t);
     f.record(f.tip, { red: reds });
-    assert.equal(await run([], f.d), 0, f.output.out.stderr);
+    const { releaseCutting: _, ...shipped } = f.d;
+    assert.equal(await run([], shipped), 0, f.output.out.stderr);
     assert.deepEqual([f.calls.full, f.calls.ship, f.calls.prepare], [[], [], 0], 'recorded verdict is the first measurement');
     assert.deepEqual(f.remoteReleases(), [`${f.tip}\trefs/heads/${f.branch}`]);
     const release = readRelease(f.root);
@@ -5126,15 +5130,183 @@ describe('mc deploy — cutting a measured release', () => {
     assert.deepEqual([f.calls.full, f.calls.ship, f.calls.prepare], [[], [], 0]);
   });
 
-  it('refuses the same red tip with cutting off in shipped code', async (t) => {
+  it('refuses the same red tip with cutting off', async (t) => {
     const f = releaseFixture(t);
     f.record(f.tip, { red: reds });
-    const { releaseCutting: _, ...shipped } = f.d;
-    assert.equal(await run([], shipped), 1);
+    assert.equal(await run([], { ...f.d, releaseCutting: false }), 1);
     assert.match(f.output.out.stderr, /refused — .* is not measured whole and exercised/u);
     assert.deepEqual(f.remoteReleases(), []);
     assert.equal(readRelease(f.root), null);
     assert.deepEqual(readDeploys(f.env).map(({ full_verdict, outcome }) => [full_verdict, outcome]), [['red', 'refused']]);
+  });
+
+  function repairCommit(f) {
+    fixtureGit(f.dir, `switch -qc ${f.branch} origin/${f.branch}`);
+    writeFileSync(join(f.dir, 'repair.txt'), 'repair\n');
+    fixtureGit(f.dir, 'add repair.txt');
+    fixtureGit(f.dir, 'commit -qm repair');
+    const head = fixtureGit(f.dir, 'rev-parse HEAD');
+    fixtureGit(f.dir, `push -q origin ${f.branch}`);
+    fixtureGit(f.dir, 'switch -q main');
+    fixtureGit(f.dir, 'commit --allow-empty -qm "main keeps moving"');
+    fixtureGit(f.dir, 'push -q origin main');
+    return head;
+  }
+
+  for (const method of ['merge', 'squash']) {
+    it(`a later deploy moves forward after a ${method === 'merge' ? 'release merge commit' : 'release squash only by refusing it'}`, async (t) => {
+      const f = releaseFixture(t);
+      f.record(f.tip, { red: reds });
+      assert.equal(await run([], f.d), 0);
+      const head = repairCommit(f);
+      fixtureGit(f.dir, method === 'merge' ? `merge --no-ff -qm return ${f.branch}` : `merge --squash ${f.branch}`);
+      if (method === 'squash') fixtureGit(f.dir, 'commit -qm squash');
+      fixtureGit(f.dir, 'commit --allow-empty -qm next');
+      fixtureGit(f.dir, 'push -q origin main');
+      const next = fixtureGit(f.dir, 'rev-parse HEAD');
+      const plan = await deployPlan({ path: f.dir, env: f.env, lastDeploy: () => ({ sha: head }), nightly: noNightly,
+        history: () => [fullRunOf(head), fullRunOf(next)] });
+      assert.equal(plan.live, head);
+      if (method === 'merge') {
+        assert.equal(plan.backwards, null);
+        assert.equal(plan.pick.green, next);
+      } else {
+        assert.match(plan.backwards, /does not descend from the live commit .* shipping it would move production backwards/u);
+        assert.equal(plan.pick.green, null);
+      }
+    });
+  }
+
+  it('returns the release before opening the pins and refuses another deploy until then', async (t) => {
+    const f = releaseFixture(t);
+    f.record(f.tip, { red: reds });
+    assert.equal(await run([], f.d), 0);
+    const head = repairCommit(f);
+    const key = { started: '2026-11-23T01:11:00.000Z', sha: head };
+    recordStart(key, f.env);
+    writeRelease(f.root, { ...readRelease(f.root), head, state: 'deployed', build: '27914', repairs: [15820, 15821],
+      shipped: { key, patch: { outcome: 'deployed', build: '27914' } }, pin_branch: 'pins/shipped' });
+    fixtureGit(f.dir, `switch -qc pins/shipped ${head}`);
+    writeFileSync(join(f.dir, 'pins.txt'), 'pins\n');
+    fixtureGit(f.dir, 'add pins.txt');
+    fixtureGit(f.dir, 'commit -qm pins');
+    fixtureGit(f.dir, 'push -q origin pins/shipped');
+    fixtureGit(f.dir, 'switch -q main');
+    const events = [];
+    let returned;
+    const d = { ...f.d, path: f.dir, root: f.root,
+      gh: (args) => {
+        const head = args[args.indexOf('--head') + 1];
+        if (args[1] === 'list') return { ok: true, stdout: '[]' };
+        if (args[1] === 'create' && head === f.branch) {
+          events.push('return');
+          assert.equal(readDeploys(f.env).at(-1).outcome, 'running');
+          return { ok: true, stdout: 'https://example.test/pull/15830' };
+        }
+        if (args[1] === 'view') return { ok: true, stdout: JSON.stringify({
+          state: returned ? 'MERGED' : 'OPEN', baseRefName: 'main', mergeCommit: { oid: returned },
+        }) };
+        if (args[1] === 'create' && head === 'pins/shipped') {
+          assert.deepEqual(fixtureGit(f.dir, 'diff --name-only origin/main...origin/pins/shipped'), 'pins.txt');
+          events.push('pin');
+          return { ok: true, stdout: 'https://example.test/pull/15832' };
+        }
+        assert.fail(`unexpected forge call: ${args.join(' ')}`);
+      },
+      queueMerge: ({ pr, branch }) => events.push([pr, branch]),
+      merge: async (argv) => { events.push(argv); return 0; },
+    };
+    await continueRelease(d);
+    assert.deepEqual(events, ['return', [15830, f.branch]]);
+    assert.match(readDeploys(f.env).at(-1).note, /deployed .* as build 27914 .*2 repairs.*goes back to main through memoro#15830 \(a merge commit\)/u);
+    const line = `mc: ${f.branch} is not back on main yet (memoro#15830, queued) — the next deploy waits for it; mc prs shows it`;
+    const before = readDeploys(f.env).length;
+    assert.equal(await run(['--dry-run'], d), 0);
+    assert.equal(readDeploys(f.env).length, before);
+    assert.ok(f.output.out.stdout.endsWith(`${line}\n`));
+    assert.equal(await run([], d), 1);
+    assert.equal(await run(['--accept-red', 'take these reds'], d), 1);
+    assert.deepEqual(readDeploys(f.env).slice(-2).map(({ outcome, note }) => [outcome, note]), [['refused', line], ['refused', line]]);
+    fixtureGit(f.dir, `merge --no-ff -qm return ${f.branch}`);
+    returned = fixtureGit(f.dir, 'rev-parse HEAD');
+    fixtureGit(f.dir, 'push -q origin main');
+    assert.equal(fixtureGit(f.dir, `log -1 --format=%P ${returned}`).split(/\s+/u).length, 2);
+    fixtureGit(f.dir, `merge-base --is-ancestor ${head} ${returned}`);
+    await continueRelease(d);
+    assert.deepEqual(events, ['return', [15830, f.branch], 'pin', ['memoro', '15832']], f.output.out.stderr + JSON.stringify(readRelease(f.root)));
+    assert.equal(readRelease(f.root).closed, 'merged');
+    assert.deepEqual(f.remoteReleases(), []);
+  });
+
+  it('drops a release with no repairs and puts its still-red main fault back in line', async (t) => {
+    const f = releaseFixture(t);
+    f.record(f.tip, { red: reds });
+    const d = { ...f.d, mainRepair: requestMainRepair };
+    assert.equal(await run([], d), 0);
+    assert.equal(await run(['--drop-release', 'drop this release'], d), 0);
+    assert.ok(f.output.out.stdout.endsWith(`mc: ${f.branch} dropped — drop this release; the branch was deleted\n`));
+    assert.deepEqual(f.remoteReleases(), []);
+    assert.deepEqual(readMainMends({ root: f.root, repo: 'memoro' }).map(({ file, state, release_branch }) => [file, state, Boolean(release_branch)]),
+      [[reds[1], 'dropped', true], [reds[0], 'dropped', true], [reds[1], 'queued', false], [reds[0], 'queued', false]]);
+  });
+
+  it('drops a release with landed repairs by opening its merge-back', async (t) => {
+    const f = releaseFixture(t);
+    f.record(f.tip, { red: reds });
+    assert.equal(await run([], f.d), 0);
+    const head = repairCommit(f);
+    writeRelease(f.root, { ...readRelease(f.root), head, state: 'measuring', repairs: [15820, 15821] });
+    const queue = [];
+    const d = { ...f.d, gh: (args) => {
+      if (args[1] === 'list') return { ok: true, stdout: '[]' };
+      if (args[1] === 'create') {
+        assert.deepEqual(args.slice(2, 6), ['--base', 'main', '--head', f.branch]);
+        return { ok: true, stdout: 'https://example.test/pull/15831' };
+      }
+      return { ok: true, stdout: '{"state":"OPEN","baseRefName":"main"}' };
+    }, queueMerge: ({ pr, branch }) => queue.push([pr, branch]) };
+    assert.equal(await run(['--drop-release', 'done waiting'], d), 0);
+    assert.ok(f.output.out.stdout.endsWith(`mc: ${f.branch} dropped — done waiting; its 2 repairs go back to main through memoro#15831\n`));
+    assert.deepEqual(queue, [[15831, f.branch]]);
+    assert.equal(readRelease(f.root).closed, undefined);
+    assert.equal(await run(['--accept-red', 'do not re-open it'], d), 1);
+  });
+
+  it('refuses to drop a deploying release and uses the running-deploy refusal for accept-red', async (t) => {
+    const f = releaseFixture(t);
+    f.record(f.tip, { red: reds });
+    assert.equal(await run([], f.d), 0);
+    const release = readRelease(f.root);
+    writeRelease(f.root, { ...release, state: 'deploying' });
+    const sha = f.tip.slice(0, 7);
+    recordStart({ sha: f.tip, pid: process.pid, started: at }, f.env);
+    assert.equal(await run(['--drop-release', 'not now'], f.d), 1);
+    assert.ok(f.output.out.stderr.endsWith(`mc: ${f.branch} is deploying ${sha} — it cannot be dropped now; mc deploy --follow watches it\n`));
+    assert.equal(await run(['--accept-red', 'not now'], f.d), 1);
+    assert.match(f.output.out.stderr, /one deploy at a time; nothing was deployed/u);
+    assert.equal(readRelease(f.root).state, 'deploying');
+  });
+
+  it('accepts the release’s recorded red at its exact head, exercising its suites and ending its mends', async (t) => {
+    const f = releaseFixture(t);
+    f.record(f.tip, { red: reds });
+    const fake = gateFake({ head: f.tip, served: f.tip });
+    const d = { ...f.d, suites: { ...fake.suites, git: tryGit }, mainRepair: requestMainRepair,
+      startDeployer: (job) => {
+        f.calls.ship.push(job.sha);
+        return { pid: process.pid, inline: () => 0 };
+      },
+    };
+    assert.equal(await run([], d), 0);
+    assert.equal(await run(['--accept-red', 'the red is understood'], { ...d, env: { ...d.env, MC_HEADLESS: '1' } }), 1);
+    assert.equal(f.calls.prepare, 0);
+    assert.equal(await run(['--accept-red', 'the red is understood'], d), 0, f.output.out.stderr);
+    assert.deepEqual(f.calls.ship, [f.tip]);
+    assert.deepEqual(f.calls.full, []);
+    assert.match(f.output.out.stdout, /accepting red \(the red is understood\)/u);
+    assert.deepEqual(readMainMends({ root: f.root, repo: 'memoro' }).map(({ state }) => state), ['dropped', 'dropped']);
+    const row = readDeploys(f.env).at(-1);
+    assert.deepEqual([row.sha, row.full_verdict, row.accepted_red, row.release_branch], [f.tip, 'red', 'the red is understood', f.branch]);
   });
 
   it('cuts a stalled tip and keeps all named stalled files from history', async (t) => {

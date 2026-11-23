@@ -103,19 +103,20 @@ import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
 import { deployProgress } from '../deploy-progress.js';
 import {
-  beginCut, confirmCutTip, readClosedRelease, readRelease,
-  releaseCutLines, releaseOpenLine, releaseStateLine, releaseSummary, settleCut, RELEASE_CUTTING,
+  beginCut, confirmCutTip, openRelease, readClosedRelease, readRelease, releaseHolder as releaseAuthority, releaseRef,
+  releaseCutLines, releaseOpenLine, releaseShippedLines, releaseStateLine, releaseSummary, releaseWaitLine, sameRelease, settleCut, RELEASE_CUTTING,
 } from '../deploy-release.js';
+import { changeRelease, ensureMergeBack, finishReleaseRow, settleReleaseReturn } from '../release-return.js';
 import { awaitClaim, liveClaims, overlaps } from '../full-run-claim.js';
 import {
   classifyStop, deployMendLine, deployMendReading, FINISHED, gateStopCode, readDeployMends, requestDeployRepair,
 } from '../deploy-repair.js';
 import {
-  deployWorktreePath, isOwnWorktree, leftoverStamps, placeWorktree, STAMP_FILES, strayLines, strayPaths, takeHolder, worktreeState,
+  deployWorktreePath, ensureReleaseWorktree, isOwnWorktree, leftoverStamps, placeWorktree, STAMP_FILES, strayLines, strayPaths, takeHolder, worktreeState,
 } from '../deploy-worktree.js';
 import { fullRunVerdict, gateRecord, measureGate, pickCommit, reds, suiteLines, suiteWords, withMendsNow } from '../deploy-gate.js';
 import { outputRoot, settleOutputs } from '../gate-output.js';
-import { FINISHED as MAIN_FINISHED, readMainMends, requestMainRepair } from '../main-repair.js';
+import { endReleaseMends, FINISHED as MAIN_FINISHED, readMainMends, requestMainRepair } from '../main-repair.js';
 import { repairFromStop, repairReleaseRun } from '../nightly-loop.js';
 import { mainRecord } from '../selector-miss.js';
 import {
@@ -162,7 +163,7 @@ export function parseDeployArgs(argv) {
     const opts = { dryRun: Boolean(parsed.dryRun), json: Boolean(parsed.json), follow: false, acceptRed: null };
     return parsed.error ? { ...opts, error: parsed.error } : { ...opts, takeBack: parsed };
   }
-  const scanned = scanArgs(argv, { booleans: ['--dry-run', '--json', '--follow'], strictValues: ['--accept-red'] });
+  const scanned = scanArgs(argv, { booleans: ['--dry-run', '--json', '--follow'], strictValues: ['--accept-red', '--drop-release'] });
   const opts = { dryRun: false, json: false, follow: false, acceptRed: null };
   if (scanned.error) return { ...opts, error: scanned.error };
   if (scanned.positional.length) {
@@ -171,12 +172,17 @@ export function parseDeployArgs(argv) {
   // The reason is the point of the flag: it is printed with the deploy and kept in
   // the record, so a blank one is no reason and the flag is refused with it.
   const accepted = scanned.flags['accept-red'];
+  const dropped = scanned.flags['drop-release'];
+  if (dropped !== null && (!dropped.trim() || accepted !== null || scanned.flags.follow || scanned.flags['dry-run'])) {
+    return { ...opts, error: '--drop-release needs a reason and cannot be combined with --accept-red, --follow or --dry-run' };
+  }
   if (accepted !== null && !String(accepted).trim()) {
     return { ...opts, error: '--accept-red needs a reason — say why the red is accepted, in words; it is on the record' };
   }
   return {
     dryRun: scanned.flags['dry-run'], json: scanned.flags.json, follow: scanned.flags.follow,
     acceptRed: accepted === null ? null : String(accepted).trim(),
+    ...(dropped === null ? {} : { dropRelease: dropped.trim() }),
   };
 }
 
@@ -409,6 +415,9 @@ export function deploySource({ path, git = tryGit, env = process.env, create = f
   const args = local
     ? ['worktree', 'add', mine, 'main']
     : ['worktree', 'add', '-b', 'main', mine, 'origin/main'];
+  const existing = git(mine, ['rev-parse', '--show-toplevel']) === mine;
+  if (existing) return { worktree: mine, created: false, absent: false,
+    failed: git(mine, local ? ['switch', 'main'] : ['switch', '-c', 'main', 'origin/main']) === null };
   const added = git(path, args);
   if (added === null) return { worktree: mine, created: false, absent: true, failed: true };
   return { worktree: mine, created: true, absent: false, failed: false };
@@ -434,10 +443,12 @@ export function deploySource({ path, git = tryGit, env = process.env, create = f
 export async function deployPlan({
   path, env = process.env, git = tryGit, fetchVersion = fetchVersionDefault,
   lastDeploy = lastDeployRow, nightly = nightlyReading, offline = false,
-  languageState = readLanguageState, acceptRed = false, history = null, takenBack = takenBackRead,
+  languageState = readLanguageState, acceptRed = false, history = null, takenBack = takenBackRead, branch = null,
 }) {
-  const fetched = offline ? false : git(path, ['fetch', 'origin', 'main', '--quiet']) !== null;
-  const tip = git(path, ['rev-parse', '--verify', 'origin/main']);
+  const ref = branch ? releaseRef(branch) : 'origin/main';
+  const tipWords = branch ? `${branch}'s head` : "main's tip";
+  const fetched = offline ? false : git(path, ['fetch', 'origin', branch || 'main', '--quiet']) !== null;
+  const tip = git(path, ['rev-parse', '--verify', ref]);
   if (!tip) return { repo: REPO, path, sha: null, fetched, reason: 'no-checkout' };
 
   // What is live: the last deployed row's `live_commit` — what production said it ran
@@ -480,17 +491,17 @@ export async function deployPlan({
     backwards = `the live commit ${last.short} is not a commit this checkout has — nothing newer than it can be told from here, so nothing ships`;
   } else if (liveFull) {
     const listed = git(path, ['rev-list', '--first-parent', `${liveFull}..${tip}`]);
-    if (listed === null) backwards = `git could not list the commits between the live commit ${last.short} and origin/main`;
+    if (listed === null) backwards = `git could not list the commits between the live commit ${last.short} and ${ref}`;
     else chain = String(listed).split('\n').map((line) => line.trim()).filter(Boolean);
-    if (!backwards && liveFull === tip) backwards = `the live commit ${last.short} is main's tip — nothing newer can ship`;
-    else if (!backwards && !descends(tip)) backwards = `main's tip ${short(tip)} does not descend from the live commit ${last.short} — shipping it would move production backwards, and nothing newer can ship`;
+    if (!backwards && liveFull === tip) backwards = `the live commit ${last.short} is ${tipWords} — nothing newer can ship`;
+    else if (!backwards && !descends(tip)) backwards = `${tipWords} ${short(tip)} does not descend from the live commit ${last.short} — shipping it would move production backwards, and nothing newer can ship`;
   }
 
   // The floor (D7): a commit that was taken back, or comes before one, is no pick, also under --accept-red.
   const floor = takenBackFloor({ path, git, shas: takenBack(env) });
   let takenBackTip = null;
   if (!backwards && floor.covers(tip)) {
-    takenBackTip = `main's tip ${short(tip)} ${floor.names(tip)} after its check was red; nothing after it is green yet, so nothing ships, also with --accept-red`;
+    takenBackTip = `${tipWords} ${short(tip)} ${floor.names(tip)} after its check was red; nothing after it is green yet, so nothing ships, also with --accept-red`;
   }
   const runs = history ? history() : readNightlyHistory(path, { root: mcHome(env) }).runs;
   const found = backwards || takenBackTip
@@ -521,6 +532,7 @@ export async function deployPlan({
   return {
     repo: REPO,
     path,
+    ...(branch ? { branch } : {}),
     sha,
     short: short(sha),
     tip,
@@ -810,6 +822,233 @@ function reportOpenRelease(release, { stdout, opts }) {
   return 0;
 }
 
+function releaseBusy(record, { root, alive = processAlive, env, gate }) {
+  if (record.activity?.pid && alive(record.activity.pid)) return true;
+  const prep = readPreparation(root);
+  if (prep?.release === record.cut.at && preparationState(prep, { alive }) === 'running') return true;
+  return liveClaims({ root: gate?.root ?? mcHome(env), alive }).some((claim) => overlaps(claim, { repo: REPO, sha: record.head }));
+}
+
+async function releaseCommand(release, opts, deps) {
+  const { root, env, stdout, stderr } = deps;
+  const refuse = (line) => {
+    if (!opts.dryRun) recordRefusal({ sha: release.head, holder: deps.holder?.name || currentHolder().name, note: line }, env);
+    const sink = opts.dryRun ? stdout : stderr;
+    sink.write(`${opts.json ? JSON.stringify({ release: releaseSummary(release), refusal: line }) : line}\n`);
+    return opts.dryRun ? 0 : 1;
+  };
+  if (release.state === 'deployed' || release.drop_reason) return refuse(releaseWaitLine(release));
+  if (opts.dropRelease) {
+    const deploying = () => refuse(`mc: ${release.branch} is deploying ${short(release.head)} — it cannot be dropped now; mc deploy --follow watches it`);
+    if (release.state === 'deploying') return deploying();
+    const dropped = changeRelease(release, deps, (r) => r.state !== 'deploying' && r.state !== 'deployed' && !r.drop_reason
+      ? { ...r, activity: null, drop_reason: opts.dropRelease } : null);
+    if (!dropped) {
+      const current = openRelease(root);
+      if (current?.state === 'deploying') return deploying();
+      return refuse('mc: the release changed — read it again with mc deploy');
+    }
+    endReleaseMends({ release: dropped, root, reason: opts.dropRelease, ...deps.mend });
+    const returned = await settleReleaseReturn(dropped, deps);
+    const tail = returned.merge_back ? `; its ${dropped.repairs.length} repair${dropped.repairs.length === 1 ? '' : 's'} go back to main through memoro#${returned.merge_back}`
+      : returned.closed ? '; the branch was deleted' : '; the runner will finish returning it to main';
+    stdout.write(`mc: ${dropped.branch} dropped — ${opts.dropRelease}${tail}\n`);
+    if (returned.closed) repairDroppedRelease(returned, deps);
+    return 0;
+  }
+  if (!opts.acceptRed || opts.dryRun) return reportOpenRelease(release, { stdout, opts });
+  const running = runningDeploy(env, { alive: deps.alive || processAlive });
+  if (running) return refuse(`mc: a deploy of ${short(running.sha)} has been running since ${running.started.slice(0, 16).replace('T', ' ')} (${running.holder || 'holder unknown'}, pid ${running.pid}) — one deploy at a time; nothing was deployed`);
+  if (release.state === 'deploying' || releaseBusy(release, deps)) {
+    return refuse(`mc: ${release.branch} is being prepared — wait for its full run or suites; mc deploy --follow watches it`);
+  }
+  const result = await attemptRelease(release, { ...deps, acceptRed: opts.acceptRed, json: opts.json });
+  return result.code === 130 ? 130
+    : result.result === 'deployed' || result.result === 'running' ? 0
+      : result.result === 'busy' ? refuse(`mc: ${release.branch} is busy; mc deploy --follow watches it`) : 1;
+}
+
+function repairDroppedRelease(release, deps) {
+  const { path, root, env } = deps;
+  if (!release.claimed_reds?.length) return;
+  const historyRoot = deps.gate?.root ?? mcHome(env);
+  const git = deps.git || tryGit;
+  const main = git(path, ['rev-parse', '--verify', 'origin/main']);
+  const runs = (deps.gate?.history || readNightlyHistory)(path, { root: historyRoot }).runs;
+  const full = fullRunVerdict(runs.filter((run) => !run.ref), main);
+  if (!isRed(full)) return; // The next run of main will queue any new red normally.
+  const claimed = new Set(release.claimed_reds);
+  repairFromStop({ name: REPO, path }, full, {
+    root: historyRoot, release: release.branch, // Accept file names from the claimed observation even without a retained selector record.
+    repair: ({ files = [], commands = [], checks = [], ...request }) => (deps.mainRepair || requestMainRepair)({
+      ...request, root, ...deps.mend, files: files.filter((file) => claimed.has(file)),
+      commands: commands.filter(({ packageScript }) => claimed.has(`command:${packageScript}`)),
+      checks: checks.filter(({ key }) => claimed.has(key)),
+    }),
+  });
+}
+
+/** The runner's sole entry. A cut authorizes its own exact head only;
+ * this entry cannot fall back to the main pick or cut a release. */
+export async function continueRelease(deps) {
+  const { root, path, env } = deps;
+  const pending = readRelease(root);
+  if (pending?.push_pending && path && !(deps.alive || processAlive)(pending.push_pid)) {
+    const lock = deps.lock || realLock;
+    settleCut(pending, { root, env, path, git: deps.git || tryGit,
+      admit: (fn) => withDeploysLock(env, fn, { root, lock, strict: true, name: 'release' }) });
+  }
+  const release = openRelease(root);
+  if (!release) return null;
+  if (release.drop_reason || release.state === 'deployed') {
+    if (release.deployer?.pid && (deps.alive || processAlive)(release.deployer.pid)) return null;
+    const closed = await settleReleaseReturn(release, deps);
+    if (closed.closed === 'dropped') repairDroppedRelease(closed, deps);
+    return null;
+  }
+  if (release.state === 'deploying') {
+    if ((deps.alive || processAlive)(release.deployer?.pid)) return null;
+    const [row] = closeAbandoned({ alive: deps.alive || processAlive }, env).filter((row) => row.started === release.deployer.key.started);
+    const failed = row || readDeploys(env).find((row) => row.started === release.deployer.key.started);
+    if (failed) stopRelease(release, { ...deps, retry: release.deployer.retry, acceptRed: release.deployer.acceptRed }, failed, 'deployer');
+    return null;
+  }
+  if (release.stop || !path) return null;
+  if (release.state === 'red') {
+    if (release.activity && !releaseBusy(release, deps)) changeRelease(release, deps, (r) => r.activity?.at === release.activity.at
+      ? { ...r, activity: null } : null);
+    return null;
+  }
+  if (release.activity?.pid && (deps.alive || processAlive)(release.activity.pid)) return null;
+  return attemptRelease(release, { ...deps, follow: false });
+}
+
+function stopRelease(release, deps, row, code, full) {
+  const { root, retry, acceptRed } = deps;
+  if (!retry && classifyStop({ outcome: row.outcome, code })) {
+    // Queue first. A process lost before the stop marker can requeue from
+    // this same row, which the mend register deduplicates.
+    queueRepair({ row, code, holder: releaseAuthority(release), acceptRed, deps, root, full, release });
+  }
+  changeRelease(release, deps, (r) => r.drop_reason || r.state === 'deployed' ? null : {
+    ...r, state: r.state === 'deploying' || r.state === 'green' ? 'measuring' : r.state, activity: null, deployer: null,
+    stop: { row: row.started, code, retry: Boolean(retry) },
+  });
+}
+
+export async function attemptRelease(release, deps) {
+  const { root, path, env, acceptRed = null, retry = false, json = false } = deps;
+  const git = deps.git || tryGit;
+  const stdout = deps.stdout || process.stdout;
+  const stderr = deps.stderr || process.stderr;
+  deps = { ...deps, git, stdout, stderr };
+  const alive = deps.alive || processAlive;
+  const now = () => new Date(deps.clock?.() ?? Date.now()).toISOString();
+  const holder = { name: releaseAuthority(release) };
+  const attempt = { pid: process.pid, at: now() };
+  const owns = (r) => r.activity?.pid === attempt.pid && r.activity?.at === attempt.at && !r.drop_reason;
+  const clear = () => changeRelease(release, deps, (r) => owns(r) ? { ...r, activity: null } : null);
+  const claimed = changeRelease(release, deps, (r) => {
+    if (r.state === 'deploying' || r.state === 'deployed' || r.drop_reason ||
+        (r.activity?.pid && alive(r.activity.pid)) || (acceptRed && releaseBusy(r, deps)) ||
+        (!retry && !acceptRed && (r.stop || r.state === 'red'))) return null;
+    return { ...r, activity: attempt };
+  });
+  if (!claimed) return { result: 'busy' };
+  const say = (line) => { if (!json) stdout.write(`${line}\n`); };
+  const opts = { acceptRed, json };
+  let cells = {};
+  const stop = (reason, code, full) => {
+    const current = openRelease(root);
+    if (!sameRelease(current, release) || !owns(current)) return { result: 'stopped', reason };
+    const row = recordRefusal({ sha: release.head, holder: holder.name, note: reason, gate: cells, takeBack: release.take_back_cells }, env);
+    stderr.write(`mc: ${reason} — nothing was deployed\n`);
+    stopRelease(release, deps, row, code, full);
+    return { result: classifyStop({ outcome: row.outcome, code }) ? 'technical' : 'stopped', reason };
+  };
+  const lastDeploy = (env) => (deps.lastDeploy || lastDeployRow)(env) || (release.live ? { sha: release.live } : null);
+  const takenBack = deps.takenBack || takenBackRead;
+  const ref = releaseRef(release.branch);
+  const verification = () => git(path, ['rev-parse', '--verify', ref]) === release.head;
+  try {
+    const plan = await deployPlan({ path, env, git, branch: release.branch, lastDeploy, takenBack,
+      fetchVersion: deps.fetchVersion || fetchVersionDefault, nightly: deps.nightly, languageState: deps.languageState, acceptRed: true });
+    if (!plan.fetched || !verification()) return stop(`could not confirm ${release.branch} at ${short(release.head)}`, 'prepare');
+    if (plan.backwards || plan.taken_back) return stop(plan.backwards || plan.taken_back, plan.backwards ? 'backwards' : 'taken-back');
+    const prepared = await prepareStage({
+      plan, opts, env, root, holder, say, stdout, stderr, deps, own: true, release,
+    });
+    if (prepared.code != null) {
+      if (prepared.code === 130) return { code: 130 };
+      return stop(prepared.note, prepared.stop || 'prepare');
+    }
+    const gate = judgeGate({ ...prepared.result, plan, opts });
+    cells = gateRecord({ full: gate.full, exercise: gate.exercise, accepted: gate.accepted });
+    for (const line of gate.lines) say(line);
+    if (gate.refusal) {
+      const code = gateStopCode(gate);
+      if (code !== 'red') return stop(gate.refusal.note, code === 'unmeasured' ? 'full-run' : code, gate.full);
+      const suites = (gate.exercise?.suites || []).filter(({ state }) => state === 'red').map((suite) => ({
+        name: suite.name, exit: suite.status ?? null, verdict: suite.verdict || [], output_path: suite.output_path || null, sha: release.head,
+      }));
+      const red = changeRelease(release, deps, (r) => owns(r) ? {
+        ...r, state: 'red', state_at: now(), activity: null, suite_reds: suites, reds: suites.map(({ name }) => `suite:${name}`),
+        claimed_reds: [...new Set([...r.claimed_reds, ...suites.map(({ name }) => `suite:${name}`)])],
+      } : null);
+      if (red) {
+        if (suites.length) (deps.mainRepair || requestMainRepair)({ repo: REPO, root, base: red.head, release: red.branch, suites, ...deps.mend });
+        else repairReleaseRun({ name: REPO, path }, red, gate.full.run, { root, historyRoot: deps.gate?.root ?? mcHome(env), repair: deps.mainRepair, ...deps.mend, say });
+      }
+      return { result: 'stopped', reason: gate.refusal.note };
+    }
+    if (git(path, ['fetch', 'origin', release.branch, '--quiet']) === null || !verification()) return stop(`could not confirm ${release.branch} at ${short(release.head)}`, 'prepare');
+    let refused;
+    let started;
+    const worktree = deployWorktreePath(env);
+    const key = { started: now(), sha: release.head };
+    changeRelease(release, deps, (r) => {
+      if (!owns(r)) return null;
+      if (runningDeploy(env, { alive }) || liveRun(env, { alive })) return null; // Next pass can use the same preparation.
+      const standing = lastDeploy(env);
+      const live = standing && liveCommitOf(standing.live_commit || standing.sha);
+      const chain = live ? git(path, ['rev-list', '--first-parent', `${live}..${ref}`]) : release.head;
+      if (!verification() || !chain?.split('\n').includes(release.head) || (live && git(path, ['merge-base', '--is-ancestor', live, release.head]) === null)) {
+        refused = { why: `${short(live)} is live now and ${short(release.head)} does not come after it`, code: 'backwards' };
+        return null;
+      }
+      const floor = takenBackFloor({ path, git, shas: takenBack(env) });
+      if (floor.covers(release.head)) {
+        refused = { why: `${short(release.head)} ${floor.names(release.head)}`, code: 'taken-back' };
+        return null;
+      }
+      const job = { key, sha: release.head, worktree, path, own: true, holder: holder.name, root, release, retry, acceptRed: Boolean(acceptRed), json };
+      const deployer = (deps.startDeployer || startDeployerDefault)(job, deps);
+      if (!deployer.pid) {
+        refused = { why: `the deployer could not be started (${deployer.error || 'no pid'})`, code: 'start' };
+        return null;
+      }
+      recordStart({ ...key, holder: holder.name, pid: deployer.pid, releaseBranch: release.branch, gate: cells, takeBack: release.take_back_cells }, env);
+      started = deployer;
+      return { ...r, state: 'deploying', state_at: key.started, deployer: { key, pid: deployer.pid, log: deployer.log, retry, acceptRed: Boolean(acceptRed) }, activity: null };
+    });
+    if (refused) return stop(refused.why, refused.code);
+    if (!started) return { result: 'busy' };
+    endReleaseMends({ release, reason: 'the release is deploying — not landed', root, ...deps.mend });
+    say(`mc: deploying ${short(release.head)} to production${gate.accepted ? `, accepting red (${gate.accepted})` : ''} in its own process (pid ${started.pid}) — after the gate round in flight, if any; the merge queue waits for it`);
+    if (started.inline) {
+      const code = await started.inline();
+      return { result: code === 0 ? 'deployed' : 'technical', code };
+    }
+    if (deps.follow === false) return { result: 'running' };
+    const code = await followDeploy({ ...started, key, env, stdout, deps });
+    const finished = readRelease(root);
+    if (sameRelease(finished, release) && finished.state === 'deployed') return { result: 'deployed', code: 0 };
+    return { result: code === 130 ? 'running' : code === 0 ? 'deployed' : 'technical', code };
+  } catch (error) {
+    return stop(error.message, 'prepare');
+  } finally { clear(); }
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
@@ -834,9 +1073,11 @@ export async function run(argv, deps = {}) {
   const cutting = deps.releaseCutting ?? RELEASE_CUTTING;
   const admit = (fn) => withDeploysLock(env, fn, { lock, root, name: 'deploy', ...(cutting ? { strict: true } : {}) });
   const pending = cutting && !opts.takeBack ? readRelease(root) : null;
-  if (pending && !pending.closed && !pending.push_pending) return opts.follow
-    ? followRelease(pending, { root, stdout, deps, opts })
-    : reportOpenRelease(pending, { stdout, opts });
+  const settledRelease = pending && !pending.closed && !pending.push_pending;
+  if (settledRelease && opts.follow) return followRelease(pending, { root, stdout, deps, opts });
+  if (settledRelease && !opts.acceptRed && !opts.dropRelease && pending.state !== 'deployed' && !pending.drop_reason) {
+    return reportOpenRelease(pending, { stdout, opts });
+  }
   if (opts.follow && !pending?.push_pending) return follow({ env, stdout, deps });
 
   const repos = deps.repos || defaultRepos(env);
@@ -848,6 +1089,8 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: no checkout of ${REPO} on this machine — mc deploy deploys that repository and no other\n`);
     return 1;
   }
+  const handleRelease = (release) => releaseCommand(release, opts, { ...deps, env, root, path, stdout, stderr });
+  if (settledRelease) return handleRelease(pending);
 
   // `path` is used for three things that must be told apart. The git reads
   // below are refs, and refs are shared by every worktree of the repository,
@@ -865,7 +1108,7 @@ export async function run(argv, deps = {}) {
     const prior = settleCut(pending, { root, env, path, git, admit, dryRun: opts.dryRun || opts.follow });
     if (prior.release) {
       if (!opts.dryRun && !opts.follow) queueCutRed(prior.release);
-      return opts.follow ? followRelease(prior.release, { root, stdout, deps, opts }) : reportOpenRelease(prior.release, { stdout, opts });
+      return opts.follow ? followRelease(prior.release, { root, stdout, deps, opts }) : handleRelease(prior.release);
     }
     if (prior.error) {
       stderr.write(`mc: ${prior.error} — nothing was deployed\n`);
@@ -873,6 +1116,10 @@ export async function run(argv, deps = {}) {
     }
   }
   if (opts.follow) return follow({ env, stdout, deps });
+  if (opts.dropRelease) {
+    stderr.write('mc: there is no open release to drop\n');
+    return 1;
+  }
   const historyRoot = deps.gate?.root ?? mcHome(env);
   const history = () => (deps.gate?.history || readNightlyHistory)(path, { root: historyRoot }).runs;
   const activeFullRun = (sha) => liveClaims({ root: historyRoot, alive: deps.alive || processAlive })
@@ -893,7 +1140,7 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: ${path} has no origin/main — mc deploy needs ${REPO}'s main checkout\n`);
     return 1;
   }
-  const cutPossible = cutting && branchable(base, opts);
+  const cutPossible = cutting && !deps.retry && branchable(base, opts);
   const observed = { state: base.pick.tip_state, run: base.pick.tip_run, commit: base.tip };
   // A run in flight is newer than the recorded red. Let it finish before
   // deciding to cut; an ordinary unmeasured tip still joins via preparation.
@@ -1082,7 +1329,7 @@ export async function run(argv, deps = {}) {
     if (result.wait) return awaitClaim(result.wait, { root: historyRoot, alive, sleep: deps.sleep }).then(() => run(argv, deps));
     if (result.replan) return run(argv, deps);
     if (result.refused) return 1;
-    if (result.existing) return reportOpenRelease(result.release, { stdout, opts });
+    if (result.existing) return handleRelease(result.release);
     const settled = result.intent ? settleCut(result.intent, { root, env, path, git, admit, push: true }) : result;
     if (!settled.release) {
       stderr.write(`mc: ${settled.error || 'the release cut could not be recorded'} — nothing was deployed\n`);
@@ -1226,7 +1473,7 @@ export async function run(argv, deps = {}) {
   });
   if (!started) return 1;
   if (started.replan) return run(argv, deps);
-  if (started.release) return reportOpenRelease(started.release, { stdout, opts });
+  if (started.release) return handleRelease(started.release);
   const { key, deployer } = started;
   // A deployer run in this process — a test's — is run now, after its row is
   // written, and its exit code is the answer.
@@ -1248,7 +1495,7 @@ export async function run(argv, deps = {}) {
  * A technical stop queues one repair (`requestDeployRepair`, deploy-repair.js), the copies of the logs with it.
  * Never throws and never changes the deploy's exit code, row or output; the runner's retry queues nothing.
  */
-function queueRepair({ row, code = '', holder, acceptRed, deps, root, full = null }) {
+function queueRepair({ row, code = '', holder, acceptRed, deps, root, full = null, release = null }) {
   try {
     if (!row) return null;
     const technical = classifyStop({ outcome: row.outcome, code });
@@ -1259,7 +1506,7 @@ function queueRepair({ row, code = '', holder, acceptRed, deps, root, full = nul
     // origin `deploy`, so the one retry applies unchanged (D14), and it names whose checkout is held.
     const fullRun = code === 'full-run' ? { repo: REPO, holders: full?.run?.holders || [] } : {};
     return (deps.queueRepair || requestDeployRepair)({
-      row, holder, acceptRed: Boolean(acceptRed), root, ...(deps.mend || {}), ...fullRun,
+      row, holder, acceptRed: Boolean(acceptRed), ...(release ? { release } : {}), root, ...(deps.mend || {}), ...fullRun,
       logs: [{ name: 'deploy.log', path: deployLogPath(root) }, { name: 'deploy-prepare.log', path: preparationLogPath(root) }],
     });
   } catch { return null; }
@@ -1455,6 +1702,10 @@ function queueShipStop(job, deps) {
   try {
     const env = deps.env || process.env;
     const row = readDeploys(env).findLast((item) => item.started === job.key?.started);
+    if (row && job.release) {
+      stopRelease(job.release, { ...deps, env, root: job.root, retry: job.retry, acceptRed: job.acceptRed }, row, 'deployer');
+      return;
+    }
     queueRepair({ row, holder: job.holder, acceptRed: job.acceptRed, deps: { ...deps, retry: deps.retry || job.retry }, root: job.root || workRoot(env) });
   } catch { /* the deploy's own outcome is unchanged */ }
 }
@@ -1491,7 +1742,9 @@ async function shipJob(job, deps = {}) {
         return 1;
       }
       releaseHolder = taken.release;
-      const placed = placeWorktree({ worktree, sha, git });
+      const placed = placeWorktree({ worktree, sha, git,
+        ...(job.release ? { branch: job.release.branch, checkoutBranch: true } : {}),
+      });
       if (!placed.ok) {
         const stood = placed.stopped_at === 'moved' || placed.stopped_at === 'unreadable';
         recordEnd(key, {
@@ -1506,7 +1759,7 @@ async function shipJob(job, deps = {}) {
         } else stderr.write(`mc: ${placed.reason}; run the deploy again — nothing was deployed\n`);
         return 1;
       }
-      if (placed.moved) stdout.write(`mc: ${placed.how === 'reset' ? 'moved' : 'fast-forwarded'} main in ${worktree} to ${short(sha)}\n`);
+      if (placed.moved) stdout.write(`mc: ${placed.how === 'reset' ? 'moved' : 'fast-forwarded'} ${job.release?.branch || 'main'} in ${worktree} to ${short(sha)}\n`);
       for (const line of strayLines(placed.strays)) stdout.write(`${line}\n`);
     } else {
       // Anywhere but mc's own worktree the one movement of somebody else's checkout
@@ -1623,7 +1876,8 @@ async function shipJob(job, deps = {}) {
     try {
       progress.report('prepare', 'Starting deploy script');
       scriptRan = true;
-      const pending = spawnDeploy({ cwd: worktree, env, sha: shipping, onOutput, stdout, stderr });
+      const spawnEnv = job.release ? { ...env, MEMORO_DEPLOY_BRANCH: job.release.branch } : env;
+      const pending = spawnDeploy({ cwd: worktree, env: spawnEnv, sha: shipping, onOutput, stdout, stderr });
       diskAdmission?.release?.();
       result = await pending;
     } finally {
@@ -1632,10 +1886,34 @@ async function shipJob(job, deps = {}) {
     }
     const said = readScriptOutput(tail);
     const ok = result.code === 0;
+    if (job.release && ok) {
+      const options = { ...deps, env, root: job.root, path: job.path || worktree, git };
+      // Leave the branch available for a merge-failure mend, while the
+      // post-deploy check can still place this tree at the shipped commit.
+      if (git(worktree, ['switch', '--detach', shipping]) === null) {
+        stderr.write(`mc: could not detach the deploy worktree from ${job.release.branch}\n`);
+      }
+      // The provider result is durable even if the forge is offline. The
+      // runner will finish the same row and return PR, not run the deploy again.
+      let published = changeRelease(job.release, options, (r) => ({
+        ...r, state: 'deployed', build: said.build || said.live_build, pin_branch: said.branch,
+        shipped: { key, patch: { sha: shipping, outcome: DEPLOYED, build: said.build, live_commit: said.live_commit,
+          live_build: said.live_build, stopped_at: '', ...versionCells(said.versions) } },
+      }));
+      if (published) {
+        try { published = finishReleaseRow(ensureMergeBack(published, options), options); }
+        catch (error) { stderr.write(`mc: ${published.branch} return pending — ${error.message}\n`); }
+        if (published.row_finished) {
+          if (job.json) stdout.write(`${JSON.stringify({ release: releaseSummary(published), deployed: true, ...said })}\n`);
+          else stdout.write(`${releaseShippedLines(published).join('\n')}\n`);
+        } else stderr.write(`mc: ${published.branch} shipped; the runner will finish opening its return to main\n`);
+      }
+      return 0;
+    }
     // A branch the script made is landed through a pull request, whatever the
     // deploy's outcome; failing to open it changes neither the exit code nor
     // the outcome (`openBranchPr` never throws).
-    const pin = said.branch
+    const pin = said.branch && !job.release
       ? await openBranchPr({
         worktree,
         branch: said.branch,
@@ -1728,7 +2006,7 @@ function preparationInFlight({ root, plan, alive }) {
  * `{ result }` when the measurements are in, else `{ code, note }`: the exit
  * code the deploy ends with and, for a refusal, the row's note.
  */
-async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, own = false, again = false, deferMainRepair = false }) {
+async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, own = false, again = false, deferMainRepair = false, release = null }) {
   const alive = deps.alive || processAlive;
   const lock = deps.lock || realLock;
   const startPreparer = deps.startPreparer || startPreparerDefault;
@@ -1737,14 +2015,17 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
   const chosen = lock(root, () => {
     const record = readPreparation(root);
     const state = preparationState(record, { alive });
-    const same = record?.sha === plan.sha;
+    const same = record?.sha === plan.sha && (record.release || null) === (release?.cut.at || null);
     if (same && state === 'running') return { join: record };
     // A finished preparation is the gate's answer only while the history still says what
     // it recorded: a full run that has been written since (a red where it read green, or
     // the other way) makes it a measurement of an older state of the same commit.
     let stale = null;
-    if (same && state === 'done' && preparationServes(record, opts)) {
-      const runs = (deps.gate?.history || readNightlyHistory)(plan.path, { root: deps.gate?.root ?? mcHome(env) }).runs;
+    if (same && state === 'done' && preparationServes(record, opts) &&
+        (!release || (!deps.retry && !release.stop) || (!record.result.exercise?.error &&
+          !record.result.exercise?.suites?.some(({ state }) => state === 'cannot-run')))) {
+      const runs = release && release.head === release.cut.sha ? [release.cut_run]
+        : (deps.gate?.history || readNightlyHistory)(plan.path, { root: deps.gate?.root ?? mcHome(env) }).runs;
       const now = fullRunVerdict(runs, record.sha).state;
       const then = record.result?.full?.state;
       if (now === then) return { done: record };
@@ -1764,10 +2045,12 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
     const log = preparationLogPath(root);
     const started = new Date().toISOString();
     const job = { root, sha: plan.sha, path: plan.path, started, acceptRed: Boolean(opts.acceptRed), log, holder: holder.name, ownWorktree: own,
+      ...(release ? { branch: release.branch, release, ...(release.head === release.cut.sha ? { recorded: release.cut_run } : {}) } : {}),
       ...(deferMainRepair ? { deferMainRepair: true } : {}) };
     // The record is written before the process exists, so that its first
     // word about itself finds it and a second asker finds it too.
-    writePreparation(root, { sha: plan.sha, pid: null, started, stage: 'starting', log, accept_red: Boolean(opts.acceptRed), holder: holder.name });
+    writePreparation(root, { sha: plan.sha, pid: null, started, stage: 'starting', log, accept_red: Boolean(opts.acceptRed), holder: holder.name,
+      ...(release ? { release: release.cut.at } : {}) });
     const preparer = startPreparer(job, { ...deps, stdout, stderr, env });
     if (preparer.pid) patchPreparation(root, started, { pid: preparer.pid }, { lock: (r, fn) => fn() });
     else patchPreparation(root, started, { stage: 'done', ended: new Date().toISOString(), error: `the preparation could not be started (${preparer.error || 'no pid'})` }, { lock: (r, fn) => fn() });
@@ -1820,7 +2103,7 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
     // suites on a red full run: the same rule as a finished one — prepare
     // again, with the suites, said in one line. Once: a preparation this
     // asker started has its flags.
-    if (!again) return prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, own, again: true, deferMainRepair });
+    if (!again) return prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, own, again: true, deferMainRepair, release });
     const note = `the preparation of ${plan.short} did not run the suites --accept-red needs`;
     stderr.write(`mc: ${note} — nothing was deployed\n`);
     return { code: 1, note, stop: 'prepare' };
@@ -1906,8 +2189,8 @@ async function followRelease(first, { root, stdout, deps, opts }) {
       if (release?.row.started !== first.row.started || release.cut.sha !== first.cut.sha) {
         release = readClosedRelease(root, first);
       }
-      if (!release || (release.closed && release.closed !== 'merged')) return 1;
-      const line = releaseStateLine(release);
+      if (!release || release.drop_reason || (release.closed && release.closed !== 'merged')) return 1;
+      const line = release.state === 'deployed' && release.row_finished ? releaseShippedLines(release).join('\n') : releaseStateLine(release);
       if (line !== previous) {
         stdout.write(`${opts.json ? JSON.stringify({ release: releaseSummary(release) }) : line}\n`);
         previous = line;

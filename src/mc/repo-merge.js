@@ -39,7 +39,7 @@ import { log } from './logger.js';
 import { gateRedFiles } from './merge-red.js';
 import { mcHome, workRoot } from './paths.js';
 import { repoNameOf } from './repos.js';
-import { isReleaseBase, releaseMergeAdmission, releaseReadingChange } from './release-merge.js';
+import { isReleaseBase, releaseMergeAdmission, releaseReadingChange, releaseReturnAdmission } from './release-merge.js';
 import { openRelease } from './deploy-release.js';
 import { recordLandingMainRed } from './selector-miss.js';
 import { runGate, verdictPhrase } from './repo-gate.js';
@@ -131,9 +131,13 @@ export async function runMergeRound({
   const askGh = gh || run('gh');
   const repo = repoNameOf(repoPath);
   const releaseRoot = workRoot(env);
-  const admitRelease = ({ number, head, base }) => base
-    ? releaseMergeAdmission({ root: releaseRoot, repo, pr: number, head, base })
-    : {};
+  const admitRelease = ({ number, head, base }) => {
+    if (!base) return {};
+    const identity = { root: releaseRoot, repo, pr: number, head, base };
+    const returning = releaseReturnAdmission(identity);
+    if (returning.stop || returning.mergeBack) return returning;
+    return releaseMergeAdmission(identity);
+  };
 
   const report = {
     schema: MERGE_SCHEMA,
@@ -367,7 +371,8 @@ export async function runMergeRound({
       if (allowed !== true) return typeof allowed === 'string'
         ? finish('repair-release', allowed)
         : finish('dropped', `#${number} belongs only to a dropped goal; delivery is abandoned`);
-      if (admitted.release || (repo === 'memoro' && openRelease(releaseRoot))) {
+      let method = '--squash';
+      if (admitted.release || admitted.mergeBack || (repo === 'memoro' && openRelease(releaseRoot))) {
         // Recheck the forge's target, not just the head SHA: changing the
         // base does not change the head. The release state is re-read last.
         const target = await askGh(['pr', 'view', String(number), '--json', 'baseRefName'], { cwd: repoPath });
@@ -379,11 +384,16 @@ export async function runMergeRound({
           if (changed.stop) return finish(changed.stop, changed.reason);
         }
         if (branch !== report.pr.base) return finish('drift', `could not confirm that #${number} still has its measured base — nothing merged`);
-        const current = admitRelease(report.pr);
+        const head = batch ? (verdict.prs || []).find(item => item.number === number)?.head : report.pr.head;
+        const current = admitRelease({ ...report.pr, number, head });
         if (current.stop) return finish(current.stop, current.reason);
         if (current.release && current.release.head !== nowAt) return finish('drift', `${base} moved while the release repair was measured — nothing merged`);
+        if (current.mergeBack && (!pin || (await askGit(['merge-base', '--is-ancestor', current.mergeBack.head, pin], { cwd: repoPath })).status !== 0)) {
+          return finish('merge', `#${number} no longer contains the release head ${short(current.mergeBack.head)} — nothing merged`);
+        }
+        method = current.mergeBack ? '--merge' : '--squash';
       }
-      const merged = await askGh(['pr', 'merge', String(number), '--squash', ...(pin ? ['--match-head-commit', pin] : [])], { cwd: repoPath });
+      const merged = await askGh(['pr', 'merge', String(number), method, ...(pin ? ['--match-head-commit', pin] : [])], { cwd: repoPath });
       if (merged.status !== 0) {
         // A failed call is not a failed merge. On #10844 GitHub took the call,
         // performed it, and timed out on the reply; the round said "nothing was

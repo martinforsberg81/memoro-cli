@@ -33,6 +33,7 @@ import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { measureGate } from './deploy-gate.js';
+import { changeRelease } from './release-return.js';
 import { outputDir } from './gate-output.js';
 import { processAlive } from './lease-owner.js';
 import { realLock } from './runner-lock.js';
@@ -162,8 +163,15 @@ export async function prepare(job, {
     patch({ output_dir: dir });
     const measured = await measureGate({
       sha: job.sha, path: job.path, acceptRed: Boolean(job.acceptRed), own: Boolean(job.ownWorktree), branch: job.branch, env, say,
-      outputDir: dir, deferMainRepair: job.deferMainRepair,
-      deps: deps.gate || {}, suites: deps.suites || {}, stage: (next) => { stage = next; return patch({ stage: next }); },
+      outputDir: dir, recorded: job.recorded, deferMainRepair: job.deferMainRepair,
+      deps: deps.gate || {}, suites: deps.suites || {}, stage: (next, full) => {
+        stage = next;
+        if (job.release && next === 'suites' && full.state === 'green') {
+          changeRelease(job.release, { root: job.root, env }, (r) => !r.drop_reason && r.activity
+            ? { ...r, state: 'green', state_at: now().toISOString(), reds: [] } : null);
+        }
+        return patch({ stage: next });
+      },
     });
     patch({ stage: 'done', ended: now().toISOString(), result: measured });
     say('mc: the preparation is done');

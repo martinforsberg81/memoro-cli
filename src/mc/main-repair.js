@@ -135,6 +135,14 @@ export function belongsToRelease(entry, release) {
   return Boolean(release && entry.release_branch === release.branch && entry.release_started === release.row.started);
 }
 
+export function endReleaseMends({ release, reason, ...options }) {
+  return updateMainMends({ repo: 'memoro', ...options }, (entries) => {
+    for (const entry of entries) if (belongsToRelease(entry, release) && !FINISHED.includes(entry.state)) {
+      Object.assign(entry, { state: 'dropped', reason });
+    }
+  });
+}
+
 /** The key of a check member: one per red part of one release's check. */
 export const checkMemberKey = (part, started) => `check:${part}@${started}`;
 

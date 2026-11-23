@@ -80,7 +80,8 @@ import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from 
 import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
 import { loggedTick, repairReleaseRun } from './nightly-loop.js';
 import { readNightlyHistory } from './nightly-history.js';
-import { canRepairRelease, openRelease, releaseRef } from './deploy-release.js';
+import { canRepairRelease, openRelease, releaseHolder, releaseRef } from './deploy-release.js';
+import { changeRelease } from './release-return.js';
 import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
@@ -102,7 +103,7 @@ import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { answerMainMend, belongsToRelease, buildWaitsForMain, failMainMend, mainMendBranch, mainMendPrompt, mainRepairWaits, readMainMends, removeFinishedWorktrees, updateMainMends } from './main-repair.js';
-import { answerDeployMend, deployMendBranch, deployMendPrompt, failDeployMend, readDeployMends, REPOS as DEPLOY_REPOS, removeCopies, retryFailed, retryHolder, retryVerdict, updateDeployMends, FINISHED as DEPLOY_MEND_FINISHED } from './deploy-repair.js';
+import { answerDeployMend, deployMendBranch, deployMendPrompt, deployMendRelease, failDeployMend, readDeployMends, REPOS as DEPLOY_REPOS, removeCopies, retryFailed, retryHolder, retryVerdict, updateDeployMends, FINISHED as DEPLOY_MEND_FINISHED } from './deploy-repair.js';
 import { deployAlive, readDeploys } from './deploys.js';
 import { deployCheckTick } from './deploy-check.js';
 import { takeBackTick } from './take-back-run.js';
@@ -649,6 +650,8 @@ export function realDeps(env = process.env) {
     // so a test drives the retry with no production, no gate and no checkout behind it.
     pickOf: async (repoPath) => (await (await import('./commands/deploy.js')).deployPlan({ path: repoPath, env })).sha || null,
     deployRun: async (argv, options) => (await import('./commands/deploy.js')).run(argv, options),
+    releaseTick: async (options) => (await import('./commands/deploy.js')).continueRelease(options),
+    releaseAttempt: async (release, options) => (await import('./commands/deploy.js')).attemptRelease(release, options),
     deploys: () => readDeploys(env),
     startMerger: (options) => startMerger({ env, ...options }),
     pendingMerges: (root) => { try { return parseQueue(readFileSync(mergesPath(root), 'utf8')); } catch { return []; } },
@@ -1274,6 +1277,26 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   // by the handover and by STOP.
   const fullRunsAbort = new AbortController();
   const handoverAbort = new AbortController();
+  let releaseStep = null;
+
+  function releaseOptions(repo) {
+    const sink = { write: (chunk) => { for (const line of String(chunk).trimEnd().split('\n')) say(`release: ${line}`); return true; } };
+    return {
+      root, path: repo.path, env: deps.env, stdout: sink, stderr: sink, alive, clock: () => deps.now().getTime(),
+      git: (cwd, args) => { const result = deps.git(cwd, args); return result.ok ? String(result.stdout || '').trim() : null; },
+      gh: (args) => deps.gh(repo.path, args), queueMerge: deps.queueMerge, pendingMerges: deps.pendingMerges,
+    };
+  }
+
+  function runRelease() {
+    const repo = repos.find(({ name }) => name === 'memoro');
+    if (!repo || !deps.releaseTick || stopRequested() || updateRequested()) return;
+    if (releaseStep) return releaseStep;
+    releaseStep = deps.releaseTick(releaseOptions(repo))
+      .catch((error) => say(`release: not continued — ${error.message}`)).finally(() => { releaseStep = null; });
+    return releaseStep;
+  }
+
   async function runNightly() {
     if (stopRequested() || updateRequested()) return null;
     // No once-a-day gate (Martin, 2026-11-15): every pass asks `fullRunDue` of
@@ -1284,12 +1307,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     let outcome = null;
     let note = '';
     try {
+      const release = deps.releaseTick ? openRelease(root, deps.read) : null;
       const tick = await deps.nightlyTick({
         say: (message) => say(`full run: ${message}`),
         shouldStop: () => stopRequested() || updateRequested(),
         running: fullRuns,
         signal: fullRunsAbort.signal,
         handover: handoverAbort.signal,
+        ...(release?.state === 'measuring' && !release.stop && !release.drop_reason ? { deferRepo: 'memoro' } : {}),
       });
       const started = tick?.started || [];
       if (started.length) {
@@ -2233,10 +2258,22 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   // An idle lane notices newly queued main reds on the existing control poll,
   // not after its ten-minute idle sleep. Unstartable existing work does not spin.
   function mainMendTicket() {
-    return repos.flatMap((repo) => {
+    const returning = releaseReturnMend();
+    return [...repos.flatMap((repo) => {
       try { return readMainMends(mendState(repo.name)).filter((entry) => entry.state === 'queued').map((entry) => entry.id); }
       catch { return []; } // mainMendWork reports the unreadable state at the next pick.
-    }).sort().join(',');
+    }), ...(returning ? [`${returning.name}:${returning.releaseReturn.attempts || 0}`] : [])].sort().join(',');
+  }
+
+  // A conflict on the release return owns the existing PR and branch, not a
+  // goal or a new PR. Offer it through the same mend lane and resource checks.
+  function releaseReturnMend() {
+    const release = openRelease(root, deps.read);
+    if (!release?.merge_back || release.merge_landed || (release.return_attempts || 0) >= 3) return null;
+    const job = deps.pendingMerges?.(root).find((item) => item.repo === 'memoro' && Number(item.pr) === release.merge_back && item.state === 'red');
+    if (!job) return null;
+    return { name: `merge-mend:memoro#${job.pr}`, kind: 'mend', repo: 'memoro', branch: release.branch,
+      since: job.answered || job.since, priority: 0, releaseReturn: { release, job, attempts: release.return_attempts } };
   }
 
   function mainMendWork(names, passed) {
@@ -2260,11 +2297,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(entry);
       }
-      return [...groups.values()].map((batch) => {
+      const work = [...groups.values()].map((batch) => {
         const branch = mainMendBranch(repo, batch);
         return { name: `main-red:${branch}`, repo, kind: 'mend', variant: null, since: batch[0].created,
           mainMend: batch, branch, priority: 0 };
-      }).filter((item) => !passed.has(item.name) && !claims.has(item.name) && !held.has(item.name));
+      });
+      const returning = repo === 'memoro' ? releaseReturnMend() : null;
+      if (returning) work.unshift(returning);
+      return work.filter((item) => !passed.has(item.name) && !claims.has(item.name) && !held.has(item.name));
     });
   }
 
@@ -2285,7 +2325,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     delete entry.session_log;
   }
   async function runMainMend(item, { lane }) {
-    const { name, repo: repoName, branch } = item;
+    const { name, repo: repoName, branch, releaseReturn } = item;
     const repo = repos.find((repo) => repo.name === repoName);
     const role = deps.role(MEND_ROLE);
     if (!role?.overlay) return 'skipped:role-missing';
@@ -2299,7 +2339,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     let admission;
     const currentPath = paths.currentFor(repoName, lane);
     let scratch; let marker; let out; let claimed = false; let result; let reserveRefusal;
-    const ids = new Set(item.mainMend.map((entry) => entry.id));
+    const ids = new Set(item.mainMend?.map((entry) => entry.id));
     const state = mendState(repoName);
     try {
       const picked = await billingFor(launch, route, settings.model);
@@ -2307,11 +2347,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
       if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
       if (offlineHeld()) return 'skipped:offline';
-      const worktree = item.mainMend[0].worktree || join(root, 'runner', 'work', branch.replace('/', '-'), repoName);
+      const worktree = item.mainMend?.[0].worktree || join(root, 'runner', 'work', branch.replace('/', '-'), repoName);
       if (!deps.exists(worktree)) {
         const fetched = deps.git(repo.path, ['fetch', '--quiet', 'origin']);
         if (!fetched.ok) return 'skipped:fetch';
-        const target = item.mainMend[0].release_branch;
+        const target = releaseReturn ? branch : item.mainMend[0].release_branch;
         const added = addBranchWorktree({ git: deps.git, bare: repo.path, path: worktree, branch, ...(target ? { start: releaseRef(target) } : {}) });
         if (!added.ok) { say(`${name}: worktree not made — ${added.stderr || 'git failed'}`); return 'skipped:worktree'; }
       }
@@ -2326,17 +2366,26 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       scratch = join(paths.scratch, stem);
       marker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind: 'mend', stem, started: stamp() };
       deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
-      const entries = updateMainMends(state, (all) => {
+      const entries = releaseReturn ? [] : updateMainMends(state, (all) => {
         const batch = all.filter((entry) => ids.has(entry.id));
         if (batch.some((entry) => entry.state !== 'queued')) return [];
         for (const entry of batch) Object.assign(entry, { state: 'running', branch, worktree, owner: name, session_log: `${out}.jsonl` });
         return batch;
       });
-      if (!entries.length) return 'skipped:claimed';
+      if (releaseReturn) {
+        const claimedReturn = changeRelease(releaseReturn.release, { root, env: deps.env, lock }, (r) =>
+          r.merge_landed || (r.return_attempts || 0) >= 3 ? null
+            : { ...r, return_attempts: (r.return_attempts || 0) + 1, return_mend_log: `${out}.jsonl` });
+        if (!claimedReturn) return 'skipped:claimed';
+      } else if (!entries.length) return 'skipped:claimed';
       claimed = true;
       const history = readMainMends(state).filter((entry) => entries.some((current) => current.file === entry.file &&
         current.release_started === entry.release_started) && ['landed', 'dropped'].includes(entry.state));
-      const prompt = mainMendPrompt({ repo: repoName, entries, branch, worktree, history, exists: existsSync });
+      const prompt = releaseReturn
+        ? `You are a merge-failure mend session on memoro#${releaseReturn.job.pr}, ${branch} → main, with no goal.\n`
+          + `The measured merge stopped: ${releaseReturn.job.reason || 'see the merger log'}.\n`
+          + `Resolve it in this PR's existing worktree at ${worktree}. Fetch and integrate origin/main without rewriting the release's commits. Preserve ${releaseReturn.release.head}, the immutable release head, in its ancestry. Do not deploy. Run the affected gate and bare mc gate, then use mc publish --base main on this branch to requeue the same PR.\n`
+        : mainMendPrompt({ repo: repoName, entries, branch, worktree, history, exists: existsSync });
       const instructions = instructionsFor(launch.id, role.overlay);
       const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
       const current = { name, kind: 'mend', variant: null, repo: repoName, lane, pid, worktree, started: stamp(), tool: settings.tool, model: settings.model,
@@ -2369,7 +2418,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } finally {
       try {
         // mc publish and the merger may already have advanced these rows. Never overwrite them.
-        if (claimed) updateMainMends(state, (entries) => {
+        if (claimed && releaseReturn && reserveRefusal) changeRelease(releaseReturn.release, { root, env: deps.env, lock },
+          (r) => ({ ...r, return_attempts: r.return_attempts - 1 }));
+        if (claimed && !releaseReturn) updateMainMends(state, (entries) => {
           for (const entry of entries) {
             if (!ids.has(entry.id) || entry.state !== 'running' || entry.owner !== name || entry.session_log !== `${out}.jsonl`) continue;
             if (reserveRefusal) returnMendToQueue(entry);
@@ -2415,7 +2466,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       });
       entries = readDeployMends(deployMendState());
     }
-    return entries.filter((entry) => entry.state === 'queued' && !busy(entry)).map((entry) => {
+    return entries.filter((entry) => entry.state === 'queued' && !busy(entry) &&
+      (!deployMendRelease(entry) || matchingRelease(deployMendRelease(entry))?.stop)).map((entry) => {
       const branch = deployMendBranch(entry);
       return { name: `deploy-mend:${branch}`, repo: 'memoro-cli', kind: 'mend', variant: null, since: entry.created, deployMend: entry, branch, priority: 0 };
     }).filter((item) => !passed.has(item.name) && !claims.has(item.name) && !held.has(item.name));
@@ -2461,7 +2513,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         if (deps.exists(tree.path)) continue;
         const fetched = deps.git(repo.path, ['fetch', '--quiet', 'origin']);
         if (!fetched.ok) return 'skipped:fetch';
-        const added = addBranchWorktree({ git: deps.git, bare: repo.path, path: tree.path, branch });
+        const target = tree.repo === 'memoro' && deployMendRelease(request)?.branch;
+        const added = addBranchWorktree({ git: deps.git, bare: repo.path, path: tree.path, branch, ...(target ? { start: releaseRef(target) } : {}) });
         if (!added.ok) { say(`${name}: ${tree.repo} worktree not made — ${added.stderr || 'git failed'}`); return 'skipped:worktree'; }
       }
       for (const tree of worktrees) await deps.attachDeps(tree.path);
@@ -2672,6 +2725,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     try {
       const release = openRelease(root, deps.read);
       if (!canRepairRelease(release)) return;
+      if (release.suite_reds?.length && release.suite_reds[0].sha === release.head) {
+        requestMainRepair({ ...mendState(repo.name), repo: repo.name, base: release.head, release: release.branch, suites: release.suite_reds });
+      }
       const historyRoot = mcHome(deps.env);
       const run = release.head === release.cut.sha ? release.cut_run
         : readNightlyHistory(repo.path, { root: historyRoot }).runs.findLast((run) => run.commit === release.head && run.ref === releaseRef(release.branch));
@@ -2736,6 +2792,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     return { result: 'technical', reason: `the retry stopped: ${stop?.row?.note || row?.note || tail || 'no record of why'}` };
   }
 
+  function matchingRelease(identity) {
+    const release = openRelease(root, deps.read);
+    return release?.branch === identity?.branch && release?.cut.at === identity?.at && !release.drop_reason ? release : null;
+  }
+
   /** Settle one request: pull requests to landed, landed to repaired, repaired to the one retry, the retry to its end. */
   async function settleDeployMend(id) {
     const find = () => readDeployMends(deployMendState()).find((entry) => entry.id === id);
@@ -2755,14 +2816,23 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           if (job && job.state !== 'red') continue;
           const status = prState(deps.gh, repo.path, item.number);
           if (status === 'CLOSED') answers.push({ item, landed: false });
-          else if (status === 'MERGED') answers.push({ item, landed: true });
+          else if (status === 'MERGED') {
+            if (item.repo === 'memoro' && deployMendRelease(entry)) {
+              const asked = deps.gh(repo.path, ['pr', 'view', String(item.number), '--json', 'mergeCommit,baseRefName']);
+              try {
+                const facts = asked.ok && JSON.parse(asked.stdout);
+                if (facts?.mergeCommit?.oid && facts.baseRefName) answers.push({ item, landed: true, commit: facts.mergeCommit.oid, baseBranch: facts.baseRefName });
+              } catch { /* wait for a readable answer */ }
+            } else answers.push({ item, landed: true });
+          }
           else if (status === 'OPEN') {
             try { deps.queueMerge({ root, repo: item.repo, repoPath: repo.path, pr: item.number, branch: entry.branch, holder: { name: entry.owner }, now: deps.now() }); }
             catch (error) { say(`${item.repo}#${item.number}: deploy-mend delivery could not be restored — ${error.message}`); }
           }
         }
       }
-      for (const { item, landed } of answers) answerDeployMend({ ...deployMendState(), repo: item.repo, pr: item.number, landed, reason: 'pull request closed without merging' });
+      for (const { item, landed, commit, baseBranch } of answers) answerDeployMend({ ...deployMendState(), repo: item.repo, pr: item.number, landed,
+        commit, baseBranch, now: deps.now, reason: 'pull request closed without merging' });
       entry = find();
       if (entry.state !== 'published') return;
       // The merge commit each landed pull request left, which the retry's two conditions are read from.
@@ -2777,19 +2847,29 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (entry.state === 'retrying' && !deployMendSettling.has(`retry:${id}`) && (entry.retry_owner === pid || !alive(Number(entry.retry_owner)))) {
       // The runner that started the retry is gone. The deploy it started may still be going, or may have finished.
       // The one retry is spent either way: never started again (D5); what did not ship waits on Martin.
-      const { outcome } = deployOutcomeOf(retryHolder(entry));
+      const identity = deployMendRelease(entry);
+      const release = identity && matchingRelease(identity);
+      const { outcome } = identity
+        ? { outcome: release?.state === 'deployed' ? 'deployed' : release?.state === 'deploying' && alive(release.deployer?.pid) ? 'running' : 'failed' }
+        : deployOutcomeOf(retryHolder(entry));
       if (outcome === 'running') return;
       if (outcome === 'deployed') patch((found) => { found.state = 'deployed'; });
       else patch((found) => retryFailed(found, `runner ended during the retry; its deploy row reads ${outcome || 'nothing'}`));
       entry = find();
     }
     if (entry.state === 'repaired' && !sessionBusy) {
+      const identity = deployMendRelease(entry);
+      const release = identity && matchingRelease(identity);
       const needsPick = (entry.prs || []).some((item) => item.repo === 'memoro' && item.state === 'landed');
       const repo = repoOf('memoro');
-      let pick = null;
-      if (needsPick && repo) { try { pick = await deps.pickOf(repo.path); } catch { pick = null; } }
+      let pick = release?.head || null;
+      if (release && needsPick && repo) deps.git(repo.path, ['fetch', '-q', 'origin', release.branch]);
+      if (!identity && needsPick && repo) { try { pick = await deps.pickOf(repo.path); } catch { pick = null; } }
       const shippedSince = (at) => deps.deploys().some((row) => row.outcome === 'deployed' && Date.parse(row.ended || row.started) > Date.parse(at));
-      const verdict = retryVerdict({ entry, now: deps.now(), shippedSince, contained: () => deployMendContained(entry, pick) });
+      const verdict = identity && !release ? { drop: 'the release is no longer open' }
+        : retryVerdict({ entry, now: deps.now(), shippedSince, contained: () => deployMendContained(entry, pick) });
+      if (!identity && openRelease(root, deps.read) && !verdict.drop) return;
+      if (release && (release.activity || release.state === 'deploying' || releaseStep) && !verdict.drop) return;
       if (verdict.drop) {
         patch((found) => { Object.assign(found, { state: 'not-retried', reason: verdict.drop, ended_at: deps.now().toISOString() }); delete found.waiting; });
         say(`deploy-mend ${id}: repaired, not retried — ${verdict.drop}`);
@@ -2804,13 +2884,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           return found;
         });
         if (!started) return;
-        say(`deploy-mend ${id}: retrying the deploy once as ${retryHolder(entry)}`);
+        say(`deploy-mend ${id}: retrying the deploy once as ${release ? releaseHolder(release) : retryHolder(entry)}`);
         deployMendSettling.add(`retry:${id}`);
         let ended;
-        try { ended = await retryDeploy(entry); } finally { deployMendSettling.delete(`retry:${id}`); }
+        try {
+          ended = release ? await deps.releaseAttempt(release, { ...releaseOptions(repo), retry: true }) : await retryDeploy(entry);
+        } finally { deployMendSettling.delete(`retry:${id}`); }
         patch((found) => {
           if (found.state !== 'retrying') return;
           if (ended.result === 'deployed') found.state = 'deployed';
+          else if (release && ended.result === 'busy') Object.assign(found, { state: 'repaired', retried: false });
           else if (ended.result === 'stopped') Object.assign(found, { state: 'stopped', reason: ended.reason });
           else retryFailed(found, ended.reason);
         });
@@ -2861,6 +2944,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     lastSettle = at;
     settleMainMends();
     settleReleaseRed();
+    runRelease();
     void settleDeployMends().catch((error) => say(`deploy-mend: not settled — ${error.message}`));
     /** GitHub's `state` of a goal's pull request — `OPEN`, `MERGED`, `CLOSED` — or null when it cannot say. */
     const readState = ({ repo: repoName, pr }) => {
@@ -3510,7 +3594,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const held = [...claimRepos.values(), ...others.map((item) => item.repo)].filter(Boolean);
     const priorities = new Map();
     for (const item of items) {
-      if (item.mainMend || item.decision || item.deployMend || item.archiveTurn || item.managerTurn) continue;
+      if (item.mainMend || item.releaseReturn || item.decision || item.deployMend || item.archiveTurn || item.managerTurn) continue;
       const programme = item.goal.programme;
       if (!priorities.has(programme)) priorities.set(programme, readProgrammePriority(programme, { home: programsHome(deps.env), read: deps.read }));
       item.priority = priorities.get(programme);
@@ -3621,7 +3705,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         ? await archivePass(pick, { lane })
         : pick.managerTurn
         ? await managerPass(pick, { lane })
-        : pick.mainMend
+        : pick.mainMend || pick.releaseReturn
         ? await mainMendPass(pick, { lane })
         : pick.deployMend
         ? await deployMendPass(pick, { lane })
@@ -3722,6 +3806,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // Last: the full runs it starts are the long work, and are not waited
     // for. The deps reading goes first: a minute a repository.
     await runDepsDaily();
+    runRelease();
     await runNightly();
     await runDeployCheck();
   }
@@ -3875,7 +3960,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, deployMendTicket, settleDeployMends, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, runDeployCheck, runTakeBackFallback, settleFullRuns, fireHandover, fullRunsMeasuring, askGithub, stopRequested, startCapacityTicker,
+    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, deployMendTicket, settleDeployMends, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, runRelease, runDeployCheck, runTakeBackFallback, settleFullRuns, fireHandover, fullRunsMeasuring, askGithub, stopRequested, startCapacityTicker,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, generation: () => marked?.generation, markRunner, dropPredecessor, clearRunner, retireOwner,
   };
 }
