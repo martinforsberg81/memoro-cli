@@ -1,8 +1,11 @@
 # mc deploy — one door to production, and a record of every time it opened
 
-`mc deploy` is the verb a person types to put memoro's `main` in production, the
-way `mc merge` is the verb that puts a pull request on `main`. It is not a
-deploy tool. memoro's own `npm run deploy` — `scripts/deploy.mjs`, ending in
+`mc deploy` is the verb a person types to ship memoro. In the usual path it
+ships a green pick from `main` or cuts a [release branch](#the-release-branch)
+at its red or stalled tip if nothing green can ship.
+The runner never starts a deploy; it continues only the release a typed
+deploy cut. The verb is not a deploy tool. memoro's own
+`npm run deploy` — `scripts/deploy.mjs`, ending in
 *Verify live version* — is the deploy, and this verb
 reimplements no part of it, passes it no flag it does not already take, and does
 not edit it.
@@ -11,17 +14,18 @@ What the verb adds is everything around the script:
 
 - **the reading**, so the person who typed it sees what ships: the sha, what is live now, the gap between them, whether the nightly
   ever measured that tree whole, and which worktree it would run in;
-- **a `main` to run it in**, found where `main` is already checked out or made
-  and kept by mc, so nobody checks `main` out by hand to deploy;
+- **a worktree to run it in**, found where `main` is already checked out or made
+  and kept by mc; a release branch always uses mc's own deploy worktree;
 - **the gate**, so the commit that ships is one that was measured whole and
   exercised: a completed full run of exactly that commit, and the app's own
   suites run against a local server of it (below);
 - **no question, and no terminal needed** — typing `mc deploy` is the decision
   (Martin, 2026-11-15: *"without me and without a question; whoever types
   deploy wants it"*): once the reading is printed and the gate has passed the
-  deployer starts, from a terminal or from a session's shell. `--dry-run` is the
-  reading and ships nothing. An unattended session (`MC_HEADLESS=1`) is refused
-  before anything is read: nobody typed that deploy. Deploy is not one of the
+  deployer starts. A cut leaves that authority with the release, so nobody
+  types it again after a repair. `--dry-run` is the reading and ships nothing.
+  An unattended session (`MC_HEADLESS=1`) cannot start a deploy, accept a red,
+  or drop a release. Deploy is not one of the
   acts that reach Martin ([canon/tasks/asking-martin.md](../../canon/tasks/asking-martin.md)),
   and the refusal to an unattended session stays until a release is checked where
   users meet it and can be taken back (Martin, 2026-11-15);
@@ -42,12 +46,16 @@ since removed ([`mc-helper.md`](mc-helper.md) § *the deploy section*).
 mc deploy [--dry-run] [--json]
 mc deploy --accept-red "<reason>"
 mc deploy --follow
+mc deploy --drop-release "<reason>"
 ```
 
 It takes no repository argument and never will: memoro-cli is installed, not
 deployed. `REPO` is `memoro` in
 [`src/mc/commands/deploy.js`](../../src/mc/commands/deploy.js), resolved to a
 path through `defaultRepos(env)`, the same reading the page uses.
+
+This sequence describes a deploy from main. When a release is open, or the
+main tip needs to be cut, see [The release branch](#the-release-branch).
 
 1. **Fetch and read.** `git fetch origin main` in `~/memoro`, then
    `rev-parse origin/main` — main's tip — and the first-parent chain of
@@ -56,7 +64,8 @@ path through `defaultRepos(env)`, the same reading the page uses.
    tip when the tip is green, an older commit when it is not. The reading says
    how many commits behind the tip it is and why the tip was passed over (red,
    stalled, stopped, not measured), listing every red name. With nothing green
-   after the live commit, the tip is prepared as it is, as before. Refs are
+   after the live commit, the tip is prepared as it is. A recorded red or
+   stalled verdict at an eligible tip cuts a release instead. Refs are
    shared by every worktree of a repository, so these reads stay here whatever
    branch this checkout is on.
 2. **Where the script will run.** `git worktree list --porcelain` in `~/memoro`,
@@ -218,6 +227,170 @@ mc: from /Users/martinforsberg/memoro — main, 1 behind origin/main, fast-forwa
   "behind": 1,
 ```
 
+## The release branch
+
+### Cut and record
+
+With no open release, a green pick after live ships without a branch. With no
+green pick, an unmeasured tip is measured first and a full run already in
+flight is allowed to finish. Only a red or stalled full run of the tip can
+cut a release, and only if live is known, the tip moves production forward
+and the take-back floor permits it. A stopped run that measured nothing
+does not qualify. A typed `--accept-red` does not cut a new branch.
+
+The verb confirms the tip on origin, then pushes `release/<short sha of the
+tip>` at that exact commit. It does not overwrite a branch at another commit.
+The tip's recorded verdict is the first release measurement; the cut does not
+run that sha again. The take-back reading is made from live to the cut and
+printed as for main; the release keeps that reading through the repairs.
+
+```
+mc: main's tip 1a2b3c4 is RED (3), and nothing after live 9f8e7d6 is green
+mc: cut release/1a2b3c4 at main's tip — 14 commits would ship
+mc: the release is repaired, measured and shipped by itself; mc deploy --follow watches it
+```
+
+The cut exits 0, not because anything shipped, but because the release can
+continue without another typed deploy. Under `--dry-run` the reading exits 0
+without a cut, push or deploy row:
+
+```
+mc: main's tip 1a2b3c4 is RED (3), and nothing after live 9f8e7d6 is green
+mc: would cut release/1a2b3c4 at main's tip — 14 commits would ship
+mc: --dry-run — nothing was cut
+```
+
+The release record, `<mc work root>/runner/deploy-release.json`
+([`deploy-release.js`](../../src/mc/deploy-release.js)), holds the branch,
+cut sha and time, live sha at cut, current head and state, typed holder and
+row key, first measurement, take-back reading, current and claimed red names,
+landed repair PR numbers and merge-back PR. The cut gets its own
+`release-cut` row in `deploys.tsv`; a later deployer gets a separate row under
+holder `release/<short> for <who typed it>, <cut time>`. The cut intent is
+recorded before the push so an interrupted cut can be settled against origin.
+Closed records are retained in `runner/deploy-releases/` for existing watchers
+even if the active record is replaced.
+
+### Reading and following
+
+Only one release can be open. Before merge-back is due, `mc deploy` and
+`mc deploy --dry-run` report it and exit 0 without cutting another one:
+
+```
+mc: release/1a2b3c4 is open — cut 2026-11-23 01:10, 2 repairs landed
+mc: full run of 5d6e7f8 (the release head): RED (3): command:sql:budgets:check, command:i18n:locale-contract, tests/lib/money.test.js — a repair is on its way
+mc: it ships by itself when it is green; mc deploy --follow watches it
+```
+
+The second line follows the state:
+
+| state | line (after `mc: `) |
+|---|---|
+| `measuring` | `full run of <sha> (the release head): measuring since <time>` |
+| `red` | `full run of <sha> (the release head): RED (<n>): <names> — a repair is on its way` |
+| `green` | `full run of <sha> (the release head): green — the suites run against a local server of it` |
+| `deploying` | `deploying <sha> since <time>` |
+| `deployed` | `deployed as build <n>; going back to main through memoro#<n>` |
+
+`--follow` prints the opening and state lines and then prints changes to the
+state line, streaming the deployer's log when it runs. For example, the
+release watcher test sees these status lines:
+
+```
+mc: release/1a2b3c4 is open — cut 2026-11-23 01:10, 0 repairs landed
+mc: full run of 1a2b3c4 (the release head): RED (2): command:sql:budgets:check, tests/lib/money.test.js — a repair is on its way
+mc: full run of 9f8e7d6 (the release head): measuring since 2026-11-23 01:10
+mc: full run of 9f8e7d6 (the release head): green — the suites run against a local server of it
+mc: deploying 9f8e7d6 since 2026-11-23 01:10
+mc: deployed as build 11; going back to main through memoro#19
+```
+
+The watch exits 0 after the return closes, 1 on drop and 130 on ^C, which
+only stops watching. With no open release, it follows the normal preparation
+or deploy. `--json` reports the open release as
+`{ release: { branch, cut: { sha, at }, head, state, reds, repairs, merge_back } }`.
+`reds` is a list of names, `repairs` a list of PR numbers, and `merge_back` a PR
+number or null. A cut includes that summary in its plan; a dry run that would
+cut has `would_cut: true` and `release: null`. A return refusal adds
+`refusal` to the summary response.
+
+### Continuation and repairs
+
+The runner takes the cut's reds, and any later full-run or gate-suite reds, as
+[release mends](mc-run.md#release-mend). A landed mend advances the head and
+starts measurement of the new sha. A named full run of `origin/release/<short>`
+uses the shared full-run claim with deploy priority before a waiting run of
+main and writes the same history keyed by sha. When green, the head must also
+pass the gate suites against a local server of that exact commit. The gate
+and the check after shipping use the release sha's `.mc/test.json`, not
+`origin/main`'s. A technical stop uses the deploy mend and its one retry;
+a red suite queues a release mend, not a deploy retry.
+
+Only the release's own repairs can land on its branch, and not once it is
+green or deploying. A repair cannot change the take-back reading. These are
+the merger's refusals, in the pull request's stop and in `merger.log`:
+
+```
+mc: memoro#15820 is based on release/1a2b3c4, which takes only its own repairs — base it on main (mc publish --base main)
+mc: memoro#15821 changes what can be taken back (adds migrations/0431_x.sql) — a release repair may not; repair the red without it
+mc: memoro#15822 came after release/1a2b3c4 went green — not landed; the release takes nothing more
+```
+
+The deployer runs in mc's own deploy worktree, never someone's checkout, on
+`release/<short>` with `MEMORO_DEPLOY_BRANCH=release/<short>`. The pick and
+final admission use the release ref's first-parent chain from live and the
+usual forward and take-back floor checks. The deployer and check can place
+a release commit before it is on main. The post-deploy check and take-back
+rules do not change.
+
+A typed `--accept-red "<reason>"` can ship the exact open release head,
+recording the reds and reason as usual. It cannot skip the take-back floor,
+the backwards check or a gate that could not run. It is refused while a
+full run, suite or deployer for the release is active; when a deployer is
+running it uses the normal one-deploy-at-a-time refusal. When the deployer
+starts, open release mends are answered as not landed.
+
+### Merge-back and drop
+
+After shipping, the deployer opens and queues the registered return
+`release/<short> → main` before completing the deploy row with its note.
+The [merger](mc-merge.md#release-branches) lands it with a merge commit so
+main descends from the shipped sha; a squash would not preserve that ancestry.
+A merge conflict is handled on that same PR by a merge-failure mend. The
+row's note and `--follow` say:
+
+```
+mc: deployed 5d6e7f8 as build 27914 (release/1a2b3c4, cut by a typed deploy 2026-11-23 01:10, 2 repairs)
+mc: release/1a2b3c4 goes back to main through memoro#15830 (a merge commit)
+```
+
+While the return is pending, the next deploy (including `--accept-red`) is
+refused with exit 1 and a refused row; `--dry-run` prints the same line with
+exit 0 and no row:
+
+```
+mc: release/1a2b3c4 is not back on main yet (memoro#15830, queued) — the next deploy waits for it; mc prs shows it
+```
+
+Only after merge-back does mc open the pin PR from the shipped sha against
+main, so its diff is the pins alone. The release branch is then deleted and
+the record closes.
+
+A person can use `mc deploy --drop-release "<reason>"` before the deployer
+starts. It cannot be combined with `--accept-red`, `--follow` or `--dry-run`.
+Open mends stop; landed repairs return to main through the same merge
+commit path, or, with nothing to return, the branch is deleted. A claimed
+fault still red on main can then queue a main mend. If the return cannot be
+settled in the call, the runner finishes it. Drop exits 0; it is refused
+with exit 1 while deploying, while returning to main, or when no release is
+open:
+
+```
+mc: release/1a2b3c4 dropped — <reason>; its 2 repairs go back to main through memoro#15831
+mc: release/1a2b3c4 dropped — drop this release; the branch was deleted
+mc: release/1a2b3c4 is deploying 5d6e7f8 — it cannot be dropped now; mc deploy --follow watches it
+```
+
 ## The reading: whether the release can be taken back
 
 Once the plan is known — the live commit, the pick and the gap between them —
@@ -299,7 +472,8 @@ slower, never less than the deploy asked for.
 
 Typing `mc deploy` is the decision (Martin, 2026-11-15), so the verb asks nothing: every refusal below is made before the
 deployer starts and ships nothing. An unattended session has nobody who typed
-the deploy, so it is refused.
+the deploy, so it is refused. The release-specific readings and refusals are
+under [The release branch](#the-release-branch).
 
 | situation | code | what happens |
 |---|---|---|
@@ -317,7 +491,7 @@ the deploy, so it is refused.
 | mc's own worktree is held by another process for 90 minutes (a deployer, `mc language`) | 1 | the deployer's row completed `failed`, stopped at `held`, naming the holder; nothing placed or spawned. `mc deploy` again waits for it once more. The exercise of the suites has no such bound: it waits while the holder lives, saying so each minute, and refuses only a holder whose pid is gone and never released it (stale state, technical) |
 | **an unattended session** (`MC_HEADLESS=1`) | 1 | *"an unattended session does not deploy — a deploy is made by whoever types it, and no one typed this (headless, MC_HEADLESS=1); nothing was deployed. mc deploy --dry-run is the reading."* — before any fetch, history read, full run or suite, and no row: nothing was read. `--dry-run` and `--follow` are allowed |
 | `--accept-red` without a reason | 2 | usage; nothing read |
-| **no full run of the exact commit is green** (only when nothing after the live commit is) | 1 | red or stalled: names the commit, the red files and commands and the main-red mend that holds them. Stopped without measuring (never green) or measuring another commit: names that. Refused row, the gate's cells filled |
+| **no full run of the exact commit is green**, and the result does not cut a release | 1 | red or stalled: names the commit, the red files and commands and the main-red mend that holds them. Stopped without measuring (never green) or measuring another commit: names that. Refused row, the gate's cells filled |
 | **a gate suite is red** | 1 | names the suite and what it states: its closing `verdict: ` lines, at most ten, verbatim and without the prefix, then `whole output: <path>`; a red suite that closes with none is *"suite `<name>` failed (exit N) and states no verdict; whole output: `<path>`"*. Says that a repair is queued and which (the main-red mend's member `suite:<name>`); code `red`; refused row |
 | **a suite could not run** (the server never came up, a suite never started, a holder's pid gone and never released) | 1 | names the suite and why, with `whole output: <path>` where there is one; code `suites`, technical: queues the deploy mend; refused row |
 | **the full run of the pick cannot start or finish** (its worktree held, a lease, a reservation, its base, the run threw) | 1 | names the commit, the stop and what held it; code `full-run`, technical: queues the deploy mend as a deploy row naming what held it, and the one retry applies; refused row |
@@ -364,7 +538,8 @@ daily run. A merge no longer carries a whole-suite measure
 ([`mc-merge.md`](mc-merge.md)); what ships does, here. The gate is
 [`src/mc/deploy-gate.js`](../../src/mc/deploy-gate.js), called from
 `gateStage` in `commands/deploy.js`, and it measures the commit that would ship
-— the pick of step 1, which is `origin/main`'s tip when that is green — and no other.
+and no other. This section describes the main path; the release path uses
+the [exact release head](#continuation-and-repairs).
 
 **Which commit.** `pickCommit` walks the first-parent chain of `origin/main`
 newest first, stops at the live commit, and takes the first commit whose full run
@@ -838,14 +1013,14 @@ header the file actually carries rather than the one this module knows.
 | `sha` | what was shipped: the deploy worktree's `HEAD` after the fast-forward (a refused row: `origin/main` as the reading saw it) |
 | `build` | the build number from the script's success banner |
 | `holder` | who typed it (`currentHolder()`); the runner's one retry of a repaired stop writes `runner for <holder>, <started>` |
-| `outcome` | `running`, `deployed`, `failed` or `refused` |
+| `outcome` | `running`, `deployed`, `failed`, `refused` or `release-cut` (the typed deploy cut the branch; it has not shipped) |
 | `live_commit`, `live_build` | what production answered when the script verified it |
 | `stopped_at` | the last `▸ <step>` header before a non-zero exit |
 | `note` | the reason: the failure message, the refusal, an unverified deploy. For a refused gate it is the verdict lines the failure closed with (or *states no verdict*) and `whole output: <path>` |
 | `pid` | the deployer's process |
 | `full_commit`, `full_verdict` | the commit the full run measured and its verdict — `green`, `red`, `stalled`, `unmeasured` or `moved`; empty when none was read |
 | `suites` | each suite's result, `name:state` joined by commas — `ok`, `red`, `skipped` or `cannot-run`; `cannot-run:<why>` when none could start; empty when the suites were not run |
-| `output_path` | where the whole output of what failed is — the full run's file and each failed suite's, joined by commas; empty on a deploy that was not refused for a measured failure and on every row written before the column (2026-11-16). It is the last column of the file, though it belongs to the gate's cells |
+| `output_path` | where the whole output of what failed is — the full run's file and each failed suite's, joined by commas; empty when no path was recorded and on every row written before the column (2026-11-16) |
 | `accepted_red` | the reason given to `--accept-red`, when a red was accepted |
 | `take_back` | `yes` when the release could be taken back, `no` when it could not — or when the reading could not be made; empty when no reading was made (a refusal before the plan was known or for a backwards pick) and in rows written before the column |
 | `take_back_why` | for `no`, the reasons on one line — `<kind>: <what> (<sha>, …)`, joined by `; `, at most five and `and N more` — or `reading not made: <why>`; empty for `yes` |
@@ -858,6 +1033,7 @@ header the file actually carries rather than the one this module knows.
 | `takes_back` | on a take-back row, the `started` of the release row it took back; empty on every other row (*The take-back*) |
 | `takes_back_sha` | on a take-back row, the commit of that release |
 | `takes_back_why` | on a take-back row, what asked for it: the runner's — the release's `check_why` — or the verb's, `typed: <reason>`, with `(despite the reading)` when `--despite` was given |
+| `release_branch` | the branch on the cut and deployer rows of a branch release; empty for the main path |
 
 Two properties are the point of it:
 
