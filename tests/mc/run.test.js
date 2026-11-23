@@ -9,9 +9,13 @@ import { dirname, join } from 'node:path';
 
 import { attemptDeadline, deployCheckTick, killGroup, statePath as deployCheckState, writeVerdictFile } from '../../src/mc/deploy-check.js';
 import { DEPLOYED as DEPLOY_ROW, readDeploys, recordEnd, recordStart } from '../../src/mc/deploys.js';
-import { answerHeldDeployMend, publishDeployMend, readDeployMends, recordRepaired, requestDeployRepair } from '../../src/mc/deploy-repair.js';
+import { answerHeldDeployMend, deployMendPath, publishDeployMend, readDeployMends, recordRepaired, requestDeployRepair, updateDeployMends } from '../../src/mc/deploy-repair.js';
 import { answerHeldMend, answerMainMend, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
-import { releaseBranch, writeRelease } from '../../src/mc/deploy-release.js';
+import { readRelease, releaseBranch, releasePath, writeRelease } from '../../src/mc/deploy-release.js';
+import { attemptRelease, continueRelease, deployWorktreePath, run as deployCommand, ship } from '../../src/mc/commands/deploy.js';
+import { prepare } from '../../src/mc/deploy-prepare.js';
+import { fullRun } from '../../src/mc/nightly-loop.js';
+import { makeTempRepo, git as fixtureGit } from './_helpers/git-fixture.js';
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { newRecord, readRecord, writeRecord } from '../../src/mc/programme-record.js';
 import { interruptedRepairCut } from '../../src/mc/repair-cut.js';
@@ -6174,6 +6178,149 @@ test('a release mend starts from the release on origin, not from main', async (t
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, f.log.join('\n'));
   assert.deepEqual(readMainMends(state).map(({ base, state, pr }) => [base, state, pr]), [[cut, 'published', 42]]);
 });
+
+for (const failure of [null, 'technical', 'suite']) {
+  test(`a typed release continues after its mend lands${failure ? ` (with a ${failure} stop)` : ''}`, async (t) => {
+    const fx = makeTempRepo({ name: 'runner-release' });
+    t.after(fx.cleanup);
+    const root = fx.root;
+    const f = goalFixture({}, { root });
+    const env = Object.assign(f.deps.env, { MC_HOME: fx.mcHome, MC_HEADLESS: '1' });
+    const live = fixtureGit(fx.dir, 'rev-parse HEAD');
+    mkdirSync(join(fx.dir, '.mc'));
+    const declaration = { schema_version: 1, suites: [{ name: 'release-smoke', argv: ['node', 'fixture.js'] }], environments: { dev: { service: 'app' } } };
+    writeFileSync(join(fx.dir, '.mc/test.json'), JSON.stringify(declaration));
+    fixtureGit(fx.dir, 'add .mc/test.json');
+    fixtureGit(fx.dir, 'commit -qm cut');
+    const cut = fixtureGit(fx.dir, 'rev-parse HEAD');
+    const branch = releaseBranch(cut);
+    fixtureGit(fx.dir, `switch -qc ${branch}`);
+    fixtureGit(fx.dir, 'commit --allow-empty -qm repair');
+    const head = fixtureGit(fx.dir, 'rev-parse HEAD');
+    fixtureGit(fx.dir, `push -q origin ${branch}`);
+    fixtureGit(fx.dir, 'switch -q main');
+    fixtureGit(fx.dir, 'push -q origin main');
+    const at = new Date(f.deps.now().getTime() - 1000).toISOString();
+    const file = 'tests/red.test.js';
+    const release = { branch, cut: { sha: cut, at }, row: { sha: cut, started: at }, holder: 'typed@desk', live, head: cut,
+      state: 'red', reds: [file], claimed_reds: [file], repairs: [], cut_run: { commit: cut, red: [file] } };
+    writeRelease(root, release);
+    const state = { root, repo: 'memoro' };
+    const mend = 'mend/main-memoro-release-fixture';
+    requestMainRepair({ ...state, base: cut, files: [file], release: branch });
+    updateMainMends(state, (entries) => Object.assign(entries[0], { state: 'running', branch: mend }));
+    publishMainMend({ ...state, branch: mend, pr: 15820 });
+    answerMainMend({ ...state, pr: 15820, landed: true, commit: head, baseBranch: branch });
+    assert.deepEqual([readRelease(root).head, readRelease(root).state], [head, 'measuring']);
+
+    const events = [];
+    const { promise: reachedFullRun, resolve: fullStarted } = Promise.withResolvers();
+    const { promise: mayFinish, resolve: finishFull } = Promise.withResolvers();
+    t.after(finishFull);
+    const read = f.deps.read, write = f.deps.writeJson;
+    f.deps.read = (path) => [releasePath(root), deployMendPath(root)].includes(path)
+      ? (existsSync(path) ? readFileSync(path, 'utf8') : null) : read(path);
+    f.deps.writeJson = (path, value) => path === deployMendPath(root)
+      ? writeFileSync(path, JSON.stringify(value)) : write(path, value);
+    f.deps.alive = (pid) => pid === process.pid;
+    f.deps.deploys = () => readDeploys(env);
+    let tick = f.deps.now().getTime();
+    let spawns = 0;
+    const path = fx.dir;
+    const git = (cwd, args) => { const ran = gitRun(cwd, args); return ran.status === 0 ? ran.stdout.trim() : null; };
+    const options = {
+      root, path, env, git, clock: () => tick++, nightly: () => null, fetchVersion: async () => ({ commit: live }),
+      readMerger: () => null, runningRounds: () => ({}), deploys: f.deps.deploys,
+      gate: {
+        root: fx.mcHome,
+        fullRun: (repo, options) => fullRun(repo, { ...options, round: async ({ sha, ref }) => {
+          events.push(['full', sha, ref]); fullStarted();
+          await mayFinish;
+          return { base: { commit: sha }, candidate: { red: [], tests: 1 }, ok: true };
+        } }),
+      },
+      suites: {
+        git,
+        readDeclaration: () => ({ ok: true, declaration }),
+        ensureAppServer: async (cwd) => {
+          events.push(['server', cwd, git(cwd, ['rev-parse', 'HEAD'])]);
+          return { ok: true, baseUrl: 'http://127.0.0.1:1', server: { instance_id: 'release-fixture', built_from: { commit: head } } };
+        },
+        serversFor: () => [],
+        tokenFor: async () => ({}),
+        runSuites: async ({ declaration }) => {
+          events.push(['suites', declaration.suites.map(({ name }) => name)]);
+          return { results: [{ name: 'release-smoke', ok: failure !== 'suite', status: failure === 'suite' ? 1 : 0 }], gone: false, skipped: [] };
+        },
+      },
+      startPreparer: (job, d) => ({ pid: process.pid, inline: () => prepare(job, { ...d, deps: d }) }),
+      startDeployer: (job, d) => ({ pid: process.pid, inline: () => ship(job, d) }),
+      spawnDeploy: async ({ cwd, env, sha, onOutput }) => {
+        events.push(['deploy', cwd, sha, git(cwd, ['branch', '--show-current']), env.MEMORO_DEPLOY_BRANCH]);
+        spawns += 1;
+        if (failure === 'technical') return { code: 1, error: 'fixture deployer stop' };
+        onOutput('Build number: 27914\n');
+        return { code: 0 };
+      },
+      gh: (args) => {
+        if (args[1] === 'list') return { ok: true, stdout: '[]' };
+        if (args[1] === 'create') {
+          events.push(['return', args[args.indexOf('--head') + 1]]);
+          assert.equal(readDeploys(env).at(-1).outcome, 'running');
+          return { ok: true, stdout: 'https://example.test/pull/15830' };
+        }
+        return { ok: true, stdout: '{"state":"OPEN","baseRefName":"main"}' };
+      },
+      queueMerge: ({ pr, branch }) => { events.push(['queue', pr, branch]); },
+    };
+    f.deps.releaseTick = (d) => continueRelease({ ...d, ...options });
+    f.deps.releaseAttempt = (record, d) => attemptRelease(record, { ...d, ...options });
+    f.deps.deployRun = () => assert.fail('the normal deploy door is not the release continuation or retry');
+    const runner = createRunner({ deps: f.deps });
+    const running = runner.runRelease();
+    await Promise.race([reachedFullRun, running]);
+    const typed = { ...options, env: { ...env, MC_HEADLESS: '' }, repos: [{ name: 'memoro', path }],
+      stdout: { write: () => {} }, stderr: { write: () => {} }, startPreparer: () => assert.fail('second preparation') };
+    assert.equal(await deployCommand([], typed), 0, 'a typed deploy neither cuts nor measures another release');
+    assert.equal(await deployCommand(['--accept-red', 'not during the full run'], typed), 1);
+    assert.deepEqual(fixtureGit(fx.dir, 'ls-remote --heads origin').split('\n').filter((line) => line.includes('\trefs/heads/release/')),
+      [`${head}\trefs/heads/${branch}`]);
+    finishFull();
+    await running;
+    const tree = deployWorktreePath(env);
+    const fullAndSuite = [['full', head, `origin/${branch}`], ['server', tree, head], ['suites', ['release-smoke']]];
+    const deploy = ['deploy', tree, head, branch, branch];
+    if (failure === 'suite') {
+      assert.deepEqual(events, fullAndSuite);
+      assert.deepEqual(readMainMends(state).map(({ state, file, base }) => [state, file, base]),
+        [['landed', 'tests/red.test.js', cut], ['queued', 'suite:release-smoke', head]]);
+      assert.equal(readRelease(root).state, 'red');
+      return;
+    }
+    const holder = `${branch} for typed@desk, ${at}`;
+    assert.deepEqual(readDeploys(env).filter((row) => row.holder === holder).map(({ release_branch, full_commit, full_verdict, suites }) =>
+      [release_branch, full_commit, full_verdict, suites]), [[branch, head, 'green', 'release-smoke:ok']]);
+    if (failure === 'technical') {
+      assert.deepEqual(events, [...fullAndSuite, deploy]);
+      const [request] = readDeployMends({ root });
+      assert.deepEqual([request.state, request.rows[0].holder], ['queued', holder]);
+      updateDeployMends({ root }, ([entry]) => { entry.state = 'running'; });
+      const fix = recordRepaired({ root, id: request.id, reason: 'fixture repaired', role: 'mend-session', named: request.id });
+      assert.equal(fix.ok, true, fix.error);
+      await runner.settleDeployMends();
+      await runner.settleDeployMends();
+      await runner.runRelease();
+      assert.equal(spawns, 2, 'one retry, never another attempt');
+      const [ended] = readDeployMends({ root });
+      assert.deepEqual([ended.state, ended.retried], ['Martin', true]);
+      assert.equal(readRelease(root).stop.retry, true);
+    } else {
+      assert.deepEqual(events, [...fullAndSuite, deploy, ['return', branch], ['queue', 15830, branch]]);
+      assert.equal(readRelease(root).state, 'deployed');
+      assert.equal(readDeploys(env).at(-1).outcome, 'deployed');
+    }
+  });
+}
 
 test('the third main-red attempt waits on Martin with its session log and keeps the same branch', async () => {
   const f = mainRedFixture();

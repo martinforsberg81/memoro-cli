@@ -214,7 +214,7 @@ export function judgeSuites(round, { names = [] } = {}) {
  * held too long, or cannot be put there, is could-not-run. No server is
  * started: production has one address, and the declaration says it.
  */
-export async function checkSuites({ sha, declaration, baseUrl, env, say = () => {} }, deps = {}) {
+export async function checkSuites({ sha, declaration, baseUrl, env, branch = null, say = () => {} }, deps = {}) {
   const names = declaration.suites.filter(isGate).map((suite) => suite.name);
   if (!names.length) return part('suites', COULD_NOT_RUN, 'the declaration has no gating suite');
   const holder = await (deps.takeHolder || takeHolder)({
@@ -223,7 +223,7 @@ export async function checkSuites({ sha, declaration, baseUrl, env, say = () => 
   if (!holder.ok) return part('suites', COULD_NOT_RUN, holder.reason);
   try {
     const worktree = (deps.worktreePath || deployWorktreePath)(env);
-    const placed = (deps.place || placeWorktree)({ worktree, sha });
+    const placed = (deps.place || placeWorktree)({ worktree, sha, ...(branch ? { branch } : {}) });
     if (!placed.ok) return part('suites', COULD_NOT_RUN, `the checkout could not be put at ${short(sha)}: ${placed.reason}`);
     // The declaration of the checkout the suites run in is the one that is read;
     // `declaration` was read from the same commit, so they agree.
@@ -468,7 +468,7 @@ export async function runCheck({ row, env = process.env, deps = {} }) {
     // branch head is pinned by sha: merge-back may already have deleted the
     // branch by the time this check runs.
     parts.push(await guarded('suites', async () => {
-      if (row.release_branch) return checkSuites({ sha, declaration, baseUrl, env, say }, deps.suites || {});
+      if (row.release_branch) return checkSuites({ sha, declaration, baseUrl, env, branch: row.release_branch, say }, deps.suites || {});
       const tip = (deps.declare || ((at) => declarationAt(worktree, at)))(CHECK_GATE_REF);
       if (!tip.ok) return part('suites', COULD_NOT_RUN, `main's tip declaration could not be read: ${oneLine(tip.error)}`);
       return checkSuites({ sha, declaration: gatedByTip(declaration, tip.declaration), baseUrl, env, say }, deps.suites || {});

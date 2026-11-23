@@ -524,7 +524,7 @@ export async function fullRunTick({
   root = mcHome(), env = process.env, say = () => {}, narrate = say,
   repos = null, round = scheduledRound, clock = () => Date.now(), head = remoteHead,
   shouldStop = () => false, running = new Map(), signal = null, handover = null, repair = requestMainRepair,
-  retryMs = FULL_RUN_RETRY_MS, claims = {},
+  retryMs = FULL_RUN_RETRY_MS, claims = {}, deferRepo = null,
 } = {}) {
   const at = new Date(clock()).toISOString();
   const known = unique(repos || await knownRepos({ env }));
@@ -559,6 +559,7 @@ export async function fullRunTick({
   let stopped = false;
   for (const repo of known) {
     if (leaving()) { stopped = true; break; }
+    if (repo.name === deferRepo) { waiting.push({ repo: repo.name, why: 'the release uses the next full run' }); continue; }
     if (running.has(repo.path)) { busy.push(repo.name); continue; }
     const due = fullRunDue(repo, { root, head, clock, retryMs });
     if (!due.due) { waiting.push({ repo: repo.name, why: due.why }); continue; }

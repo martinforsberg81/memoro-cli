@@ -37,6 +37,7 @@ import { tryGit } from './git.js';
 import { processAlive } from './lease-owner.js';
 import { mcHome, workRoot } from './paths.js';
 import { realLock } from './runner-lock.js';
+import { releaseRef } from './deploy-release.js';
 
 const REPO = 'memoro';
 const short = (sha) => (sha ? String(sha).slice(0, 7) : 'unknown');
@@ -62,7 +63,7 @@ export function deployWorktreePath(env = process.env) {
  * behind it is. Read in the worktree itself — a working tree is its own, while
  * `origin/main` is a ref every worktree of the repository shares.
  */
-export function worktreeState({ worktree, git = tryGit }) {
+export function worktreeState({ worktree, git = tryGit, ref = 'origin/main' }) {
   const status = git(worktree, ['status', '--porcelain']);
   const dirty = String(status || '').split('\n').filter((line) => line.trim());
   const count = (range) => {
@@ -71,7 +72,16 @@ export function worktreeState({ worktree, git = tryGit }) {
     return out !== null && Number.isFinite(value) ? value : null;
   };
   // A status git could not give is not a clean tree: the caller refuses it.
-  return { dirty, unreadable: status === null, ahead: count('origin/main..HEAD'), behind: count('HEAD..origin/main') };
+  return { dirty, unreadable: status === null, ahead: count(`${ref}..HEAD`), behind: count(`HEAD..${ref}`) };
+}
+
+/** A release never uses an existing checkout of main. Start detached so
+ * placing it cannot advance somebody's main, even when nobody has it out. */
+export function ensureReleaseWorktree({ path, env, git = tryGit, branch }) {
+  const worktree = deployWorktreePath(env);
+  if (git(worktree, ['rev-parse', '--show-toplevel']) === worktree) return true;
+  mkdirSync(dirname(worktree), { recursive: true });
+  return git(path, ['worktree', 'add', '--detach', worktree, releaseRef(branch)]) !== null;
 }
 
 /** Whether `worktree` is the one mc made for itself — the only `main` whose
@@ -149,7 +159,8 @@ function pathsWords(paths) {
  * or a HEAD off origin/main's line is a stop, because in this tree it means
  * something went wrong that is worth seeing.
  */
-export function placeWorktree({ worktree, sha, git = tryGit }) {
+export function placeWorktree({ worktree, sha, git = tryGit, branch = null, checkoutBranch = false }) {
+  if (branch) return placeRelease({ worktree, sha, git, branch, checkoutBranch });
   const head = git(worktree, ['rev-parse', '--verify', 'HEAD']);
   const state = worktreeState({ worktree, git });
   const stop = (stopped_at, reason, lines = []) => ({ ok: false, stopped_at, reason, head: head || null, lines });
@@ -215,6 +226,38 @@ export function placeWorktree({ worktree, sha, git = tryGit }) {
     return stop('moved', `${worktree} has uncommitted files after the placing (${pathsWords(after.dirty)})`);
   }
   return { ok: true, moved: how !== null, how, strays, restored: restore, from: head };
+}
+
+function placeRelease({ worktree, sha, git, branch, checkoutBranch }) {
+  const ref = releaseRef(branch);
+  const head = git(worktree, ['rev-parse', '--verify', 'HEAD']);
+  const state = worktreeState({ worktree, git, ref });
+  const stop = (reason) => ({ ok: false, stopped_at: 'moved', reason, head, lines: [] });
+  const contains = (tip, commit) => git(worktree, ['merge-base', '--is-ancestor', commit, tip]) !== null;
+  if (!head || state.unreadable) return stop(`could not read the release worktree at ${worktree}`);
+  if (!contains('origin/main', head) && !contains(ref, head)) return stop(`the deploy worktree holds ${short(head)}, which neither main nor ${branch} contains`);
+  if (!contains('origin/main', sha) && !contains(ref, sha)) return stop(`${short(sha)} is not on main or ${branch}`);
+  const tracked = state.dirty.filter((line) => !line.startsWith('?? '));
+  if (tracked.length) {
+    if (!leftoverStamps({ worktree, dirty: tracked, git })) return stop(`${worktree} has modified tracked files (${pathsWords(tracked)})`);
+    if (git(worktree, ['checkout', '--', ...STAMP_FILES.filter((file) => tracked.some((line) => line.trim().endsWith(file)))]) === null) {
+      return stop(`could not restore the stamps a killed deploy left in ${worktree}`);
+    }
+  }
+  const current = git(worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  const local = checkoutBranch && git(worktree, ['rev-parse', '--verify', `refs/heads/${branch}`]);
+  if (local && !contains(ref, local)) return stop(`local ${branch} holds commits not on ${ref}`);
+  if (checkoutBranch && !contains(ref, sha)) return stop(`${short(sha)} is not on ${ref}`);
+  const changed = checkoutBranch ? current !== branch || head !== sha : Boolean(current) || head !== sha;
+  if (changed && git(worktree, checkoutBranch ? ['switch', '-C', branch, sha] : ['switch', '--detach', sha]) === null) {
+    return stop(`could not place ${worktree} at ${short(sha)}${checkoutBranch ? ` on ${branch}` : ''}`);
+  }
+  const after = worktreeState({ worktree, git, ref });
+  const strays = strayPaths(after.dirty) || [];
+  if (after.unreadable || (after.dirty.length && !strays.length) || (strays.length && git(worktree, ['clean', '-fd']) === null)) {
+    return stop(`could not cleanly place ${worktree} at ${short(sha)}`);
+  }
+  return { ok: true, moved: changed, how: 'reset', strays, from: head };
 }
 
 /** The lines `ship` and the exercise say about what a placing removed. */

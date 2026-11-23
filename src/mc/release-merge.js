@@ -1,5 +1,6 @@
 import { canRepairRelease, readRelease } from './deploy-release.js';
 import { belongsToRelease, readMainMends } from './main-repair.js';
+import { deployMendRelease, readDeployMends } from './deploy-repair.js';
 import { takeBackReading } from './take-back.js';
 
 export const isReleaseBase = (base) => Boolean(base?.startsWith('release/'));
@@ -7,9 +8,18 @@ export const isReleaseBase = (base) => Boolean(base?.startsWith('release/'));
 /** PR number AND head branch carry the ownership recorded before queueing. */
 export function releaseMendOf({ root, repo, pr, head, read }) {
   if (repo !== 'memoro') return null;
-  return readMainMends({ root, repo, read }).find((entry) =>
+  const mend = readMainMends({ root, repo, read }).find((entry) =>
     entry.release_branch && entry.pr === Number(pr) && (!head || entry.branch === head) &&
-    ['published', 'running'].includes(entry.state)) || null;
+    ['published', 'running'].includes(entry.state));
+  if (mend) return mend;
+  for (const entry of readDeployMends({ root, read })) {
+    const release = deployMendRelease(entry);
+    if (release && ['published', 'running'].includes(entry.state) && (!head || head === entry.branch) &&
+        entry.prs?.some((item) => item.repo === repo && item.state === 'open' && item.number === Number(pr))) {
+      return { release_branch: release.branch, release_started: release.at, technical: true };
+    }
+  }
+  return null;
 }
 
 export function releaseMergeAdmission({ root, repo, pr, head, base, read }) {
@@ -20,13 +30,26 @@ export function releaseMergeAdmission({ root, repo, pr, head, base, read }) {
     : {};
   const release = repo === 'memoro' ? readRelease(root, read) : null;
   if (mend && head && base === mend.release_branch && belongsToRelease(mend, release)) {
-    if (!release.closed && !release.push_pending && canRepairRelease(release)) return { release };
+    const technicalStop = mend.technical && ['measuring', 'red'].includes(release.state) && release.stop && !release.stop.retry && !release.activity && !release.drop_reason;
+    if (!release.closed && !release.push_pending && (mend.technical ? technicalStop : canRepairRelease(release))) return { release };
     return { stop: 'release-closed', reason: `${label} came after ${base} went green — not landed; the release takes nothing more` };
   }
   return { stop: 'merge', reason: `${label} is based on ${base}, which takes only its own repairs — base it on main (mc publish --base main)` };
 }
 
+/** Only the registered return PR uses a merge commit. Other PRs with a
+ * release branch as their head must not squash or redirect the return. */
+export function releaseReturnAdmission({ root, repo, pr, head, base, read }) {
+  if (repo !== 'memoro' || !isReleaseBase(head)) return {};
+  const release = readRelease(root, read);
+  if (base === 'main' && release?.branch === head && release.merge_back === Number(pr) && !release.closed &&
+      (release.state === 'deployed' || release.drop_reason)) return { mergeBack: release };
+  return { stop: 'merge', reason: `mc: memoro#${pr} is not the recorded return of ${head} to main` };
+}
+
 export function releaseFastPathRefusal(pr) {
+  const returning = releaseReturnAdmission(pr);
+  if (returning.stop || returning.mergeBack) return returning.reason || `mc: memoro#${pr.pr} needs the release's measured merge commit`;
   const admission = releaseMergeAdmission(pr);
   return admission.reason || (admission.release
     ? `mc: ${pr.repo}#${pr.pr} needs the release repair's measured merge — publish it with mc publish --base ${pr.base}`

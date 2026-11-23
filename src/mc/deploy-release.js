@@ -4,8 +4,7 @@ import { join } from 'node:path';
 import { writeJsonAtomic } from './atomic-write.js';
 import { recordReleaseCut } from './deploys.js';
 
-// Part 3 opens the door only once the runner can finish a typed release.
-export const RELEASE_CUTTING = false;
+export const RELEASE_CUTTING = true;
 
 const SCHEMA = 'mc-deploy-release';
 const short = (sha) => sha?.slice(0, 7) || 'unknown';
@@ -13,7 +12,18 @@ const when = (at) => String(at || '').slice(0, 16).replace('T', ' ');
 
 export const releaseBranch = (sha) => `release/${short(sha)}`;
 export const releaseRef = (branch) => `origin/${branch}`;
-export const canRepairRelease = (record) => Boolean(record && ['red', 'measuring'].includes(record.state));
+export const canRepairRelease = (record) => Boolean(record && !record.drop_reason && !record.activity && !record.stop && ['red', 'measuring'].includes(record.state));
+export const releaseHolder = (record) => `${record.branch} for ${record.holder}, ${record.cut.at}`;
+export const sameRelease = (a, b) => Boolean(a && b && a.branch === b.branch && a.cut.at === b.cut.at);
+export const releaseShippedLines = (record) => [
+  `mc: deployed ${short(record.head)} as build ${record.build} (${record.branch}, cut by a typed deploy ${when(record.cut.at)}, ${record.repairs.length} repair${record.repairs.length === 1 ? '' : 's'})`,
+  ...(record.merge_back ? [`mc: ${record.branch} goes back to main through memoro#${record.merge_back} (a merge commit)`] : []),
+];
+
+export function releaseWaitLine(record) {
+  const pr = record.merge_back ? `memoro#${record.merge_back}, ${record.merge_status || 'queued'}` : 'opening the pull request';
+  return `mc: ${record.branch} is not back on main yet (${pr}) — the next deploy waits for it; mc prs shows it`;
+}
 
 export function releasePath(root) {
   return join(root, 'runner', 'deploy-release.json');
@@ -130,7 +140,7 @@ export function releaseStateLine({ state, state_at, head, reds, build, merge_bac
     case 'red': return `${full} RED (${reds.length})${reds.length ? `: ${reds.join(', ')}` : ''} — a repair is on its way`;
     case 'green': return `${full} green — the suites run against a local server of it`;
     case 'deploying': return `mc: deploying ${short(head)} since ${when(state_at)}`;
-    case 'deployed': return `mc: deployed as build ${build}; going back to main through memoro#${merge_back}`;
+    case 'deployed': return `mc: deployed as build ${build}; ${merge_back ? `going back to main through memoro#${merge_back}` : 'returning to main'}`;
   }
 }
 

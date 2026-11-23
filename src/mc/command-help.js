@@ -486,6 +486,7 @@ export const COMMAND_USAGE = Object.freeze({
   deploy: [
     "usage — mc deploy [--dry-run] [--json]   memoro's main to production, asking nothing, in its own process\n",
     "        mc deploy --accept-red \"<reason>\"   the same, past a red the reading lists, the reason on the record\n",
+    "        mc deploy --drop-release \"<reason>\"   stop an open release and return its landed repairs to main\n",
     "        mc deploy --follow                 watch the deploy or the preparation that is running\n",
     "        mc deploy take-back [--dry-run] [--despite \"<reason>\"] [--json]\n",
     "                                           the last release back to the version live before it, red or not\n",

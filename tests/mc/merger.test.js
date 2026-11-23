@@ -157,6 +157,35 @@ describe('merger admission for a release base', () => {
 });
 
 describe('landJob — one job, landed or answered', () => {
+  it('lands only a recorded release return with --merge; an ordinary PR still squashes', async () => {
+    const repo = 'memoro';
+    const repoPath = join(root, repo);
+    const cut = '1a2b3c4abcdef';
+    const head = '5d6e7f8abcdef';
+    const branch = releaseBranch(cut);
+    const at = '2026-11-23T01:10:00Z';
+    writeRelease(root, { branch, cut: { sha: cut, at }, row: { sha: cut, started: at }, head,
+      state: 'deployed', repairs: [15820], merge_back: 15830 });
+    const merges = [];
+    for (const [pr, prHead] of [[15830, branch], [15831, 'ordinary']]) {
+      const gh = async (args) => {
+        if (args[1] === 'merge') { merges.push(args); return { status: 0 }; }
+        return { status: 0, stdout: JSON.stringify({ state: 'OPEN', baseRefName: 'main', headRefOid: head, mergeCommit: { oid: head } }) };
+      };
+      const git = async (args) => ({ ok: true, status: 0, stdout: args[0] === 'symbolic-ref' ? 'origin/main'
+        : args[0] === 'rev-parse' ? cut : '' });
+      const m = machine([], { gh, mergeRound: (opts) => runMergeRound({ ...opts, root, gh, git, mergeLog: join(root, 'merged.tsv'),
+        gate: async () => ({ ok: true, pr: { number: pr, base: 'main', head: prHead, head_sha: head },
+          base: { commit: cut }, candidate_commit: head, candidate: { red: [] } }),
+      }) });
+      const [answer] = await landJob({ ...JOB, repo, repo_path: repoPath, pr, branch: prHead }, m.deps);
+      assert.equal(answer.landed, true, answer.report.reason);
+    }
+    assert.deepEqual(merges, [
+      ['pr', 'merge', '15830', '--merge', '--match-head-commit', head],
+      ['pr', 'merge', '15831', '--squash', '--match-head-commit', head],
+    ]);
+  });
   it('green: the job is answered landed with the commit, the round ran as the job\'s holder, one runs.tsv row', async () => {
     const m = machine([green]);
     const [answer] = await landJob(JOB, m.deps);

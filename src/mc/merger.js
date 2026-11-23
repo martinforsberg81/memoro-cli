@@ -842,7 +842,8 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
   }
   // The same for a deploy repair: the pull request is recorded per repository by mc publish, and the runner decides repaired.
   if (read(deployMendPath(root)) != null && (landed || (!back && !requeued && !offline))) {
-    try { answerDeployMend({ root, repo: job.repo, pr: job.pr, landed, reason: report?.reason || 'pull request closed without merging', read, write, lock }); }
+    try { answerDeployMend({ root, repo: job.repo, pr: job.pr, landed, reason: report?.reason || 'pull request closed without merging',
+      commit: report?.merge_commit, baseBranch: report?.merged_into, read, write, lock, now }); }
     catch (error) { say(`${label}: deploy-mend answer not recorded: ${error.message}`); }
   }
   for (const found of mainRepairsOf(report)) {
