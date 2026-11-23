@@ -91,6 +91,11 @@ only those members' red, not the PR that found it. There is no goal: write no
 GOAL.json, LOG.md or proposal, run no goal commands, and do not create a goal.
 The runner records your session log and outcome on the main-red request.
 
+When the prompt names a release base, that branch replaces main throughout
+this work. For change-scope acceptance use `mc gate --base origin/release/<short>`;
+publish with `mc publish --base release/<short>`. Do not merge main or change
+the take-back reading that was made at the cut.
+
 The prompt carries each red test's place and recorded stack and names the
 retained record of the measuring run (`~/.memoro/mc/main-red/<repo>/<base>.json`).
 Read them, and the test at the place named, before you run anything. A red that

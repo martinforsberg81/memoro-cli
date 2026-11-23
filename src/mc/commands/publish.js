@@ -38,7 +38,7 @@ import { basename, dirname, join } from 'node:path';
 
 import { run as runGit, tryGit } from '../git.js';
 import { addPr, beforeMergeLine, goalDirIn, goalOfPath, GOAL_FILE, isGoalRef, logStamp, parseGoal, programsGoals, prRef, readTextOrNull } from '../goals.js';
-import { publishMainMend } from '../main-repair.js';
+import { publishMainMend, readMainMends } from '../main-repair.js';
 import { BRANCH_PREFIX as DEPLOY_MEND_PREFIX, publishDeployMend } from '../deploy-repair.js';
 import { writeFileAtomic } from '../atomic-write.js';
 import { programsHome, workRoot } from '../paths.js';
@@ -96,6 +96,14 @@ export async function run(argv, deps = {}) {
   const remoteIsAncestor = remoteHead ? git(['merge-base', '--is-ancestor', remoteHead, 'HEAD']) !== null : true;
   const why = refusal({ branch, dirty, remoteHead, localHead, remoteIsAncestor });
   if (why) { stderr.write(`mc: ${why}\n`); return 1; }
+  const repo = repoName(git(['remote', 'get-url', 'origin']), root);
+  const releaseTarget = repo === 'memoro' && branch.startsWith('mend/main-memoro-')
+    ? readMainMends({ root: workRoot(env), repo }).find((entry) => entry.branch === branch && entry.release_branch)?.release_branch
+    : null;
+  if (releaseTarget && flags.base !== releaseTarget) {
+    stderr.write(`mc: this mend repairs ${releaseTarget} — use mc publish --base ${releaseTarget}\n`);
+    return 1;
+  }
   // A branch whose merge with origin/<base> conflicts is not published (memoro-cli#1369): asked after a fetch.
   // `--base` names that base; without it, main.
   const base = flags.base || 'main';
@@ -116,7 +124,6 @@ export async function run(argv, deps = {}) {
   const repair = repairAdmission();
   if (repair?.problems) { stderr.write(`mc: ${repair.problems[0]} — nothing was published\n`); return 1; }
 
-  const repo = repoName(git(['remote', 'get-url', 'origin']), root);
   if (learning && (repo !== deps.learningArea.repo || branch !== deps.learningArea.branch)) {
     stderr.write('mc: learning publishes only from its assigned area worktree — use mc learning area <repo>/<area>\n');
     return 2;

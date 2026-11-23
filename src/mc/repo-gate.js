@@ -180,6 +180,7 @@ export async function runGate({
   // this round, which is the merger's pid in a merge.
   holderPid = process.pid,
   onProgress = () => {},
+  admitPr = null,
   // Stops the round from outside: step 2 of round-abort, the merger's watch.
   signal = null,
   clock = () => Date.now(),
@@ -657,6 +658,10 @@ export async function runGate({
       const bases = [...new Set(all.map((item) => item.base))];
       if (bases.length > 1) return finish('pr', `the batch aims at ${bases.length} different bases (${bases.join(', ')}) — one round per base`);
     }
+    for (const item of all) {
+      const denied = admitPr?.(item);
+      if (denied?.stop) return finish(denied.stop, denied.reason);
+    }
 
     // Fresh, always. What is measured is the tree after the current base has
     // been merged in, and a stale remote-tracking ref is how a round measures
@@ -858,6 +863,10 @@ export async function runGate({
       } else {
         say('derived artifacts already current after the merge');
       }
+    }
+
+    if (facts.pr?.base?.startsWith('release/')) {
+      report.candidate_commit = trim((await askGit(['rev-parse', 'HEAD'], { cwd: headDir })).stdout) || null;
     }
 
     // The test flags of the tree this round measures: the final candidate's

@@ -15,7 +15,9 @@
 import { spawnSync } from 'node:child_process';
 
 import { runAsync as runGitAsync } from './git.js';
-import { mcHome } from './paths.js';
+import { mcHome, workRoot } from './paths.js';
+import { releaseFastPathRefusal } from './release-merge.js';
+import { repoNameOf } from './repos.js';
 import { recordLandingMainRed } from './selector-miss.js';
 import { measureDocs } from './docs-measure.js';
 
@@ -89,6 +91,8 @@ export async function runDocsMerge({
   report.branch = info.headRefName || null;
   report.body = info.body || null;
   report.files = (info.files || []).map((f) => f.path);
+  const releaseProblem = releaseFastPathRefusal({ root: workRoot(), repo: repoNameOf(repoPath), pr, head: report.branch, base: report.pr.base });
+  if (releaseProblem) return finish('merge', releaseProblem);
   if (info.state !== 'OPEN') return finish('state', `#${pr} is ${String(info.state).toLowerCase()}, not open`);
   if (info.isDraft) return finish('draft', `#${pr} is a draft`);
   const outside = firstNonDoc(report.files);

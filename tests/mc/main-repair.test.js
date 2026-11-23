@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { answerMainMend, mainMendPrompt, requestMainRepair, shapeMainRedTest } from '../../src/mc/main-repair.js';
+import { answerMainMend, mainMendPrompt, publishMainMend, readMainMends, requestMainRepair, shapeMainRedTest, updateMainMends } from '../../src/mc/main-repair.js';
+import { readRelease, releaseBranch, writeRelease } from '../../src/mc/deploy-release.js';
+import { repairReleaseRun } from '../../src/mc/nightly-loop.js';
 import { mainRedPath } from '../../src/mc/selector-miss.js';
 import { redTests } from '../../src/mc/tap-red.js';
 
@@ -18,6 +23,58 @@ function stateWith(entries = []) {
 
 const landed = (extra = {}) => ({ id: 'prior-id', file: 'tests/red.test.js', state: 'landed', pr: 1539,
   base: 'measured-base', landed_commit: 'repair-commit', ...extra });
+
+it('queues the exact red release head and keeps cut and later reds claimed through landing', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-release-repair-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const repo = { name: 'memoro', path: join(root, 'memoro.git') };
+  const cut = 'abcdef1234567';
+  const head = 'bcdefa1234567';
+  const fixed = 'cdefab1234567';
+  const at = '2026-11-23T06:30:00.000Z';
+  const branch = releaseBranch(cut);
+  const cutRed = 'tests/cut-red.test.js';
+  const laterRed = 'tests/later-red.test.js';
+  const newRed = 'tests/main-only.test.js';
+  const cutRun = { commit: cut, red: [cutRed] };
+  writeRelease(root, { branch, cut: { sha: cut, at }, row: { started: at, sha: cut }, head: cut, state: 'red',
+    reds: [cutRed], claimed_reds: [cutRed], repairs: [], cut_run: cutRun });
+  const read = () => readRelease(root);
+  const state = { root, repo: repo.name };
+  const rows = () => readMainMends(state);
+  const mainRed = (files) => requestMainRepair({ ...state, base: 'main-head', files });
+  const publish = (id, pr) => {
+    const repairBranch = `mend/main-memoro-${pr}`;
+    updateMainMends(state, (entries) => Object.assign(entries.find((entry) => entry.id === id), { branch: repairBranch, state: 'running' }));
+    publishMainMend({ ...state, branch: repairBranch, pr });
+  };
+
+  const first = repairReleaseRun(repo, read(), cutRun, { root, historyRoot: root });
+  assert.deepEqual(rows().map(({ id, base, file, release_branch }) => [id, base, file, release_branch]), [[first.created[0], cut, cutRed, branch]]);
+  publish(first.created[0], 10);
+  answerMainMend({ ...state, pr: 10, landed: true, commit: head, baseBranch: branch });
+  assert.equal(read().head, head);
+  assert.deepEqual(read().repairs, [10]);
+  assert.equal(repairReleaseRun(repo, read(), cutRun, { root, historyRoot: root }), null, 'a stale run cannot queue another mend');
+
+  const later = repairReleaseRun(repo, read(), { commit: head, red: [laterRed] }, { root, historyRoot: root });
+  assert.deepEqual(rows().map(({ base, file, release_branch }) => [base, file, release_branch]), [[cut, cutRed, branch], [head, laterRed, branch]]);
+  assert.deepEqual(read().claimed_reds, [cutRed, laterRed]);
+  assert.match(mainRed([cutRed, laterRed]).skipped, /all reds are claimed/u);
+  assert.equal(rows().length, 2);
+
+  publish(later.created[0], 11);
+  answerMainMend({ ...state, pr: 11, landed: true, commit: fixed, baseBranch: branch });
+  assert.deepEqual(rows().map(({ state, landed_commit }) => [state, landed_commit]), [['landed', head], ['landed', fixed]]);
+  assert.match(mainRed([cutRed, laterRed]).skipped, /all reds are claimed/u);
+  assert.equal(rows().length, 2, 'landing does not release the claims');
+  const mixed = mainRed([laterRed, newRed]);
+  assert.deepEqual(rows().filter((row) => !row.release_branch).map(({ id, file }) => [id, file]),
+    [[mixed.created[0], laterRed], [mixed.created[1], newRed]]);
+  writeRelease(root, { ...read(), closed: 'merged' });
+  const after = mainRed([cutRed]);
+  assert.deepEqual(rows().filter((row) => after.created.includes(row.id)).map((row) => row.file), [cutRed]);
+});
 
 describe('main-red repair evidence', () => {
   for (const [label, contains, extra] of [

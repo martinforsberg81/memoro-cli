@@ -78,7 +78,9 @@ import { realLock } from './runner-lock.js';
 import { drainingOwners, drainState, drainWaiting, fullRunWords, handOver, mcCheckout, readRunner } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
 import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
-import { loggedTick } from './nightly-loop.js';
+import { loggedTick, repairReleaseRun } from './nightly-loop.js';
+import { readNightlyHistory } from './nightly-history.js';
+import { canRepairRelease, openRelease, releaseRef } from './deploy-release.js';
 import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
@@ -86,7 +88,7 @@ import { readRecord } from './programme-record.js';
 import { PART_CHANGED, reconcileRepair, repairGoalAdmission } from './repair-reconcile.js';
 import { programmeRepositories } from './programme-review.js';
 import { repairMergeBinding } from './repair-delivery.js';
-import { RUNNER_DISK, RUNNER_MEMORY, planAreaName, programsHome, restrictedProgrammeDir, runnerDir, runnerScratchDir, workRoot } from './paths.js';
+import { RUNNER_DISK, RUNNER_MEMORY, mcHome, planAreaName, programsHome, restrictedProgrammeDir, runnerDir, runnerScratchDir, workRoot } from './paths.js';
 import { archiveGoal, finalizeDroppedGoal, goalArchiveDue } from './goal-archive.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
@@ -99,7 +101,7 @@ import { PR_LIST_ARGS } from './open-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
-import { answerMainMend, buildWaitsForMain, failMainMend, mainMendBranch, mainMendPrompt, mainRepairWaits, readMainMends, removeFinishedWorktrees, updateMainMends } from './main-repair.js';
+import { answerMainMend, belongsToRelease, buildWaitsForMain, failMainMend, mainMendBranch, mainMendPrompt, mainRepairWaits, readMainMends, removeFinishedWorktrees, updateMainMends } from './main-repair.js';
 import { answerDeployMend, deployMendBranch, deployMendPrompt, failDeployMend, readDeployMends, REPOS as DEPLOY_REPOS, removeCopies, retryFailed, retryHolder, retryVerdict, updateDeployMends, FINISHED as DEPLOY_MEND_FINISHED } from './deploy-repair.js';
 import { deployAlive, readDeploys } from './deploys.js';
 import { deployCheckTick } from './deploy-check.js';
@@ -2251,8 +2253,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         entries = readMainMends(mendState(repo));
       }
       const groups = new Map();
+      const release = repo === 'memoro' && entries.some((entry) => entry.release_branch) ? openRelease(root, deps.read) : null;
       for (const entry of entries.filter((entry) => entry.state === 'queued')) {
-        const key = entry.branch || entry.finder;
+        if (entry.release_branch && (!canRepairRelease(release) || !belongsToRelease(entry, release))) continue;
+        const key = entry.branch || (entry.release_branch ? `${entry.release_started}:${entry.base}:${entry.finder}` : entry.finder);
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(entry);
       }
@@ -2307,7 +2311,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (!deps.exists(worktree)) {
         const fetched = deps.git(repo.path, ['fetch', '--quiet', 'origin']);
         if (!fetched.ok) return 'skipped:fetch';
-        const added = addBranchWorktree({ git: deps.git, bare: repo.path, path: worktree, branch });
+        const target = item.mainMend[0].release_branch;
+        const added = addBranchWorktree({ git: deps.git, bare: repo.path, path: worktree, branch, ...(target ? { start: releaseRef(target) } : {}) });
         if (!added.ok) { say(`${name}: worktree not made — ${added.stderr || 'git failed'}`); return 'skipped:worktree'; }
       }
       await deps.attachDeps(worktree);
@@ -2329,7 +2334,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       });
       if (!entries.length) return 'skipped:claimed';
       claimed = true;
-      const history = readMainMends(state).filter((entry) => entries.some((current) => current.file === entry.file) && ['landed', 'dropped'].includes(entry.state));
+      const history = readMainMends(state).filter((entry) => entries.some((current) => current.file === entry.file &&
+        current.release_started === entry.release_started) && ['landed', 'dropped'].includes(entry.state));
       const prompt = mainMendPrompt({ repo: repoName, entries, branch, worktree, history, exists: existsSync });
       const instructions = instructionsFor(launch.id, role.overlay);
       const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
@@ -2343,7 +2349,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing, runnerAdmission: true });
       const pending = runnerSession(tool, { cwd: worktree, logPath: `${out}.jsonl`,
         onSpawn: (childPid) => { current.session_pid = childPid; writeJson(currentPath, current); },
-        ...watchFor(launch, settings, { prompt, name, checkInText: () => 'Continue the main-red mend in this worktree. No goal or LOG.md. Publish with mc publish after the named fresh gate and whole-selection acceptance.' }),
+        ...watchFor(launch, settings, { prompt, name, checkInText: () => 'Continue the mend in this worktree. No goal or LOG.md. Run the gates and publish to the base named in the prompt.' }),
         env: { MC_HEADLESS: '1', MC_ROLE: MEND_ROLE, MC_REPO: repoName, MC_WORKAREA: worktree, MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch },
         unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', ...dropEnv(launch)] });
       admission.release?.();
@@ -2641,7 +2647,15 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         const job = pending.find((job) => job.repo === repo.name && Number(job.pr) === pr);
         if (job && job.state !== 'red') continue;
         const status = prState(deps.gh, repo.path, pr);
-        if (status === 'MERGED' || status === 'CLOSED') answerMainMend({ ...mendState(repo.name), pr, landed: status === 'MERGED', commit: status === 'MERGED' ? mergeCommitOf(repo, pr) : null, reason: 'pull request closed without merging' });
+        if (status === 'MERGED' && batch[0].release_branch) {
+          const asked = deps.gh(repo.path, ['pr', 'view', String(pr), '--json', 'mergeCommit,baseRefName']);
+          if (!asked.ok) continue;
+          let facts;
+          try { facts = JSON.parse(asked.stdout); } catch { continue; }
+          if (!facts?.baseRefName || !facts.mergeCommit?.oid) continue;
+          answerMainMend({ ...mendState(repo.name), pr, landed: facts.baseRefName === batch[0].release_branch,
+            baseBranch: facts.baseRefName, commit: facts.mergeCommit.oid, reason: `pull request merged into ${facts.baseRefName}, not the release` });
+        } else if (status === 'MERGED' || status === 'CLOSED') answerMainMend({ ...mendState(repo.name), pr, landed: status === 'MERGED', commit: status === 'MERGED' ? mergeCommitOf(repo, pr) : null, reason: 'pull request closed without merging' });
         else if (status === 'OPEN') {
           try { deps.queueMerge({ root, repo: repo.name, repoPath: repo.path, pr, branch: batch[0].branch, holder: { name: batch[0].owner }, now: deps.now() }); }
           catch (error) { say(`${repo.name}#${pr}: main-red delivery could not be restored — ${error.message}`); }
@@ -2649,6 +2663,20 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       }
       sweepMendWorktrees(repo, (entry) => claims.has(entry.owner) || held.has(entry.owner));
     }
+  }
+
+  /** Recover a cut or a measured red that was recorded before its mend was queued. */
+  function settleReleaseRed() {
+    const repo = repos.find(({ name }) => name === 'memoro');
+    if (!repo) return;
+    try {
+      const release = openRelease(root, deps.read);
+      if (!canRepairRelease(release)) return;
+      const historyRoot = mcHome(deps.env);
+      const run = release.head === release.cut.sha ? release.cut_run
+        : readNightlyHistory(repo.path, { root: historyRoot }).runs.findLast((run) => run.commit === release.head && run.ref === releaseRef(release.branch));
+      if (run) repairReleaseRun(repo, release, run, { ...mendState(repo.name), historyRoot, say, now: deps.now });
+    } catch (error) { say(`release mend: red not settled — ${error.message}`); }
   }
 
   /** The repository's checkout by name, or null. */
@@ -2832,6 +2860,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (at - lastSettle < SETTLE_EVERY_MS) return;
     lastSettle = at;
     settleMainMends();
+    settleReleaseRed();
     void settleDeployMends().catch((error) => say(`deploy-mend: not settled — ${error.message}`));
     /** GitHub's `state` of a goal's pull request — `OPEN`, `MERGED`, `CLOSED` — or null when it cannot say. */
     const readState = ({ repo: repoName, pr }) => {

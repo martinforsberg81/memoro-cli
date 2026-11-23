@@ -123,7 +123,7 @@ export function runBounded(argv, { cwd, timeoutMs }) {
  * and never refuses.
  */
 export async function takeBackReading({
-  path, from, to, exportTree = exportAtRev, timeoutMs = READING_TIMEOUT_MS, scratch = tmpdir(),
+  path, from, to, readerRev = to, exportTree = exportAtRev, timeoutMs = READING_TIMEOUT_MS, scratch = tmpdir(),
 }) {
   if (!from) return notMade('no live commit is known, so there is no range to read');
   if (!path || !to) return notMade('no repository or commit to read');
@@ -133,9 +133,9 @@ export async function takeBackReading({
     // (macOS' /var → /private/var), and a script that compares its own url with its argv
     // would otherwise run nothing (the lesson `atRev` learned, 2026-11-03).
     dir = realpathSync(mkdtempSync(join(scratch, 'mc-take-back-')));
-    const why = exportTree(path, to, 'scripts', dir);
-    if (why) return notMade(`${READING_SCRIPT} is not on ${to.slice(0, 10)} (${why})`);
-    if (!existsSync(join(dir, READING_SCRIPT))) return notMade(`${to.slice(0, 10)} has no ${READING_SCRIPT}`);
+    const why = exportTree(path, readerRev, 'scripts', dir);
+    if (why) return notMade(`${READING_SCRIPT} is not on ${readerRev.slice(0, 10)} (${why})`);
+    if (!existsSync(join(dir, READING_SCRIPT))) return notMade(`${readerRev.slice(0, 10)} has no ${READING_SCRIPT}`);
     const result = await runBounded(
       ['node', join(dir, READING_SCRIPT), '--repo', path, '--from', from, '--to', to],
       { cwd: dir, timeoutMs },

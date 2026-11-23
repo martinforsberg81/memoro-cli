@@ -68,8 +68,9 @@
 import { spawnSync } from 'node:child_process';
 import { tryGit } from './git.js';
 import { mcHome, workRoot } from './paths.js';
-import { appendNightlyLog } from './nightly.js';
+import { appendNightlyLog, nightlyLogPath } from './nightly.js';
 import { requestMainRepair, shapeMainRedTest } from './main-repair.js';
+import { openRelease, releaseRef } from './deploy-release.js';
 import { FULL_RUN_FAULTS, requestDeployRepair } from './deploy-repair.js';
 import { mainRecord } from './selector-miss.js';
 import { nightlyReading, readNightlyHistory, recordNightlyRun } from './nightly-history.js';
@@ -386,7 +387,7 @@ export function repairFromRun(repo, report, run, {
  * whether a mend that holds the red made the request unnecessary.
  */
 export function repairFromStop(repo, full, {
-  root = mcHome(), repair = requestMainRepair, say = () => {}, git, record = mainRecord,
+  root = mcHome(), repair = requestMainRepair, say = () => {}, git, record = mainRecord, report: measured = null, release = null,
 } = {}) {
   const run = full?.run;
   const none = { created: [], open: [], members: [], held: false };
@@ -395,9 +396,14 @@ export function repairFromStop(repo, full, {
   const evidence = record(root, repo.name, run.commit);
   const names = run.red || [];
   const commands = names.filter((name) => String(name).startsWith('command:')).map((name) => name.slice('command:'.length));
-  const report = {
-    stopped_at: full.state !== 'stalled' ? null : run.cut_files?.length ? 'suite' : 'stalled', reason: run.reason,
-    candidate: { red_files: evidence?.files || [], red_tests: evidence?.tests || [] },
+  // Historic rows list TAP assertion names, not necessarily paths. Prefer
+  // the retained measurement and use only unambiguous file names as a fallback.
+  const files = evidence?.files?.length ? evidence.files : release
+    ? names.filter((name) => /^(?!command:)[^\s›]+\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(name))
+    : [];
+  const report = measured || {
+    stopped_at: run.cut_files?.length ? 'suite' : full.state === 'stalled' ? 'stalled' : null, reason: run.reason,
+    candidate: { red_files: files, red_tests: evidence?.tests || [] },
     extra_gates: commands.map((name) => ({ name, id: name, ok: false, command: null, exit_code: null, failure: `red in the full run of ${run.commit.slice(0, 7)}`, output_path: full.output || null })),
     stalled_files: run.stalled_files || [],
     cut_files: run.cut_files || [],
@@ -419,6 +425,28 @@ export function repairFromStop(repo, full, {
     open: requests.flatMap((asked) => [].concat(asked?.open || [], asked?.finished || [])),
     members, held: false,
   };
+}
+
+/** The cut uses its recorded stop; later heads use the named full run. */
+export function repairReleaseRun(repo, release, run, {
+  historyRoot = mcHome(), root = workRoot(), repair = requestMainRepair, say = () => {}, report = null, ...state
+} = {}) {
+  if (run?.commit !== release.head) return null;
+  const verdict = run.red?.length ? 'red'
+    : run.stopped_at === 'stalled' || run.stalled_files?.length || run.cut_files?.length ? 'stalled' : null;
+  if (!verdict) return null;
+  const asked = repairFromStop(repo, { state: verdict, run, output: nightlyLogPath(historyRoot) }, {
+    root: historyRoot, report, release: release.branch,
+    repair: (request) => {
+      const result = repair({ ...state, ...request, root, release: release.branch });
+      if (result?.skipped && result.skipped !== 'no matching release head taking repairs') {
+        say(`${release.branch}: release mend not queued — ${result.skipped}`);
+      }
+      return result;
+    },
+  });
+  if (asked.created.length) say(`${release.branch}: RED at ${run.commit.slice(0, 7)} — release mend queued: ${asked.members.join(', ')}`);
+  return asked;
 }
 
 /**
@@ -471,8 +499,14 @@ async function measure(repo, {
   recordNightlyRun(run, { root });
   say(line(run));
 
-  // Named runs are consumed by the release, never offered as main-red work.
   if (!ref) repairFromRun(repo, report, run, { repair, say, repairFullRun, env, deferMainRepair });
+  else if (repo.name === 'memoro' && ref.startsWith('origin/release/')) {
+    const mendRoot = workRoot(env);
+    try {
+      const release = openRelease(mendRoot);
+      if (release && ref === releaseRef(release.branch)) repairReleaseRun(repo, release, run, { root: mendRoot, historyRoot: root, repair, say, report });
+    } catch (error) { say(`${ref}: could not read the release to queue repairs — ${error.message}`); }
+  }
   return run;
 }
 

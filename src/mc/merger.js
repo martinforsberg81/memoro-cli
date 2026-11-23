@@ -49,6 +49,7 @@ import {
 } from './merge-queue.js';
 import { answerDeployMend, deployMendPath } from './deploy-repair.js';
 import { answerMainMend, mainMendPath, readMainMends, removeFinishedWorktrees, requestMainRepair } from './main-repair.js';
+import { isReleaseBase, releaseMendOf } from './release-merge.js';
 import { repairPrBinding } from './repair-delivery.js';
 import { removeRedDetail, writeRedDetail } from './merge-red.js';
 import { shouldWait } from './merge-step.js';
@@ -335,9 +336,15 @@ export function watchSubject({
 }
 
 /** The answer for a pull request somebody merged on GitHub outside the queue. */
-const alreadyMerged = (facts) => ({
-  ok: true, merged: true, merge_commit: facts.sha, merged_into: facts.base, already_merged: true, stopped_at: null, reason: null,
-});
+function alreadyMerged(facts, job, { root, read }) {
+  const mend = releaseMendOf({ root, repo: job.repo, pr: job.pr, read });
+  if ((mend && facts.base !== mend.release_branch) || (!mend && isReleaseBase(facts.base))) {
+    return { ok: false, merged: true, merge_commit: facts.sha, merged_into: facts.base,
+      stopped_at: 'merge', reason: `merged on GitHub into ${facts.base || 'an unknown base'}, not the authorized base` };
+  }
+  return { ok: true, merged: true, merge_commit: facts.sha, merged_into: facts.base, already_merged: true, stopped_at: null, reason: null,
+    ...(mend ? { release_mend: true } : {}) };
+}
 
 /** The answer for a pull request closed on GitHub without merging. */
 const closedOnGitHub = (job) => ({
@@ -373,7 +380,7 @@ export async function sweepMergedReds({
   }, { name: 'merges' });
   for (const { entry, facts } of dropped) {
     if (facts.state === 'MERGED') {
-      const report = alreadyMerged(facts);
+      const report = alreadyMerged(facts, entry, { root, read });
       await tell(entry, report.ok, report, {
         root, say, gh, now, read, write, lock, appendRun: null, dropFromPage: dropPr, seconds: 0,
       });
@@ -394,7 +401,7 @@ export async function sweepMergedReds({
  * reaching gets the batch's stop.
  */
 export function answersFor(jobs, report) {
-  const isLanded = (r) => Boolean(r?.ok && r.merged && !r.off_default);
+  const isLanded = (r) => Boolean(r?.ok && r.merged && (!r.off_default || r.release_mend));
   if (!report?.batch) return jobs.map((job) => ({ job, landed: isLanded(report), report }));
   const { merges = [], rounds = [] } = report.batch;
   return jobs.map((job) => {
@@ -488,7 +495,7 @@ export async function landJob(batch, {
     const given = !landed && !offline && report?.stopped_at === OFFLINE_STOP ? offlineGivenUp(report) : report;
     const flags = { ...(requeued ? { requeued: true } : {}), ...(back ? { back: true } : {}), ...(moved ? { moved: true } : {}), ...(offline ? { offline: true } : {}) };
     answers.push({ job, landed, report: given, ...flags });
-    if (landed && afterLanding) {
+    if (landed && !given.release_mend && afterLanding) {
       try { await afterLanding(job); } catch (error) { say(`${job.repo}: could not pull the installation (${error.message})`); }
     }
     await tell(job, landed, given, {
@@ -518,7 +525,7 @@ export async function landJob(batch, {
     }
     const facts = await prStateOf(one, ask);
     if (facts?.state === 'MERGED') {
-      const report = alreadyMerged(facts);
+      const report = alreadyMerged(facts, one, { root, read });
       await answer(one, report.ok, report);
     } else if (facts?.state === 'CLOSED') await answer(one, false, closedOnGitHub(one));
     else continue;
@@ -590,7 +597,7 @@ export async function landJob(batch, {
     record(report, { mode: 'merge' });
     // Stopped by the watch: answered as GitHub says. A 'gone' nobody asked for falls through as any other stop.
     if (report?.stopped_at === 'gone' && gone) {
-      report = gone.kind === 'merged' ? alreadyMerged({ sha: gone.sha, base: gone.base })
+      report = gone.kind === 'merged' ? alreadyMerged({ sha: gone.sha, base: gone.base }, job, { root, read })
         : gone.kind === 'closed' ? closedOnGitHub(job)
         : { ok: false, merged: false, stopped_at: 'pushed', reason: gone.reason };
       break;
@@ -825,7 +832,8 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
 
   // Ownership is recorded by mc publish before queueing, even if its session is still ending.
   if (read(mainMendPath(root, job.repo)) != null && (landed || (!back && !requeued && !offline))) {
-    const repaired = answerMainMend({ root, repo: job.repo, pr: job.pr, landed, reason: report?.reason, commit: report?.merge_commit, read, write, lock });
+    const repaired = answerMainMend({ root, repo: job.repo, pr: job.pr, landed, reason: report?.reason, commit: report?.merge_commit,
+      baseBranch: report?.merged_into, final: report?.stopped_at === 'release-closed', read, write, lock, now });
     // No force: a session still exiting or uncommitted work keeps its tree for cleanup later.
     if (landed && repaired.length) {
       const swept = sweepMendWorktrees({ root, repo: job.repo, repoPath: job.repo_path, read });
@@ -838,6 +846,7 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
     catch (error) { say(`${label}: deploy-mend answer not recorded: ${error.message}`); }
   }
   for (const found of mainRepairsOf(report)) {
+    const release = isReleaseBase(report?.pr?.base) ? report.pr.base : null;
     // requestMainRepair asks about ancestry synchronously; the answers are
     // fetched here first, so the merger holds no synchronous child.
     const ancestry = new Map();
@@ -848,15 +857,18 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
       catch { ancestry.set(commit, null); }
     }
     const asked = repairMain({ repo: job.repo, pr: job.pr, base: found.base, files: found.files,
+      ...(release ? { release } : {}),
       tests: (found.tests || []).map((test) => ({ file: test.file, name: test.name,
         ...(test.at ? { at: test.at } : {}), error: test.error,
         ...(test.detail ? { detail: test.detail } : {}), ...(test.stack ? { stack: test.stack } : {}) })),
       contains: (commit) => ancestry.get(commit) ?? null });
     const where = found.files.join(', ');
+    const target = release || 'main';
+    const repair = release ? 'release mend' : 'main-red mend';
     for (const stale of asked.stale_members || []) say(`${stale.file}: reported at ${found.base}, which does not contain its landed repair ${stale.landed_commit} (#${stale.pr}) — no repair opened`);
-    if (asked.created?.length) say(`${label}: main is red in ${where} at ${String(found.base).slice(0, 7)} — main-red mend queued: ${[].concat(asked.created).join(', ')}${asked.open?.length ? `; already under way: ${asked.open.join(', ')}` : ''}`);
-    else if (asked.open?.length) say(`${label}: main is red in ${where} — its main-red mend is under way: ${asked.open.join(', ')}`);
-    else if (!asked.stale_members?.length) say(`${label}: main is red in ${where} — no main-red mend requested: ${asked.skipped || 'nothing new'}`);
+    if (asked.created?.length) say(`${label}: ${target} is red in ${where} at ${String(found.base).slice(0, 7)} — ${repair} queued: ${[].concat(asked.created).join(', ')}${asked.open?.length ? `; already under way: ${asked.open.join(', ')}` : ''}`);
+    else if (asked.open?.length) say(`${label}: ${target} is red in ${where} — its ${repair} is under way: ${asked.open.join(', ')}`);
+    else if (!asked.stale_members?.length) say(`${label}: ${target} is red in ${where} — no ${repair} requested: ${asked.skipped || 'nothing new'}`);
   }
 
   if (appendRun) {

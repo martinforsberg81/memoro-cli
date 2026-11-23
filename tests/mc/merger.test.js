@@ -18,6 +18,8 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { parseGoal } from '../../src/mc/goals.js';
 import { writeRedDetail } from '../../src/mc/merge-red.js';
 import { deployMendPath, publishDeployMend, readDeployMends, requestDeployRepair, updateDeployMends } from '../../src/mc/deploy-repair.js';
+import { readRelease, releaseBranch, writeRelease } from '../../src/mc/deploy-release.js';
+import { runMergeRound } from '../../src/mc/repo-merge.js';
 import { mainMendPath, mainMendPrompt, publishMainMend, readMainMends, removeFinishedWorktrees, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { mergesSection } from '../../src/mc/page-collect.js';
@@ -68,6 +70,91 @@ function machine(reports, over = {}) {
     },
   };
 }
+
+describe('merger admission for a release base', () => {
+  for (const scenario of ['repair', 'ordinary PR', 'adds migration', 'after green']) {
+    it(`release base: ${scenario}`, async () => {
+      const repo = 'memoro';
+      const repoPath = join(root, repo);
+      let cut = '1a2b3c4abcdef';
+      let candidate = '234567bcdef12';
+      if (scenario === 'adds migration') {
+        const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+        git(root, 'init', '-q', repoPath);
+        mkdirSync(join(repoPath, 'scripts/release'), { recursive: true });
+        // Stand-in for memoro's D6 reading contract. It reads the real
+        // candidate diff, not the PR's name or a preselected answer.
+        writeFileSync(join(repoPath, 'scripts/release/reading.mjs'), `
+          import { execFileSync } from 'node:child_process';
+          const arg = (name) => process.argv[process.argv.indexOf(name) + 1];
+          const changed = execFileSync('git', ['-C', arg('--repo'), 'diff', '--name-only', '--diff-filter=A',
+            arg('--from'), arg('--to'), '--', 'migrations/'], { encoding: 'utf8' }).trim();
+          const reasons = changed ? [{ kind: 'migration-after', file: changed, what: changed + ': applied after the build' }] : [];
+          console.log(JSON.stringify({ schema_version: 1, can_take_back: !reasons.length, reasons }));
+        `);
+        git(repoPath, 'add', 'scripts');
+        git(repoPath, 'commit', '-qm', 'record the cut');
+        cut = git(repoPath, 'rev-parse', 'HEAD');
+        mkdirSync(join(repoPath, 'migrations'));
+        writeFileSync(join(repoPath, 'migrations/0431_x.sql'), 'SELECT 1;\n');
+        // The reading must use the cut's script even if the PR edits it.
+        writeFileSync(join(repoPath, 'scripts/release/reading.mjs'), 'console.log("{}");\n');
+        git(repoPath, 'add', '.');
+        git(repoPath, 'commit', '-qm', 'add a migration');
+        candidate = git(repoPath, 'rev-parse', 'HEAD');
+      }
+      const base = releaseBranch(cut);
+      const pr = { repair: 15819, 'ordinary PR': 15820, 'adds migration': 15821, 'after green': 15822 }[scenario];
+      const branch = scenario === 'ordinary PR' ? 'ordinary' : 'mend/main-memoro-testing';
+      const state = { root, repo };
+      const at = '2026-11-23T06:30:00.000Z';
+      const file = 'tests/red.test.js';
+      writeRelease(root, { branch: base, cut: { sha: cut, at }, row: { sha: cut, started: at }, head: cut,
+        state: 'red', reds: [file], claimed_reds: [file], repairs: [] });
+      if (scenario !== 'ordinary PR') {
+        requestMainRepair({ ...state, base: cut, files: [file], release: base });
+        updateMainMends(state, (entries) => Object.assign(entries[0], { branch, state: 'running' }));
+        publishMainMend({ ...state, branch, pr });
+      }
+      if (scenario === 'after green') writeRelease(root, { ...readRelease(root), state: 'green', reds: [] });
+
+      const squash = 'defabcd1234567';
+      const merges = [];
+      const gh = async (args) => {
+        if (args[1] === 'merge') { merges.push(args); return { status: 0 }; }
+        return { status: 0, stdout: JSON.stringify({ state: 'OPEN', baseRefName: base, headRefOid: candidate, mergeCommit: { oid: squash } }) };
+      };
+      const git = async (args) => ({ status: 0, stdout: args[0] === 'symbolic-ref' ? 'origin/main'
+        : args[0] === 'rev-parse' ? (merges.length ? squash : cut) : '' });
+      const m = machine([], { gh, mergeRound: (opts) => runMergeRound({ ...opts, root, gh, git, mergeLog: join(root, 'merged.tsv'),
+        gate: async () => ({ ok: true, pr: { number: pr, base, head: branch, head_sha: candidate },
+          base: { commit: cut }, candidate_commit: candidate, candidate: { red: [] } }),
+        ...(scenario === 'adds migration' ? {} : { readTakeBack: async () => ({ made: true, can: true, reasons: [] }) }),
+      }) });
+      const [answer] = await landJob({ ...JOB, repo, repo_path: repoPath, pr, branch }, m.deps);
+      if (scenario === 'repair') {
+        assert.equal(answer.report.off_default, true);
+        assert.equal(answer.landed, true);
+        assert.deepEqual(merges, [['pr', 'merge', String(pr), '--squash', '--match-head-commit', candidate]]);
+        assert.deepEqual(readMainMends(state).map(({ state, landed_commit }) => [state, landed_commit]), [['landed', squash]]);
+        assert.deepEqual({ head: readRelease(root).head, repairs: readRelease(root).repairs }, { head: squash, repairs: [pr] });
+      } else {
+        const reason = {
+          'ordinary PR': `mc: memoro#15820 is based on ${base}, which takes only its own repairs — base it on main (mc publish --base main)`,
+          'adds migration': 'mc: memoro#15821 changes what can be taken back (adds migrations/0431_x.sql) — a release repair may not; repair the red without it',
+          'after green': `mc: memoro#15822 came after ${base} went green — not landed; the release takes nothing more`,
+        }[scenario];
+        const stop = scenario === 'after green' ? 'release-closed' : 'merge';
+        assert.equal(answer.landed, false);
+        assert.deepEqual(merges, []);
+        assert.equal(answer.report.stopped_at, stop);
+        assert.equal(answer.report.reason, reason);
+        assert.ok(m.said.includes(`memoro #${pr}: not merged — ${stop}: ${reason}`), m.said.join('\n'));
+        if (scenario !== 'ordinary PR') assert.equal(readMainMends(state)[0].state, scenario === 'after green' ? 'dropped' : 'queued');
+      }
+    });
+  }
+});
 
 describe('landJob — one job, landed or answered', () => {
   it('green: the job is answered landed with the commit, the round ran as the job\'s holder, one runs.tsv row', async () => {
