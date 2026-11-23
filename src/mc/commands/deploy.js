@@ -98,6 +98,7 @@ import {
   runningDeploy, versionCells, withDeploysLock,
 } from '../deploys.js';
 import { attemptInFlight, checkWords, takeBeforeReading } from '../deploy-check.js';
+import { stampedCommit } from '../same-commit.js';
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
 import { deployProgress } from '../deploy-progress.js';
@@ -145,7 +146,8 @@ export const REPO = 'memoro';
 const short = (sha) => (sha ? String(sha).slice(0, 7) : null);
 // The commit a live version names. A deploy that stamps pins into its tree is
 // verified as `<sha>-dirty`; the commit it was built from is the sha before it.
-const liveCommitOf = (ref) => (ref ? String(ref).replace(/-dirty$/u, '') : ref);
+// `stampedCommit` (same-commit.js) is the one reading, shared with mc asc build.
+const liveCommitOf = (ref) => (ref ? stampedCommit(ref).sha : ref);
 
 export function parseDeployArgs(argv) {
   // `mc deploy take-back …` is a verb of its own (deploy-take-back.js); `mc deploy` itself gains no flag.

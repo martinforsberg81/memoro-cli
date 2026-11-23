@@ -80,7 +80,10 @@ Capacitor config, the sync script's Info.plist edits and the native packages
 built from `node_modules`. That layer has to agree with the web it meets. A
 plugin the web calls has to be in the binary, with the interface the web
 expects. So a binary is built from **the commit production runs**, read from
-`<server_url>/api/version` (`commit_full`). `--sha` can name an older commit,
+`<server_url>/api/version` (`commit_full`). A stamp `<sha>-dirty` (the deploy
+tree had uncommitted files) is read as `<sha>`, the commit it was built from,
+with a line that says so — the same reading as `mc deploy`
+(`stampedCommit`, `src/mc/same-commit.js`). `--sha` can name an older commit,
 but only one production already contains. A commit production does not run
 yet is refused before anything is built:
 
