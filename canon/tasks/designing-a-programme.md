@@ -30,6 +30,13 @@ Use the supported manual route without a record, or the valid-record route when 
 1. Define what the implementation plan delivers and its end; point to its
    area's enduring direction and, where applicable, the horizon it serves.
 2. Read affected code, technical standards, programme README and the areas' proposals; design claims cite files actually opened.
+   A part that rests on a data layer (a dictionary, a reference table, an imported corpus, a
+   catalogue) first shows that the layer carries it in production: the part's own lookups, at
+   production size and in every language or tenant it serves, read with a sanctioned read-only
+   tool and kept as evidence. A dev slice or fixture shows that the code works, not that the
+   data does. A layer that does not yet carry the part is a prerequisite part or programme, not
+   a risk note (Martin, 2026-11-23: French chapters were built against a dev slice of a few
+   hundred words; production's French forms carried their pronouns, so no chapter could pass).
 3. Resolve questions through [asking-martin](asking-martin.md). Record decisions in the README or goal. Put shared decisions in the technical standard and then in affected goals. Add needed standards within the app's direction.
 4. Read the README against [the document structure](references/programme-document.md) (repairs use their short page). Follow [writing a programme document](writing-a-programme-document.md) through the desk's release of the ready order.
 
