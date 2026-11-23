@@ -464,9 +464,11 @@ export async function runCheck({ row, env = process.env, deps = {} }) {
   const database = await guarded('database', () => checkDatabase(baseUrl, requests));
   parts.push(database);
   if (version.verdict === GREEN && database.verdict === GREEN) {
-    // Which suites gate is main's tip's word, as for the deploy itself; the
-    // deployed commit says how each runs.
+    // Main's tip selects gates for a main deploy. For a release the shipped
+    // branch head is pinned by sha: merge-back may already have deleted the
+    // branch by the time this check runs.
     parts.push(await guarded('suites', async () => {
+      if (row.release_branch) return checkSuites({ sha, declaration, baseUrl, env, say }, deps.suites || {});
       const tip = (deps.declare || ((at) => declarationAt(worktree, at)))(CHECK_GATE_REF);
       if (!tip.ok) return part('suites', COULD_NOT_RUN, `main's tip declaration could not be read: ${oneLine(tip.error)}`);
       return checkSuites({ sha, declaration: gatedByTip(declaration, tip.declaration), baseUrl, env, say }, deps.suites || {});

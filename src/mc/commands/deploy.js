@@ -102,6 +102,11 @@ import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
 import { deployProgress } from '../deploy-progress.js';
 import {
+  beginCut, confirmCutTip, readClosedRelease, readRelease,
+  releaseCutLines, releaseOpenLine, releaseStateLine, releaseSummary, settleCut, RELEASE_CUTTING,
+} from '../deploy-release.js';
+import { awaitClaim, liveClaims, overlaps } from '../full-run-claim.js';
+import {
   classifyStop, deployMendLine, deployMendReading, FINISHED, gateStopCode, readDeployMends, requestDeployRepair,
 } from '../deploy-repair.js';
 import {
@@ -723,7 +728,7 @@ function failureLine(code, said, interrupted) {
  */
 export async function gateStage({ plan, opts, env, say, deps = {}, own = false }) {
   const measured = await measureGate({
-    sha: plan.sha, path: plan.path, acceptRed: Boolean(opts.acceptRed), dryRun: opts.dryRun, env, say, own,
+    sha: plan.sha, path: plan.path, branch: plan.branch, acceptRed: Boolean(opts.acceptRed), dryRun: opts.dryRun, env, say, own,
     deps: deps.gate || {}, suites: deps.suites || {},
   });
   return judgeGate({ ...measured, plan, opts });
@@ -790,6 +795,18 @@ function gateSummary(gate) {
   };
 }
 
+const branchable = (plan, opts) => Boolean(plan.live) && !opts.acceptRed && !plan.pick.green && !plan.backwards && !plan.taken_back;
+const isRed = ({ state }) => state === 'red' || state === 'stalled';
+
+function reportOpenRelease(release, { stdout, opts }) {
+  if (opts.json) stdout.write(`${JSON.stringify({ release: releaseSummary(release) }, null, 2)}\n`);
+  else {
+    stdout.write(`${releaseOpenLine(release)}\n${releaseStateLine(release)}\n`);
+    stdout.write('mc: it ships by itself when it is green; mc deploy --follow watches it\n');
+  }
+  return 0;
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
@@ -809,7 +826,15 @@ export async function run(argv, deps = {}) {
       : 'mc: an unattended session does not deploy — a deploy is made by whoever types it, and no one typed this (headless, MC_HEADLESS=1); nothing was deployed. mc deploy --dry-run is the reading.\n');
     return opts.takeBack ? 2 : 1;
   }
-  if (opts.follow) return follow({ env, stdout, deps });
+  const root = deps.root || workRoot(env);
+  const lock = deps.lock || realLock;
+  const cutting = deps.releaseCutting ?? RELEASE_CUTTING;
+  const admit = (fn) => withDeploysLock(env, fn, { lock, root, name: 'deploy', ...(cutting ? { strict: true } : {}) });
+  const pending = cutting && !opts.takeBack ? readRelease(root) : null;
+  if (pending && !pending.closed && !pending.push_pending) return opts.follow
+    ? followRelease(pending, { root, stdout, deps, opts })
+    : reportOpenRelease(pending, { stdout, opts });
+  if (opts.follow && !pending?.push_pending) return follow({ env, stdout, deps });
 
   const repos = deps.repos || defaultRepos(env);
   const path = repos.find((repo) => repo.name === REPO)?.path;
@@ -825,6 +850,26 @@ export async function run(argv, deps = {}) {
   // below are refs, and refs are shared by every worktree of the repository,
   // so they stay here. Only the spawn's cwd moves.
   const git = deps.git || tryGit;
+  if (pending?.push_pending) {
+    const alive = deps.alive || processAlive;
+    if (pending.push_pid && alive(pending.push_pid)) {
+      stdout.write(`mc: ${pending.branch} is being cut; mc deploy will report it once the push finishes\n`);
+      return 0;
+    }
+    const prior = settleCut(pending, { root, env, path, git, admit, dryRun: opts.dryRun || opts.follow });
+    if (prior.release) return opts.follow
+      ? followRelease(prior.release, { root, stdout, deps, opts })
+      : reportOpenRelease(prior.release, { stdout, opts });
+    if (prior.error) {
+      stderr.write(`mc: ${prior.error} — nothing was deployed\n`);
+      return 1;
+    }
+  }
+  if (opts.follow) return follow({ env, stdout, deps });
+  const historyRoot = deps.gate?.root ?? mcHome(env);
+  const history = () => (deps.gate?.history || readNightlyHistory)(path, { root: historyRoot }).runs;
+  const activeFullRun = (sha) => liveClaims({ root: historyRoot, alive: deps.alive || processAlive })
+    .find((claim) => overlaps(claim, { repo: REPO, sha }));
   const base = await deployPlan({
     path,
     env,
@@ -835,17 +880,29 @@ export async function run(argv, deps = {}) {
     nightly: deps.nightly || nightlyReading,
     languageState: deps.languageState || readLanguageState,
     acceptRed: Boolean(opts.acceptRed),
-    history: () => (deps.gate?.history || readNightlyHistory)(path, { root: deps.gate?.root ?? mcHome(env) }).runs,
+    history,
   });
   if (!base.sha) {
     stderr.write(`mc: ${path} has no origin/main — mc deploy needs ${REPO}'s main checkout\n`);
     return 1;
   }
+  const cutPossible = cutting && branchable(base, opts);
+  const observed = { state: base.pick.tip_state, run: base.pick.tip_run, commit: base.tip };
+  // A run in flight is newer than the recorded red. Let it finish before
+  // deciding to cut; an ordinary unmeasured tip still joins via preparation.
+  if (cutPossible && !opts.dryRun && isRed(observed)) {
+    const active = activeFullRun(base.tip);
+    if (active) {
+      if (!opts.json) stdout.write(`mc: a full run of ${base.short} is in flight (pid ${active.pid}); waiting for its verdict before cutting\n`);
+      await awaitClaim(active, { root: historyRoot, alive: deps.alive || processAlive, sleep: deps.sleep });
+      return run(argv, deps);
+    }
+  }
 
   // Where the script will run, and in what state that `main` is. A dry run
   // makes nothing, so it reports the worktree it would make rather than a
   // state it cannot read.
-  const source = deploySource({ path, git, env, create: !opts.dryRun });
+  const source = deploySource({ path, git, env, create: !opts.dryRun && !(cutPossible && isRed(observed)) });
   const state = source.absent
     ? { dirty: [], ahead: null, behind: null }
     : worktreeState({ worktree: source.worktree, git });
@@ -876,10 +933,19 @@ export async function run(argv, deps = {}) {
   // starts no full run: it says one is needed.
   const say = (line) => { if (!opts.json) stdout.write(`${line}\n`); };
   const gateDeps = { gate: deps.gate || {}, suites: deps.suites || {} };
+  const sayCut = (full, release = null, { includeReading = true } = {}) => {
+    if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: opts.dryRun, release: release ? releaseSummary(release) : null, ...(opts.dryRun ? { would_cut: true } : {}) }, null, 2)}\n`);
+    else {
+      for (const line of releaseCutLines(plan, full, opts)) say(line);
+      if (includeReading) for (const line of takeBackLines(plan.take_back)) say(line);
+    }
+    return 0;
+  };
 
   // `--dry-run` is the plan alone: it starts nothing and deploys nothing, so it
   // is the safe thing to type when you are not sure.
   if (opts.dryRun) {
+    if (cutPossible && isRed(observed) && !activeFullRun(plan.tip)) return sayCut(observed);
     if (!opts.json) { for (const line of planLines(plan)) stdout.write(`${line}\n`); repairLine({ stdout, root: deps.root || workRoot(env), deps }); }
     // Production never moves backwards, and a taken-back commit does not come back: there is nothing to gate, and the reading has said why.
     if (plan.backwards || plan.taken_back) {
@@ -911,8 +977,12 @@ export async function run(argv, deps = {}) {
     }
     return 0;
   }
-  if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: false }, null, 2)}\n`);
-  else { for (const line of planLines(plan)) stdout.write(`${line}\n`); repairLine({ stdout, root: deps.root || workRoot(env), deps }); }
+  const showPlan = () => {
+    if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: false }, null, 2)}\n`);
+    else { for (const line of planLines(plan)) stdout.write(`${line}\n`); repairLine({ stdout, root, deps }); }
+  };
+  const recordedCut = cutPossible && isRed(observed);
+  if (!recordedCut && !(opts.json && cutPossible)) showPlan();
 
   // The holder is who the record names, and it is needed before it: a
   // refusal is written by somebody too.
@@ -967,6 +1037,53 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
+  const attemptCut = (full, includeReading) => {
+    const remoteError = confirmCutTip(path, git, plan.tip);
+    const result = admit(() => {
+      const existing = readRelease(root);
+      if (existing?.push_pending) return { replan: true };
+      if (existing && !existing.closed) return { release: existing, existing: true };
+      if (remoteError) return { error: remoteError };
+      if (refuseRunning()) return { refused: true };
+      const standing = (deps.lastDeploy || lastDeployRow)(env);
+      const live = standing ? liveCommitOf(standing.live_commit || standing.sha) : null;
+      const floor = takenBackFloor({ path, git, shas: (deps.takenBack || takenBackRead)(env) });
+      if ((live && git(path, ['rev-parse', '--verify', `${live}^{commit}`]) !== plan.live) || floor.covers(plan.tip)) {
+        return { error: 'live or the take-back floor changed; mc deploy reads it again' };
+      }
+      // Recheck the decision with the history as it stands under admission.
+      // Another full run might have finished while the reading was made.
+      const active = activeFullRun(plan.tip);
+      if (active) return { wait: active };
+      const runs = history();
+      const verdict = fullRunVerdict(runs, plan.tip);
+      const chain = plan.live ? git(path, ['rev-list', '--first-parent', `${plan.live}..${plan.tip}`]) : plan.tip;
+      if (chain === null) return { error: "could not read main's first-parent chain; nothing cut" };
+      const green = pickCommit({ chain: chain.split('\n').filter(Boolean), live: plan.live, runs,
+        descends: (sha) => !plan.live || git(path, ['merge-base', '--is-ancestor', plan.live, sha]) !== null,
+        takenBack: floor.covers,
+      }).pick;
+      if (green || (verdict.state !== 'none' && !isRed(verdict))) return { replan: true };
+      // Only the exact run recorded for the tip can authorize a cut.
+      if (!isRed(verdict)) return { error: `no recorded red or stalled full run of ${plan.short}; nothing cut` };
+      const measured = { ...full, ...verdict, commit: plan.tip };
+      const intent = beginCut({ root, plan, full: measured, holder: holder.name,
+        gate: gateRecord({ full: measured }), reading, now: () => new Date(deps.clock?.() ?? Date.now()) });
+      return { intent, measured };
+    });
+    if (result.wait) return awaitClaim(result.wait, { root: historyRoot, alive, sleep: deps.sleep }).then(() => run(argv, deps));
+    if (result.replan) return run(argv, deps);
+    if (result.refused) return 1;
+    if (result.existing) return reportOpenRelease(result.release, { stdout, opts });
+    const settled = result.intent ? settleCut(result.intent, { root, env, path, git, admit, push: true }) : result;
+    if (!settled.release) {
+      stderr.write(`mc: ${settled.error || 'the release cut could not be recorded'} — nothing was deployed\n`);
+      return 1;
+    }
+    return sayCut(result.measured, settled.release, { includeReading });
+  };
+  if (recordedCut) return attemptCut(observed, true);
+
   // Nothing here stashes, resets or discards anything: the worktree that has
   // `main` may well be somebody's, and a `main` that is not exactly
   // `origin/main` plus nothing is a refusal with the path in the row. The one
@@ -1001,15 +1118,17 @@ export async function run(argv, deps = {}) {
   // The commit is measured whole and the app used before anything ships — and
   // after every refusal that costs nothing to make, so a deploy already
   // running or a dirty main is not found out after a full run.
-  const root = deps.root || workRoot(env);
   const prepared = await prepareStage({
-    plan, opts, env, root, holder, say, stdout, stderr, own, deps: { ...deps, gate: gateDeps.gate, suites: gateDeps.suites },
+    plan, opts, env, root, holder, say, stdout, stderr, own, deferMainRepair: cutPossible,
+    deps: { ...deps, gate: gateDeps.gate, suites: gateDeps.suites },
   });
   if (prepared.code != null) {
     if (prepared.note) refuse(prepared.note, prepared.stop || 'prepare');
     return prepared.code;
   }
   const gate = judgeGate({ ...prepared.result, plan, opts });
+  if (cutPossible && isRed(gate.full) && gate.full.run?.commit === plan.tip) return attemptCut(gate.full, opts.json);
+  if (opts.json && cutPossible) showPlan();
   cells = gateRecord({ full: gate.full, exercise: gate.exercise, accepted: gate.accepted });
   if (opts.json) stdout.write(`${JSON.stringify({ gate: gateSummary(gate) }, null, 2)}\n`);
   else for (const line of gate.lines) stdout.write(`${line}\n`);
@@ -1037,12 +1156,16 @@ export async function run(argv, deps = {}) {
   // (ruling 30: the deploy is its own process, beside the merger). Under the
   // lock the record is final: the check for a running deploy, the closing of
   // an abandoned row, the deployer's start and its row are one step.
-  const lock = deps.lock || realLock;
   const startDeployer = deps.startDeployer || startDeployerDefault;
   // The same lock the row writers take, and held once: `withDeploysLock` runs
   // the writers called inside this step (`recordStart`, `closeAbandoned`,
   // `recordRefusal`) within this hold instead of waiting for it.
-  const started = withDeploysLock(env, () => {
+  const started = admit(() => {
+    if (cutting) {
+      const prior = readRelease(root);
+      if (prior?.push_pending) return { replan: true };
+      if (prior && !prior.closed) return { release: prior };
+    }
     if (refuseRunning()) return null;
     // The ancestor rule once more, against the last deployed row as it stands now: a deploy that
     // landed since the reading may have moved production past this pick.
@@ -1091,8 +1214,10 @@ export async function run(argv, deps = {}) {
       sha: plan.sha, holder: holder.name, pid: deployer.pid ?? '', started: key.started, gate: cells, takeBack: reading,
     }, env);
     return { key, deployer };
-  }, { lock, root, name: 'deploy' });
+  });
   if (!started) return 1;
+  if (started.replan) return run(argv, deps);
+  if (started.release) return reportOpenRelease(started.release, { stdout, opts });
   const { key, deployer } = started;
   // A deployer run in this process — a test's — is run now, after its row is
   // written, and its exit code is the answer.
@@ -1594,7 +1719,7 @@ function preparationInFlight({ root, plan, alive }) {
  * `{ result }` when the measurements are in, else `{ code, note }`: the exit
  * code the deploy ends with and, for a refusal, the row's note.
  */
-async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, own = false, again = false }) {
+async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, own = false, again = false, deferMainRepair = false }) {
   const alive = deps.alive || processAlive;
   const lock = deps.lock || realLock;
   const startPreparer = deps.startPreparer || startPreparerDefault;
@@ -1629,7 +1754,8 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
     }
     const log = preparationLogPath(root);
     const started = new Date().toISOString();
-    const job = { root, sha: plan.sha, path: plan.path, started, acceptRed: Boolean(opts.acceptRed), log, holder: holder.name, ownWorktree: own };
+    const job = { root, sha: plan.sha, path: plan.path, started, acceptRed: Boolean(opts.acceptRed), log, holder: holder.name, ownWorktree: own,
+      ...(deferMainRepair ? { deferMainRepair: true } : {}) };
     // The record is written before the process exists, so that its first
     // word about itself finds it and a second asker finds it too.
     writePreparation(root, { sha: plan.sha, pid: null, started, stage: 'starting', log, accept_red: Boolean(opts.acceptRed), holder: holder.name });
@@ -1685,7 +1811,7 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
     // suites on a red full run: the same rule as a finished one — prepare
     // again, with the suites, said in one line. Once: a preparation this
     // asker started has its flags.
-    if (!again) return prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, own, again: true });
+    if (!again) return prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, own, again: true, deferMainRepair });
     const note = `the preparation of ${plan.short} did not run the suites --accept-red needs`;
     stderr.write(`mc: ${note} — nothing was deployed\n`);
     return { code: 1, note, stop: 'prepare' };
@@ -1750,6 +1876,50 @@ export function startDetached(job, {
 
 /** How often the watcher reads the log again. */
 const FOLLOW_POLL_MS = 500;
+
+async function followRelease(first, { root, stdout, deps, opts }) {
+  const sleep = deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
+  const signals = deps.signals || process;
+  const logOut = opts.json ? deps.stderr || process.stderr : stdout;
+  let stopped = false;
+  const onStop = () => { stopped = true; };
+  for (const signal of STOP_SIGNALS) signals.on(signal, onStop);
+  let previous = null;
+  let followed = null;
+  if (!opts.json) stdout.write(`${releaseOpenLine(first)}\n`);
+  try {
+    let release = first;
+    for (;;) {
+      if (stopped) {
+        logOut.write('mc: stopped watching — the release goes on; mc deploy --follow watches again\n');
+        return 130;
+      }
+      if (release?.row.started !== first.row.started || release.cut.sha !== first.cut.sha) {
+        release = readClosedRelease(root, first);
+      }
+      if (!release || (release.closed && release.closed !== 'merged')) return 1;
+      const line = releaseStateLine(release);
+      if (line !== previous) {
+        stdout.write(`${opts.json ? JSON.stringify({ release: releaseSummary(release) }) : line}\n`);
+        previous = line;
+      }
+      if (release.closed === 'merged') return 0;
+      const { log, pid } = release.deployer || {};
+      if (release.state === 'deploying' && log && pid && followed !== pid) {
+        followed = pid;
+        const exit = await followLog({
+          log, pid, stdout: logOut, deps, stopped: 'the release goes on; mc deploy --follow watches again',
+        });
+        if (exit !== null) return exit;
+      } else {
+        await sleep(FOLLOW_POLL_MS);
+      }
+      release = readRelease(root);
+    }
+  } finally {
+    for (const signal of STOP_SIGNALS) signals.off(signal, onStop);
+  }
+}
 
 /**
  * Watch a deploy in its own process: the log as it grows, until the process

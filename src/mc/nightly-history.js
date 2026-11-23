@@ -90,6 +90,9 @@ export function storedRun(run) {
     reason: run?.reason ? String(run.reason).slice(0, 300) : null,
     tests: run?.tests ?? null,
     red: measured ? [...run.red] : null,
+    ...(run?.ref ? { ref: run.ref } : {}),
+    ...(run?.cut_files?.length ? { cut_files: [...run.cut_files] } : {}),
+    ...(run?.stalled_files?.length ? { stalled_files: [...run.stalled_files] } : {}),
     // What held a checkout the run could not use (pid, command, cwd): the deploy mend names it.
     ...(Array.isArray(run?.holders) && run.holders.length
       ? { holders: run.holders.slice(0, 5).map(({ pid, command = null, cwd = null }) => ({ pid, command, cwd })) } : {}),
@@ -152,7 +155,7 @@ export function readNightlyHistory(repoPath, { root = mcHome() } = {}) {
  * second claims a freshness the meter does not have.
  */
 export function nightlyReading(repoPath, { root = mcHome() } = {}) {
-  const { runs } = readNightlyHistory(repoPath, { root });
+  const runs = readNightlyHistory(repoPath, { root }).runs.filter((run) => !run.ref);
   const measured = runs.filter((run) => Array.isArray(run.red));
   const latest = measured.at(-1) || null;
   return {

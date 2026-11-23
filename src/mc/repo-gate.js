@@ -148,6 +148,10 @@ export async function runGate({
   // (`holdLease: false`), since it merges nothing. A `--full` asked about a pull
   // request stays in the lane.
   isolated = false,
+  // A named remote-tracking ref for an isolated full run. Pin the resolved
+  // commit, and do not start if it has moved past the caller's expected head.
+  fullRef = null,
+  expectedSha = null,
   // The test lanes, when the caller declares them (the full run's
   // `fullRunLanes`); null asks `testLanes` for the round's mode.
   lanes: declaredLanes = null,
@@ -522,8 +526,8 @@ export async function runGate({
   // cannot know whether the suite will be complete is a round whose green
   // means nothing, so it stops here rather than after two suite runs. Read
   // before the lock.
-  const declared = declarationFor(repoPath, { root, env });
-  if (!declared.ok) {
+  let declared = fullRef ? null : declarationFor(repoPath, { root, env });
+  if (declared && !declared.ok) {
     if (holdLease) releaseLease({ repoPath, holder, root });
     return finish('declaration', declared.reason);
   }
@@ -555,7 +559,7 @@ export async function runGate({
   // for the stall window stops the group and releases its lane.
   const externalSignal = signal;
   signal = externalSignal ? AbortSignal.any([externalSignal, stopSignal]) : stopSignal;
-  const roundTimeoutMs = declared.declaration.round_timeout_ms || suiteTimeoutMs(env);
+  let roundTimeoutMs = declared?.declaration.round_timeout_ms || suiteTimeoutMs(env);
   const stallMinutes = Number(env.MC_ROUND_STALL_MINUTES);
   const stallMs = Number.isFinite(stallMinutes) && stallMinutes > 0 ? stallMinutes * 60_000 : ROUND_STALL_MS;
   let stalled = false;
@@ -584,11 +588,12 @@ export async function runGate({
     stallReason = `${why} — files in flight: ${nameSome(report.stalled_files) || 'none named'}; gates in flight: ${nameSome(report.stalled_gates) || 'none'}; phase: ${[...activePhases].join(', ') || 'final checks'}; load ${Math.round(loadavg()[0] * 10) / 10}`;
     deadlineController.abort(new Error(stallReason));
   };
-  const cancelCeiling = armCeiling(() => {
+  const sayCeiling = () => {
     const runs = progress.read();
     const finished = Math.max(runs.finished.length, progress.processes().exited);
     say(`past its ${Math.ceil(roundTimeoutMs / 1000)} s ceiling at load ${Math.round(loadavg()[0] * 10) / 10} — ${finished} of ${finished + pendingFiles().length} files finished, going on`);
-  }, roundTimeoutMs);
+  };
+  let cancelCeiling = armCeiling(sayCeiling, roundTimeoutMs);
   // Forward motion is a test file the reporter finished, or a test file's
   // process that exited (`test-progress-preload.mjs`). The second is what a
   // whole suite shows while node's in-order reporter waits on a slow file ahead;
@@ -627,7 +632,7 @@ export async function runGate({
   const caught = signals ? ['SIGINT', 'SIGTERM'] : [];
   for (const signal of caught) process.on(signal, onSignal);
 
-  report.declaration = { source: declared.source, ...declared.declaration };
+  if (declared) report.declaration = { source: declared.source, ...declared.declaration };
 
   const checkoutName = beside ? FULL_RUN_CHECKOUT : 'candidate';
   const headDir = measurementCheckoutPath(repoPath, workRoot(env), checkoutName);
@@ -664,32 +669,24 @@ export async function runGate({
     // here would measure a tree nobody asked about on a repository that calls
     // it something else, so it is read, and a repository that will not say is
     // a stop.
-    const baseRef = facts.pr ? `origin/${facts.pr.base}` : await defaultBaseRef({ git: askGit, repoPath });
+    const baseRef = facts.pr ? `origin/${facts.pr.base}` : fullRef || await defaultBaseRef({ git: askGit, repoPath });
     if (!baseRef) return finish('base', 'no pull request named a base and origin does not say which branch is its default');
-    report.base = { ref: baseRef, commit: trim((await askGit(['rev-parse', baseRef], { cwd: repoPath })).stdout) || null };
+    const resolved = await askGit(fullRef ? ['rev-parse', '--verify', `${baseRef}^{commit}`] : ['rev-parse', baseRef], { cwd: repoPath });
+    report.base = { ref: baseRef, commit: (!fullRef || resolved.status === 0) ? trim(resolved.stdout) || null : null };
+    if (fullRef && (!report.base.commit || (expectedSha && report.base.commit !== expectedSha))) {
+      return finish('base', `${fullRef} does not resolve to the expected full-run head${expectedSha ? ` ${expectedSha}` : ''}`);
+    }
 
-    // What gets run: the test files the repository's selector says this change
-    // reaches, or the repository's own whole suite. `full` asks for the second
-    // on purpose; a repository with no `select` gets it either way.
-    const selectCommand = wholeSuite ? declared.declaration.select_full : declared.declaration.select;
-    const selects = Boolean(selectCommand);
-    const commandLine = suiteCommand({ repoPath, declaration: declared.declaration, root });
-    if (!commandLine.ok && !selects) return finish('suite', commandLine.reason);
-    report.command = selects ? selectCommand : commandLine.command;
-    // Which command produced a whole-suite reading, and which of the two
-    // answers it is. "It was full" is not enough on its own any more: `npm
-    // test` and a declared `suite` are both whole-suite runs and are not the
-    // same run, and the round that reported 6 files as everything reported
-    // `full: true` while it did it.
-    //
-    // Not the same field as `selection.full_suite`, which is the selector's
-    // admission that it could not narrow a change. They are never both set:
-    // this one exists only when no selection ran.
-    if (wholeSuite && selects) report.full_suite = { command: selectCommand, source: 'declared-plan' };
-    else if (!selects) report.full_suite = { command: commandLine.run, source: commandLine.source };
+    const suitePlan = (contentDir) => {
+      const selectCommand = wholeSuite ? declared.declaration.select_full : declared.declaration.select;
+      const commandLine = suiteCommand({ repoPath: contentDir, declaration: declared.declaration, root });
+      return { selectCommand, selects: Boolean(selectCommand), commandLine };
+    };
+    let planForSuite = declared && suitePlan(repoPath);
+    if (planForSuite && !planForSuite.commandLine.ok && !planForSuite.selects) return finish('suite', planForSuite.commandLine.reason);
 
     const candidate = await measurementCheckout({
-      repoPath, sha: facts.pr && !batch ? facts.pr.head_sha : baseRef,
+      repoPath, sha: facts.pr && !batch ? facts.pr.head_sha : fullRef ? report.base.commit : baseRef,
       git: askGit, cwds: candidateCwds, root: workRoot(env), name: checkoutName,
     });
     if (!candidate.ok) {
@@ -698,6 +695,27 @@ export async function runGate({
       return finish('worktree', candidate.reason);
     }
     say(beside ? `using the full run's own measurement checkout ${headDir}` : `using the merger's measurement checkout ${headDir}`);
+
+    // The checked-out ref declares its own preparation, commands and suites.
+    if (fullRef) {
+      declared = declarationFor(repoPath, { root, env, contentDir: headDir });
+      if (!declared.ok) return finish('declaration', declared.reason);
+      report.declaration = { source: declared.source, ...declared.declaration };
+      const namedCeiling = declared.declaration.round_timeout_ms || suiteTimeoutMs(env);
+      if (namedCeiling !== roundTimeoutMs) {
+        cancelCeiling();
+        roundTimeoutMs = namedCeiling;
+        cancelCeiling = armCeiling(sayCeiling, roundTimeoutMs);
+      }
+      planForSuite = suitePlan(headDir);
+      if (!planForSuite.commandLine.ok && !planForSuite.selects) return finish('suite', planForSuite.commandLine.reason);
+    }
+    const { selectCommand, selects, commandLine } = planForSuite;
+    report.command = selects ? selectCommand : commandLine.command;
+    // Distinct from selection.full_suite, which reports a selector that
+    // could not narrow a change rather than the command we chose to run.
+    if (wholeSuite && selects) report.full_suite = { command: selectCommand, source: 'declared-plan' };
+    else if (!selects) report.full_suite = { command: commandLine.run, source: commandLine.source };
 
     if (!facts.pr) {
       say(`measuring ${baseRef} as fetched — the whole suite, one tree`);
@@ -831,6 +849,7 @@ export async function runGate({
         commit: fresh.commit || null,
       };
       if (!fresh.ok) return finish(fresh.kind === 'outside' ? 'derived-outside' : 'derived', fresh.reason);
+      if (fullRef && fresh.commit) return finish('derived', `${fullRef} needs derived changes; the changed tree was not measured`);
       if (fresh.commit) {
         say(`regenerated ${fresh.regenerated.length} derived file${fresh.regenerated.length === 1 ? '' : 's'} after the merge and committed them in the candidate`);
         if (report.candidate_trees?.length) {

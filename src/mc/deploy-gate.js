@@ -33,6 +33,7 @@ import { KEPT_HOLD_SECONDS, mainIdleSecondsOf, stopServer } from './dev-servers.
 import { verdictOf } from './gate-output.js';
 import { run as runGit } from './git.js';
 import { readMainMends } from './main-repair.js';
+import { releaseRef } from './deploy-release.js';
 import { fullRun, RETRY_LATER, RETRY_NOW } from './nightly-loop.js';
 import { readNightlyHistory } from './nightly-history.js';
 import { nightlyLogPath } from './nightly.js';
@@ -73,6 +74,7 @@ function normalized(run) {
     ...(Array.isArray(run?.holders) && run.holders.length ? { holders: run.holders } : {}),
     // The files a run never finished: a stall as surely as a run stopped as one (`classify`).
     ...(Array.isArray(run?.cut_files) && run.cut_files.length ? { cut_files: [...run.cut_files] } : {}),
+    ...(Array.isArray(run?.stalled_files) && run.stalled_files.length ? { stalled_files: [...run.stalled_files] } : {}),
   };
 }
 
@@ -98,8 +100,9 @@ export function fullRunVerdict(runs, sha) {
 
 /** The state of one run of the commit. */
 function classify(run) {
-  if (run.measured) return run.red.length ? 'red' : 'green';
-  return run.stopped_at === 'stalled' || run.cut_files?.length ? 'stalled' : 'unmeasured';
+  if (run.red?.length) return 'red';
+  if (run.stopped_at === 'stalled' || run.cut_files?.length || run.stalled_files?.length) return 'stalled';
+  return run.measured ? 'green' : 'unmeasured';
 }
 
 /**
@@ -170,6 +173,7 @@ function mendWords(entries) {
  */
 export async function measureFull({
   sha, path, env = process.env, dryRun = false, say = () => {}, deps = {}, root = mcHome(env), mendRoot = workRoot(env),
+  branch = null, deferMainRepair = false,
 }) {
   const history = deps.history || readNightlyHistory;
   const found = fullRunVerdict(history(path, { root }).runs, sha);
@@ -185,7 +189,9 @@ export async function measureFull({
     }
     say(`mc: full run — none of ${short(sha)}; starting one (mc test memoro --full, the round the daily run takes) and following it`);
     const start = () => (deps.fullRun || fullRun)({ name: REPO, path }, {
-      root, env, sha, deploy: true, say: (line) => say(`mc:   ${line}`), narrate: (line) => say(`mc:   ${line}`),
+      root, env, sha, deploy: true, ...(branch ? { ref: releaseRef(branch) } : {}),
+      ...(deferMainRepair ? { deferMainRepair: true } : {}),
+      say: (line) => say(`mc:   ${line}`), narrate: (line) => say(`mc:   ${line}`),
     });
     let given = await start();
     // A run this one followed measured what its starter found, which may be a
@@ -234,18 +240,18 @@ export function withMendsNow(full, { env = process.env, deps = {} } = {}) {
  */
 export async function measureGate({
   sha, path, acceptRed = false, dryRun = false, env = process.env, say = () => {}, deps = {}, suites = {}, stage = () => {}, own = false,
-  outputDir = null,
+  outputDir = null, branch = null, deferMainRepair = false,
 }) {
   stage('full-run');
   const full = await measureFull({
-    sha, path, env, dryRun, say, deps, root: deps.root, mendRoot: deps.mendRoot,
+    sha, path, env, dryRun, say, deps, root: deps.root, mendRoot: deps.mendRoot, branch, deferMainRepair,
   });
   const unmeasured = full.state === 'unmeasured' || full.state === 'moved';
   const redFull = full.state === 'red' || full.state === 'stalled';
   if (unmeasured || (redFull && !dryRun && !acceptRed)) return { full, exercise: null };
   stage('suites');
   say(`mc: suites — starting a local server of ${short(sha)} and running what .mc/test.json declares`);
-  const exercise = await exerciseApp({ sha, env, say, deps: suites, own, outputDir });
+  const exercise = await exerciseApp({ sha, env, say, deps: suites, own, outputDir, gateRef: branch ? sha : GATE_REF });
   return { full, exercise };
 }
 
@@ -388,7 +394,7 @@ function gitIn(worktree, args) {
  * `not_on_tip` the names of the commit's suites the tip does not declare.
  */
 export async function exerciseApp({
-  sha, env = process.env, say = () => {}, deps = {}, own = false, outputDir = null,
+  sha, env = process.env, say = () => {}, deps = {}, own = false, outputDir = null, gateRef = GATE_REF,
 }) {
   const d = {
     sharedWorktree, readDeclaration, ensureAppServer, ensureDevServer, runSuites, tokenFor, head: headOf, dirty: dirtyOf,
@@ -396,7 +402,7 @@ export async function exerciseApp({
     takeHolder, placeWorktree, serversFor, stopServer, deployWorktree: deployWorktreePath, alive: processAlive,
     ...deps,
   };
-  if (own) return exerciseOwn({ sha, env, say, deps, d, outputDir });
+  if (own) return exerciseOwn({ sha, env, say, deps, d, outputDir, gateRef });
   const worktree = d.sharedWorktree(env);
   if (!worktree) return cannot(NO_SHARED_WORKTREE);
   const dirtyNow = d.dirty(worktree);
@@ -419,7 +425,7 @@ export async function exerciseApp({
   }
 
   // Every ensure pins: the checkout is where it was placed, and following main would move it.
-  return runDeclared({ d, deps, worktree, sha, env, say, pinned: true, outputDir });
+  return runDeclared({ d, deps, worktree, sha, env, say, pinned: true, outputDir, gateRef });
 }
 
 /**
@@ -437,7 +443,7 @@ export async function exerciseApp({
  * 4. whatever happened, the servers the exercise started are stopped and the holder is released;
  *    a server that was already there is left.
  */
-async function exerciseOwn({ sha, env, say, deps, d, outputDir }) {
+async function exerciseOwn({ sha, env, say, deps, d, outputDir, gateRef }) {
   const worktree = d.deployWorktree(env);
   // No bound on the wait: a holder that is alive is waited for and said each minute (`takeHolder`), a holder
   // that is gone is taken over, and elapsed time is never the reason the suites do not run (D6, D16).
@@ -456,7 +462,7 @@ async function exerciseOwn({ sha, env, say, deps, d, outputDir }) {
     if (placed.moved) say(`mc: suites — the deploy worktree ${worktree} stands at ${short(sha)} now (${placed.how === 'reset' ? 'moved back from' : 'fast-forwarded from'} ${short(placed.from)})`);
     for (const line of strayLines(placed.strays)) say(line);
     already = new Set(d.serversFor(worktree, { root: d.root }).map((server) => server.instance_id));
-    return await runDeclared({ d, deps, worktree, sha, env, say, pinned: false, outputDir });
+    return await runDeclared({ d, deps, worktree, sha, env, say, pinned: false, outputDir, gateRef });
   } finally {
     // Its own servers only: one that was there before the exercise is somebody's, and left.
     if (already) {
@@ -475,12 +481,12 @@ async function exerciseOwn({ sha, env, say, deps, d, outputDir }) {
  * themselves — the same on both routes. `pinned` is the shared checkout's: it is placed once and no
  * ensure may follow main, which would move it.
  */
-async function runDeclared({ d, deps, worktree, sha, env, say, pinned, outputDir = null }) {
+async function runDeclared({ d, deps, worktree, sha, env, say, pinned, outputDir = null, gateRef }) {
   const read = d.readDeclaration(worktree);
   if (!read.ok) return cannot(read.error);
   const { declaration } = read;
   // Which suites gate is main's tip's to say, never the shipped commit's (Martin, 2026-11-15).
-  const tip = tipDeclaration(d, worktree);
+  const tip = tipDeclaration(d, worktree, gateRef);
   if (!tip.ok) return cannot(tip.error);
   const { gating, notGate, notInCommit, notOnTip } = gateSet({ tip: tip.declaration, shipped: declaration });
   const gated = { ...declaration, suites: gating };
@@ -598,12 +604,13 @@ export const GATE_REF = 'origin/main';
  * fetched in). One that cannot be read or is not valid refuses: without it
  * nothing says which suites gate, and the shipped commit's is never asked.
  */
-function tipDeclaration(d, worktree) {
-  const shown = d.gitIn(worktree, ['show', `${GATE_REF}:.mc/test.json`]);
+function tipDeclaration(d, worktree, ref) {
+  const shown = d.gitIn(worktree, ['show', `${ref}:.mc/test.json`]);
   if (shown.status !== 0) {
-    return { ok: false, error: `main's tip (${GATE_REF}) does not declare .mc/test.json (${lastLines(shown.stderr, 1) || 'git show failed'}) — it is what says which suites gate a deploy` };
+    const source = ref === GATE_REF ? "main's tip" : 'the release head';
+    return { ok: false, error: `${source} (${ref}) does not declare .mc/test.json (${lastLines(shown.stderr, 1) || 'git show failed'}) — it is what says which suites gate a deploy` };
   }
-  return parseDeclaration(shown.stdout, `${GATE_REF}:.mc/test.json`);
+  return parseDeclaration(shown.stdout, `${ref}:.mc/test.json`);
 }
 
 /**

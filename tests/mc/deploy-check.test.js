@@ -882,3 +882,11 @@ test("runCheck: which suites gate is main's tip's word, not the deployed commit'
   assert.equal(unread.seen.round.length, 0);
   assert.equal(gatedByTip(shipped, tip).suites.length, 4);
 });
+
+test('runCheck: a release row gates with the shipped release declaration, not main', async () => {
+  const { deps, seen } = boundaries();
+  const verdict = await runCheck({ row: { ...ROW, release_branch: 'release/0123456' }, env: {}, deps });
+  assert.equal(verdict.check, GREEN, verdict.check_why);
+  assert.deepEqual(seen.declared, [SHA], 'check needs no branch ref after merge-back');
+  assert.deepEqual(seen.round[0].declaration, DECLARATION);
+});
