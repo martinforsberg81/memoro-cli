@@ -1578,12 +1578,11 @@ with all sessions and merges; there is no clock between runs, so a pass every
 few minutes finds main's move within one run's length. A run started by hand is
 an exception, and hands its reds to the main-red repair like the runner's run.
 
-It is a **chore of the runner** (`runNightly` in `src/mc/run.js`, the last
-thing a chore pass does), implemented in
+The standing main run is a **chore of the runner** (`runNightly` in
+`src/mc/run.js`), implemented in
 [`nightly-loop.js`](../../src/mc/nightly-loop.js). Until 2026-09-19 it was a
 detached process of its own, started with `mc test nightly start`, with a pid
-file and a `stop`, and that scheduler is gone — there is nothing on this
-machine that can start a full run but the runner. The verb that is left is
+file and a `stop`. There is no separate scheduler now. The verb that is left is
 `mc test nightly status`; it is under `mc test` because that is the round a
 full run is. It was `mc repo nightly` until 2026-09-04, which now prints
 `mc repo nightly is now mc test nightly` and exits 2. The file names, the round
@@ -1677,8 +1676,8 @@ the one way the runner is: no runner, no full run.
   a request is claimed by the open release, it queues no main-red mend.
   A mixed request goes through the usual main-red queue. The
   [named release run](mc-deploy.md#continuation-and-repairs) records its own
-  head's verdict in the same history and sends its reds to the release,
-  not to main.
+  head's verdict in the same history without updating main's standing
+  reading. It sends its reds to the release, not to main.
 - **STOP ends it; an update does not.** A chore pass that finds
   `~/mc/runner/STOP` or `UPDATE` starts no run. The runner has two signals
   (`mc-tests/full-run-survives-handover`). The *stop* signal reaches the

@@ -326,9 +326,11 @@ and the check after shipping use the release sha's `.mc/test.json`, not
 `origin/main`'s. A technical stop uses the deploy mend and its one retry;
 a red suite queues a release mend, not a deploy retry.
 
-Only the release's own repairs can land on its branch, and not once it is
-green or deploying. A repair cannot change the take-back reading. These are
-the merger's refusals, in the pull request's stop and in `merger.log`:
+Only the release's own repairs can land on its branch, and only while the
+record admits repairs. Ordinary release mends stop at green; a registered
+deploy mend may repair an unretried technical stop. Neither can change the
+take-back reading. These are the merger's refusals, in the pull request's
+stop and in `merger.log`:
 
 ```
 mc: memoro#15820 is based on release/1a2b3c4, which takes only its own repairs — base it on main (mc publish --base main)
@@ -356,8 +358,11 @@ After shipping, the deployer opens and queues the registered return
 `release/<short> → main` before completing the deploy row with its note.
 The [merger](mc-merge.md#release-branches) lands it with a merge commit so
 main descends from the shipped sha; a squash would not preserve that ancestry.
-A merge conflict is handled on that same PR by a merge-failure mend. The
-row's note and `--follow` say:
+A merge conflict is handled on that same PR by a merge-failure mend. If no
+return PR exists and main already contains the recorded release head, no PR
+is needed. If the forge is unavailable after shipping, the runner resumes
+the return from the recorded result without deploying again. With a return
+PR, the row's note and `--follow` say:
 
 ```
 mc: deployed 5d6e7f8 as build 27914 (release/1a2b3c4, cut by a typed deploy 2026-11-23 01:10, 2 repairs)
@@ -372,12 +377,14 @@ exit 0 and no row:
 mc: release/1a2b3c4 is not back on main yet (memoro#15830, queued) — the next deploy waits for it; mc prs shows it
 ```
 
-Only after merge-back does mc open the pin PR from the shipped sha against
-main, so its diff is the pins alone. The release branch is then deleted and
-the record closes.
+If the deploy script reports a pin branch, mc opens and queues its PR
+against main only after the release head is back on main, so the diff is the
+pins alone. It does not wait for the pin PR to land before deleting the
+release branch and closing the record.
 
-A person can use `mc deploy --drop-release "<reason>"` before the deployer
-starts. It cannot be combined with `--accept-red`, `--follow` or `--dry-run`.
+A person can use `mc deploy --drop-release "<reason>"` on an open release
+that is neither deploying nor already returning to main. It cannot be
+combined with `--accept-red`, `--follow` or `--dry-run`.
 Open mends stop; landed repairs return to main through the same merge
 commit path, or, with nothing to return, the branch is deleted. A claimed
 fault still red on main can then queue a main mend. If the return cannot be
@@ -751,13 +758,15 @@ made them gates, so they ran under load, went red and refused the deploy. Now
   commit's declaration is not asked in its place. The shipped commit's own
   declaration must still be valid — it is what the suites run from.
 
-The tip is `origin/main` as it stands when the suites start, after the deploy's
-fetch; a full run started by the deploy may have fetched again, and a newer tip
-is still main's word. The check after a deploy (`deploy-check.js`) reads the
-gate set the same way. `gatedByTip` keeps the deployed commit's suites and
-how they run, and lets main's tip say which of them gate. A suite the tip does
-not declare does not gate. When the tip's declaration cannot be read, the
-suites part is could-not-run.
+For a main deploy the tip is `origin/main` as it stands when the suites start,
+after the deploy's fetch; a full run started by the deploy may have fetched
+again, and a newer tip is still main's word. The check after a main deploy
+(`deploy-check.js`) uses the same rule: `gatedByTip` keeps the deployed commit's
+suites and how they run, and lets main's tip say which of them gate. A suite
+the tip does not declare does not gate. When the tip's declaration cannot be
+read, the suites part is could-not-run. For a branch release, both rounds use
+the shipped sha's own gate set, even if the return has already deleted the
+release branch by the time the check runs.
 
 **A suite that does not gate a deploy.** A suite in main's tip `.mc/test.json`
 declared `"gate": false` with a required, non-empty `"gate_why"` is not run
@@ -864,8 +873,9 @@ is a deploy in progress (`runningDeploy`,
 [`src/mc/deploys.js`](../../src/mc/deploys.js)). It is read before the preparation
 — nobody prepares for a deploy that cannot start — and again under the register's lock,
 where the new row is written. There is no queue (Martin, 2026-10-09: *"Vi skulle
-kunna låta deploy vara utan kö."*): a second `mc deploy` is refused and run again
-when the first is done.
+kunna låta deploy vara utan kö."*): a second main deploy is refused and run
+again when the first is done. A plain `mc deploy` during a branch release
+reports the open release or its pending return; it starts no second deploy.
 
 ### Memoro's lane is the deploy's while it builds (2026-10-18)
 
@@ -937,9 +947,11 @@ row's holder and counts its age from the newest row's `started`. Queueing is don
 the row is written and outside the deploy lock; a failed write or copy changes neither the exit code, the row nor the output.
 
 **The repair.** The runner offers a queued request at the main-red mend's rank, with its machinery: `mend-session`, class
-fast, a worktree each of memoro-cli and memoro on `mend/deploy-<digest>` from each `origin/main`, no goal identity, two
-attempts (a failed one returns the request to the queue; the second waits on Martin with the last session log). The
-session's role page has a *Deploy mend* section: find the cause from the rows and logs; fix it at its cause (memoro-cli or
+fast, a worktree each of memoro-cli and memoro on `mend/deploy-<digest>`, no goal identity, two
+attempts (a failed one returns the request to the queue; the second waits on Martin with the last session log). Each
+worktree starts from its `origin/main`, except memoro's for a release stop, which starts from and publishes to
+the [release branch](mc-run.md#deploy-mend). The session's role page has a *Deploy mend* section:
+find the cause from the rows and logs; fix it at its cause (memoro-cli or
 memoro through `mc publish` and the merger, or state mc owns through mc's verbs); never discard a file it cannot show is mc's;
 never run `mc deploy`; never touch production data or credentials; write a proposal. `mc publish` on a `mend/deploy-` branch
 records the pull request per repository before it queues the merge. It ends with a published pull request, or `mc repo mend
@@ -965,8 +977,9 @@ derived commands — is recorded as it starts, and a process standing in the wor
 `worktree` naming it.
 Every suite of a round runs with `MC_TEST_MODE=1`, so a test of mc never reaches the platform keychain.
 
-**The retry.** Once, through the same path as a typed deploy — the same pick, the same gate, the same admission, the same
-never-backwards guard — with the holder `runner for <holder>, <newest row's started>`. It never carries `--accept-red` and
+**The retry.** Once. For a main stop it follows the normal pick, gate and admission, with the holder
+`runner for <holder>, <newest row's started>`. For a release stop it uses the matching release record and holder, not a
+new pick from main. Both keep the backwards guard. It never carries `--accept-red` and
 the headless refusal does not apply to it: it is not a session, the runner is. It starts only when the runner's own code has
 every landed memoro-cli merge commit as an ancestor and the pick descends from every landed memoro merge commit; until then
 the request stays `repaired` and the reading says what it waits for. It is not made ("repaired, not retried", with its
@@ -1002,17 +1015,16 @@ stopped run and `mc language resume`. `--json` has the same information as
 ## The record
 
 `~/mc/runner/log/deploys.tsv`, written by
-[`src/mc/deploys.js`](../../src/mc/deploys.js) — 172 lines, and the shape follows
-`runs.tsv`: a header written once, rows appended whole, read back keyed by the
-header the file actually carries rather than the one this module knows.
+[`src/mc/deploys.js`](../../src/mc/deploys.js), follows the shape of `runs.tsv`:
+rows are appended whole and read back by the column names in the file's header.
 
 | column | what it holds |
 |---|---|
 | `started` | when the row was written, before the spawn |
 | `ended` | when the script exited — empty on a deploy that never came back |
-| `sha` | what was shipped: the deploy worktree's `HEAD` after the fast-forward (a refused row: `origin/main` as the reading saw it) |
+| `sha` | the commit placed in the deploy worktree; on a cut row, the cut sha; on a refused row, the commit read for admission, if known |
 | `build` | the build number from the script's success banner |
-| `holder` | who typed it (`currentHolder()`); the runner's one retry of a repaired stop writes `runner for <holder>, <started>` |
+| `holder` | who typed it (`currentHolder()`); a main retry uses `runner for <holder>, <started>`; a release deployer uses `release/<short> for <who typed it>, <cut time>` |
 | `outcome` | `running`, `deployed`, `failed`, `refused` or `release-cut` (the typed deploy cut the branch; it has not shipped) |
 | `live_commit`, `live_build` | what production answered when the script verified it |
 | `stopped_at` | the last `▸ <step>` header before a non-zero exit |
@@ -1020,7 +1032,6 @@ header the file actually carries rather than the one this module knows.
 | `pid` | the deployer's process |
 | `full_commit`, `full_verdict` | the commit the full run measured and its verdict — `green`, `red`, `stalled`, `unmeasured` or `moved`; empty when none was read |
 | `suites` | each suite's result, `name:state` joined by commas — `ok`, `red`, `skipped` or `cannot-run`; `cannot-run:<why>` when none could start; empty when the suites were not run |
-| `output_path` | where the whole output of what failed is — the full run's file and each failed suite's, joined by commas; empty when no path was recorded and on every row written before the column (2026-11-16) |
 | `accepted_red` | the reason given to `--accept-red`, when a red was accepted |
 | `take_back` | `yes` when the release could be taken back, `no` when it could not — or when the reading could not be made; empty when no reading was made (a refusal before the plan was known or for a backwards pick) and in rows written before the column |
 | `take_back_why` | for `no`, the reasons on one line — `<kind>: <what> (<sha>, …)`, joined by `; `, at most five and `and N more` — or `reading not made: <why>`; empty for `yes` |
@@ -1033,6 +1044,7 @@ header the file actually carries rather than the one this module knows.
 | `takes_back` | on a take-back row, the `started` of the release row it took back; empty on every other row (*The take-back*) |
 | `takes_back_sha` | on a take-back row, the commit of that release |
 | `takes_back_why` | on a take-back row, what asked for it: the runner's — the release's `check_why` — or the verb's, `typed: <reason>`, with `(despite the reading)` when `--despite` was given |
+| `output_path` | where the whole output of what failed is — the full run's file and each failed suite's, joined by commas; empty when no path was recorded and on every row written before the column (2026-11-16) |
 | `release_branch` | the branch on the cut and deployer rows of a branch release; empty for the main path |
 
 Two properties are the point of it:
@@ -1044,21 +1056,12 @@ Two properties are the point of it:
   about it. Nothing sweeps the file, so that row stands until a person looks at
   it; the page draws a `running` row older than an hour in yellow, which is where
   a person looks.
-- **Completing a row rewrites the file through its own header.** A `deploys.tsv`
-  written by an older mc keeps its columns, and a column this mc sets that the
-  file has no room for is dropped rather than shifting every cell after it. One
-  `writeFileAtomic`, so a reader sees the file before or after and never
-  half-way. `take_back` and `take_back_why` came before the three version
-  columns, which are the last: a refusal made after the reading carries the
-  take-back's as the started row does, and a file with the header of any version
-  before them is given the new header on its next row, its old rows' cells empty.
-  The three check columns are after those, and the three take-back columns are
-  the last (26 columns in all); a file with any older header, the 23-column one
-  included, is given the current one the same way on its next row. An mc of the
-  version before keeps the 26-column header it finds only if it is one, and
-  otherwise writes its rows with the new columns empty: it reads a take-back
-  row as an ordinary `deployed` row, so what is live is right, and it lacks only
-  the pick floor.
+- **A rewrite is atomic and matches cells by name.** The current header ends
+  in `output_path` and `release_branch`. On the next write, a recognized
+  older header is upgraded by leaving the new cells empty in existing rows.
+  An unrecognized header is kept as it is: fields it has no room for are
+  dropped rather than shifting any cells. A reader of a rewrite sees the
+  complete file before or after, never half-way.
 - **Every writer takes one lock, once.** `withDeploysLock` (`deploys.js`) is the
   `deploys` lock of the runner (`runner-lock.js`), held through an admission and
   re-entered by the writers inside it without taking it again; `recordStart`,
@@ -1386,22 +1389,21 @@ where they differ.
 The boundary is a rule, not a judgement call:
 
 - **mc does not deploy.** No step of `scripts/deploy.mjs` is reimplemented here,
-  no flag is invented for it, and it is not edited from this repository. The
-  environment variable it is always handed is one the script itself reads. If a
-  preflight mc wants is missing there, that is a memoro pull request made on its
-  own terms.
-- **mc chooses where the script runs, and moves that checkout in one way only.**
-  `deploy.mjs` keeps its own preflight — it refuses a dirty tree and a branch that
-  is not `main` (`REQUIRED_PROD_BRANCH`, `ensureCleanWorktree`) — and mc reimplements none
-  of it. Its remote step, `ensureUpToDateWithOrigin`, which would fast-forward to
-  the remote main, is skipped under `mc deploy` by
-  `MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT=1`: the commit was chosen here. What mc adds
-  is a `cwd` that is always a `main`, and one placement at the sha that was
-  measured after the admission, by the deployer: `git merge --ff-only <sha>` when
-  behind, and `git reset --keep <sha>` in mc's own worktree only, when the pick
-  is an ancestor of HEAD, HEAD is an ancestor of `origin/main` and the tracked
-  tree is clean. Anything else in that worktree is
-  refused with the path in the row; nothing is ever stashed or discarded.
+  no flag is invented for it, and it is not edited from this repository. mc
+  passes settings the script already reads. If a preflight mc wants is missing
+  there, that is a memoro pull request made on its own terms.
+- **mc places the measured commit before it runs the script.** `deploy.mjs`
+  keeps its own clean-tree and branch preflight. It expects `main` unless
+  `MEMORO_DEPLOY_BRANCH` names a release branch. Its remote step,
+  `ensureUpToDateWithOrigin`, is skipped under `mc deploy` by
+  `MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT=1`: the commit was chosen here. On the
+  main path, the deployer fast-forwards `main` to the measured sha or, only in
+  mc's own clean worktree, uses `git reset --keep <sha>` when the pick is an
+  ancestor of HEAD and HEAD is an ancestor of `origin/main`. For a branch
+  release it checks out the release branch at the measured sha in mc's own
+  worktree and passes that branch to the script. Cleanup detaches the worktree
+  so the branch is available for a return mend. Neither route stashes or
+  discards work to place the tree.
   Before ruling 16 (2026-09-06) the spawn's `cwd` was `~/memoro` whatever branch
   it stood on, and two deploys died at *Deploy source preflight* for exactly
   that.
