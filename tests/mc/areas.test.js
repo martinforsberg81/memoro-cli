@@ -151,5 +151,9 @@ test('the system area is a source area whose page has the five headings in order
   assert.deepEqual(standards.filter((name) => !page.includes(`](../${name})`)), [], 'every mc standard is listed');
   const decisions = page.split('## Decisions')[1].split('## Store')[0];
   assert.ok(/\(Martin, 2026-11-15; programme `horizon`\)/u.test(decisions), 'a decision of this programme stands among them');
-  for (const item of decisions.split('\n- ').slice(1)) assert.match(item, /\(Martin, \d{4}-\d{2}-\d{2}; (?:programme `[a-z-]+`|the desk)\)/u, item.slice(0, 40));
+  // Desk citations can include the item's eight-character short reference or its full digest.
+  const decisionCredit = /\(Martin, \d{4}-\d{2}-\d{2}; (?:programme `[a-z-]+`|the desk(?:, desk item (?:[a-f0-9]{8}|[a-f0-9]{24}))?)\)/u;
+  for (const item of decisions.split('\n- ').slice(1)) {
+    assert.match(item, decisionCredit, `missing dated decision citation: ${item.slice(0, 60)}`);
+  }
 });
