@@ -20,9 +20,9 @@ The verb has two forms, and which one runs is decided by what the pull request
 touches:
 
 - **the gate round** — lease, the pull request's **existing** checkout holding its head
-  with main merged into it, the change's own tests run there without command
-  gates, squash. This is what
-  `mc repo merge` was; only the name moved.
+  with the base merged into it, the change's own tests run there without command
+  gates, then squash except for the [release return](#release-branches). This
+  is the measured form formerly named `mc repo merge`.
 - **`--docs`** — a pull request whose every file is under `docs/`, squash-merged
   after the repository's change-scope tests pass. A script is not a document,
   under `docs/` or not: one is refused here and goes through the gate. The flag
@@ -64,7 +64,7 @@ number that is not a number, and the same pull request named twice.
 ```
 mc test  <repo> <pr> [<pr>...] [--json]            measure it; merge nothing
 mc test  <repo> --full [--json]                    the whole suite, on the default branch
-mc merge <repo> <pr> [<pr>...] [--check] [--json]   the same round, then squash
+mc merge <repo> <pr> [<pr>...] [--check] [--json]   the same round, then land it
 mc merge <repo> <pr> --docs [--json]                docs-only: the tests that read documents, then squash (also chosen without the flag)
 mc merge <repo> <pr> --watch [--json]               queue it, then follow it to the answer
 mc merge watch <repo> <pr> [--timeout <min>] [--json]   follow a job already queued
@@ -324,6 +324,34 @@ acceptance and authorization, under
 [mc-goals.md](mc-goals.md#integrating-main-into-a-goal). A clean textual merge
 does not establish that the judged tree contains its required dependencies.
 
+
+### Release branches
+
+The only PR the merger lands with `--merge` instead of `--squash` is memoro's
+recorded [release return](mc-deploy.md#merge-back-and-drop), from
+`release/<short>` to `main`. The PR must match the current release record and
+its measured head must contain the recorded release head. Pinning the forge
+merge to the measured head still applies. The merge commit preserves the
+shipped commit in main's ancestry. A PR from a memoro release branch to a
+different base, or not registered as that release's return, is refused. Main
+keeps taking ordinary PRs while the release is repaired and measured.
+
+A `release/*` base accepts only a mend owned by that open release. The
+merger refuses any other PR on that base, and also refuses a registered
+release mend aimed at main, another release, or any other base. Ordinary
+release mends land one at a time, squashed into their own base while the
+release is measuring or red and still taking repairs. A registered technical
+deploy mend may land for the release's unretried technical stop. Neither
+kind may alter the cut's take-back reading: the merger uses the reader from
+the cut on the measured candidate, checking the changes since the cut and the
+reading from live. A mend arriving after green is answered as not landed.
+
+A release repair that does land is answered as landed on the release,
+even though it is off the default branch. Admission rechecks the base and
+release record before the forge merge. Neither the docs nor the admin form
+can bypass the measured round for a release repair or return. See
+[the release refusals](mc-deploy.md#continuation-and-repairs) for the
+terminal wording.
 
 ### Watching a merge
 
@@ -1645,7 +1673,12 @@ the one way the runner is: no runner, no full run.
   2026-11-13). A test that never ends is red too (Martin, 2026-11-14): a run
   stopped as stalled hands the files it names as in flight to the same door,
   with the stall as their failure; a stall that names no file asks for nothing
-  and the next run, when main has moved, measures again.
+  and the next run, when main has moved, measures again. If every red name in
+  a request is claimed by the open release, it queues no main-red mend.
+  A mixed request goes through the usual main-red queue. The
+  [named release run](mc-deploy.md#continuation-and-repairs) records its own
+  head's verdict in the same history and sends its reds to the release,
+  not to main.
 - **STOP ends it; an update does not.** A chore pass that finds
   `~/mc/runner/STOP` or `UPDATE` starts no run. The runner has two signals
   (`mc-tests/full-run-survives-handover`). The *stop* signal reaches the

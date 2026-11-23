@@ -1,6 +1,7 @@
 # mc run — the runner
 
-`mc run` starts fresh headless goal sessions and main-red mends until stopped.
+`mc run` starts fresh headless goal sessions, main-red mends and release mends
+until stopped.
 It reads goal files and main-mend requests, chooses work, launches a coding tool through the shared
 adapter, and records the outcome. The runner itself makes no model turn.
 `src/mc/run.js` owns processes and file boundaries; `src/mc/run-plan.js`
@@ -8,7 +9,7 @@ holds prompts, argument lists, output parsing and chore cadence rules.
 
 Projects went on 2026-11-03; migration is documented in
 [mc-goals.md § From a project](mc-goals.md#from-a-project). The runner now
-starts goal sessions and goal-less main-red mends. A goal's worktree stays on
+starts goal sessions and goal-less mends. A goal's worktree stays on
 its one branch until it lands.
 
 ```
@@ -218,7 +219,12 @@ order without a model call:
    lasts. It is re-read during admission, before spawning build, review
    or mend, not just at the pick. A running session finishes normally; neither
    the merger's queued work nor the runner's landed-PR reconciliation is held.
-5. Take merge-failure mend and goal-less main-red mend first, then decision, a repair build, review, then an ordinary build; the programme archive turn follows build ([below](#programme-archive-turn)), and the manager's turns ([below](#the-managers-turns)) come last. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
+5. Take merge-failure mend and goal-less main-red, release and deploy mends
+   first, then decision, a repair build, review, then an ordinary build; the
+   programme archive turn follows build ([below](#programme-archive-turn)),
+   and the manager's turns ([below](#the-managers-turns)) come last. Pre-merge
+   blocked work wakes no session and is reconciled to Martin. Within the
+   earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work
    and longest waiting. Waiting begins at the last log entry. A carried build never
    jumps ahead of recovery or review.
@@ -1237,7 +1243,33 @@ afresh. The settlement pass and `runMainMend`'s finally remove a finished
 entry's worktree through the one function in `src/mc/main-repair.js`, `removeFinishedWorktrees`,
 keeping a tree an unfinished entry, a `current-*.json` or a live claim still
 names.
-The full run's cadence (it follows main) and existing repair goals are unchanged.
+The full run follows main; a waiting release measurement has deploy priority
+over the next run of memoro's main.
+
+## Release mend
+
+A [typed deploy's release](mc-deploy.md#the-release-branch) uses the same
+goal-less mend register, rank and session machinery as main-red. The
+request records the release branch, cut identity and exact head that was red.
+The runner starts the mend worktree from `origin/release/<short>`, not
+`origin/main`, and the mend publishes with `mc publish --base release/<short>`.
+The merger answers a good landing on that base as landed. Settlement advances
+the recorded head and the runner measures it again; a gate-suite red enters
+the same queue as a red from a full run.
+
+Red names stay claimed until the release closes, even after their mends land.
+A main-red request queues nothing if all its names are claimed. If it
+contains an unclaimed name, the request is processed as usual. A drop ends
+open release mends and, once the branch is returned or removed, lets
+still-red names queue for main again.
+
+The runner never cuts a release or starts a new deploy. It continues the
+release authorized by the typed cut, measuring and shipping the exact
+release head and settling its return as described in
+[the deploy contract](mc-deploy.md#the-release-branch). A failed return
+round gets a goal-less merge-failure mend on the same PR and branch: it
+integrates main without rewriting the release commits, preserves the
+recorded release head and requeues the PR to main. It does not deploy.
 
 
 ## Deploy mend
@@ -1255,6 +1287,11 @@ it starts and is never made twice: its technical stop is `retryFailed`, the requ
 gone is settled from `deploys.tsv` first: deployed ends it, still running waits, anything else is `retryFailed`, never started
 again. Finished requests' worktrees are removed
 unless git refuses (files that are not mc's stay, and the line says so).
+
+For a technical stop on a release, memoro's mend worktree starts at
+`origin/release/<short>` and its PR targets that release; memoro-cli work
+still targets main. The one retry uses the matching release record and its
+holder, not the normal deploy command and not a new pick from main.
 
 ## Decision lane
 
