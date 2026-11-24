@@ -326,7 +326,10 @@ release as
 `reds` is a list of names, `repairs` a list of PR numbers, and `merge_back` a PR
 number or null. A cut includes that summary in its plan; a dry run that would
 cut has `would_cut: true` and `release: null`. A return refusal adds
-`refusal` to the summary response.
+`refusal` to the summary response. When reporting an open release paused by
+an intentional preparation stop, `mc deploy --dry-run --json` includes the
+stop note as a top-level string `preparation_stop` alongside `release`. The
+field is omitted when the open-release report has no preparation stop note.
 
 ### Continuation and repairs
 
@@ -1168,9 +1171,9 @@ stripped, from `~/memoro/scripts/deploy.mjs` as it stood on 2026-09-04 (a fifth,
 | `✗ Deploy failed` + the line under it | the catch, line 814 | `note` |
 
 On failure the closing line also relays the script's `Production` row, not
-the temporary `Production meanwhile:` lines. This includes the script's
-readback of applied migrations independently of whether a new Worker is
-live. When the script gives no production row, mc says
+the temporary `Production meanwhile:` lines or extra detail from the
+failure body. The row can name migrations confirmed applied, whether or not
+a new Worker is live. When the script gives no production row, mc says
 `production may be part-way`.
 
 The fifth line is the script's last: `Deploy branch: <branch>`, matched exactly,
