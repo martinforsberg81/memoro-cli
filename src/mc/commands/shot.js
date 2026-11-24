@@ -5,7 +5,8 @@
  *           [--full] [--viewport <name|WxH[@dpr]>] [--theme light|dark]
  *           [--locale <code>] [--safe-area <t,r,b,l>] [--wait-for <css>]
  *           [--scroll <css>[@end|@top|@<px>] | @end] [--measure <css> | @<name>]
- *           [--click <selector>]… [--context-click <css>]… [--long-press <css>[@ms]]…
+ *           [--click <selector>]… [--context-click <css>]… [--hover <css>]…
+ *           [--long-press <css>[@ms]]…
  *           [--fill <css>=<text>]… [--eval <js> | --eval-file <path>]…
  *           [--upload <css>=<file>]… [--press <key>]… [--timeout <s>]
  *           [--account <name>] [--onboarding] [--me] [--here] [--main]
@@ -70,7 +71,7 @@ export const ROUTES = {
       '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
       '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--timeout', '--set', '--state',
     ],
-    repeatable: ['--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
+    repeatable: ['--click', '--context-click', '--hover', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
   },
   next: STEP_FLAGS,
   close: CLOSE_FLAGS,

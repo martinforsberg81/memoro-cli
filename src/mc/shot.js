@@ -203,13 +203,13 @@ export function parseScroll(value) {
 }
 
 export const ACTING_FLAGS = [
-  '--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press', '--wait-for',
+  '--click', '--context-click', '--hover', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press', '--wait-for',
 ];
 const LONG_PRESS_MS = 600;
 
 /**
  * The acting flags, in the order they were written: `--click <css>`,
- * `--context-click <css>`, `--long-press <css>[@<ms>]` (600 ms unless said),
+ * `--context-click <css>`, `--hover <css>`, `--long-press <css>[@<ms>]` (600 ms unless said),
  * `--fill <css>=<text>`, `--eval <js>` (or `--eval-file <path>`, its text read
  * here), `--upload <css>=<file>` (the file resolved against `cwd`) and
  * `--press <key>` and `--wait-for <css>` (until visible). scanArgs keeps each
@@ -257,6 +257,9 @@ export function parseActions(argv, { cwd = process.cwd(), deps = {} } = {}) {
     } else if (flag === '--wait-for') {
       if (!value.trim()) return { ok: false, error: '--wait-for takes a CSS selector' };
       actions.push({ kind: 'wait-for', selector: value.trim() });
+    } else if (flag === '--hover') {
+      if (!value.trim()) return { ok: false, error: '--hover takes a selector' };
+      actions.push({ kind: 'hover', selector: value.trim() });
     } else {
       actions.push({ kind: flag === '--click' ? 'click' : 'context-click', selector: value });
     }

@@ -905,13 +905,14 @@ describe('mc shot — eval, upload, press, timeout, and what comes back', () => 
     };
   };
 
-  it('parseActions keeps argv order across the seven flags and --eval-file', () => {
+  it('parseActions keeps argv order across the eight flags and --eval-file', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-shot-acts-'));
     writeFileSync(join(dir, 'probe.js'), 'getComputedStyle(document.body).zIndex\n');
     writeFileSync(join(dir, 'rows.csv'), 'a,b\n');
     assert.deepEqual(parseActions([
       'dev', 'home', '--click', 'a', '--eval', '1 + 1', '--fill', 'b=hi', '--upload', 'input.csv=rows.csv',
-      '--context-click', 'c', '--eval-file', 'probe.js', '--press', 'Meta+K', '--long-press', 'd@800',
+      '--hover', '.row .actions', '--context-click', 'c', '--eval-file', 'probe.js', '--press', 'Meta+K',
+      '--long-press', 'd@800',
     ], { cwd: dir }), {
       ok: true,
       actions: [
@@ -919,12 +920,14 @@ describe('mc shot — eval, upload, press, timeout, and what comes back', () => 
         { kind: 'eval', script: '1 + 1' },
         { kind: 'fill', selector: 'b', text: 'hi' },
         { kind: 'upload', selector: 'input.csv', file: join(dir, 'rows.csv') },
+        { kind: 'hover', selector: '.row .actions' },
         { kind: 'context-click', selector: 'c' },
         { kind: 'eval', script: 'getComputedStyle(document.body).zIndex\n' },
         { kind: 'press', key: 'Meta+K' },
         { kind: 'long-press', selector: 'd', ms: 800 },
       ],
     });
+    assert.deepEqual(parseActions(['--hover', '  ']), { ok: false, error: '--hover takes a selector' });
   });
 
   it('the command hands the new kinds to the script in argv order', async () => {
@@ -1081,7 +1084,7 @@ describe('mc shot — eval, upload, press, timeout, and what comes back', () => 
   });
 
   it('usage lists the new flags and the error paragraph', () => {
-    for (const flag of ['--eval <js>', '--eval-file <path>', '--upload <css>=<file>', '--press <key>', '--timeout <s>', 'the seven act in the order']) {
+    for (const flag of ['--eval <js>', '--eval-file <path>', '--upload <css>=<file>', '--press <key>', '--hover <css>', '--timeout <s>', 'the eight act in the order', 'text= takes the first match']) {
       assert.ok(usage().includes(flag), flag);
     }
     assert.match(usage().replace(/\n/gu, ' '), /Every error the page, its requests, the dev server or a dialog raised during the shot prints as error lines after the path/u);
