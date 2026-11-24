@@ -865,7 +865,7 @@ function reviewRecoveryExhausted(log) {
 /**
  * What a review session's move out of review asks of REVIEW.md (D4, D5, D8), as `{}` for any other move, `{ refusal }`,
  * or the verdict, its archive number, the rejected evidence ids and whether the automatic repairs are exhausted.
- * The head of the first repository must be MC_REVIEW_HEAD; every id the goal requires has one line.
+ * The head of the review repository (MC_REPO) must be MC_REVIEW_HEAD; every id the goal requires has one line.
  * A move to merge has no NOT OK line and a move to build has one.
  */
 function reviewMove(goal, target, to, ctx) {
@@ -875,7 +875,7 @@ function reviewMove(goal, target, to, ctx) {
   if (!env.MC_REVIEW_HEAD) return { refusal: 'a review judges the head the runner named: MC_REVIEW_HEAD is not set' };
   const text = read(join(target.dir, REVIEW_FILE));
   if (text === null) return { refusal: `a review moves a goal to ${to} with ${REVIEW_FILE} — write ${file} first: a \`head: <repo> <sha>\` line per repository, then \`<id>: OK\` or \`<id>: NOT OK — <what and where>\` per item` };
-  const found = trippedAreas({ goal, dir: target.dir, head: env.MC_REVIEW_HEAD, git: ctx.git, exists: ctx.exists });
+  const found = trippedAreas({ goal, dir: target.dir, reviewRepo: env.MC_REPO, head: env.MC_REVIEW_HEAD, git: ctx.git, exists: ctx.exists });
   if (found.error) return { refusal: found.error };
   // The areas the review was told of at its launch, never asked of main again (`seenAreas`, run.js): a session started
   // before an area declared `seen`, or by a runner from before the key, is held to no `seen` line.

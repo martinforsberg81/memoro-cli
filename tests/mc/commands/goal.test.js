@@ -1453,6 +1453,23 @@ test('a goal of two repositories needs a head line for the second as well', asyn
   assert.equal(stateOf(both), 'merge · ready');
 });
 
+test('the verdict binds MC_REVIEW_HEAD to MC_REPO and the other line to its worktree HEAD', async () => {
+  const goal = { repos: ['memoro-cli', 'memoro'], prs: ['memoro#31'] };
+  const env = { ...REVIEW, MC_REPO: 'memoro' };
+  const git = worktreeGit({ heads: { ...TWO_HEADS } });
+  const text = `head: memoro-cli ${TWO_HEADS['memoro-cli']}\nhead: memoro ${HEAD}\ncriterion 1: OK\n`;
+  const move = (verdict) => moveOut('merge', reviewFiles(verdict, { goal }), env, git);
+
+  const both = await move(text);
+  assert.equal(both.code, 0, both.err());
+  assert.equal(stateOf(both), 'merge · ready');
+
+  const wrongFirst = await move(text.replace(TWO_HEADS['memoro-cli'], HEAD));
+  assertRefused(wrongFirst, /`head: memoro-cli abc1234def` is not the head judged, a{40}/u, 'first repository');
+  const wrongSecond = await move(text.replace(HEAD, TWO_HEADS.memoro));
+  assertRefused(wrongSecond, /`head: memoro b{40}` is not the head judged, abc1234def/u, 'second repository');
+});
+
 test('a missing line for a criterion, a preserve item or a touched obligation is refused naming every missing id; a version 1 goal needs the criteria lines only', async () => {
   const missing = ['criterion 1', 'V1', 'obligation Documentation', 'bugs'];
   for (const to of ['merge', 'build']) {

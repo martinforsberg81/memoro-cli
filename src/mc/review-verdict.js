@@ -185,19 +185,23 @@ export function underPath(file, path) {
  * The heads judged and the untouched areas the goal's branch changed.
  * `{ heads: [{ repo, sha }], tripped: [{ area, repo, files }] }`, or `{ error }` when a repository cannot be read.
  *
- * For each repository of the goal with a worktree in `dir`: the first repository's head is `head` (MC_REVIEW_HEAD), any
- * other's its worktree's HEAD; the files are `git diff --name-only origin/main...<head>`; the areas are the repository's
+ * The head of `reviewRepo` (MC_REPO, first repository when absent) is `head` (MC_REVIEW_HEAD); every other repository
+ * uses its worktree's HEAD in `dir`. The files are `git diff --name-only origin/main...<head>`; the areas are the repository's
  * at origin/main (`readAreas`), and the goal's obligation for `<repo>/<id>` must stand `untouched`. A file counts for an
- * area when it is under one of the area's paths. A source area asks no stand and is never tripped. Version 1 goals and goals with no untouched obligation read no git.
+ * area when it is under one of the area's paths. A source area asks no stand and is never tripped. Version 1 goals and
+ * goals with no untouched obligation resolve heads but read no areas or diffs.
  * `git(cwd, args)` answers `{ ok, stdout, stderr }`.
  */
-export function trippedAreas({ goal, dir, head, git, exists = () => true }) {
+export function trippedAreas({ goal, dir, reviewRepo = goal.repos?.[0], head, git, exists = () => true }) {
+  if (reviewRepo !== undefined && !goal.repos?.includes(reviewRepo)) {
+    return { error: `the review repository ${reviewRepo} is not a repository of the goal` };
+  }
   const heads = [];
   const tripped = [];
   const untouched = new Set((goal.version === 2 ? goal.obligations ?? [] : []).filter((one) => one.stand === 'untouched').map((one) => one.area));
-  (goal.repos ?? []).forEach((repo, index) => {
+  (goal.repos ?? []).forEach((repo) => {
     const cwd = join(dir, repo);
-    if (index === 0) heads.push({ repo, sha: head ?? null });
+    if (repo === reviewRepo) heads.push({ repo, sha: head ?? null });
     else if (exists(cwd)) {
       const parsed = git(cwd, ['rev-parse', 'HEAD']);
       heads.push({ repo, sha: parsed.ok ? parsed.stdout.trim() || null : null });
