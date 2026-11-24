@@ -15,6 +15,7 @@ import { learningEligible, learningLine } from './lesson-learning.js';
 import { learningClaimPath } from './learning-publication.js';
 import { curationWorktreesDir, settleCurationWorktrees } from './manager-pulse.js';
 import { chooseCandidate } from './model-choice.js';
+import { readerWalk, sayWalk, walkStop } from './programme-review.js';
 import { readCapacity } from './model-capacity.js';
 import { readModels } from './model-config.js';
 import { runnerDir, workRoot } from './paths.js';
@@ -53,9 +54,16 @@ export function learningRanToday({ env = process.env, now = new Date(), read = (
   return typeof marker?.started_at === 'string' && marker.started_at.slice(0, 10) === now.toISOString().slice(0, 10);
 }
 
-function decisionRoute(env, now) {
-  const catalog = readModels(env);
-  return chooseCandidate({ cls: 'decision', catalog, capacity: readCapacity({ root: runnerDir(env) }), now, priority: catalog.providerPriority ?? 'auto' });
+/** The `decision` list walked to the first candidate that can launch and be billed (`readerWalk`); no author is passed by. */
+function walkDecision({ env, now, deps }) {
+  try {
+    const billingRoute = deps.billingRoute || billingRouteNow;
+    return readerWalk({
+      cls: 'decision', catalog: deps.catalog ?? readModels(env), capacity: deps.capacity ?? readCapacity({ root: runnerDir(env) }), now: now(), author: null, env,
+      choose: deps.route ? ({ setAside }) => deps.route('decision', { setAside }) : chooseCandidate, launch: deps.launch || resolveLaunch,
+      billing: (tool, options, launched) => billingRoute(requireCapability(launched.id, 'BILLING_PROVIDER'), options),
+    });
+  } catch (error) { return { ok: false, reason: error.message || String(error), setAside: [] }; }
 }
 function appendRun(row, env) {
   const path = deskRunsPath(env);
@@ -86,15 +94,12 @@ export async function runLearningPass({ env = process.env, now = () => new Date(
   if (!manual && (deps.ranToday || learningRanToday)({ env, now: now() })) return { started: false, reason: 'the learning pass already ran today' };
   const budget = (deps.budget || deskBudget)({ env, now: now() });
   if (budget.held) return { started: false, held: true, reason: deskBudgetReason(budget) };
-  const route = deps.route ? deps.route('decision') : decisionRoute(env, now());
-  if (!route?.ok || !route.candidate) return { started: false, reason: route?.reason || 'no usable decision candidate' };
-  const candidate = route.candidate;
-  const launch = (deps.launch || resolveLaunch)(candidate.tool);
-  if (!launch?.ok) return { started: false, reason: launch?.hint || launch?.reason || 'tool unavailable' };
+  const walked = walkDecision({ env, now, deps });
+  sayWalk(deps.stderr || process.stderr, 'learning', 'pass', walked.setAside);
+  if (!walked.ok) return { started: false, reason: `no reader can run: ${walkStop(walked)}` };
+  const { candidate, launched: launch, billing } = walked;
   const role = (deps.role || readCanonRole)('learning');
   if (!role?.overlay) return { started: false, reason: 'learning role missing' };
-  const billing = (deps.billingRoute || billingRouteNow)(requireCapability(launch.id, 'BILLING_PROVIDER'), { env, now: now(), route: { billing: route.billing, why: route.why } });
-  if (billing.billing === 'unavailable') return { started: false, reason: billing.why };
   const run = randomUUID();
   const claimPath = learningClaimPath(env);
   const claim = takeClaim(claimPath, { pid: process.pid, run, manual, lessons: Object.fromEntries(offered.map(x => [x.name, x.evidence])) });

@@ -19,7 +19,7 @@ import { spawnSync } from 'node:child_process';
 import { requireCapability, resolveLaunch } from '../adapters/index.js';
 import { writeFileAtomic } from './atomic-write.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
-import { checkoutIdentity, appendRun, realDiscard, realSession } from './programme-review.js';
+import { checkoutIdentity, appendRun, readerWalk, realDiscard, realSession, sayWalk, walkStop } from './programme-review.js';
 import { redactText, redactValue } from './jev.js';
 import { chooseCandidate } from './model-choice.js';
 import { readCapacity } from './model-capacity.js';
@@ -52,19 +52,17 @@ export const callDirOf = (env, id) => join(askDir(env), id);
 
 // -------------------------------------------------------------------------- the model
 
+/** The asker as `readerWalk`'s author: only a tool and a model both known pass anyone by. */
+const readerAuthor = (asker) => (asker?.tool && asker?.model ? { tool: asker.tool, model: asker.model } : null);
+
 /**
  * The reader's candidate: the `decision` list with the asker's tool and model taken out of it, asked of
  * `chooseCandidate`; only when that list is empty or answers that nothing can run is the whole list asked.
+ * This is `readerWalk`'s author rule with every tool launchable and every billing usable; `askReaderCall` walks.
  */
 export function chooseAskReader({ catalog, capacity, now, asker, choose = chooseCandidate }) {
-  const priority = catalog.providerPriority ?? 'auto';
-  const ask = (decision) => choose({ cls: 'decision', catalog: { ...catalog, decision }, capacity, now, priority });
-  const others = asker ? catalog.decision.filter((one) => !(one.model === asker.model && one.tool === asker.tool)) : catalog.decision;
-  if (others.length && others.length < catalog.decision.length) {
-    const answer = ask(others);
-    if (answer?.ok && answer.candidate) return answer;
-  }
-  return ask(catalog.decision);
+  const walked = readerWalk({ cls: 'decision', catalog, capacity, now, author: readerAuthor(asker), choose, launch: () => ({ ok: true }), billing: () => ({ billing: 'plan', why: '' }) });
+  return walked.ok ? walked.answer : { ok: false, reason: walked.reason };
 }
 
 // ------------------------------------------------------------------------ the copy
@@ -251,23 +249,21 @@ export async function askReaderCall({ call, evidence = '', jevText = '', goalNam
   const clean = (value) => redactText(value, secrets);
   const unread = (reason, extra = {}) => ({ read: false, reason: clean(reason), ...extra });
 
-  const route = (() => {
+  const walked = (() => {
     try {
-      if (deps.route) return deps.route('decision');
-      const catalog = deps.catalog ?? readModels(env);
-      const capacity = deps.capacity ?? readCapacity({ root: runnerDir(env) });
-      return chooseAskReader({ catalog, capacity, now: now(), asker, choose: deps.choose });
-    } catch (error) { return { ok: false, reason: error.message || String(error) }; }
+      return readerWalk({
+        cls: 'decision', catalog: deps.catalog ?? readModels(env), capacity: deps.capacity ?? readCapacity({ root: runnerDir(env) }), now: now(), author: readerAuthor(asker), env,
+        choose: deps.route ? ({ setAside }) => deps.route('decision', { setAside }) : (deps.choose ?? chooseCandidate),
+        launch: deps.launch ?? resolveLaunch, billing: deps.billingRoute ?? billingRouteNow,
+      });
+    } catch (error) { return { ok: false, reason: error.message || String(error), setAside: [] }; }
   })();
-  if (!route?.ok || !route.candidate) return unread(`no reader can run: ${route?.reason || 'no answer'}`);
-  const candidate = route.candidate;
+  sayWalk({ write: (text) => stderr.write(clean(text)) }, 'ask', goalName ?? programme ?? '-', walked.setAside);
+  if (!walked.ok) return unread(`no reader can run: ${walkStop(walked)}`);
+  const { candidate, launched, billing } = walked;
   const who = { tool: candidate.tool, model: candidate.model };
-  const launched = (deps.launch ?? resolveLaunch)(candidate.tool);
-  if (!launched?.ok) return unread(`${candidate.tool} is unavailable: ${launched?.hint || launched?.reason || 'no launch'}`, who);
   const role = (deps.role ?? readCanonRole)(ASK_READER_ROLE);
   if (!role?.overlay) return unread('the ask-reader role is missing', who);
-  const billing = (deps.billingRoute ?? billingRouteNow)(candidate.tool, { env, now: now(), route: { billing: route.billing, why: route.why } });
-  if (billing.billing === 'unavailable') return unread(billing.why, who);
 
   const id = (deps.id ?? randomUUID)();
   const token = (deps.token ?? (() => randomBytes(24).toString('hex')))();

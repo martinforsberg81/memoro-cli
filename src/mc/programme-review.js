@@ -48,33 +48,41 @@ export function authorOf(env, avoid) {
   return null;
 }
 
-export function readerWalk({ catalog, capacity, now, author, env = {}, choose = chooseCandidate, launch, billing, fallThrough = true, independent = false }) {
+/**
+ * Walk a model list to the first candidate that can launch and be billed: one whose tool cannot launch, or whose
+ * billing reads `unavailable`, is set aside and the choice is asked again without it. `cls` is the list walked —
+ * `review` for programme review, `decision` for the ask and learning readers, `build` for desk preparation — and
+ * `author` the candidate passed by first. The set-aside list goes to `choose` as `setAside` (`tool`, `model`).
+ */
+export function readerWalk({ cls = 'review', catalog, capacity, now, author, env = {}, choose = chooseCandidate, launch, billing, fallThrough = true, independent = false }) {
   const priority = catalog.providerPriority ?? 'auto';
-  const top = catalog.review[0] ?? null;
+  const list = catalog[cls] ?? [];
+  const top = list[0] ?? null;
   const setAside = [];
   const gone = new Set();
+  const key = (one) => `${one.tool}:${one.model}`;
   const launches = new Map();
   const launchOf = (tool) => { if (!launches.has(tool)) launches.set(tool, launch(tool)); return launches.get(tool); };
-  const sideline = (candidate, reason) => { gone.add(candidate); setAside.push({ tool: candidate.tool, model: candidate.model, reason }); };
+  const sideline = (candidate, reason) => { gone.add(key(candidate)); setAside.push({ tool: candidate.tool, model: candidate.model, reason }); };
   const launchReason = (candidate) => launchOf(candidate.tool)?.hint || launchOf(candidate.tool)?.reason || `${candidate.tool} cannot be launched here`;
   const stage = (pool) => {
     for (;;) {
-      for (const one of pool) if (!gone.has(one) && !launchOf(one.tool)?.ok) sideline(one, launchReason(one));
-      const live = pool.filter((one) => !gone.has(one));
+      for (const one of pool) if (!gone.has(key(one)) && !launchOf(one.tool)?.ok) sideline(one, launchReason(one));
+      const live = pool.filter((one) => !gone.has(key(one)));
       if (!live.length) return { reason: 'no candidate is left' };
-      const answer = choose({ cls: 'review', catalog: { ...catalog, review: live }, capacity, now, priority, first: live.includes(top) ? top : null, setAside: setAside.map(({ tool, model }) => ({ tool, model })) });
+      const answer = choose({ cls, catalog: { ...catalog, [cls]: live }, capacity, now, priority, first: live.includes(top) ? top : null, setAside: setAside.map(({ tool, model }) => ({ tool, model })) });
       if (!answer?.ok || !answer.candidate) return { reason: answer?.reason || 'no answer' };
       if (independent && !live.some(one => one.tool === answer.candidate.tool && one.model === answer.candidate.model)) return { reason: 'the choice did not select an independent candidate' };
-      if (gone.has(answer.candidate)) return { reason: `the choice answered ${answer.candidate.tool} ${answer.candidate.model}, which is already set aside` };
+      if (gone.has(key(answer.candidate))) return { reason: `the choice answered ${answer.candidate.tool} ${answer.candidate.model}, which is already set aside` };
       const launched = launchOf(answer.candidate.tool);
-      const route = launched?.ok ? billing(answer.candidate.tool, { env, now, route: { billing: answer.billing, why: answer.why } }) : { billing: 'unavailable', why: launchReason(answer.candidate) };
+      const route = launched?.ok ? billing(answer.candidate.tool, { env, now, route: { billing: answer.billing, why: answer.why } }, launched) : { billing: 'unavailable', why: launchReason(answer.candidate) };
       if (route.billing !== 'unavailable') return { answer, billing: route, launched };
       sideline(answer.candidate, route.why);
       if (!fallThrough) return { reason: route.why, failed: true };
     }
   };
-  const others = author ? catalog.review.filter((one) => !(one.model === author.model && one.tool === author.tool)) : catalog.review;
-  const tiers = independent ? [others] : others.length && others.length < catalog.review.length ? [others, catalog.review] : [catalog.review];
+  const others = author ? list.filter((one) => !(one.model === author.model && one.tool === author.tool)) : list;
+  const tiers = independent ? [others] : others.length && others.length < list.length ? [others, list] : [list];
   let result = { reason: 'no candidate is left' };
   for (const pool of tiers) {
     result = stage(pool);
@@ -82,6 +90,16 @@ export function readerWalk({ catalog, capacity, now, author, env = {}, choose = 
   }
   if (!result.answer) return { ok: false, reason: result.reason, failed: Boolean(result.failed), setAside };
   return { ok: true, candidate: result.answer.candidate, answer: result.answer, billing: result.billing, launched: result.launched, setAside };
+}
+
+/** Each set-aside candidate, said once: `mc: <kind> <target>: <tool>:<model> cannot read — <reason>; trying the next reader`. */
+export function sayWalk(stderr, kind, target, setAside) {
+  for (const one of setAside ?? []) stderr.write(`mc: ${kind} ${target}: ${one.tool}:${one.model} cannot read — ${one.reason}; trying the next reader\n`);
+}
+
+/** A walk that found no reader, as one stop: each set-aside candidate and why, then the walk's own reason. */
+export function walkStop(walked) {
+  return [...(walked.setAside ?? []).map((one) => `${one.tool} ${one.model}: ${one.reason}`), walked.reason].filter(Boolean).join('; ');
 }
 
 export function chooseReader({ catalog, capacity, now, author, choose = chooseCandidate, launchable }) {
@@ -181,7 +199,7 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
       billing: deps.billingRoute ?? billingRouteNow, fallThrough: Boolean(policy.fallThrough), independent: policy.independent,
     });
   } catch (error) { walked = { ok: false, reason: error.message || String(error), setAside: [] }; }
-  for (const one of walked.setAside ?? []) stderr.write(`mc: ${kind} ${target.name}: ${one.tool}:${one.model} cannot read — ${one.reason}; trying the next reader\n`);
+  sayWalk(stderr, kind, target.name, walked.setAside);
   if (!walked.ok) {
     if (!policy.unreadFile) { stderr.write(`mc: ${kind} ${target.name}: ${walked.failed ? walked.reason : `no review candidate can run — ${walked.reason}`}\n`); return invalidExit; }
     const unread = { hash, author, set_aside: walked.setAside, reason: walked.reason ?? null, at: now().toISOString() };
@@ -192,8 +210,7 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
       return {};
     }, { strict: true, name: `${kind}-claim` });
     if (parked.refused) return refuse(parked.refused);
-    const reasons = [...walked.setAside.map((one) => `${one.tool} ${one.model}: ${one.reason}`), walked.reason].filter(Boolean);
-    stderr.write(`mc: ${kind} ${target.name}: no reader can run — nothing was read; the draft waits for a reader (${reasons.join('; ')})\n`);
+    stderr.write(`mc: ${kind} ${target.name}: no reader can run — nothing was read; the draft waits for a reader (${walkStop(walked)})\n`);
     return 3;
   }
   const candidate = walked.candidate;

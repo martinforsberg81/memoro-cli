@@ -604,7 +604,7 @@ async function prepare(argv, deps) {
   const parsed = scanArgs(argv, ROUTES.prepare);
   const error = parsed.error || ROUTES.prepare.check(parsed);
   if (error) { stderr.write(`mc: ${error}\n`); return 2; }
-  const options = { env, now: deps.now || (() => new Date()), deps: { ...deps.prepareDeps, say: line => stdout.write(`${line}\n`) } };
+  const options = { env, now: deps.now || (() => new Date()), deps: { stderr, ...deps.prepareDeps, say: line => stdout.write(`${line}\n`) } };
   if (!parsed.positional[0]) { await drainDeskPreparation(options); return 0; }
   const turn = await prepareDeskItem({ ...options, id: parsed.positional[0] });
   stdout.write(`mc: desk-prepare: ${turn.reason || 'prepared'}\n`);

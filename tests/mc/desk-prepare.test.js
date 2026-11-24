@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import * as agy from '../../src/adapters/antigravity-cli.js';
+import * as claude from '../../src/adapters/claude-code.js';
 import * as codex from '../../src/adapters/codex.js';
+import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { readCapacity } from '../../src/mc/model-capacity.js';
 import { runnerDir } from '../../src/mc/paths.js';
 import { prepareDeskItem, drainDeskPreparation } from '../../src/mc/desk-prepare.js';
@@ -29,6 +31,38 @@ function fixture(t) {
   return { env, item, now, deps, call: extra => prepareDeskItem({ id: item.id, env, now, deps: { ...deps, ...extra } }) };
 }
 const result = { status: 0, stdout: '', stderr: '' };
+const sink = () => { const parts = []; return { write: text => parts.push(text), text: () => parts.join('') }; };
+
+/** The build list walked by the production choice: claude first, codex second; a tool's launch and billing as the case says. */
+const WALK_CATALOG = { ...DEFAULT_CATALOG, providerPriority: 'auto', build: [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }] };
+const launchOf = tool => (tool === 'codex'
+  ? { ok: true, id: 'codex', shortName: 'codex', spec: { bin: '/fake/codex' }, adapter: codex }
+  : { ok: true, id: 'claude-code', shortName: 'claude', spec: { bin: '/fake/claude' }, adapter: claude });
+
+test('a first build candidate whose billing reads unavailable, or whose tool cannot launch, is set aside once on stderr and the next one prepares', async t => {
+  for (const [name, extra, why] of [
+    ['billing', { launch: launchOf, billingRoute: provider => (provider === 'claude' ? { billing: 'unavailable', why: 'claude has no plan left' } : { billing: 'plan' }) }, 'claude has no plan left'],
+    ['launch', { launch: tool => (tool === 'claude' ? { ok: false, hint: 'claude is not installed' } : launchOf(tool)) }, 'claude is not installed'],
+  ]) {
+    const f = fixture(t), err = sink(), seen = [];
+    const turn = await f.call({ route: undefined, catalog: WALK_CATALOG, stderr: err, ...extra, session: call => { seen.push([call.bin, call.env.MC_TOOL, call.env.MC_MODEL]); return result; } });
+    assert.equal(turn.started, true, `${name}: ${turn.reason}`);
+    assert.deepEqual(seen, [['/fake/codex', 'codex', 'gpt-6.2-sol']], `${name}: the second candidate prepares`);
+    assert.equal(err.text(), `mc: desk-prepare ${f.item.id}: claude:opus cannot read — ${why}; trying the next reader\n`, `${name}: said once, in programme review's form`);
+  }
+});
+
+test('with every build candidate set aside preparation stops, naming each candidate and why, and launches nothing', async t => {
+  const f = fixture(t), err = sink();
+  const turn = await f.call({ route: undefined, catalog: WALK_CATALOG, stderr: err,
+    launch: tool => (tool === 'claude' ? { ok: false, hint: 'claude is not installed' } : launchOf(tool)),
+    billingRoute: () => ({ billing: 'unavailable', why: 'codex has no plan left' }),
+    session: () => assert.fail('nothing can run') });
+  assert.equal(turn.started, false);
+  assert.equal(turn.reason, 'no reader can run: claude opus: claude is not installed; codex gpt-6.2-sol: codex has no plan left; no candidate is left');
+  assert.equal(err.text().split('\n').filter(Boolean).length, 2, 'each set-aside candidate is said once');
+  assert.equal(readDeskItem(f.item.id, { env: f.env }).prepare_failures, undefined, 'a stop is no failed turn');
+});
 
 test('failed turns are counted without losing the item and two failures produce only a mechanical preparation', async t => {
   const f = fixture(t);

@@ -952,8 +952,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * The candidate a catalog list runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read.
    * `passBy` holds `<tool>:<model>` keys (`modelKey`) the list's candidates are judged without: the models that declined a
    * goal's build. When it leaves the list no candidate, the answer is `{ ok: false, declined: true }`, not a wait.
+   * `setAside` is a reader's walk (`readerWalk`): the `{ tool, model }` candidates it set aside, which the choice is made without.
    */
-  function routeClass(cls, { avoid = null, catalog = null, passBy = [] } = {}) {
+  function routeClass(cls, { avoid = null, catalog = null, passBy = [], setAside = [] } = {}) {
     try {
       const saved = deps.catalog();
       let given = catalog ?? saved;
@@ -962,6 +963,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         if (!left.length && given[cls]?.length) return { ok: false, declined: true, class: cls, reason: `every ${cls} candidate declined the work — ${passBy.join(', ')}` };
         given = { ...given, [cls]: left };
       }
+      const aside = new Set((setAside ?? []).map(modelKey));
+      if (aside.size) given = { ...given, [cls]: (given[cls] ?? []).filter((candidate) => !aside.has(modelKey(candidate))) };
       const chosen = chooseCandidate({ cls, catalog: given, capacity: capacity.read(), now: deps.now(), avoid, priority: saved.providerPriority ?? 'auto', launchable: (tool) => Boolean(deps.launch(tool)?.ok), waitForReserve });
       // A class sent to the API reserve waits instead when that provider's API is off.
       const provider = declared(chosen?.candidate?.tool, 'BILLING_PROVIDER');
@@ -1492,7 +1495,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     try {
       reconcileAreaLearning({ env: deps.env, now: deps.now(), repos, gh: deps.gh, queue: deps.deskLearning?.queue, say });
       const out = await runLearningPass({ env: deps.env, now: deps.now, deps: {
-        ...(deps.deskLearning || {}), repos, route: routeClass, logRun, say, reserveAdmission,
+        ...(deps.deskLearning || {}), repos, route: routeClass, catalog: deps.catalog(), logRun, say, reserveAdmission,
+        stderr: { write: (text) => say(String(text).replace(/\n$/u, '')) },
         budget: options => deskBudget({ ...options, read: deps.read }),
       } });
       if (out.started) {
