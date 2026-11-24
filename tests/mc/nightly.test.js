@@ -33,7 +33,7 @@ import { nightlyReading, readNightlyHistory, recordNightlyRun } from '../../src/
 import { fullRun, fullRunDue, fullRunTick, loggedTick, repairFromRun, scheduledRound } from '../../src/mc/nightly-loop.js';
 import { readDeployMends, requestDeployRepair } from '../../src/mc/deploy-repair.js';
 import { requestMainRepair } from '../../src/mc/main-repair.js';
-import { awaitClaim, claimFullRun, liveClaims, releaseClaim } from '../../src/mc/full-run-claim.js';
+import { addClaimGroup, awaitClaim, claimFullRun, liveClaims, releaseClaim } from '../../src/mc/full-run-claim.js';
 
 await preloadVerbs('test', 'repo');
 
@@ -535,6 +535,79 @@ describe('a full run, one at a time per tree — whoever starts it', () => {
         assert.match(said.join('\n'), /ended without a record; starting one/u);
         assert.ok(claim);
       } finally { rmSync(root2, { recursive: true, force: true }); }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  // A starter killed (SIGKILL, OOM) while its suite runs on in the full-run
+  // checkout: the claim holds while a group its run recorded lives.
+  const SUITE = 7001;
+  it('a claim whose starter is dead and one of whose groups lives is live for all four checks, and void when all are gone', async () => {
+    const root = home();
+    try {
+      const claim = held(root, { sha: OTHER });
+      addClaimGroup(claim, SUITE, { root });
+      const living = new Set([SUITE]);
+      const checks = { alive: () => false, groupAlive: (pgid) => living.has(pgid) };
+
+      assert.deepEqual(liveClaims({ root, ...checks }).map((one) => [one.pid, one.groups]), [[OTHER_PID, [SUITE]]], 'liveClaims: held by its group');
+      const second = claimFullRun({ repo: 'memoro', sha: SHA, verb: 'mc deploy', root, pid: 5555, ...checks });
+      assert.equal(second.claimed, false, 'claimFullRun: the checkout is not given to another tree');
+      assert.equal(second.waitFor?.pid, OTHER_PID);
+
+      // Another run's release keeps it; its own release while the group lives keeps it, released.
+      const other = claimFullRun({ repo: 'memoro-cli', sha: SHA, verb: 'full run', root, pid: 6666, alive: () => true, groupAlive: checks.groupAlive }).claim;
+      releaseClaim(other, { root, ...checks });
+      assert.deepEqual(liveClaims({ root, ...checks }).map((one) => one.pid), [OTHER_PID], 'releaseClaim of another run keeps it');
+      releaseClaim(claim, { root, ...checks });
+      assert.deepEqual(liveClaims({ root, alive: () => true, groupAlive: checks.groupAlive }).map((one) => [one.pid, one.released]), [[OTHER_PID, true]], 'releaseClaim of its own: kept while the group lives');
+
+      let polls = 0;
+      await awaitClaim(claim, { root, ...checks, pollMs: 1, sleep: async () => { polls += 1; if (polls === 3) living.delete(SUITE); } });
+      assert.equal(polls, 3, 'awaitClaim waited until the group was gone');
+
+      assert.deepEqual(liveClaims({ root, ...checks }), [], 'all gone: no claim');
+      assert.equal(claimFullRun({ repo: 'memoro', sha: SHA, verb: 'mc deploy', root, pid: 5555, ...checks }).claimed, true, 'all gone: the checkout is free');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a run waiting for a stopped starter\'s suite says so, and measures once the group is gone', async () => {
+    const root = home();
+    try {
+      const claim = held(root, { sha: OTHER });
+      addClaimGroup(claim, SUITE, { root });
+      const living = new Set([SUITE]);
+      const events = [];
+      const said = [];
+      await fullRun(REPO, {
+        root, sha: SHA, say: (message) => said.push(message), repair: null,
+        round: () => { events.push('round'); return report(); },
+        claims: { alive: (pid) => pid !== OTHER_PID, groupAlive: (pgid) => living.has(pgid), pollMs: 1, sleep: async () => { events.push('wait'); living.delete(SUITE); } },
+      });
+      assert.deepEqual(events, ['wait', 'round'], 'measured only after the orphaned suite had ended');
+      assert.match(said.join('\n'), /a full run of bbbbbbb is using the full-run checkout \(the suite of a stopped starter \(group 7001\)\); waiting for it before measuring aaaaaaa/u);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a run\'s spawn adds its group to its claim', async () => {
+    const root = home();
+    try {
+      let stored = null;
+      await fullRun(REPO, {
+        root, sha: SHA, say: () => {}, repair: null,
+        // The scheduled round, with the gate it starts its batches through: each batch's group goes to the claim.
+        round: (args) => scheduledRound({
+          ...args,
+          gate: async ({ onSpawn }) => {
+            onSpawn(7002);
+            onSpawn(7003);
+            stored = liveClaims({ root, alive: () => true, groupAlive: () => false });
+            return report();
+          },
+        }),
+        claims: { alive: () => true, groupAlive: () => false, pollMs: 1, sleep: async () => {} },
+      });
+      assert.deepEqual(stored.map((one) => [one.pid, one.groups]), [[process.pid, [7002, 7003]]], 'the claim recorded each group as it started');
+      assert.deepEqual(liveClaims({ root, alive: () => true, groupAlive: () => false }), [], 'given back at the end, its groups gone');
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

@@ -50,6 +50,7 @@ describe('classifyStop: what a technical stop is', () => {
     ['a pick that would move production backwards (backwards)', { outcome: 'refused', code: 'backwards' }, false],
     ['a tip that was taken back, or comes before one (taken-back)', { outcome: 'refused', code: 'taken-back' }, false],
     ['a preparation replaced by a newer one (replaced)', { outcome: 'refused', code: 'replaced' }, false],
+    ['a preparation a person stopped, mc deploy --stop-preparation (stopped)', { outcome: 'refused', code: 'stopped' }, false],
     ['a tip nobody measured (unmeasured)', { outcome: 'refused', code: 'unmeasured' }, false],
     ['a red gate suite (red)', { outcome: 'refused', code: 'red' }, false],
     ['a full run that could not start for a reason of mc\'s own (full-run)', { outcome: 'refused', code: 'full-run' }, true],
