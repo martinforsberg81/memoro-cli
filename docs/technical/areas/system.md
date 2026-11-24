@@ -130,6 +130,7 @@ On main now:
 - [mc-helper.md](../mc-helper.md)
 - [mc-help.md](../mc-help.md)
 - [mc-hooks.md](../mc-hooks.md)
+- [mc-image.md](../mc-image.md)
 - [mc-interactive-access.md](../mc-interactive-access.md)
 - [mc-interactive-sessions.md](../mc-interactive-sessions.md)
 - [mc-jev.md](../mc-jev.md)
