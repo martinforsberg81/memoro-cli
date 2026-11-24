@@ -38,6 +38,8 @@ On main now:
   acts next when available. A build that has more in-scope work records a
   bounded continuation instead of presenting the goal as ready for review
   ([goal verbs](../mc-goals.md#the-verbs)).
+- Setting a revised order ready after dropping old goals allows those parts, including a dropped Documentation goal, to be cut again. A drop after the recorded ready minute does not by itself start replacement work ([the cut of a ready order](../mc-run.md#the-cut-of-a-ready-order)).
+- [`mc ask`](../mc-jev.md#the-context-sent) can still send a goal's documents after its worktree is released. It reads the goal branch, then `origin/main`, and says which supplied each document without creating another checkout.
 - The [learning pass](../mc-martin.md#lessons-and-the-learning-pass) can
   publish an evidenced factual correction to one area page. It does not
   change held wording or create a repair order.
@@ -49,6 +51,8 @@ On main now:
 - A review that finds a goal not OK returns it to build for a repair build, up
   to two automatic repairs for the current brief; a further failed verdict
   holds delivery for an automatic desk decision ([goal stages](../mc-goals.md)).
+- The [runner](../mc-run.md#the-session) distinguishes a provider refusal from a review verdict. A review cut short without a new verdict can run again without counting as a death.
+- [Gate receipts](../mc-gate-evidence.md#resuming-on-unchanged-content) can carry eligible passes forward after an interruption on unchanged inputs. A run with a caller-supplied code loader is [diagnostic](../mc-gate-evidence.md#diagnostic-runs-with-caller-supplied-loaders): it neither reuses passes nor supplies landing evidence.
 - The runner's archive turn and `mc programs archive <programme>` share one
   writer, which records the retained trees in a versioned receipt before the
   programme is shelved. For a ready programme with at least one done goal and
@@ -58,6 +62,7 @@ On main now:
   validates against main ([programme archive turn](../mc-run.md#programme-archive-turn),
   [archiving a programme](../mc-plan.md#archiving-a-programme)).
 - [Deploy](../mc-deploy.md#the-release-branch) can ship a green pick from main directly. If nothing after live is green, a typed deploy can cut a red or stalled main tip into its own release branch, subject to the forward and take-back checks. The runner only continues a release that a typed deploy cut: it measures that head ahead of a waiting main measurement, routes its reds to release mends, and runs the gate suites at the exact release head before shipping.
+- If main advances during measurement, the [release cut](../mc-deploy.md#cut-and-record) can still use the measured commit while main contains it. A newer eligible green commit ships instead of cutting that release.
 - After shipping from a release branch, the [return to main](../mc-deploy.md#merge-back-and-drop) preserves the shipped commit by ancestry. A return interrupted by a forge outage can resume without shipping again. The next deploy waits for the return, and any pin pull request is opened against main only afterwards.
 - Deploy reads a live commit reported with a `-dirty` suffix from stamped pins as the source commit it was built from; the no-backwards check still applies.
 - [Language cutover](../mc-language.md) can run from the desk on Martin's recorded word without a terminal. An unmet local build step runs without asking; production expectations still stop the run, and a write that already holds is not repeated. If no key is kept, the credentialed child uses Wrangler's existing login.
