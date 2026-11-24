@@ -328,7 +328,9 @@ describe('the store', () => {
 
 describe('the full run writes it', () => {
   // A pass with no remote to ask and no repair to write, waited for to the end.
-  const pass = async (options) => (await fullRunTick({ head: () => null, repair: () => ({ skipped: 'fixture' }), ...options })).done;
+  const pass = async (options) => (await fullRunTick({
+    head: () => null, repair: () => ({ skipped: 'fixture' }), repairFullRun: () => ({ skipped: 'fixture' }), ...options,
+  })).done;
 
   it('one entry per repository measured, with the names and the commit', async () => {
     const root = home();

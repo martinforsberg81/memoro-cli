@@ -519,12 +519,17 @@ async function measure(repo, {
  * true. A run that ends starts nothing after it. `done` settles when every run
  * this pass started has ended, with their records: the runner does not wait on
  * it, a test does.
+ *
+ * `repairFullRun` is the deploy mend a run that cannot start is handed to
+ * (`requestDeployRepair` into `workRoot(env)`), passed on to every run: a
+ * caller that replaces `repair` and not this still writes real requests
+ * (2026-11-24: a test's thrown round queued a deploy mend on the server).
  */
 export async function fullRunTick({
   root = mcHome(), env = process.env, say = () => {}, narrate = say,
   repos = null, round = scheduledRound, clock = () => Date.now(), head = remoteHead,
   shouldStop = () => false, running = new Map(), signal = null, handover = null, repair = requestMainRepair,
-  retryMs = FULL_RUN_RETRY_MS, claims = {}, deferRepo = null,
+  repairFullRun = requestDeployRepair, retryMs = FULL_RUN_RETRY_MS, claims = {}, deferRepo = null,
 } = {}) {
   const at = new Date(clock()).toISOString();
   const known = unique(repos || await knownRepos({ env }));
@@ -540,7 +545,7 @@ export async function fullRunTick({
   const launch = (repo, sha = null) => {
     const state = { measuring: false, repo: repo.name, sha, since: null };
     const tracked = fullRun(repo, {
-      root, env, say, narrate, round, clock, signal, handover, repair, sha, claims,
+      root, env, say, narrate, round, clock, signal, handover, repair, repairFullRun, sha, claims,
       onMeasuring: (claim) => { state.measuring = true; state.sha = claim.sha || sha; state.since = claim.started || null; },
     })
       .then((ran) => (ran ? [ran] : []))

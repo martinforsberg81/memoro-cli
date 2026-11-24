@@ -7,8 +7,8 @@
  * and rewrote the REAL ~/.memoro/mc/registry.json mid-development. Reads
  * that mutate are legitimate (that is what self-healing means), so the
  * invariant must live here instead: the runner starts with MC_HOME already
- * pointing at a throwaway directory, and a suite that manages its own
- * MC_HOME keeps overriding it exactly as before.
+ * pointing at a throwaway directory, whatever the launching shell had, and
+ * a suite that manages its own MC_HOME keeps overriding it exactly as before.
  *
  * Loaded via --import before any test module (see the npm test script).
  */
@@ -52,7 +52,16 @@ writeFileSync(join(homeRoot, '.gitconfig'), [
   '',
 ].join('\n'));
 
-if (!process.env.MC_HOME) {
+// MC_HOME and MC_WORK_ROOT are kept only when a test process this file already
+// isolated set them (MC_TEST_ISOLATED, below): a test file the runner spawns
+// shares the runner's throwaway roots, and a suite that passes its own to a
+// child keeps them. A value from anywhere else is the machine's own, and is
+// replaced. A session's shell carries the runner's real roots, and a
+// reviewer's `node --test` of tests/mc/nightly*.test.js queued a real deploy
+// mend for a fixture's "git fetch failed" (2026-11-24); the gate strips them
+// (`suiteEnv`), a hand-typed run did not.
+const inheritedIsolated = process.env.MC_TEST_ISOLATED === '1';
+if (!inheritedIsolated || !process.env.MC_HOME) {
   process.env.MC_HOME = mkdtempSync(join(tmpdir(), 'mc-test-isolated-home-'));
 }
 
@@ -135,6 +144,7 @@ if (testFile) {
 // repository that never existed (2026-08-23). Same invariant, same shape: the
 // runner starts with MC_WORK_ROOT pointing at an empty throwaway directory,
 // so a send that escapes a fixture finds no area rather than a person.
-if (!process.env.MC_WORK_ROOT) {
+if (!inheritedIsolated || !process.env.MC_WORK_ROOT) {
   process.env.MC_WORK_ROOT = mkdtempSync(join(tmpdir(), 'mc-test-isolated-work-'));
 }
+process.env.MC_TEST_ISOLATED = '1';
