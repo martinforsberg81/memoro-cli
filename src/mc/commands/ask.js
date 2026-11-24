@@ -17,6 +17,7 @@ import { appendLedgerLine, askJev, askWithinLimit, buildState, documentPath, INS
 import { readKeysDotenv } from '../keys-dotenv.js';
 import { mcHome, programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
+import { tryGit } from '../git.js';
 import { appendEntry, goalDirIn, GOAL_FILE, parseGoal, setGoalState } from '../goals.js';
 import { knownRepositories } from '../work-area.js';
 import { jevContext, reportDefect } from './goal.js';
@@ -119,7 +120,9 @@ export async function run(argv, deps = {}) {
 
   let context;
   const safeStderr = { write: (line) => stderr.write(clean(line)) };
-  if (target) context = jevContext(target, goal, flags.document, { read, env, home, stderr: safeStderr, realpath: deps.realpath, cwd });
+  // A released worktree's documents are read with git show in the repository known() finds (jevContext).
+  if (target) context = jevContext(target, goal, flags.document, { read, env, home, stderr: safeStderr, realpath: deps.realpath, cwd,
+    exists: deps.exists, known: deps.known || (() => knownRepositories(env)), git: deps.git || ((repo, args) => tryGit(repo, args, { trim: false })) });
   else context = noGoalContext(programme, flags.document, { home, env, read, stderr: safeStderr, list: deps.list, known: deps.known || (() => knownRepositories(env)), realpath: deps.realpath, gitRoot: deps.gitRoot, cwd });
 
   const key = values && typeof values[JEV_KEY] === 'string' && values[JEV_KEY] ? values[JEV_KEY] : null;
