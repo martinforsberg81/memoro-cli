@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { it } from 'node:test';
-import { runSessionGate as sessionGate, selectorCommand } from '../../src/mc/session-gate-run.js';
+import { codeLoaders, runSessionGate as sessionGate, selectorCommand } from '../../src/mc/session-gate-run.js';
 import { spawnedBatch, withSpawnedBatches } from './_helpers/spawned-batch.js';
 
 /** Every fake `tests` here stands for a spawn: it reports the batch that spawn would carry. */
@@ -78,8 +78,8 @@ process.exitCode = await run(['--budget', '0.02'], {
     assert.equal(command.status, 3, command.stderr || command.error?.message);
     // Under the suite the fake-git preload rides NODE_OPTIONS into this gate (the fixture's
     // repository is the model's): a loader run, which says so first and passes as diagnostic.
-    assert.match(command.stdout, /^(?:mc gate: NODE_OPTIONS loads code \(--import\)[^\n]*\n)?RUNNING/u);
-    const loaded = command.stdout.startsWith('mc gate: NODE_OPTIONS loads code');
+    const loaded = codeLoaders(process.env.NODE_OPTIONS).length > 0;
+    assert.match(command.stdout, loaded ? /^mc gate: NODE_OPTIONS loads code \(--import\)[^\n]*\nRUNNING/u : /^RUNNING/u);
     const passed = loaded ? 'diagnostic' : 'green';
     const lockPath = join(cwd, '.git', 'mc-gate.json');
     const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
