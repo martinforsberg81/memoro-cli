@@ -8,6 +8,7 @@ import { runTool } from './child-async.js';
 import { deskBudget, deskBudgetReason, deskRunsPath } from './desk-budget.js';
 import { itemDirectory, listDeskItems, readDeskItem, updateDeskItem } from './desk-items.js';
 import { chooseCandidate } from './model-choice.js';
+import { readerWalk, sayWalk, walkStop } from './programme-review.js';
 import { readCapacity } from './model-capacity.js';
 import { readModels } from './model-config.js';
 import { runnerDir, workRoot } from './paths.js';
@@ -23,10 +24,19 @@ import { pidAlive } from './status-collect.js';
 export const PREPARE_LIMIT = 3;
 export const PREPARE_TIMEOUT_MS = 15 * 60_000;
 
-/** The same catalog policy as routeClass; never borrow another list. */
-function buildRoute(env, now) {
-  const catalog = readModels(env);
-  return chooseCandidate({ cls: 'build', catalog, capacity: readCapacity({ root: runnerDir(env) }), now, priority: catalog.providerPriority ?? 'auto' });
+/**
+ * The `build` list — the same catalog policy as routeClass; never borrow another list — walked to the first
+ * candidate that can launch and be billed (`readerWalk`); no author is passed by.
+ */
+function walkBuild({ env, now, deps }) {
+  try {
+    const billingRoute = deps.billingRoute || billingRouteNow;
+    return readerWalk({
+      cls: 'build', catalog: deps.catalog ?? readModels(env), capacity: deps.capacity ?? readCapacity({ root: runnerDir(env) }), now: now(), author: null, env,
+      choose: deps.route ? ({ setAside }) => deps.route('build', { setAside }) : chooseCandidate, launch: deps.launch || resolveLaunch,
+      billing: (tool, options, launched) => billingRoute(requireCapability(launched.id, 'BILLING_PROVIDER'), options),
+    });
+  } catch (error) { return { ok: false, reason: error.message || String(error), setAside: [] }; }
 }
 
 // The runner lock guards only claim/release, never the asynchronous turn. A
@@ -63,16 +73,13 @@ export async function prepareDeskItem({ id, env = process.env, now = () => new D
     if (readDeskItem(id, { env })?.state !== 'new') return { started: false, reason: 'item is no longer new' };
     const budget = (deps.budget || deskBudget)({ env, now: now() });
     if (budget.held) return { started: false, held: true, reason: deskBudgetReason(budget) };
-    const route = deps.route ? deps.route('build') : buildRoute(env, now());
-    if (!route?.ok || !route.candidate) return { started: false, reason: route?.reason || 'no usable medium candidate' };
-    const candidate = route.candidate;
-    const launch = (deps.launch || resolveLaunch)(candidate.tool);
-    if (!launch?.ok) return { started: false, reason: launch?.hint || launch?.reason || 'tool unavailable' };
+    const walked = walkBuild({ env, now, deps });
+    sayWalk(deps.stderr || process.stderr, 'desk-prepare', id, walked.setAside);
+    if (!walked.ok) return { started: false, reason: `no reader can run: ${walkStop(walked)}` };
+    const { candidate, launched: launch, billing } = walked;
     const role = (deps.role || readCanonRole)('desk-prepare');
     if (!role?.overlay) return { started: false, reason: 'desk-prepare role missing' };
     const provider = requireCapability(launch.id, 'BILLING_PROVIDER');
-    const billing = (deps.billingRoute || billingRouteNow)(provider, { env, now: now(), route: { billing: route.billing, why: route.why } });
-    if (billing.billing === 'unavailable') return { started: false, reason: billing.why };
     const dir = itemDirectory(item, env);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: candidate.model, effort: candidate.effort,
       instructions: instructionsFor(launch.id, role.overlay), prompt: `Prepare only desk item ${id}. Read it with mc martin item ${id}. Write prepared.md here, then mc martin item ${id} prepared --sort <sort> and stop.`, profileArgs, stream: false, cache: role.cache });

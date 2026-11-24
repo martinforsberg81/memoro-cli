@@ -313,7 +313,7 @@ test('one way to ask: a reading that ends without a verdict, times out or cannot
 
   const i = setup(t);
   const missing = await i.call({ session: async () => { launched = true; return DONE; }, launch: () => ({ ok: false, hint: 'claude is not installed' }) });
-  assert.match(missing.reason, /claude is unavailable: claude is not installed/u);
+  assert.match(missing.reason, /no reader can run: claude opus: claude is not installed; codex gpt-6\.2-sol: claude is not installed/u);
   const gone = await i.call({ role: () => null });
   assert.match(gone.reason, /the ask-reader role is missing/u);
   const dear = await i.call({ billingRoute: () => ({ billing: 'unavailable', why: 'no budget left' }) });
@@ -325,6 +325,36 @@ test('one way to ask: a reading that ends without a verdict, times out or cannot
   const leaky = await j.call({ session: async () => ({ status: 1, stdout: '', stderr: `exploded ${SECRET}` }), snapshot: () => ({ ok: false, reason: `copy failed ${SECRET}` }) });
   assert.equal(leaky.read, false);
   assert.equal(leaky.reason.includes(SECRET), false, 'a reason never holds a key-source value');
+});
+
+test('one way to ask: a first decision candidate whose billing reads unavailable, or whose tool cannot launch, is set aside once on stderr and the next one reads', async (t) => {
+  const codexLaunch = { ok: true, id: 'claude-code', shortName: 'codex', spec: { bin: '/fake/codex' }, adapter: claude };
+  for (const [name, extra, why] of [
+    ['billing', { billingRoute: (tool) => (tool === 'claude' ? { billing: 'unavailable', why: 'claude has no plan left' } : { billing: 'plan' }) }, 'claude has no plan left'],
+    ['launch', { launch: (tool) => (tool === 'claude' ? { ok: false, hint: 'claude is not installed' } : codexLaunch) }, 'claude is not installed'],
+  ]) {
+    const f = setup(t);
+    const err = sink();
+    let seen = null;
+    const result = await f.call({ ...extra, session: f.answers([ID, 'continue', 'a'], { before: (spawned) => { seen = spawned; } }) }, { stderr: err });
+    assert.equal(result.read, true, `${name}: ${result.reason}`);
+    assert.deepEqual([result.tool, result.model, seen.env.MC_TOOL, seen.env.MC_MODEL], ['codex', 'gpt-6.2-sol', 'codex', 'gpt-6.2-sol'], `${name}: the second candidate reads`);
+    assert.equal(err.text(), `mc: ask p/g: claude:opus cannot read — ${why}; trying the next reader\n`, `${name}: said once, in programme review's form`);
+  }
+});
+
+test('one way to ask: with every decision candidate set aside the reader stops unread, naming each candidate and why, and launches nothing', async (t) => {
+  const f = setup(t);
+  const err = sink();
+  let launched = false;
+  const result = await f.call({
+    session: async () => { launched = true; return DONE; },
+    launch: (tool) => (tool === 'claude' ? { ok: false, hint: 'claude is not installed' } : { ok: true, id: 'claude-code', shortName: 'codex', spec: { bin: '/fake/codex' }, adapter: claude }),
+    billingRoute: () => ({ billing: 'unavailable', why: 'codex has no plan left' }),
+  }, { stderr: err });
+  assert.deepEqual([result.read, launched, f.rows.length], [false, false, 0]);
+  assert.equal(result.reason, 'no reader can run: claude opus: claude is not installed; codex gpt-6.2-sol: codex has no plan left; no candidate is left');
+  assert.equal(err.text().split('\n').filter(Boolean).length, 2, 'each set-aside candidate is said once');
 });
 
 test('one way to ask: the call directory that cannot be removed is left and said, the reading still answers', async (t) => {

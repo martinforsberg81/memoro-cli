@@ -1,4 +1,5 @@
 import { createDiskPressure } from '../../src/mc/disk-pressure.js';
+import * as codexAdapter from '../../src/adapters/codex.js';
 import { effortArgs as codexEffortArgs } from '../../src/adapters/codex.js';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
@@ -571,6 +572,38 @@ test('chores starts one learning session with five open lessons: its role, headl
   assert.equal(call.cwd, join(l.root, 'martin', 'lessons'));
   assert.ok(call.args[call.args.indexOf('--append-system-prompt') + 1].includes(readCanonRole('learning').overlay), "the role's words");
   assert.deepEqual(l.rows(runner).map(row => [row[1], row[2], row[3]]), [['learning', 'learning', '0']]);
+});
+
+test('a learning pass sets aside a first decision candidate whose billing reads unavailable, or whose tool cannot launch, says it once and runs on the next one that routeClass chooses', async (t) => {
+  const [first, second] = TEST_CATALOG.decision;
+  assert.deepEqual([first.tool, second.tool], ['claude', 'codex'], 'the case needs two tools');
+  const codexLaunch = { ok: true, id: 'codex', spec: { bin: '/fake/codex' }, adapter: codexAdapter };
+  for (const [name, extra, why] of [
+    ['billing', { billingRoute: (provider) => (provider === 'claude' ? { billing: 'unavailable', why: 'claude has no plan left' } : { billing: 'plan' }), launch: (tool) => (tool === 'codex' ? codexLaunch : { ok: true, id: 'claude-code', spec: { bin: '/fake/claude' }, adapter: claudeAdapter }) }, 'claude has no plan left'],
+    ['launch', { launch: (tool) => (tool === 'codex' ? codexLaunch : { ok: false, hint: 'claude is not installed' }) }, 'claude is not installed'],
+  ]) {
+    const l = learningFixture(t, { ages: [1, 1, 1, 1, 1] });
+    Object.assign(l.f.deps.deskLearning, extra);
+    const runner = createRunner({ deps: l.f.deps });
+    await runner.chores();
+    assert.deepEqual(l.calls.map((call) => [call.env.MC_TOOL, call.env.MC_MODEL]), [[second.tool, second.model]], `${name}: the second candidate runs, chosen by routeClass without the first`);
+    const said = l.f.log.filter((line) => line.includes('cannot read'));
+    assert.equal(said.length, 1, `${name}: said once`);
+    assert.ok(said[0].endsWith(`mc: learning pass: ${first.tool}:${first.model} cannot read — ${why}; trying the next reader`), said[0]);
+  }
+});
+
+test('a learning pass with every decision candidate set aside starts no session and its stop names each candidate and why', async (t) => {
+  const [first, second] = TEST_CATALOG.decision;
+  const l = learningFixture(t, { ages: [1, 1, 1, 1, 1] });
+  l.f.deps.deskLearning.launch = (tool) => (tool === 'codex' ? { ok: true, id: 'codex', spec: { bin: '/fake/codex' }, adapter: codexAdapter } : { ok: false, hint: 'claude is not installed' });
+  l.f.deps.deskLearning.billingRoute = () => ({ billing: 'unavailable', why: 'codex has no plan left' });
+  const runner = createRunner({ deps: l.f.deps });
+  await runner.chores();
+  assert.deepEqual(l.calls, []);
+  assert.equal(l.f.log.filter((line) => line.includes('cannot read')).length, 2, 'each set-aside candidate is said once');
+  const stop = `no reader can run: ${first.tool} ${first.model}: claude is not installed; ${second.tool} ${second.model}: codex has no plan left`;
+  assert.ok(l.f.log.some((line) => line.includes(stop)), `the stop names the list: ${l.f.log.filter((line) => /learning/u.test(line)).join(' | ')}`);
 });
 
 test('chores starts one learning session when one lesson is seven days old, and none at six days', async (t) => {
