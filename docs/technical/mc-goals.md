@@ -974,18 +974,24 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    `finish` catalog list (a list name kept; it is not the `build` list); merge failures alone get a mend session (`mend-session`) on the mend list. None of them uses the `build` list, and none borrows its candidates when its own list has none usable. Legacy blocked goals outside merge are reconciled to Martin, retaining prior evidence without a diagnostic launch. `MC_ROLE`,
    `MC_GOAL`, `MC_REPO`, `MC_WORKAREA` and `MC_TOOL` are set for every kind.
    If the role's file is missing on the machine, the goal is skipped.
-4. **Silent build.** A build session that leaves no entry gets one from the
-   runner: tool `runner`, stage and status unchanged, `Comment: session ended
-   without a log entry (exit <n>, <s> s)`. A worktree that could not be made
-   gets one too. When the last three entries in `build` are all the runner's,
+4. **Silent build.** An [offline](mc-run.md#the-session) or
+   [host-refused](mc-run.md#launch-settings) ending writes no runner entry and
+   does not count as a silent build. Otherwise a build session that leaves no
+   entry gets one from the runner: tool `runner`, stage and status unchanged,
+   `Comment: session ended without a log entry (exit <n>, <s> s)`.
+   A worktree that could not be made gets one too. When the last three entries
+   in `build` are all the runner's (skipping progress and decline entries),
    the goal is set `build · Martin`, and the stage stays build.
    That is the guard against a session that fails the same way every time;
    there is no attempt counter.
 5. **After a review** (`afterReview`). The review decides with `mc goal stage
    merge` or `build`; mc checks REVIEW.md's lines when the move is made, and the
-   runner reads neither its words nor the verdict. A first crash leaves `review · ready` for the bounded retry; a
-   second crash sets `review · Martin`. A dirty review refusal also sets Martin
-   and preserves the worktree paths; it is not sent to mend.
+   runner does not interpret the verdict. A cut-short review runs again without
+   counting. For endings that count, the first leaves `review · ready` for a
+   retry and the second in the same review stage sets `review · Martin` (see
+   *Review recovery* under [What a review session does](#what-a-review-session-does)).
+   A dirty review refusal also sets Martin and preserves the worktree paths;
+   it is not sent to mend.
 6. **After a repair build.** A build session on a goal moved back by a review
    is the same session as any build (`afterBuild`): it moves the goal to
    `review` or the three-silent-sessions and no-progress counts apply. Its
@@ -1213,8 +1219,8 @@ it refuses the end — `{ "decision": "block", "reason": … }` — while the go
 `review` or no `.md` has been written in any area's `~/mc/areas/<repo>/<area>/proposals/` since
 `MC_SESSION_STARTED`, naming what is missing. The hook lets the review end after
 a move to `merge` or `build`, or when the goal is `blocked` or in `Martin`.
-Any other session ends as it will. A review that dies anyway leaves the goal `review · ready` (*How the
-runner takes a goal*, step 5).
+Any other session ends as it will. If the session ends while the goal is still
+`review · ready`, *Review recovery* below governs whether the ending counts.
 
 ### The verdict, the rounds and the tripped areas
 

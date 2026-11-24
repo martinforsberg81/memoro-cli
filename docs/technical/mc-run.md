@@ -325,8 +325,10 @@ role tells the session to read LOG.md first.
   build for up to two automatic repairs. A further failed verdict opens a
   stop for the decision lane. A review after repair is narrow:
   its prompt names the previous review's heads and failed items, and lists the
-  untouched areas the diff tripped. A review that dies still in review
-  is retried once, then waits directly on Martin if it dies again.
+  untouched areas the diff tripped. A cut-short review runs again without
+  counting. For endings that count, the first leaves the goal `review · ready`
+  for a retry; the second in the same review stage sets `review · Martin`.
+  See [Review recovery](mc-goals.md#what-a-review-session-does).
 - A repair build uses `build-session:goal` on the `finish` catalog list, not
   the `build` list, on a goal in `build · ready` that a review rejected. Its
   prompt names REVIEW.md and the NOT OK ids (or says the file is in the old form).
@@ -349,6 +351,7 @@ write its records before the final stage command.
 
 When the runner counts a build ending without a log entry, it writes one;
 three such ends in succession set the goal Martin; the stage stays build.
+Offline and host-refused endings write no runner entry and do not count.
 A normal build end with more work leaves it build · ready for the next
 session. See [goal recovery](mc-goals.md#what-a-build-session-does) for
 build stops and declines.
