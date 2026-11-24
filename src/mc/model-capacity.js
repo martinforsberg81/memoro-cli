@@ -10,7 +10,8 @@
  * windows (the fraction of the plan used, and the instant the window resets),
  * the models the provider lists where that is known, a refusal instant (the
  * provider's) and per-model refusal instants (`model_refusals`, additive: a file
- * without it reads as none, an older mc ignores it) —
+ * without it reads as none, an older mc ignores it), beside them the reviews each
+ * model cut short in a row (`model_cut_short`, additive the same way) —
  * and, beside it, the last failure. A failure never erases the snapshot before
  * it; it says so. A window whose reset has passed is expired: its usage is
  * unknown, never zero.
@@ -86,6 +87,12 @@ function modelRefusals(value) {
   return Object.fromEntries(Object.entries(value).filter(([id, until]) => id && iso(until)).map(([id, until]) => [id, until]));
 }
 
+/** `{ <model>: <count> }` of the reviews each model cut short in a row, bad or zero entries dropped; empty when the file has none. */
+function cutShortCounts(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([id, count]) => id && Number.isInteger(count) && count > 0));
+}
+
 /** One provider as the file holds it, every bad field null or empty. Windows are null until something was observed. */
 function normaliseProvider(raw, provider) {
   const observed = iso(raw?.observed_at);
@@ -96,6 +103,7 @@ function normaliseProvider(raw, provider) {
     models: observed && Array.isArray(raw?.models) ? raw.models.map(model).filter(Boolean) : null,
     refusal_until: iso(raw?.refusal_until),
     model_refusals: modelRefusals(raw?.model_refusals),
+    model_cut_short: cutShortCounts(raw?.model_cut_short),
     failure: failure(raw?.failure),
   };
 }
@@ -176,6 +184,21 @@ export function applyRefusal(state, provider, until, model = null, now = new Dat
   const held = normaliseCapacity(state).providers[provider].model_refusals;
   const live = Object.fromEntries(Object.entries(held).filter(([id, at]) => id !== model && after(at, now)));
   return withProvider(state, provider, { model_refusals: iso(until) ? { ...live, [model]: iso(until) } : live });
+}
+
+/** How many reviews in a row `model` of `provider` cut short (`model_cut_short`); 0 when none. */
+export function cutShortCount(state, provider, model) {
+  return normaliseCapacity(state).providers[provider].model_cut_short[model] ?? 0;
+}
+
+/**
+ * The state with `model`'s count of reviews cut short in a row set to `count`;
+ * 0 removes it. Kept beside the model's refusals, so a restarted runner keeps it.
+ */
+export function applyCutShort(state, provider, model, count) {
+  const held = normaliseCapacity(state).providers[provider].model_cut_short;
+  const rest = Object.fromEntries(Object.entries(held).filter(([id]) => id !== model));
+  return withProvider(state, provider, { model_cut_short: count > 0 ? { ...rest, [model]: count } : rest });
 }
 
 /** `{ five_hour, seven_day }` of a claude stream, as fractions; a missing window is null. */

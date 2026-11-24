@@ -5414,19 +5414,92 @@ test('a review that sends the goal to build hands it to one repair session, neve
   assert.equal(runRows(f.files).at(-1).kind, 'repair');
 });
 
-test('a review that dies leaves review · ready and a review runs again; a second that dies waits on Martin', async () => {
+/** A review that wrote a LOG.md entry of its own and ended with the goal still in review, its exit `status`. */
+const writesThenDies = (f, status = 1) => () => {
+  const path = `${GOALS}/judged/LOG.md`;
+  f.files[path] = `${f.files[path]}\n## 2026-08-29T10:00Z · claude opus · review · ready\n\nComment: reading the diff\n`;
+  return { status, stdout: '', stderr: '', timedOut: false };
+};
+
+test('a review that wrote an entry and dies leaves review · ready with its ending named, and a review runs again; a second that dies waits on Martin', async () => {
   const f = reviewFixture();
-  f.answer = () => ({ status: 1, stdout: '', stderr: '', timedOut: false });
+  f.answer = writesThenDies(f);
   const runner = createRunner({ deps: f.deps });
   await runner.pass({ repo: 'memoro' });
   assert.equal(where(f, 'judged'), 'review · ready');
-  assert.match(goalEntries(f).at(-1).comment, /^the review ended with the goal still in review — a review runs again$/u);
+  assert.match(goalEntries(f).at(-1).comment, /^the review ended with the goal still in review \(no-json, 0 s\) — a review runs again$/u);
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
   assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'review-session:goal');
   assert.equal(where(f, 'judged'), 'review · Martin');
-  assert.match(goalEntries(f).at(-1).comment, /a second time — review recovery cannot continue$/u);
+  assert.match(goalEntries(f).at(-1).comment, /^the review ended with the goal still in review \(no-json, 0 s\), a second time — review recovery cannot continue$/u);
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
   assert.equal(f.calls.sessions.length, 2);
+});
+
+/** The review endings that cut a review short when it wrote nothing: each the first candidate's (`model`), with the list it heads. */
+const OPUS_FIRST = [OPUS_REVIEW, LUNA_REVIEW];
+const CUT_SHORT_ENDINGS = [
+  { why: 'a quota', list: OPUS_FIRST, provider: 'claude', answer: REFUSED_429, note: 'quota' },
+  { why: 'a login refusal', list: OPUS_FIRST, provider: 'claude', answer: streamed(apiEndedSession('Not logged in · Please run /login', { api_error_status: null, num_turns: 1 })), note: 'interrupted' },
+  { why: 'an offline ending', list: OPUS_FIRST, provider: 'claude', answer: UNREACHABLE, note: 'offline' },
+  { why: 'a non-zero exit', list: OPUS_FIRST, provider: 'claude', answer: () => ({ status: 1, stdout: '', stderr: '', timedOut: false }), note: 'no-json' },
+  { why: 'a codex non-zero exit', list: [LUNA_REVIEW, OPUS_REVIEW], provider: 'codex', answer: () => ({ status: 1, stdout: '', stderr: 'stream disconnected', timedOut: false }), note: 'failed', turns: '-' },
+];
+
+test('a review cut short by its provider writes nothing and runs again; its model, cut short twice in a row, is set aside and another reviews', async () => {
+  for (const { why, list, provider, answer, note, turns } of CUT_SHORT_ENDINGS) {
+    const [first, second] = list;
+    const f = reviewFixture({ log: builtBy('claude haiku') });
+    f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), review: list });
+    f.deps.billing = { readMode: () => 'plan', readState: () => ({}), patchState: () => {}, readApi: () => ({ claude: false, codex: false }) };
+    let clock = ROUTING_NOW.getTime();
+    f.deps.now = () => new Date(clock);
+    f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.1 }));
+    f.answer = (call) => (call.env.MC_MODEL === first.model ? answer(call) : judges(f, 'merge')(call));
+    const runner = createRunner({ deps: f.deps });
+    const logBefore = f.files[`${GOALS}/judged/LOG.md`];
+    // The provider answers again before the next pick: its own refusal (a quota, a login) is lifted, nothing else.
+    const next = async () => {
+      clock += 5 * 60_000;
+      f.deps.capacity.write(applyRefusal(f.deps.capacity.read(), provider, null));
+      return runner.pass({ repo: 'memoro' });
+    };
+    assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, why);
+    for (const round of [1, 2]) {
+      if (round === 2) assert.equal((await next()).ran, 1, why);
+      assert.deepEqual([f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], [first.tool, first.model], `${why}: review ${round} is the first candidate's`);
+      assert.equal(where(f, 'judged'), 'review · ready', `${why}: review ${round}`);
+      assert.equal(f.files[`${GOALS}/judged/LOG.md`], logBefore, `${why}: review ${round} leaves no entry, from afterReview or goalWithoutWord`);
+      assert.equal(f.log.filter((line) => line.includes(`goal:prog/judged: review cut short by ${first.tool}:${first.model} (${note}, 0 s) — no answer about the goal, it runs again`)).length, round, why);
+      assert.match(runRows(f.files).at(-1).note, new RegExp(`^${note},no-log$`, 'u'), why);
+      if (turns) assert.equal(runRows(f.files).at(-1).turns, turns, why);
+    }
+    assert.ok(f.log.some((line) => line.endsWith(`${first.tool}:${first.model} set aside until 2026-08-29T10:35:00Z — two reviews cut short in a row`)), why);
+    assert.equal((await next()).ran, 1, why);
+    assert.deepEqual([f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], [second.tool, second.model], `${why}: the third review is another model's`);
+    assert.equal(f.calls.sessions.filter((call) => call.env.MC_MODEL === first.model).length, 2, `${why}: the set-aside model is not launched a third time`);
+    assert.equal(where(f, 'judged'), 'merge · ready', `${why}: the goal never waits on Martin`);
+  }
+});
+
+test('a review of the same model that is not cut short resets its count: one cut short after it does not set it aside', async () => {
+  const f = reviewFixture({ log: builtBy('claude haiku') });
+  f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), review: [OPUS_REVIEW] });
+  f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.1 }));
+  const runner = createRunner({ deps: f.deps });
+  const fails = () => ({ status: 1, stdout: '', stderr: '', timedOut: false });
+  f.answer = fails;
+  await runner.pass({ repo: 'memoro' });
+  f.answer = writesThenDies(f);
+  await runner.pass({ repo: 'memoro' });
+  assert.match(goalEntries(f).at(-1).comment, /^the review ended with the goal still in review \(no-json, 0 s\) — a review runs again$/u);
+  f.answer = fails;
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(f.log.some((line) => /set aside/u.test(line)), false, 'a cut-short, a written, a cut-short: never two in a row');
+  assert.equal(where(f, 'judged'), 'review · ready');
+  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_MODEL), ['opus', 'opus', 'opus']);
+  assert.deepEqual(f.deps.capacity.read().providers.claude.model_cut_short, { opus: 1 }, 'the count beside the refusals holds the last cut-short alone');
+  assert.equal(f.deps.capacity.read().providers.claude.model_refusals.opus, undefined);
 });
 
 /** Makes `worktree`'s `git status --porcelain` answer `tree.lines`, as a fault left in it would; `tree` is mutable. */
@@ -5461,13 +5534,14 @@ test('a review on a dirty goal worktree starts no session: the goal is review ·
 test('a review that dies with its tree left dirty logs the dirty paths in the entry the runner writes', async () => {
   const f = reviewFixture();
   const tree = dirtyTree(f, `${GOALS}/judged/memoro`);
+  const dies = writesThenDies(f);
   f.answer = () => {
     tree.lines = [' M src/mc/runner-lock.js'];
-    return { status: 1, stdout: '', stderr: '', timedOut: false };
+    return dies();
   };
   await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
   assert.equal(where(f, 'judged'), 'review · ready');
-  assert.match(goalEntries(f).at(-1).comment, /^the review ended with the goal still in review — a review runs again; worktree not clean — .*src\/mc\/runner-lock\.js$/u);
+  assert.match(goalEntries(f).at(-1).comment, /^the review ended with the goal still in review \(no-json, 0 s\) — a review runs again; worktree not clean — .*src\/mc\/runner-lock\.js$/u);
 });
 
 test('a review without a pull request returns once to build, then stops for Martin; a review entry resets the count', async () => {
