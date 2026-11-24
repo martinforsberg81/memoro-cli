@@ -555,9 +555,10 @@ export function errorLines(result) {
 /**
  * What came back besides the picture, in the order it prints after the path,
  * the URL and the measure line: the errors the page, its requests, the server
- * or a dialog raised; each `--eval`'s value (`eval <n>`, counted from 1) or
- * what it threw; and the step that failed, with what was visible instead. A
- * thrown eval or failed step makes `failed` true — the shot then exits 1.
+ * or a dialog raised; each `--eval`'s value (`eval <n>`, counted from 1),
+ * warning for a returned function, or what it threw; and the step that failed,
+ * with what was visible instead. A thrown eval or failed step makes `failed`
+ * true — the shot then exits 1.
  */
 export function reportLines(result) {
   const lines = errorLines(result);
@@ -568,7 +569,12 @@ export function reportLines(result) {
       lines.push(`eval ${n}  threw: ${oneLine(entry.error, EVAL_TEXT)}`);
       return;
     }
-    const json = JSON.stringify(entry?.value) ?? 'undefined';
+    const value = entry?.value;
+    if (value?.$type === 'function' && Object.keys(value).length === 1) {
+      lines.push(`eval ${n}  a function — it was returned, not called; write (async () => { … })() to run it`);
+      return;
+    }
+    const json = JSON.stringify(value) ?? 'undefined';
     lines.push(json.length > EVAL_TEXT
       ? `eval ${n}  ${json.slice(0, EVAL_TEXT)}… (${Buffer.byteLength(json)} bytes; --json has it whole)`
       : `eval ${n}  ${json}`);

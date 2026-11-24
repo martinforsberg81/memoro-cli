@@ -1036,6 +1036,22 @@ describe('mc shot — eval, upload, press, timeout, and what comes back', () => 
     assert.equal(lines[6], 'mc: warning — w');
   });
 
+  it('warns about a returned function without mistaking ordinary eval values for it', async () => {
+    const fx = fixture();
+    const result = await shot([
+      'dev', 'home', '--eval', '() => 1', '--eval', '"[function]"', '--eval', '({ $type: "function", label: "data" })',
+    ], fx, captured({
+      acted: [{}, {}, {}],
+      evaluated: [{ value: { $type: 'function' } }, { value: '[function]' }, { value: { $type: 'function', label: 'data' } }],
+    }));
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(result.stdout.trimEnd().split('\n').slice(2), [
+      'eval 1  a function — it was returned, not called; write (async () => { … })() to run it',
+      'eval 2  "[function]"',
+      'eval 3  {"$type":"function","label":"data"}',
+    ]);
+  });
+
   it('a failed step prints the path first, then the failed line and what is here, and exits 1', async () => {
     const fx = fixture();
     const result = await shot(['dev', 'home', '--click', '.hero-card__actions', '--press', 'Escape'], fx, captured({
@@ -1069,6 +1085,18 @@ describe('mc shot — eval, upload, press, timeout, and what comes back', () => 
       assert.ok(usage().includes(flag), flag);
     }
     assert.match(usage().replace(/\n/gu, ' '), /Every error the page, its requests, the dev server or a dialog raised during the shot prints as error lines after the path/u);
+  });
+
+  it('usage explains viewport and locale limits and shows how to call an eval function', () => {
+    const help = usage().replace(/\s+/gu, ' ');
+    assert.ok(help.includes('A kept browser keeps its starting viewport; next takes no --viewport, so start another with --keep.'));
+    assert.ok(help.includes("A phone viewport is the page's size only; it has no on-screen keyboard."));
+    assert.ok(help.includes(
+      "Signed-in --locale sets the page's language; server-rendered text follows the account's language, which you set on the fixture account itself.",
+    ));
+    assert.ok(help.includes(
+      "For example, '() => document.title' returns a function; '(() => document.title)()' calls it.",
+    ));
   });
 });
 
