@@ -238,8 +238,19 @@ cut a release, and only if live is known, the tip moves production forward
 and the take-back floor permits it. A stopped run that measured nothing
 does not qualify. A typed `--accept-red` does not cut a new branch.
 
-The verb confirms the tip on origin, then pushes `release/<short sha of the
+The verb reads main on origin, then pushes `release/<short sha of the
 tip>` at that exact commit. It does not overwrite a branch at another commit.
+The full run takes long and main keeps landing meanwhile: a main that moved
+on while the tip was measured still cuts at the measured commit, as long as
+origin's main contains it. Under admission the commits after it are read too,
+and a green one among them ships instead of a cut; otherwise they wait for the
+release to go back to main, and the cut says so in one line before the cut
+line, *"main moved to `<y>` while `<x>` was measured; the newer commits wait
+for the release to go back to main"*, and names the cut by its sha
+(*"cut release/`<x>` at `<x>`"*). Only a main that no longer contains the
+measured commit refuses the cut. (Until 2026-11-24 any move of main between
+the measurement and the cut refused it, *"main moved to `<y>`; mc deploy reads
+the new tip"*, so a busy main never got a release; Martin, 2026-11-24.)
 The tip's recorded verdict is the first release measurement; the cut does not
 run that sha again. The take-back reading is made from live to the cut and
 printed as for main; the release keeps that reading through the repairs.

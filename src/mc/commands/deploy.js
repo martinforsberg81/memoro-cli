@@ -103,7 +103,7 @@ import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
 import { deployProgress } from '../deploy-progress.js';
 import {
-  beginCut, confirmCutTip, openRelease, readClosedRelease, readRelease, releaseHolder as releaseAuthority, releaseRef,
+  beginCut, cutTipOnMain, openRelease, readClosedRelease, readRelease, releaseHolder as releaseAuthority, releaseRef,
   releaseCutLines, releaseOpenLine, releaseShippedLines, releaseStateLine, releaseSummary, releaseWaitLine, sameRelease, settleCut, RELEASE_CUTTING,
 } from '../deploy-release.js';
 import { changeRelease, ensureMergeBack, finishReleaseRow, settleReleaseReturn } from '../release-return.js';
@@ -1187,10 +1187,10 @@ export async function run(argv, deps = {}) {
   // starts no full run: it says one is needed.
   const say = (line) => { if (!opts.json) stdout.write(`${line}\n`); };
   const gateDeps = { gate: deps.gate || {}, suites: deps.suites || {} };
-  const sayCut = (full, release = null, { includeReading = true } = {}) => {
+  const sayCut = (full, release = null, { includeReading = true, mainTip = null } = {}) => {
     if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: opts.dryRun, release: release ? releaseSummary(release) : null, ...(opts.dryRun ? { would_cut: true } : {}) }, null, 2)}\n`);
     else {
-      for (const line of releaseCutLines(plan, full, opts)) say(line);
+      for (const line of releaseCutLines(plan, full, { ...opts, mainTip })) say(line);
       if (includeReading) for (const line of takeBackLines(plan.take_back)) say(line);
     }
     return 0;
@@ -1292,7 +1292,11 @@ export async function run(argv, deps = {}) {
   }
 
   const attemptCut = (full, includeReading) => {
-    const remoteError = confirmCutTip(path, git, plan.tip);
+    // Main may have moved on while the tip was measured: the cut stands at the
+    // measured commit while origin's main contains it, and the newer commits
+    // wait for the merge-back (a moved main is no reason to measure again).
+    const onMain = cutTipOnMain(path, git, plan.tip);
+    const remoteError = onMain.error || null;
     const result = admit(() => {
       const existing = readRelease(root);
       if (existing?.push_pending) return { replan: true };
@@ -1311,7 +1315,9 @@ export async function run(argv, deps = {}) {
       if (active) return { wait: active };
       const runs = history();
       const verdict = fullRunVerdict(runs, plan.tip);
-      const chain = plan.live ? git(path, ['rev-list', '--first-parent', `${plan.live}..${plan.tip}`]) : plan.tip;
+      // A commit that landed after the measured one and is green ships instead.
+      const chainTip = onMain.tip || plan.tip;
+      const chain = plan.live ? git(path, ['rev-list', '--first-parent', `${plan.live}..${chainTip}`]) : chainTip;
       if (chain === null) return { error: "could not read main's first-parent chain; nothing cut" };
       const green = pickCommit({ chain: chain.split('\n').filter(Boolean), live: plan.live, runs,
         descends: (sha) => !plan.live || git(path, ['merge-base', '--is-ancestor', plan.live, sha]) !== null,
@@ -1336,7 +1342,7 @@ export async function run(argv, deps = {}) {
       return 1;
     }
     queueCutRed(settled.release);
-    return sayCut(result.measured, settled.release, { includeReading });
+    return sayCut(result.measured, settled.release, { includeReading, mainTip: onMain.tip });
   };
   if (recordedCut) return attemptCut(observed, true);
 
