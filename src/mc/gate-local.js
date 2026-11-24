@@ -242,8 +242,11 @@ const RERUN_NAMES = 5;
  * many failing lines were left unnamed. `process_ok` preserves a permitted
  * process exit when unavailable command evidence is present; `ok` still means
  * complete passing evidence. A crash before its summary is red with no counts.
+ * `loader` is a run whose test processes loaded the caller's code through
+ * NODE_OPTIONS: it carries `loader: true`, and a pass is `diagnostic` (`process_ok`,
+ * never `ok`), not green; a red stays red and an incomplete stays incomplete.
  */
-export function summarizeGate(output, { exitCode, unavailableCommands = [] }) {
+export function summarizeGate(output, { exitCode, unavailableCommands = [], loader = false }) {
   const lines = String(output || '').split('\n');
   const counts = {};
   const gates = [];
@@ -278,10 +281,13 @@ export function summarizeGate(output, { exitCode, unavailableCommands = [] }) {
   const process_ok = exitCode === 0;
   const cancelled = counts.cancelled > 0;
   const incomplete = process_ok && !cancelled && unavailableCommands.length > 0;
-  return { ok: process_ok && !cancelled && !incomplete, ...(unavailableCommands.length ? {
+  const passed = process_ok && !cancelled && !incomplete;
+  const diagnostic = loader === true && passed;
+  return { ok: passed && !diagnostic, ...(unavailableCommands.length ? {
     process_ok, complete: false, verdict: incomplete ? 'incomplete' : 'red', incomplete,
     unavailable_commands: unavailableCommands,
-  } : {}), counts, gates, failures: failures.slice(0, FAILURE_LINES), more: Math.max(0, failures.length - FAILURE_LINES) };
+  } : {}), ...(loader === true ? { loader: true } : {}), ...(diagnostic ? { process_ok, verdict: 'diagnostic', diagnostic } : {}),
+  counts, gates, failures: failures.slice(0, FAILURE_LINES), more: Math.max(0, failures.length - FAILURE_LINES) };
 }
 
 /** How many timed tests are named before the rest are counted. */
@@ -329,19 +335,21 @@ export function gateLines(summary, { command, seconds, logPath, rerun = null, la
   let counted = c.tests != null
     ? `${c.tests} tests, ${c.fail ?? 0} failed${c.cancelled ? `, ${c.cancelled} cancelled` : ''}${c.skipped ? `, ${c.skipped} skipped` : ''}`
     : c.files != null ? `${c.files}/${c.selected} files` : (reusedText ?? 'no counts in the output');
-  if (!summary.ok && gates.length) {
+  // A diagnostic run passed: only a loader keeps it from green.
+  const passed = summary.ok || summary.diagnostic;
+  if (!passed && gates.length) {
     counted += `; command gate${gates.length === 1 ? '' : 's'} failed: ${gates.join(', ')}`;
-  } else if (!summary.ok && !c.fail && c.files == null && summary.failures.length) {
+  } else if (!passed && !c.fail && c.files == null && summary.failures.length) {
     // The counts say nothing failed, but something did, and it is named below.
     counted = reusedText ? `${reusedText} — the failure is below` : `${c.tests ?? 0} tests counted — the failure is below`;
   }
   const lines = [
-    `${summary.incomplete ? 'INCOMPLETE' : summary.ok ? 'GREEN' : 'RED'}${label ? ` ${label}` : ''} — ${command} — ${counted} — ${seconds}s`,
+    `${summary.incomplete ? 'INCOMPLETE' : summary.diagnostic ? 'DIAGNOSTIC' : summary.ok ? 'GREEN' : 'RED'}${label ? ` ${label}` : ''} — ${command} — ${counted} — ${seconds}s`,
   ];
   for (const unavailable of summary.unavailable_commands || []) {
     lines.push(`unavailable: ${unavailable.id || unavailable.packageScript} — ${unavailable.command} — exit ${unavailable.exit}`);
   }
-  if (!summary.ok) {
+  if (!passed) {
     for (const line of summary.failures) lines.push(line);
     if (summary.more) lines.push(`… and ${summary.more} more failing lines`);
     if (!summary.failures.length && !gates.length) lines.push('the output names no failing test — read the log');
