@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { it } from 'node:test';
-import { codeLoaders, runSessionGate as sessionGate, selectorCommand } from '../../src/mc/session-gate-run.js';
+import { runSessionGate as sessionGate, selectorCommand } from '../../src/mc/session-gate-run.js';
 import { spawnedBatch, withSpawnedBatches } from './_helpers/spawned-batch.js';
 
 /** Every fake `tests` here stands for a spawn: it reports the batch that spawn would carry. */
@@ -76,16 +76,16 @@ process.exitCode = await run(['--budget', '0.02'], {
       env: { ...process.env, MC_HOME: state, MC_SCRATCH: root, MC_TEST_LANES: '2' },
     });
     assert.equal(command.status, 3, command.stderr || command.error?.message);
-    // Under the suite the fake-git preload rides NODE_OPTIONS into this gate (the fixture's
-    // repository is the model's): a loader run, which says so first and passes as diagnostic.
-    const loaded = codeLoaders(process.env.NODE_OPTIONS).length > 0;
-    assert.match(command.stdout, loaded ? /^mc gate: NODE_OPTIONS loads code \(--import\)[^\n]*\nRUNNING/u : /^RUNNING/u);
-    const passed = loaded ? 'diagnostic' : 'green';
     const lockPath = join(cwd, '.git', 'mc-gate.json');
     const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
     workerPid = lock.pid;
     log = lock.log;
-    const { measurement } = JSON.parse(readFileSync(lock.request, 'utf8'));
+    const { measurement, loader } = JSON.parse(readFileSync(lock.request, 'utf8'));
+    // Under the suite the fake-git default adds its preload to this spawn's NODE_OPTIONS (the
+    // fixture's repository is the model's): a loader run, which says so first and passes as diagnostic.
+    const loaded = loader.length > 0;
+    assert.match(command.stdout, loaded ? /^mc gate: NODE_OPTIONS loads code \(--import\)[^\n]*\nRUNNING/u : /^RUNNING/u);
+    const passed = loaded ? 'diagnostic' : 'green';
     let output = '';
     const deps = { cwd, env: { ...process.env, MC_HOME: state }, stdout: { write: (s) => { output += s; } },
       stderr: { write: (s) => { output += s; } } };
