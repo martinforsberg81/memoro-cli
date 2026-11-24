@@ -9,6 +9,7 @@ import { join } from 'node:path';
 
 import * as agy from '../../src/adapters/antigravity-cli.js';
 import { declared } from '../../src/adapters/index.js';
+import { agyHookInput, preToolDecision } from '../../src/mc/hooks.js';
 import { interactiveToolRefusal } from '../../src/mc/interactive-tool.js';
 import { headlessArgs } from '../../src/mc/run-plan.js';
 
@@ -71,7 +72,19 @@ test('declarations: the terminal driver, no background or remote control, and ev
   assert.deepEqual({ ...declared(id, 'CONVERSATION_DELETE') }, { mechanism: 'agy-conversation', failed: 'conversation-delete-failed' });
   assert.deepEqual({ ...declared(id, 'COST_SOURCE') }, { files: 'agy-brain', reader: 'agy-steps', option: 'agyDir' });
   assert.equal(declared(id, 'SKILLS_DIR')({}, '/h'), '/h/.gemini/antigravity-cli/skills');
-  assert.deepEqual({ ...declared(id, 'HOOKS') }, { dialect: 'agy-hooks', file: declared(id, 'HOOKS').file, entry: 'mc', matcher: 'run_command|read_file|view_file|edit_file|write_to_file', tool: 'agy' });
+  assert.deepEqual({ ...declared(id, 'HOOKS') }, { dialect: 'agy-hooks', file: declared(id, 'HOOKS').file, entry: 'mc', matcher: 'run_command|read_file|view_file|edit_file|write_file|write_to_file', tool: 'agy' });
   assert.equal(declared(id, 'HOOKS').file({}, '/h'), '/h/.gemini/config/hooks.json');
   assert.equal(interactiveToolRefusal('agy'), null, 'agy is offered an interactive session');
+});
+
+test('hooks: the matcher takes the write_file agy really sends, and the recorded write of a goal\'s GOAL.json is refused while an ordinary write passes', () => {
+  const recorded = (name) => JSON.parse(readFileSync(new URL(`../fixtures/agy/pretool-write_file-${name}-20261124T2029Z.json`, import.meta.url), 'utf8'));
+  const goal = recorded('goal');
+  const notes = recorded('notes');
+  const matcher = new RegExp(`^(?:${agy.HOOKS.matcher})$`, 'u');
+  assert.ok(matcher.test(goal.toolCall.name), `${goal.toolCall.name} reaches mc's pre-tool hook`);
+  assert.ok(matcher.test('write_to_file'), 'write_to_file is kept');
+  const decide = (input) => preToolDecision(agyHookInput(input), { programs: join(input.cwd, 'programs') });
+  assert.equal(decide(goal)?.id, 'goal-file');
+  assert.equal(decide(notes), null, 'an ordinary file write passes');
 });

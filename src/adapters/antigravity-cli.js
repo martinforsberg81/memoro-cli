@@ -226,7 +226,8 @@ export const HOOKS = Object.freeze({
   dialect: 'agy-hooks',
   file: (_env, home) => join(home, '.gemini', 'config', 'hooks.json'),
   entry: 'mc',
-  matcher: 'run_command|read_file|view_file|edit_file|write_to_file',
+  // agy writes with `write_file` (its transcripts on this host; tests/fixtures/agy holds a recorded stdin); `write_to_file` is kept.
+  matcher: 'run_command|read_file|view_file|edit_file|write_file|write_to_file',
   tool: 'agy',
 });
 

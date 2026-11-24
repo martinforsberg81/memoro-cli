@@ -105,7 +105,7 @@ describe('mc hook install — a tool with its own hooks file (agy)', () => {
     assert.equal(written.setting, 7);
     const commands = JSON.stringify(written.mc);
     for (const word of ['session-start', 'pre-tool', 'stop']) assert.ok(commands.includes(`mc hook ${word} --tool agy 2>/dev/null || true`), word);
-    assert.equal(written.mc.PreToolUse[0].matcher, 'run_command|read_file|view_file|edit_file|write_to_file');
+    assert.equal(written.mc.PreToolUse[0].matcher, 'run_command|read_file|view_file|edit_file|write_file|write_to_file');
     assert.equal(existsSync(join(home, '.gemini', 'antigravity-cli', 'skills', 'mc', 'SKILL.md')), true);
     assert.equal(existsSync(join(home, '.claude', 'settings.json')), true, 'the Claude file is still written');
   });
@@ -139,5 +139,24 @@ describe('mc hook install — a tool with its own hooks file (agy)', () => {
     assert.equal(await run(['install'], { home, stdout: sink(), stderr, ...withAgy }), 1);
     assert.doesNotMatch(stderr.text, /sk-agy-secret/u);
     assert.equal(readFileSync(hooksPath(home), 'utf8'), text);
+  });
+
+  it('the installed matcher reaches pre-tool with the write_file agy really sends: a goal\'s GOAL.json is refused, an ordinary write passes', async () => {
+    const { home } = setup();
+    assert.equal(await run(['install'], { home, stdout: sink(), stderr: sink(), ...withAgy }), 0);
+    const entry = JSON.parse(readFileSync(hooksPath(home), 'utf8')).mc.PreToolUse[0];
+    const preTool = async (name) => {
+      const raw = readFileSync(new URL(`../../fixtures/agy/pretool-write_file-${name}-20261124T2029Z.json`, import.meta.url), 'utf8');
+      const input = JSON.parse(raw);
+      assert.match(input.toolCall.name, new RegExp(`^(?:${entry.matcher})$`, 'u'), 'the installed matcher hands this call to mc');
+      const out = sink();
+      const deps = { stdout: out, stderr: sink(), readStdin: async () => raw, env: { MC_WORK_ROOT: input.cwd }, inMcTerritory: () => true, repoHookDecision: () => null, pathInKnownRepo: () => false };
+      assert.equal(await run(entry.hooks[0].command.match(/^mc hook (pre-tool --tool agy)/u)[1].split(' '), deps), 0);
+      return out.text;
+    };
+    const refused = JSON.parse(await preTool('goal'));
+    assert.equal(refused.decision, 'deny');
+    assert.match(refused.reason, /^mc: This file is mc's: a goal changes through `mc goal`/u);
+    assert.equal(await preTool('notes'), '', 'an ordinary file write passes');
   });
 });
