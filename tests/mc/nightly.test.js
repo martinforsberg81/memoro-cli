@@ -69,14 +69,17 @@ async function pass(root, extra = {}) {
   const asked = [];
   const said = [];
   const repaired = [];
+  const deployRepairs = [];
   const outcome = await fullRunTick({
     root, repos: REPOS, head: () => null, say: (message) => said.push(message),
     repair: (request) => { repaired.push(request); return { created: ['mend-1'], open: [] }; },
+    // Never the machine's own deploy mend: a stop here queued a real one (2026-11-24).
+    repairFullRun: (request) => { deployRepairs.push(request); return { id: 'deploy-mend-1' }; },
     round: ({ repoPath }) => { asked.push(repoPath); return report(); },
     ...extra,
   });
   const runs = await outcome.done;
-  return { outcome, runs, asked, said, repaired };
+  return { outcome, runs, asked, said, repaired, deployRepairs };
 }
 
 describe('a full run', () => {
@@ -160,7 +163,7 @@ describe('a full run', () => {
   it('a round that could not measure is never a round that found nothing', async () => {
     const root = home();
     try {
-      const { runs, said } = await pass(root, {
+      const { runs, said, deployRepairs } = await pass(root, {
         round: ({ repoPath }) => {
           if (repoPath.endsWith('/memoro')) throw new Error('git fetch failed');
           return report({ verdict: 'stopped', stopped_at: 'declaration', reason: 'memoro-cli declares select and no suite' });
@@ -175,6 +178,8 @@ describe('a full run', () => {
       assert.equal(by.memoro.red, null, 'a run that never ran must not carry an empty red set');
       assert.equal(by['memoro-cli'].stopped_at, 'declaration');
       assert.match(said.join('\n'), /stopped at declaration/u);
+      // The throw is mc's own fault and goes to the deploy mend the caller gave, not the machine's.
+      assert.deepEqual(deployRepairs.map((request) => [request.repo, request.row.stopped_at]), [['memoro', 'threw']]);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
