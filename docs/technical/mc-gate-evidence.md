@@ -45,11 +45,12 @@ actual selected files/commands/flags/pattern, configuration (the effective gate
 declaration and test-flag hash), execution (the executed timeout, Node version and
 each batch's argv), members (files and commands reused from earlier passing
 content), selector (the sidecar reference, or why it could not be written), phases
-(`phaseLedger`) and execution outcome. What makes a receipt green is the
-`executionComplete` paragraph of [mc-merge.md](mc-merge.md). A repeated
-write must have identical bytes. The detached worker, not the waiting command,
-writes the receipt before publishing its result and exit marker. The waiting
-command then clears the matching worktree exclusion lock.
+(`phaseLedger`), the caller-loader marker and execution outcome. The batch
+proof required for a green receipt is described under `executionComplete` in
+[mc-merge.md](mc-merge.md). A repeated write must have identical bytes. The
+detached worker, not the waiting command, writes the receipt before publishing
+its result and exit marker. The waiting command then clears the matching
+worktree exclusion lock.
 
 Only completed checks with known successful exits and unchanged content produce
 a green receipt, with one explicit zero-check case: a readable, classified change
@@ -80,11 +81,11 @@ At the repository ceiling the worker returns a red snapshot rather than
 waiting beyond its bound. It reports every active phase, retains finished test
 and command evidence, lists unfinished files, and identifies running and
 pending commands separately. A command phase change does not discard the test
-file selection. Such a partial execution is not a reusable green receipt: the
-receipt constructor requires every selected command and the test half, when
-selected, to have completed successfully with known exits and unchanged
-content. The ceiling does not make a selected test set smaller or claim to
-solve the study selector's test-selection ceiling.
+file selection. The partial receipt can supply individual passes to a
+[retry](#resuming-on-unchanged-content), but is not green. A green still needs
+complete passing coverage, with known successful exits and unchanged content.
+The ceiling does not make a selected test set smaller or claim to solve the
+study selector's test-selection ceiling.
 
 ## Raw and normalized selection
 
@@ -152,6 +153,53 @@ wait for the owning repair. Retain the frozen base and named failed members.
 The receipt remains incomplete and its failed members cannot be reused as
 passed. The ordinary merger measures and adjudicates against its current base.
 This rule does not admit partial execution or a change-caused criterion failure.
+
+## Resuming on unchanged content
+
+A retry can reuse passes from a persisted receipt even if a ceiling or
+interrupt stopped the earlier run before it launched every file. The source
+must match the repository, tree and raw fingerprint, measurement version,
+gate configuration and test flags. Filtered requests do not resume; neither
+invalid receipts nor receipts stopped at `content-changed` or `evidence` can
+supply passes. `--fresh` and `--command <id>` start without reuse.
+
+The receipt's planned execution identity must agree with its requested
+timeout flags, and every recorded batch must match that identity: Node version,
+timeout and its provenance, forced exit, and the requested flags before the
+file paths. Each batch may name only files in the receipt's coverage. A file
+is reusable only if the receipt recorded it as run and passed and one of those
+batches launched it. A command must have run successfully with exit 0 and
+been available; if its invocation receives the base ref, the frozen base must
+also match.
+
+The retry runs the selected checks without an eligible pass: failed, unfinished,
+never started or newly selected. It names the original run for each reused
+member, not an intermediate run that reused it, and reports
+`reused N files and M commands from <runs>; running K` and `RESUMED`. The
+retry can be green only once the whole selected scope passes, with every
+non-reused file accounted for by its own execution. Reuse does not turn a
+partial source receipt green.
+
+## Diagnostic runs with caller-supplied loaders
+
+`mc gate` detects code-loading options in inherited `NODE_OPTIONS`:
+`--import`, `--require`, `-r`, `--loader` and `--experimental-loader`, with
+either a separate value or `=`. The gate's own progress preload (including one
+inherited from an outer gate), reporter flags, and options such as
+`--max-old-space-size` do not make a run diagnostic. Repository-declared test
+flags travel in the test process's arguments, not in `NODE_OPTIONS`.
+
+The notice before the run names the loader options, never their values, and
+goes to stderr under `--json`. The run selects checks as usual but reuses
+nothing. Its log and result are kept, and its receipt records `loader: true`.
+No member of that receipt can be reused, and it never adds a
+`gate-greens.jsonl` entry or supplies landing evidence.
+
+A result that would be green instead prints `DIAGNOSTIC` and exits 0. Its
+JSON has `ok: false`, `process_ok: true`, `loader: true` and
+`verdict: "diagnostic"`; a receipt that would be `green` has outcome
+`diagnostic`. Red and incomplete results and receipts retain their verdicts
+and outcomes.
 
 ## Waiting and recovery
 

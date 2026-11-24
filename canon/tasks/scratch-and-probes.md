@@ -39,7 +39,7 @@ cp "$reviewed/$source" "$MC_SCRATCH/source-before"
 git -C "$reviewed" diff -- "$source" > "$MC_SCRATCH/fault.patch"
 git -C "$reviewed" status --short
 ```
-`status --short` must list only `$source`. For a criterion covering every route or caller, replay one deletion per call site, not one shared-function change: a shared-function fault proves nothing about routes it does not reach. Run only the commissioned check, `mc gate <test-files…>`, and record its printed log path and the observed assertion failure. An import or setup failure is not that: the relevant assertion must fail. An invocation-local loader is an alternative with two guards, its target URL and an exact source match, recorded with the activation; if the source guard fails, stop and never fall back silently. Keep the loader and output in `$MC_SCRATCH`. Then restore and verify:
+`status --short` must list only `$source`. For a criterion covering every route or caller, replay one deletion per call site, not one shared-function change: a shared-function fault proves nothing about routes it does not reach. Run only the commissioned check, `mc gate <test-files…>`, and record its printed log path and the observed assertion failure. An import or setup failure is not that: the relevant assertion must fail. An invocation-local loader is an alternative with two guards, its target URL and an exact source match, recorded with the activation; if the source guard fails, stop and never fall back silently. A replay under a caller-supplied `NODE_OPTIONS` loader gives a diagnostic result, never reusable or landing evidence. Keep the loader and output in `$MC_SCRATCH`. Then restore and verify:
 ```sh
 git -C "$reviewed" checkout -- "$source"
 git -C "$reviewed" diff --exit-code
