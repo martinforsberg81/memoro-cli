@@ -1181,10 +1181,12 @@ batch's argv carries that one timeout, the same Node version and the forced exit
 with the requested flags before its file paths; and the files the batches ran are
 exactly the files the attempt ran itself. A run that ran no test file needs no
 batch, so command-only runs are unaffected. Reused members need no batch of this
-attempt, and name the run that passed them. A mismatch, a missing batch, a changed
-Node or a missing identity is incomplete: never reusable green, never resumed
-from, never published. Earlier greens (measurement version 4 and below, bound or
-unbound) are not read; `GATE_MEASUREMENT_VERSION` is 5.
+attempt, and name the run that passed them. An invalid identity or mismatched
+recorded batch prevents both green and reuse. A file that never launched
+prevents a green unless it was reused, but does not by itself disqualify the
+other batches' passes from a [session retry](mc-gate-evidence.md#resuming-on-unchanged-content).
+Earlier greens (measurement version 4 and below, bound or unbound) are not
+read; `GATE_MEASUREMENT_VERSION` is 5.
 
 The identity excludes what load decides (the lanes) and what is ephemeral (the
 reporter paths). It includes the Node version: a green measured by another Node
