@@ -13,6 +13,7 @@ import { spawnedBatch, withSpawnedBatches } from './_helpers/spawned-batch.js';
 const runSessionGate = (request, deps = {}) => sessionGate(request, deps.tests ? { ...deps, tests: withSpawnedBatches(deps.tests) } : deps);
 import { run as gateCommand } from '../../src/mc/commands/gate.js';
 import { readGreenReceipt } from '../../src/mc/gate-greens.js';
+import { captureWorktree } from '../../src/mc/session-gate-evidence.js';
 import { runningRounds } from '../../src/mc/gate-lock.js';
 import { realTests, selectFiles } from '../../src/mc/repo-gate.js';
 import timesReporter from '../../src/mc/test-times-reporter.mjs';
@@ -742,6 +743,77 @@ it('a whole selection stopped at the ceiling or by an interrupt resumes on the s
     assert.ok(readGreenReceipt({ root: second.path.split('/gate-evidence/')[0], repo: 'repo', repository: CONTENT.repository,
       run: second.run, configuration: 'config' }), 'the resumed green reads as a green receipt');
   }
+});
+
+it('a real run stopped by its signal before it launched every file hands its passed files to the identical rerun', { timeout: 4 * BOUNDARY_MS }, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-session-stopped-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const cwd = join(root, 'repo');
+  const state = join(root, 'state');
+  // Outside the repository: the measured content must not change while it runs.
+  const ready = join(root, 'ready');
+  const finish = join(root, 'finish');
+  mkdirSync(cwd);
+  const git = (...args) => {
+    const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git('init', '-q');
+  git('config', 'user.name', 'Gate Test');
+  git('config', 'user.email', 'gate@example.invalid');
+  writeFileSync(join(cwd, 'package.json'), '{"type":"module"}\n');
+  const passing = "import { test } from 'node:test';\ntest('passes', () => {});\n";
+  writeFileSync(join(cwd, 'a.test.js'), passing);
+  writeFileSync(join(cwd, 'b.test.js'), passing);
+  // The sqlite batch runs after the standard one; it holds until it is let go, and the first run is stopped there.
+  writeFileSync(join(cwd, 'c.test.js'), `import { test } from 'node:test';
+import { existsSync, writeFileSync } from 'node:fs';
+import { setTimeout } from 'node:timers/promises';
+test('held', async () => {
+  writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+  while (!existsSync(${JSON.stringify(finish)})) await setTimeout(25);
+});\n`);
+  // The heavy batch would run last: the stop comes before it is launched.
+  writeFileSync(join(cwd, 'd.test.js'), passing);
+  git('add', '.');
+  git('commit', '-qm', 'initial');
+  const base = git('rev-parse', 'HEAD');
+  const files = ['a.test.js', 'b.test.js', 'c.test.js', 'd.test.js'];
+  const classes = { 'c.test.js': 'sqlite', 'd.test.js': 'heavy' };
+  const attempt = async (run, stop) => {
+    const controller = new AbortController();
+    let output = '';
+    const request = { cwd, select: 'selector', files: null, flags: [], gate: { root: state, repo: 'repo' },
+      measurement: { repo: 'repo', run, base, candidate: captureWorktree(cwd), configuration: 'config' } };
+    // Unwrapped: the real `realTests` spawns each batch and reports its own launches.
+    const pending = sessionGate(request, { env: { ...process.env, MC_HOME: state, MC_TEST_LANES: '2' }, signal: controller.signal,
+      record: () => {}, write: (text) => { output += text; }, select: async () => ({ ok: true, files, commands: [], classes }) });
+    if (stop) { await until(() => existsSync(ready)); controller.abort(); }
+    const result = await pending;
+    const receipt = JSON.parse(readFileSync(result.evidence.path, 'utf8'));
+    return { receipt, output, reused: /^reused .*$/mu.exec(output)?.[0] ?? null };
+  };
+  const members = (receipt) => receipt.members.files.map(({ file, how, from, outcome }) => [file, how, from, outcome]);
+
+  const first = await attempt('gate-stopped', true);
+  assert.equal(first.receipt.stopped_at, 'interrupted');
+  assert.equal(first.receipt.outcome, 'red');
+  assert.deepEqual(first.receipt.execution.tests.batches.map((batch) => batch.files), [['a.test.js', 'b.test.js'], ['c.test.js']],
+    'the heavy batch was never launched');
+  // The held file was launched but never ended: whether its reporter got as far as starting it is not the point.
+  assert.deepEqual(members(first.receipt).map(([file, , , outcome]) => [file, outcome === 'passed']),
+    [['a.test.js', true], ['b.test.js', true], ['c.test.js', false], ['d.test.js', false]]);
+  assert.equal(members(first.receipt)[3][3], 'not-started');
+
+  writeFileSync(finish, 'done');
+  const second = await attempt('gate-rerun', false);
+  assert.equal(second.reused, 'reused 2 files and 0 commands from gate-stopped; running 2', second.output);
+  assert.deepEqual(second.receipt.execution.tests.batches.map((batch) => batch.files), [['c.test.js'], ['d.test.js']], 'only the rest ran');
+  assert.deepEqual(members(second.receipt), [['a.test.js', 'reused', 'gate-stopped', 'passed'], ['b.test.js', 'reused', 'gate-stopped', 'passed'],
+    ['c.test.js', 'ran', null, 'passed'], ['d.test.js', 'ran', null, 'passed']]);
+  assert.equal(second.receipt.outcome, 'green', second.output);
+  assert.equal(readGreenReceipt({ root: state, repo: 'repo', repository: second.receipt.repository, run: 'gate-rerun', configuration: 'config' })?.run, 'gate-rerun');
 });
 
 it('a red attempt resumes with only its failed members, and reuse draws on two earlier attempts', async (t) => {

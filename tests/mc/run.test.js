@@ -25,7 +25,7 @@ import { REPAIR_HANDOFF } from '../../src/mc/repair-delivery.js';
 import { freeMemoryPercent } from '../../src/mc/dev-servers.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
 import { COOLDOWN_MS, EVENTS_KEEP, POLL_MS } from '../../src/mc/disk-pressure.js';
-import { parseGoal, parseLog, redMergeText, STAGES } from '../../src/mc/goals.js';
+import { buildSessionCount, noProgressStreak, parseGoal, parseLog, redMergeText, STAGES } from '../../src/mc/goals.js';
 import { seenAreas, trippedAreas } from '../../src/mc/review-verdict.js';
 import { mcCheckout, startRunner } from '../../src/mc/run-control.js';
 import { learningMarkerPath } from '../../src/mc/desk-learning.js';
@@ -4256,6 +4256,80 @@ test('sessions without a log entry are skipped by the no-progress count, and the
   assert.equal(stuckWhere(g), 'build · ready', 'a no-progress session followed by two silent ones does not stop');
   await stuckPass(g, silentSession);
   assert.equal(stuckWhere(g), 'build · Martin', 'three silent sessions with nothing between still stop');
+});
+
+/* ------------------------------------------------ a model that declines the work (passed by, not briefed) */
+
+/** The stuck goal on a build list of two usable candidates, claude:opus first. A pass rewrites capacity as a session may spend it. */
+function declineFixture() {
+  const f = noProgressFixture();
+  f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), providerPriority: 'claude',
+    build: [TEST_CATALOG.build[0], { tool: 'codex', model: 'gpt-6-luna', effort: 'high' }],
+  });
+  f.pass = async (answer) => { f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.9 })); return stuckPass(f, answer); };
+  f.launched = () => { const { env } = f.calls.sessions.at(-1); return `${env.MC_TOOL}:${env.MC_MODEL}`; };
+  return f;
+}
+/** A build session that judges the work beyond itself: one entry beginning `declined:`, nothing committed, nothing met. */
+const declines = (f) => (call) => {
+  f.files[`${GOALS}/stuck/LOG.md`] += `\n## 2026-08-29T10:00Z · ${call.env.MC_TOOL} ${call.env.MC_MODEL} · build · ready\n\nComment: declined: the migration needs more than I can hold\n`;
+  return okSession()(call);
+};
+const declineEntries = (f) => stuckEntries(f).filter((entry) => entry.tool === 'runner' && / declined the work — /u.test(entry.comment));
+const countsOf = (f) => ({ streak: noProgressStreak(stuckEntries(f)), sessions: buildSessionCount(stuckEntries(f)) });
+
+test('a build that declines leaves both counts as they were, the runner says so, and the next build launches on another candidate', async () => {
+  const f = declineFixture();
+  await f.pass(builds(f));
+  assert.equal(f.launched(), 'claude:opus');
+  const counts = countsOf(f);
+  assert.deepEqual(counts, { streak: 1, sessions: 1 });
+  await f.pass(declines(f));
+  assert.equal(f.launched(), 'claude:opus');
+  assert.equal(stuckWhere(f), 'build · ready');
+  const entry = stuckEntries(f).at(-1);
+  assert.deepEqual([entry.tool, entry.stage, entry.status], ['runner', 'build', 'ready']);
+  assert.equal(entry.comment.split('\n')[0], 'claude:opus declined the work — the next build goes to another model');
+  assert.deepEqual(countsOf(f), counts, 'the declining session counts toward neither stop');
+  assert.equal(noProgressEntries(f).length, 1, 'no no-progress entry for the decline');
+  await f.pass(builds(f));
+  assert.equal(f.launched(), 'codex:gpt-6-luna', 'the next build passes the declined model by');
+  assert.match(stuckEntries(f).at(-1).comment, /^no progress this session \(2 of 3\)/u, 'the count goes on from before the decline');
+  await f.pass(builds(f));
+  assert.equal(f.launched(), 'codex:gpt-6-luna', 'still passed by while the text holds');
+  assert.equal(stuckWhere(f), 'build · Martin', 'three no-progress builds stop it, the decline between them not one of them');
+  assert.match(stuckEntries(f).at(-1).comment, /^no progress: three build sessions in a row/u);
+});
+
+test('with every build candidate declined the goal stops with the no-progress entry the decision pass reads, and launches nothing', async () => {
+  const f = declineFixture();
+  await f.pass(declines(f));
+  await f.pass(declines(f));
+  assert.deepEqual(f.calls.sessions.map(({ env }) => `${env.MC_TOOL}:${env.MC_MODEL}`), ['claude:opus', 'codex:gpt-6-luna']);
+  assert.equal(stuckWhere(f), 'build · ready', 'the second decline is answered like the first');
+  assert.deepEqual(countsOf(f), { streak: 0, sessions: 0 });
+  const before = f.calls.sessions.length;
+  const pass = await f.pass(declines(f));
+  assert.equal(pass.ran, 0);
+  assert.equal(f.calls.sessions.length, before, 'no session on a model that declined');
+  assert.equal(stuckWhere(f), 'build · Martin');
+  const stop = stuckEntries(f).at(-1);
+  assert.deepEqual([stop.tool, stop.stage, stop.status], ['runner', 'build', 'Martin']);
+  assert.equal(stop.comment, 'no progress: every build model declined — claude:opus, codex:gpt-6-luna');
+  const item = { kind: 'goal', reference: 'prog/stuck', source_at: stop.at };
+  assert.equal(deskItemQuestion(item, { home: '/w/programs', read: (path) => f.files[path] ?? null }), stop.comment);
+});
+
+test('an amended goal text makes a declined model eligible again; meeting a criterion does not', async () => {
+  const f = declineFixture();
+  await f.pass(declines(f));
+  f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { success_criteria: [{ criterion: 'it works', check: 'a test', met: true }] });
+  await f.pass(builds(f));
+  assert.equal(f.launched(), 'codex:gpt-6-luna', 'a criterion met is no change of the text');
+  f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { title: 'Make the goal plain, in two steps' });
+  await f.pass(builds(f));
+  assert.equal(f.launched(), 'claude:opus', 'the text changed since the decline');
+  assert.equal(declineEntries(f).length, 1);
 });
 
 test('a quota or offline ending and a HEAD that cannot be read are not counted, and do not start the count again', async () => {

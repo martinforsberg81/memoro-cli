@@ -101,6 +101,13 @@ again. Decide them so:
 - A second defect or stop on text this role has already amended is briefed for
   Martin too and not set ready again; the same words failing twice is the sign
   that the frame, not the wording, is wrong.
+- A decline is not a defect of the text and does not count as an unamended
+  stop. `no progress: every build model declined — <tool>:<model>, …` is the
+  runner's stop when every candidate of the goal's build list wrote a
+  `declined:` entry on the goal's text as it stands. Build the goal yourself,
+  or hand it to a model that has not declined; an amended text makes every
+  model eligible again. Only when every available model has declined is it
+  briefed, as a mechanical stop.
 
 ### A review repair limit
 

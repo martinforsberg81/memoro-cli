@@ -689,24 +689,40 @@ export function reportDefect(args, flags, ctx) {
  * stage and status), the programme's README, the goal's documents and each
  * `--document` (path and text; one that cannot be read is said and not sent),
  * and the last LOG.md entries.
+ *
+ * A document in one of the goal's repositories whose worktree is gone (`mc tidy`
+ * released it) is read without a checkout, as the one-worktree-per-goal rule says:
+ * `git show goal/<goal>:<path>` in that repository as `ctx.known()` finds it, then
+ * `origin/main:<path>`, with one stderr line saying where it came from. A
+ * `--document` there is taken only when its normalised path stays inside the
+ * repository; one that leaves it is refused before any git runs.
  */
 export function jevContext(target, goal, extra, ctx) {
   const { read, env } = ctx;
+  const exists = ctx.exists || existsSync;
   const documents = [];
   const seen = new Set();
+  const outside = (path) => ctx.stderr.write(`mc: ${path} is outside the goal's and programme's repositories — not sent to jev\n`);
   for (const { label, path, explicit } of [...goal.documents.map((item) => ({ ...item, explicit: false })), ...extra.map((path) => ({ label: null, path, explicit: true }))]) {
     const at = documentPath(path, { goalDir: target.dir, home: env.HOME || process.env.HOME });
     if (seen.has(at)) continue;
     seen.add(at);
-    const roots = goal.repos.map((repo) => join(target.dir, repo));
-    const safePath = explicit ? confinedDocumentPath(at, roots, ctx.realpath) : at;
-    if (!safePath) {
-      ctx.stderr.write(`mc: ${path} is outside the goal's and programme's repositories — not sent to jev\n`);
+    const add = (text) => documents.push({ path, ...(label ? { label } : {}), text });
+    const released = releasedDocument(at, target, goal.repos, exists);
+    if (released) {
+      if (!released.inside) { outside(path); continue; }
+      const found = releasedText(released, target, ctx);
+      if (!found) { ctx.stderr.write(`mc: ${path} cannot be read — not sent to jev\n`); continue; }
+      ctx.stderr.write(`mc: ${path} read from ${found.from}\n`);
+      add(found.text);
       continue;
     }
+    const roots = goal.repos.map((repo) => join(target.dir, repo));
+    const safePath = explicit ? confinedDocumentPath(at, roots, ctx.realpath) : at;
+    if (!safePath) { outside(path); continue; }
     const text = read(safePath);
     if (text === null) { ctx.stderr.write(`mc: ${path} cannot be read — not sent to jev\n`); continue; }
-    documents.push({ path, ...(label ? { label } : {}), text });
+    add(text);
   }
   const log = parseLog(read(join(target.dir, LOG_FILE)) ?? '').slice(-LOG_ENTRIES).map((entry) => renderEntry(entry));
   const criteria = goal.success_criteria.map((item) => ({ criterion: item.criterion, check: item.check, met: item.met }));
@@ -720,6 +736,34 @@ export function jevContext(target, goal, extra, ctx) {
     documents,
     log,
   };
+}
+
+/**
+ * `{ repo, inside, file }` when the document's normalised path lies in one of the goal's repositories in
+ * the goal's directory and that repository's worktree is not there; else null (read from disk as before).
+ * `documentPath` has already normalised it, so `memoro/../x` is `<goal>/x`, in no repository of the goal,
+ * and the confinement below refuses it before any git runs. `file` is the path inside the repository,
+ * `/`-separated, as `git show` takes it.
+ */
+function releasedDocument(at, target, repos, exists) {
+  const rel = relative(target.dir, at);
+  if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+  const [repo, ...rest] = rel.split(sep);
+  if (!repos.includes(repo) || exists(join(target.dir, repo))) return null;
+  const file = rest.join('/');
+  return { repo, inside: file !== '' && !file.split('/').includes('..'), file };
+}
+
+/** The text of a released repository's document and where it came from: the goal's branch, then origin/main; null when neither has it. */
+function releasedText({ repo, file }, target, ctx) {
+  const repoPath = (ctx.known?.() || []).find((path) => repoNameOf(path) === repo);
+  if (!repoPath || typeof ctx.git !== 'function') return null;
+  const branch = `goal/${target.goal}`;
+  for (const [ref, from] of [[branch, `${branch} (worktree released)`], ['origin/main', 'origin/main (not on the goal branch)']]) {
+    const text = ctx.git(repoPath, ['show', `${ref}:${file}`]);
+    if (typeof text === 'string') return { text, from };
+  }
+  return null;
 }
 
 function confinedDocumentPath(path, roots, realpath = realpathSync) {

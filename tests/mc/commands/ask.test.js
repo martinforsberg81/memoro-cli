@@ -158,6 +158,63 @@ test('goal-bound mc ask ledger records only documents retained in the trimmed re
   assert.ok(f.ledger[0].trimmed.some((item) => item.endsWith('dropped')));
 });
 
+// A goal whose worktree mc tidy released: its documents come from git, never from a checkout.
+function releasedGoal(name, repos, documents) {
+  const dir = join(programmeHome, 'jev', 'goals', name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'GOAL.json'), goalJson({ stage: 'build', title: 'Released goal', goal: ['Ask about a standard.'], repos, documents }));
+  writeFileSync(join(dir, 'LOG.md'), '');
+  return dir;
+}
+function fakeGit(objects) {
+  const calls = [];
+  return { calls, git: (repo, args) => { calls.push([repo, ...args]); return args[0] === 'show' && Object.hasOwn(objects, `${repo} ${args[1]}`) ? objects[`${repo} ${args[1]}`] : null; } };
+}
+const diskRead = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+const releasedAsk = (goal) => [`jev/${goal}`, '--reason', 'Which?', '--option', 'one: first', '--option', 'two: second', '--recommend', 'one'];
+
+test('a goal whose worktree is released sends its documents from goal/<goal>, then origin/main, and says where each came from', async () => {
+  const dir = releasedGoal('released', ['memoro-cli'], [
+    { label: 'Branch', path: 'memoro-cli/docs/technical/branch.md' },
+    { label: 'Main', path: 'memoro-cli/docs/technical/main.md' },
+    { label: 'Nowhere', path: 'memoro-cli/docs/technical/nowhere.md' },
+  ]);
+  const repo = '/repos/memoro-cli.git';
+  const { calls, git } = fakeGit({
+    [`${repo} goal/released:docs/technical/branch.md`]: 'The standard on the goal branch.',
+    [`${repo} origin/main:docs/technical/branch.md`]: 'The standard on main.',
+    [`${repo} origin/main:docs/technical/main.md`]: 'Only main has this.',
+  });
+  const f = fixture({ response: reply(0.95, 'one') });
+  assert.equal(await run(releasedAsk('released'), { ...f.deps, read: diskRead, write: writeFileSync, known: () => ['/repos/memoro.git', repo], git }), 0, f.err());
+  assert.equal(existsSync(join(dir, 'memoro-cli')), false, 'nothing is checked out');
+  const state = JSON.parse(f.requests[0].init.body).state;
+  assert.deepEqual(state.documents.map(({ path, text }) => [path, text]), [
+    ['memoro-cli/docs/technical/branch.md', 'The standard on the goal branch.'],
+    ['memoro-cli/docs/technical/main.md', 'Only main has this.'],
+  ]);
+  assert.match(f.err(), /^mc: memoro-cli\/docs\/technical\/branch\.md read from goal\/released \(worktree released\)$/mu);
+  assert.match(f.err(), /^mc: memoro-cli\/docs\/technical\/main\.md read from origin\/main \(not on the goal branch\)$/mu);
+  assert.match(f.err(), /^mc: memoro-cli\/docs\/technical\/nowhere\.md cannot be read — not sent to jev$/mu);
+  assert.ok(calls.every(([where, verb]) => where === repo && verb === 'show'), JSON.stringify(calls));
+  assert.deepEqual(f.ledger[0].documents, ['memoro-cli/docs/technical/branch.md', 'memoro-cli/docs/technical/main.md']);
+});
+
+test('a --document in a released repository of the goal is read from git; one that leaves it, or names another repository, is refused before git', async () => {
+  releasedGoal('released-memoro', ['memoro'], []);
+  const repo = '/repos/memoro.git';
+  const { calls, git } = fakeGit({ [`${repo} goal/released-memoro:docs/x.md`]: 'The memoro standard.' });
+  const f = fixture({ response: reply(0.95, 'one') });
+  const argv = [...releasedAsk('released-memoro'), '--document', 'memoro/docs/x.md', '--document', 'memoro/../x', '--document', 'memoro-cli/docs/y.md'];
+  assert.equal(await run(argv, { ...f.deps, read: diskRead, write: writeFileSync, known: () => [repo, '/repos/memoro-cli.git'], git }), 0, f.err());
+  const state = JSON.parse(f.requests[0].init.body).state;
+  assert.deepEqual(state.documents, [{ path: 'memoro/docs/x.md', text: 'The memoro standard.' }]);
+  assert.match(f.err(), /^mc: memoro\/docs\/x\.md read from goal\/released-memoro \(worktree released\)$/mu);
+  assert.match(f.err(), /^mc: memoro\/\.\.\/x is outside the goal's and programme's repositories — not sent to jev$/mu);
+  assert.match(f.err(), /^mc: memoro-cli\/docs\/y\.md is outside the goal's and programme's repositories — not sent to jev$/mu);
+  assert.deepEqual(calls, [[repo, 'show', 'goal/released-memoro:docs/x.md']], 'git runs only for the accepted document');
+});
+
 test('interactive Martin may consult jev on a newly synthesized question and keeps truthful role evidence', async () => {
   const goal = join(programmeHome, 'jev', 'goals', 'martin-choice');
   mkdirSync(goal, { recursive: true });

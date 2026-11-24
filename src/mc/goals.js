@@ -535,6 +535,57 @@ export const BUILD_SESSION_LIMIT = 5;
 export const BUILD_SESSION = 'build session';
 export const BUILD_SESSION_STOP = 'no progress: five build sessions without the goal leaving build';
 
+/**
+ * A build model that judges in-scope work beyond itself says so with a LOG.md entry whose Done or Comment begins
+ * `declined:` (build-session.md). The runner answers it with one entry (`DECLINED_TEXT`): the session counts toward
+ * neither `noProgressStreak` nor `buildSessionCount`, and the next build or repair of the goal passes by every
+ * `<tool>:<model>` such an entry names while the goal's text is the one it was declined on (`declinedModels`). Its
+ * second line, `Goal text: <digest>`, is that text's digest. With no candidate of the list left, the goal stops with
+ * `DECLINED_STOP` and status `Martin`, which the decision pass reads as a mechanical stop (decision.md).
+ */
+export const DECLINED = 'declined:';
+export const DECLINED_TEXT = 'declined the work — the next build goes to another model';
+export const DECLINED_STOP = 'no progress: every build model declined';
+const DECLINE_ENTRY = /^([^:\s]+):(\S+) declined the work — the next build goes to another model$/mu;
+const DECLINE_TEXT_LINE = /^Goal text: (\S+)$/mu;
+
+/** `<tool>:<model>`, how a decline names a candidate. */
+export const modelKey = ({ tool, model }) => `${tool}:${model ?? 'default'}`;
+
+/** Whether a session's own entry declines the work: its Done or Comment begins `declined:`. */
+export function declinesWork(entry) {
+  return entry.tool !== 'runner' && [entry.done, entry.comment].some((text) => String(text ?? '').startsWith(DECLINED));
+}
+
+/** The runner's entry for a declining session, `key` its `<tool>:<model>` and `digest` the goal text it declined. */
+export function declinedComment(key, digest) {
+  return `${key} ${DECLINED_TEXT}\nGoal text: ${digest ?? 'unread'}`;
+}
+
+/** Whether the entry is the runner's answer to a declining session. */
+export function declineEntry(entry) {
+  return entry.tool === 'runner' && DECLINE_ENTRY.test(String(entry.comment ?? ''));
+}
+
+/**
+ * The `<tool>:<model>` keys a build of the goal passes by, in the order first declined: those its runner decline
+ * entries name whose `Goal text` is `digest`, the goal's text now. An entry on another text — the text has changed
+ * since — names nothing, nor does one when the text cannot be read (`digest` null).
+ */
+export function declinedModels(log, digest) {
+  if (!digest) return [];
+  const keys = [];
+  for (const entry of log) {
+    if (!declineEntry(entry)) continue;
+    const comment = String(entry.comment);
+    const [, tool, model] = comment.match(DECLINE_ENTRY);
+    if (comment.match(DECLINE_TEXT_LINE)?.[1] !== digest) continue;
+    const key = `${tool}:${model}`;
+    if (!keys.includes(key)) keys.push(key);
+  }
+  return keys;
+}
+
 /** Whether the entry is a runner entry of a session judged (`NO_PROGRESS_SESSION`, `PROGRESS_AGAIN`, `BUILD_SESSION`) or left unjudged (`NOT_COUNTED`): not a session that ended without a word. */
 export function noProgressEntry(entry) {
   const comment = String(entry.comment ?? '');

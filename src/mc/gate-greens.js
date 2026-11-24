@@ -140,55 +140,71 @@ export function checksHash(coverage) {
 const TIMEOUT_SOURCES = Object.freeze(['declaration', 'script', 'default']);
 
 /**
- * Whether a receipt proves the test policy it was planned with was the one
- * spawned (contract B). The coverage carries the planned identity
+ * The files a receipt's batches launched, when every batch it recorded was
+ * spawned under the test policy it was planned with (contract B), or null when
+ * any part of that proof fails. The coverage carries the planned identity
  * (`coverage.execution`: timeout, its provenance, forced exit, Node version);
  * the requested flags must state exactly that timeout (none, for `default`);
- * and every batch the run spawned must say, from its own argv, the same
- * timeout and Node version, force its exit, and carry the requested flags
- * before its file paths. The files the batches ran are exactly the files the
- * attempt ran itself, so a missing batch cannot hide behind the others.
- * Reused members need no batch. A run that ran no file needs none either.
+ * every batch must say, from its own argv, the same timeout and Node version,
+ * force its exit, and carry the requested flags before its file paths; and
+ * every file a batch launched is a covered file. No batch is an empty set.
+ * It does not ask whether every file the run meant to run was launched: a run
+ * stopped before it launched them all still proves what its batches ran
+ * (`findResumable`); a complete one must add that (`executionComplete`).
  */
-export function executionComplete(coverage, execution, members = null) {
+export function launchedFiles(coverage, execution) {
   const identity = coverage?.execution;
   if (!identity || typeof identity !== 'object' || !Number.isInteger(identity.timeoutMs) || identity.timeoutMs <= 0
     || !TIMEOUT_SOURCES.includes(identity.timeoutSource) || identity.forceExit !== true
-    || typeof identity.nodeVersion !== 'string' || !identity.nodeVersion) return false;
+    || typeof identity.nodeVersion !== 'string' || !identity.nodeVersion) return null;
   const flags = Array.isArray(coverage.flags) ? coverage.flags.map(String) : null;
-  if (!flags || !Array.isArray(coverage.files)) return false;
+  if (!flags || !Array.isArray(coverage.files)) return null;
   const stated = timeoutValues(flags);
   if (identity.timeoutSource === 'default' ? stated.length !== 0
-    : stated.length !== 1 || Number(stated[0]) !== identity.timeoutMs) return false;
+    : stated.length !== 1 || Number(stated[0]) !== identity.timeoutMs) return null;
+  const batches = execution?.tests?.batches;
+  const covered = new Set();
+  if (!Array.isArray(batches)) return covered;
+  for (const batch of batches) {
+    if (!batch || typeof batch !== 'object' || !Array.isArray(batch.files) || !batch.files.length || !Array.isArray(batch.argv)
+      || batch.nodeVersion !== identity.nodeVersion || typeof batch.node !== 'string' || !batch.node
+      || batch.timeoutSource !== identity.timeoutSource || batch.timeoutMs !== identity.timeoutMs || batch.forceExit !== true) return null;
+    const argv = batch.argv.map(String);
+    const first = argv.length - batch.files.length;
+    if (first < 0 || JSON.stringify(argv.slice(first)) !== JSON.stringify(batch.files)) return null;
+    const timeouts = argv.filter((word) => word.startsWith('--test-timeout'));
+    if (timeouts.length !== 1 || timeouts[0] !== `--test-timeout=${identity.timeoutMs}` || argv.indexOf(timeouts[0]) >= first) return null;
+    const forced = argv.indexOf('--test-force-exit');
+    if (forced < 0 || forced >= first) return null;
+    for (let i = 0; i < flags.length; i += 1) {
+      if (flags[i].startsWith('--test-timeout')) { if (flags[i] === '--test-timeout') i += 1; continue; }
+      const at = argv.indexOf(flags[i]);
+      if (at < 0 || at >= first) return null;
+    }
+    // A file may be launched twice: a red file the round settles runs alone (`gate-settle.js`).
+    for (const file of batch.files) covered.add(file);
+  }
+  const asked = new Set(coverage.files);
+  return [...covered].every((file) => asked.has(file)) ? covered : null;
+}
+
+/**
+ * Whether a receipt proves the test policy it was planned with was the one
+ * spawned for everything it ran (contract B): its batches are valid
+ * (`launchedFiles`), and the files they ran are exactly the files the attempt
+ * ran itself, so a missing batch cannot hide behind the others. Reused members
+ * need no batch. A run that ran no file needs none, and has none.
+ */
+export function executionComplete(coverage, execution, members = null) {
+  const covered = launchedFiles(coverage, execution);
+  if (!covered) return false;
   const claims = members == null ? [] : Array.isArray(members.files) ? members.files.filter((member) => member?.how === 'reused') : null;
   if (!claims || claims.some((member) => typeof member?.file !== 'string')) return false;
   const reused = new Set(claims.map((member) => member.file));
   const ran = coverage.files.filter((file) => !reused.has(file));
   const batches = execution?.tests?.batches;
   if (!ran.length) return !Array.isArray(batches) || batches.length === 0;
-  if (!Array.isArray(batches) || !batches.length) return false;
-  const covered = new Set();
-  for (const batch of batches) {
-    if (!batch || typeof batch !== 'object' || !Array.isArray(batch.files) || !batch.files.length || !Array.isArray(batch.argv)
-      || batch.nodeVersion !== identity.nodeVersion || typeof batch.node !== 'string' || !batch.node
-      || batch.timeoutSource !== identity.timeoutSource || batch.timeoutMs !== identity.timeoutMs || batch.forceExit !== true) return false;
-    const argv = batch.argv.map(String);
-    const first = argv.length - batch.files.length;
-    if (first < 0 || JSON.stringify(argv.slice(first)) !== JSON.stringify(batch.files)) return false;
-    const timeouts = argv.filter((word) => word.startsWith('--test-timeout'));
-    if (timeouts.length !== 1 || timeouts[0] !== `--test-timeout=${identity.timeoutMs}` || argv.indexOf(timeouts[0]) >= first) return false;
-    const forced = argv.indexOf('--test-force-exit');
-    if (forced < 0 || forced >= first) return false;
-    for (let i = 0; i < flags.length; i += 1) {
-      if (flags[i].startsWith('--test-timeout')) { if (flags[i] === '--test-timeout') i += 1; continue; }
-      const at = argv.indexOf(flags[i]);
-      if (at < 0 || at >= first) return false;
-    }
-    // A file may be launched twice: a red file the round settles runs alone (`gate-settle.js`).
-    for (const file of batch.files) covered.add(file);
-  }
-  const asked = new Set(coverage.files);
-  return [...covered].every((file) => asked.has(file)) && ran.every((file) => covered.has(file));
+  return ran.every((file) => covered.has(file));
 }
 
 export function fullCoverage(coverage) {
