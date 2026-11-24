@@ -355,6 +355,7 @@ export async function run(argv, deps = {}) {
       stdout,
       stderr,
       openFile: (file) => openFile(file, deps),
+      assessCapture,
       deps: { ...deps, env, cwd },
     });
   }
@@ -444,6 +445,38 @@ function timingText(timing) {
     : `shot ${timing.shot_s} s`;
 }
 
+/** Decide whether to report a picture, and whether the capture exits 1. */
+function assessCapture(result, {
+  request, who = null, picture = true, worktree = '<unknown worktree>', script = '<unknown script>',
+}) {
+  const reject = (error, details = []) => ({ error, details, code: 1 });
+  if (predatesWaitFor(request, result)) {
+    return reject(`the capture script ${script} in ${worktree} predates wait-for; rebase onto main and try again`);
+  }
+  if (!result.ok) {
+    if (result.code === 'not-loaded' && typeof request?.out === 'string') {
+      rmSync(request.out, { force: true });
+    }
+    const message = result.code === 'not-loaded'
+      ? `the page did not load — ${result.error || 'no readiness reason was given'}`
+      : (result.error || result.code || 'the capture failed');
+    // A page that crashed before the picture still says why.
+    const details = errorLines(result);
+    if (result.code === 'not-signed-in' && who === 'me') details.push('mc shot login prod');
+    return reject(message, details);
+  }
+  if (picture && (typeof result.file !== 'string' || !result.file)) {
+    return reject('the capture script said ok and named no file');
+  }
+  // A picture asked with actions is one only if the script says it did them.
+  const gap = actionGap(request, result, { worktree, script });
+  if (gap) return reject(gap);
+  // A failed gate, step or eval still has a picture. A page error is information.
+  const access = accessLine(result.access);
+  const report = reportLines(result);
+  return { access, report, code: access?.failed || report.failed ? 1 : 0 };
+}
+
 /**
  * A capture's result line, printed: the path alone first, the URL, the measure
  * line, the access line, then what the shot met (`reportLines`) and the
@@ -455,38 +488,14 @@ function timingText(timing) {
  */
 export function answer(result, {
   request, served = null, who = null, json = false, open = false, picture = true, timing = null,
-  scrub = (text) => String(text), stdout, stderr, deps = {}, worktree = '<unknown worktree>', script = '<unknown script>',
+  scrub = (text) => String(text), stdout, stderr, deps = {}, worktree, script,
 }) {
-  if (predatesWaitFor(request, result)) {
-    stderr.write(`mc: ${scrub(`the capture script ${script} in ${worktree} predates wait-for; rebase onto main and try again`)}\n`);
-    return 1;
+  const { error, details, access, report, code } = assessCapture(result, { request, who, picture, worktree, script });
+  if (error) {
+    stderr.write(`mc: ${scrub(error)}\n`);
+    for (const line of details) stderr.write(`${scrub(line)}\n`);
+    return code;
   }
-  if (!result.ok) {
-    if (result.code === 'not-loaded' && typeof request?.out === 'string') {
-      rmSync(request.out, { force: true });
-    }
-    const message = result.code === 'not-loaded'
-      ? `the page did not load — ${result.error || 'no readiness reason was given'}`
-      : (result.error || result.code || 'the capture failed');
-    stderr.write(`mc: ${scrub(message)}\n`);
-    // A page that crashed before the picture still says why.
-    for (const line of errorLines(result)) stderr.write(`${scrub(line)}\n`);
-    if (result.code === 'not-signed-in' && who === 'me') stderr.write('mc shot login prod\n');
-    return 1;
-  }
-  if (picture && (typeof result.file !== 'string' || !result.file)) {
-    stderr.write('mc: the capture script said ok and named no file\n');
-    return 1;
-  }
-  // A picture asked with actions is one only if the script says it did them.
-  const gap = actionGap(request, result, { worktree, script });
-  if (gap) { stderr.write(`mc: ${scrub(gap)}\n`); return 1; }
-  // A gated target's verdict: the picture is taken either way, and a gate
-  // that did not hold makes the exit 1.
-  const access = accessLine(result.access);
-  // What the shot met, in the same call. An error is information; only a
-  // failed step (pictured as the page stood) or thrown eval makes the exit 1.
-  const report = reportLines(result);
   if (json) {
     const shown = { ...result, ...(served ? { served } : {}), ...(timing ? { timing } : {}) };
     stdout.write(`${scrub(JSON.stringify(shown, null, 2))}\n`);
@@ -501,7 +510,7 @@ export function answer(result, {
   }
   if (access?.failed) stderr.write(`mc: ${scrub(access.line)}\n`);
   if (open && picture && result.file) openFile(result.file, deps);
-  return access?.failed || report.failed ? 1 : 0;
+  return code;
 }
 
 /** `mc shot login prod [--paste]` and `mc shot logout prod`. */

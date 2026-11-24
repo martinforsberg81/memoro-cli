@@ -6,7 +6,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 
 import { run as runGit } from './git.js';
-import { actionGap, errorLines, reportLines, runCapture } from './shot.js';
+import { runCapture } from './shot.js';
 import { ensureAppServer, NO_SHARED_WORKTREE, readDeclaration, sharedWorktree } from './test-environment.js';
 import { defaultRepos } from './repos.js';
 import { workRoot } from './paths.js';
@@ -119,7 +119,7 @@ export function refOutPath(out, commit) {
 /** Compare two already-running sides and print their captures and differences. */
 export async function runCompare({
   worktree, ref, side: selectedSide = null, declared, request, signInPath, served, servedTree, env, json, open, scrub = String,
-  stdout, stderr, openFile, deps = {},
+  stdout, stderr, openFile, assessCapture, deps = {},
 }) {
   const side = selectedSide || (deps.compareSide || compareSide)(ref, { env: deps.env || process.env, cwd: deps.cwd || process.cwd(), git: deps.git });
   if (!side.ok) { stderr.write(`${side.error.startsWith('mc:') ? '' : 'mc: '}${side.error}\n`); return side.code; }
@@ -139,33 +139,41 @@ export async function runCompare({
   } else if (!json) stderr.write(`mc: ${side.worktree}: serving ${refServed.line}\n`);
   const capture = deps.runCapture || runCapture;
   const refRequest = { ...request, base_url: app.baseUrl, sign_in: { kind: 'url', url: `${app.baseUrl}${signInPath}` }, out: refOutPath(request.out, refServed.commit) };
-  const results = {};
   const label = side.kind === 'main' ? 'main' : side.worktree;
-  for (const [key, sideLabel, req] of [['here', 'here', request], ['ref', label, refRequest]]) {
+  const script = declared.argv.join(' ');
+  const outcomes = [['here', request], [label, refRequest]].map(([sideLabel, req]) => {
     const ran = capture({ worktree, declaration: declared, request: req, env, deps });
-    if (!ran.ok) { stderr.write(`mc: ${sideLabel}: ${scrub(ran.error)}\n`); return 1; }
-    const { result } = ran;
-    if (!result.ok) { stderr.write(`mc: ${sideLabel}: ${scrub(result.error || result.code || 'the capture failed')}\n`); for (const line of errorLines(result)) stderr.write(`${sideLabel}: ${scrub(line)}\n`); return 1; }
-    if (typeof result.file !== 'string' || !result.file) { stderr.write(`mc: ${sideLabel}: the capture script said ok and named no file\n`); return 1; }
-    const gap = actionGap(req, result, { worktree, script: declared.argv.join(' ') });
-    if (gap) { stderr.write(`mc: ${sideLabel}: ${scrub(gap)}\n`); return 1; }
-    results[key] = result;
-  }
-  const diff = diffMeasure(results.ref.measure, results.here.measure);
-  const reports = { here: reportLines(results.here), ref: reportLines(results.ref) };
-  const labels = { here: 'here', ref: label };
+    const result = ran.ok ? ran.result : { ok: false, error: ran.error };
+    const { error, details, access, report, code } = assessCapture(result, { request: req, worktree, script });
+    if (error) {
+      stderr.write(`mc: ${sideLabel}: ${scrub(error)}\n`);
+      for (const line of details) stderr.write(`${sideLabel}: ${scrub(line)}\n`);
+      const { code: reason, errors } = result;
+      const rejected = { ok: false, error, ...(reason ? { code: reason } : {}), ...(errors ? { errors } : {}) };
+      return { result: rejected, code };
+    }
+    if (access?.failed) stderr.write(`mc: ${sideLabel}: ${scrub(access.line)}\n`);
+    return { result, code, label: sideLabel, access, report };
+  });
+  const [here, reference] = outcomes.map(({ result }) => result);
+  const pictured = outcomes.filter(({ result }) => result.ok);
+  const pair = here.ok && reference.ok;
+  const diff = pair ? diffMeasure(reference.measure, here.measure) : [];
   if (json) stdout.write(`${scrub(JSON.stringify({
-    here: { ...results.here, served },
-    ref: { ref, kind: side.kind, worktree: side.worktree, commit: refServed.commit, behind_origin_main: behind, result: { ...results.ref, served: refServed } },
+    here: { ...here, served },
+    ref: { ref, kind: side.kind, worktree: side.worktree, commit: refServed.commit, behind_origin_main: behind, result: { ...reference, served: refServed } },
     diff,
   }, null, 2))}\n`);
   else {
-    stdout.write(`${results.here.file}\n${results.ref.file}\n`);
+    for (const { result } of pictured) stdout.write(`${result.file}\n`);
     for (const item of diff) stdout.write(`diff  ${item.element}  ${item.field}  ${shown(item.ref)} → ${shown(item.here)}\n`);
-    if (!diff.length && request.measure) stdout.write('mc: the measured numbers are the same on both trees\n');
-    for (const key of ['here', 'ref']) for (const line of reports[key].lines) stdout.write(`${labels[key]}: ${scrub(line)}\n`);
-    for (const key of ['here', 'ref']) for (const warning of results[key].warnings || []) stdout.write(`mc: warning — ${labels[key]}: ${scrub(warning)}\n`);
+    if (pair && !diff.length && request.measure) stdout.write('mc: the measured numbers are the same on both trees\n');
+    for (const { label, access, report } of pictured) {
+      if (access && !access.failed) stdout.write(`${label}: ${scrub(access.line)}\n`);
+      for (const line of report.lines) stdout.write(`${label}: ${scrub(line)}\n`);
+    }
+    for (const { label, result } of pictured) for (const warning of result.warnings || []) stdout.write(`mc: warning — ${label}: ${scrub(warning)}\n`);
   }
-  if (open) { openFile(results.here.file); openFile(results.ref.file); }
-  return reports.here.failed || reports.ref.failed ? 1 : 0;
+  if (open) for (const { result } of pictured) openFile(result.file);
+  return outcomes.some(({ code }) => code !== 0) ? 1 : 0;
 }
