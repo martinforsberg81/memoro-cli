@@ -686,10 +686,20 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
     // 2026-10-29 a crashed step read as one and every lane slept 30 min.
     const text = `${codexErrors(stdout)}\n${stderr}`;
     const quota = exitCode !== 0 && quotaSeen(text);
+    // A revoked login (2026-11-22: a 401 `token_revoked` on stderr, "refresh
+    // token was revoked" in the `error` and `turn.failed` events) is a login
+    // refusal, which Codex's plan counts (`LOGIN_REFUSES_PLAN`), not a failure.
+    const login = !quota && exitCode !== 0 ? codexLoginRefused(text) : null;
     const events = readCodexEvents(stdout);
     // Codex reports session totals only, so its cost is priced on them (`prices.js`).
     const cost = events.output == null ? null : estimateCost({ input: Number(events.input) || 0, output: Number(events.output) || 0, cacheRead: Number(events.cacheRead) || 0 }, model);
-    return { ...dash, ...events, cost, note: quota ? 'quota' : (exitCode === 0 ? 'success' : 'failed'), quota, quotaReset: quota ? quotaResetAt(text, now) : null };
+    return {
+      ...dash, ...events, cost,
+      ...(login ? { interrupted: 'login', said: login, creditsUntil: null } : {}),
+      note: quota ? 'quota' : (login ? 'interrupted' : (exitCode === 0 ? 'success' : 'failed')),
+      quota,
+      quotaReset: quota ? quotaResetAt(text, now) : null,
+    };
   }
   const json = sessionResult(stdout);
   // A session that answered carries claude's own list-price cost (`total_cost_usd`,
@@ -782,6 +792,14 @@ export function readAgyOutput(stdout) {
 }
 
 const AGY_LOGIN_RE = /authentication required|please sign in|secret keyring is locked|keyring is locked|collection is locked/iu;
+/**
+ * agy's words for a server it could not reach (2026-11-17, two reviews of
+ * org-detail/hero-scene-card: "There was a network issue connecting to the
+ * server" and `dial tcp: lookup … server misbehaving`), beside the words
+ * claude's `offline` reads. `"retryable": true` is not among them: agy marks
+ * other failures retryable too.
+ */
+const AGY_OFFLINE_RE = /network issue connecting to the server|\bdial tcp\b|\bno such host\b|\bserver misbehaving\b/iu;
 const agyText = (value) => (typeof value === 'string' ? value : value && typeof value === 'object' ? String(value.message ?? value.error ?? JSON.stringify(value)) : '');
 
 /**
@@ -793,7 +811,10 @@ const agyText = (value) => (typeof value === 'string' ? value : value && typeof 
  * at exit 0 are each a failed session, never a finished one. A result that was
  * never printed (the session was ended) is `no-json`. A quota text in the
  * error or on stderr is `quota`; a missing sign-in, or a locked keyring, is a
- * `login` interruption.
+ * `login` interruption; a server it could not reach (`AGY_OFFLINE_RE`, or
+ * `OFFLINE_WORDS`) is an `offline` interruption with the note `offline`, so the
+ * runner's offline hold applies as it does for claude. Quota and login are read
+ * first: their words win.
  */
 function readAgySession({ stdout, stderr, exitCode, now, model, dash }) {
   const { result, session } = readAgyOutput(stdout);
@@ -817,11 +838,13 @@ function readAgySession({ stdout, stderr, exitCode, now, model, dash }) {
   if (!failed) return { ...dash, ...counts, cost: priced, note: 'no-json', quota: false };
   const login = AGY_LOGIN_RE.test(errorText);
   const quota = !login && quotaSeen(errorText);
+  const offline = !login && !quota && (AGY_OFFLINE_RE.test(errorText) || OFFLINE_WORDS.test(errorText));
+  const interrupted = quota ? 'quota' : (login ? 'login' : (offline ? 'offline' : null));
   const said = errorText.trim().split('\n')[0].slice(0, 200);
   return {
     ...dash, ...counts, cost: priced,
-    ...(quota || login ? { interrupted: quota ? 'quota' : 'login', said, creditsUntil: null } : {}),
-    note: quota ? 'quota' : (login ? 'interrupted' : 'failed'),
+    ...(interrupted ? { interrupted, said, creditsUntil: null } : {}),
+    note: quota ? 'quota' : (login ? 'interrupted' : (offline ? 'offline' : 'failed')),
     quota,
     quotaReset: quota ? quotaResetAt(errorText, now) : null,
   };
@@ -838,6 +861,24 @@ export function codexErrors(stdout) {
     if (event?.type === 'turn.failed' && typeof event.error?.message === 'string') said.push(event.error.message);
   }
   return said.join('\n');
+}
+
+/**
+ * Codex's words for a login it cannot get past, recorded 2026-11-22: `401
+ * Unauthorized` and `"code": "token_revoked"` on stderr, "Your access token
+ * could not be refreshed because your refresh token was revoked" in the
+ * `error` and `turn.failed` events.
+ */
+const CODEX_LOGIN_RE = /\b401 Unauthorized\b|\bHTTP 401\b|\bstatus[=:]\s*401\b|\btoken_revoked\b|refresh token was revoked/iu;
+
+/**
+ * The first line of `text` that says Codex's login was refused, cut to 200
+ * characters, or null. The session reader and the capacity read
+ * (`codex-capacity.js`) both read a revoked login with it.
+ */
+export function codexLoginRefused(text) {
+  const line = String(text || '').split('\n').find((each) => CODEX_LOGIN_RE.test(each));
+  return line == null ? null : line.trim().slice(0, 200);
 }
 
 function readCodexEvents(stdout) {

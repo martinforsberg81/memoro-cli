@@ -1,0 +1,2 @@
+error: There was a network issue connecting to the server, please try again.
+AGY_ERROR: {"short_error":"agent executor error: generating and executing: request failed: Post \"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse\": dial tcp: lookup daily-cloudcode-pa.googleapis.com on 127.0.0.53:53: server misbehaving","status":"UNKNOWN","error_code":2,"code_kind":"grpc","retryable":true,"error_id":"4c5ddbf1-2f60-48d6-ba30-f723a236c43b-163"}

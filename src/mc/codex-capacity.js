@@ -20,6 +20,10 @@
  *
  * The read is all or nothing: a failure in either half is a failed observation,
  * and the caller keeps the last valid snapshot (model-capacity.js applyFailure).
+ * A read that fails because the login was revoked (a 401 `token_revoked` in the
+ * server's answer or on its stderr, `codexLoginRefused`) carries `login: true`,
+ * and `refreshCodexCapacity` refuses the provider with it, as a session the
+ * same login refused does (`refusePlanOnRead`).
  *
  * The child is bounded: a finite time, a cap on the bytes it may send, and an
  * end on the first answer. It is the only process this module signals, and it
@@ -28,8 +32,10 @@
 import { spawn as spawnChild } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 
-import { applyCollectedCapacity, readCapacity, writeCapacity } from './model-capacity.js';
+import { applyCollectedCapacity, applyRefusal, readCapacity, writeCapacity } from './model-capacity.js';
 import { runnerDir, workRoot } from './paths.js';
+import { refusalInstant } from './plan-refusal.js';
+import { codexLoginRefused } from './run-plan.js';
 import { realLock } from './runner-lock.js';
 
 export const CODEX_TIMEOUT_MS = 20 * 1000;
@@ -98,6 +104,8 @@ export function collectCodexCapacity({ spawn = spawnChild, bin = 'codex', timeou
     }
 
     const decoder = new StringDecoder('utf8');
+    const errDecoder = new StringDecoder('utf8');
+    let said = '';
     const pending = new Map();
     const models = [];
     let buffered = '';
@@ -114,7 +122,8 @@ export function collectCodexCapacity({ spawn = spawnChild, bin = 'codex', timeou
       settled = true;
       clearTimeout(timer);
       try { child.kill('SIGTERM'); } catch { /* already gone */ }
-      resolve(answer);
+      const login = answer.ok ? null : codexLoginRefused(`${answer.why}\n${said}`);
+      resolve(login ? { ...answer, login: true } : answer);
     };
 
     const send = (message) => {
@@ -174,7 +183,7 @@ export function collectCodexCapacity({ spawn = spawnChild, bin = 'codex', timeou
     const timer = setTimeout(() => finish({ ok: false, why: `codex app-server did not answer within ${timeoutMs} ms` }), timeoutMs);
 
     child.stdin.on('error', () => { /* a child that closed its stdin ends in `close` */ });
-    child.stderr?.on('data', counted);
+    child.stderr?.on('data', (chunk) => { if (counted(chunk)) said += errDecoder.write(chunk); });
     child.stdout.on('data', (chunk) => {
       if (!counted(chunk)) return;
       buffered += decoder.write(chunk);
@@ -196,7 +205,10 @@ export function collectCodexCapacity({ spawn = spawnChild, bin = 'codex', timeou
 
 /**
  * Collect once and persist the result: a valid read replaces the codex snapshot,
- * a failed one keeps it and records why. Returns `{ ok, why, state }`.
+ * a failed one keeps it and records why. A read the revoked login refused also
+ * refuses codex for `QUOTA_SLEEP_MS` from `now`, renewed by each such read, as a
+ * login refusal read from a session is (`refusePlanOnRead`). Returns
+ * `{ ok, why, state }`.
  */
 export async function refreshCodexCapacity({ root = runnerDir(), lockRoot = workRoot(), now = new Date(), lock = realLock, ...options } = {}) {
   const before = JSON.stringify(readCapacity({ root }).providers.codex);
@@ -205,7 +217,7 @@ export async function refreshCodexCapacity({ root = runnerDir(), lockRoot = work
   const written = lock(lockRoot, () => {
     const state = readCapacity({ root });
     const next = applyCollectedCapacity(state, 'codex', answer, now, before);
-    return writeCapacity(next, { root });
+    return writeCapacity(answer.login ? applyRefusal(next, 'codex', refusalInstant(null, now).toISOString()) : next, { root });
   }, { name: 'codex-capacity' });
   return { ok: answer.ok, why: answer.why ?? null, state: written };
 }
