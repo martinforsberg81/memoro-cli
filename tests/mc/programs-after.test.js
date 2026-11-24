@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { run as programs } from '../../src/mc/commands/programs.js';
@@ -224,7 +224,7 @@ describe('an order gives what its parts wait for', () => {
       const result = await call(['state', 'prog', 'ready'], desk(a));
       assert.equal(result.code, 0, result.err);
       assert.deepEqual([recordOf(a.home).state, recordOf(a.home).phases], ['ready', { order: 'stated', after: { 2: [1], 3: [1], 4: [2, 3], 5: [4] } }]);
-      assert.deepEqual(Object.keys(recordOf(a.home)), Object.keys(STATED), 'every key in its place');
+      assert.deepEqual(Object.keys(recordOf(a.home)), ['schema', 'version', 'horizon', 'end', 'state', 'ready_at', 'created', 'created_by', 'phases'], 'every key in its place, with when it was set ready after the state');
       // A changed line is written by setting the order ready again.
       writeFileSync(page(a), order('Closes: a.', LINE, 'Closes: c.'));
       assert.equal((await call(['state', 'prog', 'ready'], desk(a))).code, 0);
@@ -249,6 +249,12 @@ describe('an order gives what its parts wait for', () => {
       writeFileSync(goal, goalJson({ phase: 1, documents: [{ label: 'Part 2', path: page(a) }] }));
       assert.equal((await call(['state', 'prog', 'ready'], desk(a))).code, 0);
       assert.deepEqual([recordOf(a.home).state, recordOf(a.home).phases], ['ready', { order: 'stated', after: { 3: [1] } }]);
+      // Order goal-routes, Part 2: once that goal is dropped, setting the revised order ready leaves it out, so the
+      // record states what the parts give and the cut can make their goals.
+      writeFileSync(goal, goalJson({ phase: 1, stage: 'dropped', documents: [{ label: 'Part 2', path: page(a) }] }));
+      writeFileSync(join(dirname(goal), 'LOG.md'), '## 2026-11-10T09:00Z · claude · dropped · ready · by martin\n\nDone: dropped\n');
+      assert.equal((await call(['state', 'prog', 'ready'], desk(a))).code, 0);
+      assert.deepEqual(recordOf(a.home).phases, { order: 'stated', after: { 2: [1], 3: [2] } });
     } finally { a.done(); }
   });
 

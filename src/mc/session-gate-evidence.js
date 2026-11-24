@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { copyFileSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { GATE_MEASUREMENT_VERSION, checksHash, commandIdentity, emptyChangeCoverage, executionComplete, filesComplete, fullCoverage, greensPath, readGreenReceipt, recordGreen, selectionHash } from './gate-greens.js';
+import { GATE_MEASUREMENT_VERSION, checksHash, commandIdentity, emptyChangeCoverage, executionComplete, filesComplete, fullCoverage, greensPath, launchedFiles, readGreenReceipt, recordGreen, selectionHash } from './gate-greens.js';
 import { run as runGit } from './git.js';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -266,8 +266,11 @@ const FILTERING = /^--test-(name-pattern|skip-pattern|only|shard)(=|$)/u;
  * A source is a persisted receipt of another run with the same repo and
  * repository, the same tree and fingerprint, the same measurement version,
  * configuration and test flags, no name pattern, no loader (`loader: true`, a run
- * under the caller's NODE_OPTIONS code), and valid content. From it, a
- * test file it ran and saw pass (`fileOutcomes`), and a command it ran to exit
+ * under the caller's NODE_OPTIONS code), and valid content, whose
+ * recorded batches were each spawned under its execution identity
+ * (`launchedFiles`). It need not have launched every file: a run stopped at the
+ * ceiling or interrupted still hands on what it saw pass. From it, a test file
+ * it ran in one of those batches and saw pass (`fileOutcomes`), and a command it ran to exit
  * 0, ok and available; a command that passes the base is a source only on the
  * same base. What it reused itself is not a source: every reuse names the run
  * that ran it. Later attempts win. Returns `{ files, commands }`, maps of file
@@ -292,14 +295,15 @@ export function findResumable({ root, measurement, flags = [], pattern = null } 
       || ['content-changed', 'evidence'].includes(receipt.stopped_at)
       || receipt.coverage?.pattern !== null || JSON.stringify(receipt.coverage?.flags) !== JSON.stringify(flags)
       || !Array.isArray(receipt.members?.files) || !Array.isArray(receipt.members?.commands)
-      || !Array.isArray(receipt.coverage?.commands) || !Number.isFinite(Date.parse(receipt.ended))
-      || !executionComplete(receipt.coverage, receipt.execution, receipt.members)) continue;
-    receipts.push(receipt);
+      || !Array.isArray(receipt.coverage?.commands) || !Number.isFinite(Date.parse(receipt.ended))) continue;
+    const launched = launchedFiles(receipt.coverage, receipt.execution);
+    if (!launched) continue;
+    receipts.push({ receipt, launched });
   }
-  receipts.sort((a, b) => Date.parse(a.ended) - Date.parse(b.ended) || a.run.localeCompare(b.run));
-  for (const receipt of receipts) {
+  receipts.sort(({ receipt: a }, { receipt: b }) => Date.parse(a.ended) - Date.parse(b.ended) || a.run.localeCompare(b.run));
+  for (const { receipt, launched } of receipts) {
     for (const member of receipt.members.files) {
-      if (member?.how !== 'ran' || member.outcome !== 'passed' || typeof member.file !== 'string') continue;
+      if (member?.how !== 'ran' || member.outcome !== 'passed' || typeof member.file !== 'string' || !launched.has(member.file)) continue;
       found.files.set(member.file, { from: receipt.run, seconds: member.seconds ?? null, tests: Array.isArray(member.tests) ? member.tests : [] });
     }
     receipt.members.commands.forEach((member, index) => {

@@ -362,6 +362,21 @@ test('readSessionOutput: a codex crash whose work mentions quota is a failure, a
   assert.equal(limit.quota, true);
 });
 
+test('readSessionOutput: the revoked Codex login of 2026-11-22 is a login refusal, from its events or its stderr alone', () => {
+  const fixture = (name) => readFileSync(new URL(`../fixtures/codex/revoked-login-20261122T101009Z.${name}`, import.meta.url), 'utf8');
+  const stdout = fixture('jsonl');
+  const stderr = fixture('json.err');
+  const revoked = 'Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.';
+  const read = readSessionOutput({ toolId: 'codex', stdout, stderr, exitCode: 1 });
+  assert.deepEqual([read.note, read.interrupted, read.quota, read.said, read.session], ['interrupted', 'login', false, revoked, '01a202bc-16e3-7852-8633-3338a6f1a41f']);
+  assert.equal(readSessionOutput({ toolId: 'codex', stdout, exitCode: 1 }).interrupted, 'login', 'the events alone');
+  const fromStderr = readSessionOutput({ toolId: 'codex', stdout: '', stderr, exitCode: 1 });
+  assert.equal(fromStderr.interrupted, 'login', 'the stderr alone');
+  assert.match(fromStderr.said, /401 Unauthorized/u);
+  // A session that finished is read as finished, whatever a tool on its stderr was refused.
+  assert.equal(readSessionOutput({ toolId: 'codex', stdout: '', stderr, exitCode: 0 }).interrupted, undefined);
+});
+
 /**
  * The shell runner's thirteen, and `land_seconds` appended after them: the
  * gate costs 20–35 minutes on memoro where the old `gh pr merge` cost
@@ -897,5 +912,23 @@ describe('the agy-stream reader (fixtures in tests/fixtures/agy, synthesised fro
       const got = read('', { stderr: said, exitCode: 1 });
       assert.deepEqual([got.note, got.quota, got.interrupted], ['interrupted', false, 'login'], said);
     }
+  });
+
+  it('the two recorded network failures of 2026-11-17 are offline; a quota text is still quota, and "retryable" alone is a failure', () => {
+    for (const stamp of ['20261117T191632Z', '20261117T192619Z']) {
+      const stderr = readFileSync(new URL(`network-${stamp}.json.err`, FIXTURES), 'utf8');
+      const got = read('', { stderr, exitCode: 3 });
+      assert.deepEqual([got.note, got.quota, got.interrupted], ['offline', false, 'offline'], stamp);
+      assert.match(got.said, /network issue connecting to the server/u, stamp);
+      const errored = read(ndjson({ event: 'result', result: result({ status: 'ERROR', error: 'There was a network issue connecting to the server, please try again.' }) }), { stderr, exitCode: 3 });
+      assert.deepEqual([errored.note, errored.interrupted], ['offline', 'offline'], `${stamp}: with its result`);
+    }
+    for (const said of ['dial tcp 142.250.74.10:443: connect: no route', 'lookup daily-cloudcode-pa.googleapis.com: no such host', 'connect ECONNREFUSED 127.0.0.1:443']) {
+      assert.equal(read('', { stderr: said, exitCode: 1 }).interrupted, 'offline', said);
+    }
+    const quota = read('', { stderr: 'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 149h56m21s.', exitCode: 1 });
+    assert.deepEqual([quota.note, quota.quota, quota.interrupted], ['quota', true, 'quota']);
+    const retryable = read('', { stderr: 'AGY_ERROR: {"short_error":"agent executor error: tool call failed","status":"UNKNOWN","retryable":true}', exitCode: 3 });
+    assert.deepEqual([retryable.note, retryable.interrupted], ['failed', undefined]);
   });
 });

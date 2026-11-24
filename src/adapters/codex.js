@@ -613,8 +613,11 @@ export const CAPACITY_READER = 'codex-rpc';
 /** The plan windows a usage snapshot carries for this tool, in order. */
 export const PLAN_WINDOWS = Object.freeze(['primary', 'secondary']);
 
-/** A login interruption is not a plan refusal for this tool. */
-export const LOGIN_REFUSES_PLAN = false;
+/**
+ * A login interruption refuses the plan: a revoked login (2026-11-22, a 401
+ * `token_revoked`) fails every launch within seconds until someone logs in.
+ */
+export const LOGIN_REFUSES_PLAN = true;
 
 /** A quota refusal is the plan's: every model of the provider is refused with it. */
 export const QUOTA_SCOPE = 'plan';

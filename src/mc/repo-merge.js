@@ -499,7 +499,13 @@ export async function runMergeRound({
       say(`WARNING: ${report.merged_into} is not the default branch (${report.default_branch}) — this landed on a branch, not on ${report.default_branch}`);
     }
 
-    if (!report.release_mend) report.deploy = await deployPull({ git: askGit, repoPath, env, say, installs });
+    // A landing off the default branch is not what the installation runs: it
+    // pulls nothing, and the merge line says why.
+    if (report.off_default && !report.release_mend) {
+      report.deploy = { attempted: false, ok: null, off_default: true, reason: `landed on ${report.merged_into}, not ${report.default_branch}` };
+    } else if (!report.release_mend) {
+      report.deploy = await deployPull({ git: askGit, repoPath, env, say, installs, branch: report.default_branch, landed: report.merge_commit });
+    }
     const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, { root, env }), clock });
     report.log_path = written.path;
     report.log_line = written.line;
@@ -527,31 +533,61 @@ const FALLBACK_STOPS = Object.freeze(['merge', 'red', 'pr-tests', 'extra-gate', 
 /**
  * Bring the installation that runs from a checkout up to what just landed.
  *
- * On this machine `mc` is a symlink into a working tree, so `git pull` there
- * *is* the deploy — and the rule that this is routine maintenance rather than a
- * decision is the reason it belongs inside the round instead of in somebody's
- * memory. Only an installation running from *this* repository is touched.
+ * On this machine `mc` is a symlink into a working tree, so bringing that tree
+ * forward *is* the deploy — and the rule that this is routine maintenance rather
+ * than a decision is the reason it belongs inside the round instead of in
+ * somebody's memory. Only an installation running from *this* repository is
+ * touched.
+ *
+ * "Live" has to mean the installation contains what landed. A bare
+ * `git pull --ff-only` follows whatever branch the tree stands on: on
+ * 2026-11-16 the installation was left on a side branch, every landing for a
+ * day pulled that branch's upstream, exited 0 and logged Live, and the machine
+ * stayed 20 commits behind main. So the pull reads the installation first — on
+ * `branch`, the default branch, with a clean tree — fast-forwards to
+ * `origin/<branch>` explicitly rather than through an upstream, and then asks
+ * whether `landed` is in the HEAD it reached. Any other state is reported with
+ * its reason and nothing in the installation is changed: it may hold
+ * someone's work, so there is no checkout, no stash and no reset here.
  *
  * A pull that fails does not undo the merge and must not fail the round: the
- * change has landed, and what is left is a machine one commit behind, which the
- * report says plainly so somebody can pull it by hand.
+ * change has landed, and what is left is a machine behind, which the report
+ * says plainly so somebody can pull it by hand.
+ *
+ * @param {object} options
+ * @param {string|null} options.branch  the default branch the landing went to
+ * @param {string|null} [options.landed]  the landed commit; without it the ancestry check is skipped
  */
-export async function deployPull({ git, repoPath, env, say, installs }) {
+export async function deployPull({ git, repoPath, env, say, installs, branch, landed = null }) {
   const install = installs(env).find((item) => item.root === repoPath);
   if (!install) return { attempted: false, ok: null, reason: 'nothing on this machine runs from this checkout' };
 
-  const pulled = await git(['pull', '--ff-only'], { cwd: install.root });
-  const ok = pulled.status === 0;
-  const at = ok ? trim((await git(['rev-parse', 'HEAD'], { cwd: install.root })).stdout) : null;
-  say(ok ? `pulled ${install.command} at ${install.root}` : `could not pull ${install.root}`);
-  return {
-    attempted: true,
-    ok,
-    root: install.root,
-    command: install.command,
-    at,
-    reason: ok ? null : trim(pulled.stderr) || 'git pull failed',
+  const cwd = install.root;
+  const result = (ok, reason, at = null) => {
+    say(ok ? `pulled ${install.command} at ${install.root}` : `could not pull ${install.root} (${reason})`);
+    return { attempted: true, ok, root: install.root, command: install.command, at, reason: ok ? null : reason };
   };
+
+  if (!branch) return result(false, 'the default branch is not known');
+  const on = await git(['symbolic-ref', '--short', '-q', 'HEAD'], { cwd });
+  const current = on?.status === 0 ? trim(on.stdout) : '';
+  if (!current) return result(false, `installation is on a detached HEAD, not ${branch}`);
+  if (current !== branch) return result(false, `installation is on branch ${current}, not ${branch}`);
+  const status = await git(['status', '--porcelain'], { cwd });
+  if (status?.status !== 0) return result(false, `installation status could not be read (${trim(status?.stderr) || 'git status failed'})`);
+  if (trim(status.stdout)) return result(false, 'installation has uncommitted changes');
+
+  const fetched = await git(['fetch', 'origin'], { cwd });
+  if (fetched?.status !== 0) return result(false, `could not fetch origin (${trim(fetched?.stderr) || 'git fetch failed'})`);
+  const merged = await git(['merge', '--ff-only', `origin/${branch}`], { cwd });
+  if (merged?.status !== 0) return result(false, `installation cannot fast-forward to origin/${branch}`);
+
+  const at = trim((await git(['rev-parse', 'HEAD'], { cwd }))?.stdout) || null;
+  if (landed) {
+    const contains = await git(['merge-base', '--is-ancestor', landed, 'HEAD'], { cwd });
+    if (contains?.status !== 0) return result(false, `installation at ${short(at)} does not contain the landed ${short(landed)}`, at);
+  }
+  return result(true, null, at);
 }
 
 /**
@@ -680,6 +716,7 @@ async function mergeState({ gh, repoPath, pr }) {
 }
 
 function deployNote(deploy) {
+  if (deploy?.off_default) return `No deploy pull: ${deploy.reason}.`;
   if (!deploy?.attempted) return 'No source-linked installation here.';
   return deploy.ok ? 'Live via deploy pull.' : `Deploy pull failed (${deploy.reason}) — pull by hand.`;
 }

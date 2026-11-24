@@ -72,6 +72,8 @@ function fixture(files = {}) {
     stderr: { write: (text) => err.push(text) },
     read: (path) => store[path] ?? null,
     realpath: (path) => path,
+    // A directory of the in-memory tree exists when a file lies under it: the goal's worktree is present.
+    exists: (path) => Object.keys(store).some((key) => key === path || key.startsWith(`${path}/`)),
     write: (path, text) => { store[path] = text; },
     list: () => [],
     known: () => [],

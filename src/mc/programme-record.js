@@ -26,7 +26,7 @@ export const RECORD_SCHEMA = 'mc-programme';
 export const RECORD_VERSION = 2;
 export const RECORD_STATES = Object.freeze(['draft', 'ready', 'Martin', 'done']);
 export const RECORD_AUTHORS = Object.freeze(['person', 'martin', 'manager', 'repair']);
-const V1_KEYS = Object.freeze(['schema', 'version', 'horizon', 'area', 'end', 'state', 'created', 'created_by', 'phases']);
+const V1_KEYS = Object.freeze(['schema', 'version', 'horizon', 'area', 'end', 'state', 'ready_at', 'created', 'created_by', 'phases']);
 const DIGEST = /^[a-f0-9]{64}$/u;
 const REVISION = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
 const partNumber = value => Number.isSafeInteger(value) && value >= 1;
@@ -147,6 +147,7 @@ export function normalized(record) {
     ...(record.area ? { area: record.area } : {}),
     end: record.end,
     state,
+    ...(record.ready_at ? { ready_at: record.ready_at } : {}),
     created: record.created,
     created_by: record.created_by,
     ...(record.phases ? { phases: record.phases } : {}),
@@ -220,6 +221,7 @@ export function validateRecord(value) {
   const offered = value.repair ? RECORD_STATES : RECORD_STATES.filter(state => state !== 'Martin');
   const states = value.version === 1 ? ['open', 'done'] : DISK_STATES;
   if (!states.includes(value.state)) problems.push(`state: one of ${offered.join(', ')}`);
+  if (value.ready_at !== undefined && !isInstant(value.ready_at)) problems.push('ready_at: an ISO instant in UTC to the second, when the order was last set ready');
   if (!isInstant(value.created)) problems.push('created: an ISO instant in UTC to the second');
   if (!RECORD_AUTHORS.includes(value.created_by)) problems.push(`created_by: one of ${RECORD_AUTHORS.join(', ')}`);
   if (value.repair !== undefined || value.created_by === 'repair') {
@@ -279,6 +281,7 @@ export function recordView(read) {
       ...(read.record.area ? { area: read.record.area } : {}),
       end,
       state,
+      ...(read.record.ready_at ? { ready_at: read.record.ready_at } : {}),
       created,
       created_by: createdBy,
       ...(read.record.phases ? { phases: read.record.phases } : {}),
@@ -342,6 +345,9 @@ export function changePhases(dir, change, options = {}) {
  * The change to a record's `state`: draft, ready or done.
  * Validated and written whole and atomically (`write`), every other key as it was, in its place;
  * a record already in that state is not written again. An invalid record or none is never touched.
+ * Setting it ready writes `ready_at`, the instant (`options.now`, to the second) the order was set ready, each time it
+ * is set ready; draft and done keep it. The cut reads it: a goal dropped in or before its minute no longer counts as
+ * cut (`countedGoals`, programme-turn.js).
  * `options.after` is the order the parts of the document give (`partsOrder`, programme-turn.js): given, the same
  * write states the record's phases with it, so the state and the dependencies are one write.
  * Returns `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
@@ -350,7 +356,8 @@ export function setRecordState(dir, state, options = {}) {
   return changeProgrammeRecord(dir, (record) => {
     const refusal = repairDraftRefusal(record, basename(dir));
     if (refusal) return { problems: [refusal] };
-    return normalized({ ...record, state, ...(options.after ? { phases: { order: PHASES_ORDER, after: options.after } } : {}) });
+    return normalized({ ...record, state, ...(state === 'ready' ? { ready_at: instant(options.now ?? new Date()) } : {}),
+      ...(options.after ? { phases: { order: PHASES_ORDER, after: options.after } } : {}) });
   }, options, 'programme-state');
 }
 

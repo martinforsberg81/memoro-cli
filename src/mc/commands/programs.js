@@ -50,7 +50,7 @@ import { beginRepairReview, repairReviewCall } from '../repair-review.js';
 import { isDesk, releaseRepair, repairReleaseState } from '../repair-release.js';
 import { setDeskRepairState } from '../repair-reconcile.js';
 import { disposeRepair, REPAIR_DISPOSITIONS, stopRepair } from '../repair-stop.js';
-import { goalParts, partsOrder } from '../programme-turn.js';
+import { countedGoals, goalParts, partsOrder } from '../programme-turn.js';
 import { cutFromOrder } from '../goal-parts.js';
 
 export function usage() {
@@ -396,24 +396,28 @@ function stateVerb({ positional }, { env, stdout, stderr, lock, now = new Date()
     stderr.write(`mc: no programme ${name} — ${dir} does not exist\n`);
     return 1;
   }
+  const at = now instanceof Date ? now : new Date();
   try {
     const found = readRecord(dir).record;
     // A part of an order waits for the part before it unless it says it runs in parallel with it: ready writes the
     // record's dependencies from that in the same write. A repair-owned order is released by its own verbs and is not read here,
     // and a programme whose goals were written in the old form keeps the dependencies stated for its phases.
-    const written = goalParts({ home, programme: name, list: listDirsOf, read: readTextOrNull });
+    // A goal dropped before now no longer counts once the order is set ready (`countedGoals`): it is left out here too.
+    const written = targetState === 'ready'
+      ? countedGoals({ home, programme: name, list: listDirsOf, read: readTextOrNull, readyAt: at.toISOString() })
+      : goalParts({ home, programme: name, list: listDirsOf, read: readTextOrNull });
     const oldForm = written.some(({ named }) => named.size > 0) && !written.some(({ goal }) => cutFromOrder(goal));
     const given = targetState === 'ready' && found && !found.repair && !oldForm ? partsOrder(readTextOrNull(join(dir, 'README.md')) ?? '') : null;
     const outcome = found?.repair?.desk
       ? setDeskRepairState(dir, targetState, env, { lock })
-      : setRecordState(dir, targetState, { root: workRoot(env), lock, ...(given ? { after: given.after } : {}) });
+      : setRecordState(dir, targetState, { root: workRoot(env), lock, now: at, ...(given ? { after: given.after } : {}) });
     if (!outcome.ok) {
       for (const problem of outcome.problems.length ? outcome.problems : [`${name} has no valid record — mc programs show ${name}`]) stderr.write(`mc: ${problem}\n`);
       return 1;
     }
     stdout.write(`mc: ${name} · state ${targetState}\n`);
     if (targetState === 'ready') {
-      const { released, kept } = releaseDeskHolds(dir, { env, now: now instanceof Date ? now : new Date() });
+      const { released, kept } = releaseDeskHolds(dir, { env, now: at });
       for (const goal of released) stdout.write(`  ${name}/${goal.name} released (held since ${goal.hold.at ?? '—'}: ${goal.hold.reason ?? '—'})\n`);
       for (const goal of kept) stdout.write(`  ${name}/${goal.name} still held by ${goal.hold.by ?? '—'} — mc goal release ${name}/${goal.name} frees it\n`);
       wakeRunner(workRoot(env));
@@ -463,8 +467,9 @@ function showVerb({ positional, flags }, { env, stdout, stderr }) {
     stderr.write(`mc: ${name} has an invalid record (${join(dir, RECORD_FILE)}):\n${found.problems.map((text) => `  ${text}\n`).join('')}`);
     return 1;
   }
-  const { horizon, end, state, created, created_by: by, phases, area } = found.record;
-  stdout.write(`${name}\n  horizon  ${horizon ?? 'none'}\n${area ? `  area     ${area}\n` : ''}  end      ${end}\n  state    ${state}\n  created  ${created} by ${by}\n`);
+  const { horizon, end, state, ready_at: readyAt, created, created_by: by, phases, area } = found.record;
+  const ready = readyAt ? `  ready at ${readyAt.slice(0, 10)} ${readyAt.slice(11, 16)}Z\n` : '';
+  stdout.write(`${name}\n  horizon  ${horizon ?? 'none'}\n${area ? `  area     ${area}\n` : ''}  end      ${end}\n  state    ${state}\n${ready}  created  ${created} by ${by}\n`);
   if (phases) {
     stdout.write('  phases: stated\n');
     for (const [phase, waits] of Object.entries(phases.after ?? {})) stdout.write(`  phase ${phase} after ${phaseWords(waits)}\n`);

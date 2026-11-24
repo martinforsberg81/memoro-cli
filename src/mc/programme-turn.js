@@ -15,7 +15,7 @@
 import { join, resolve } from 'node:path';
 import { deskItemId } from './desk-items.js';
 import { cutFromOrder } from './goal-parts.js';
-import { appendLog, ARCHIVE_DIR, GOAL_FILE, GOALS_DIR, LOG_FILE, logStamp, parseGoal, renderGoal } from './goals.js';
+import { appendLog, ARCHIVE_DIR, GOAL_FILE, GOALS_DIR, LOG_FILE, logStamp, parseGoal, parseLog, renderGoal } from './goals.js';
 import { NAME_RE } from './plan-schema.js';
 import { readRecord } from './programme-record.js';
 import { repairReleaseState } from './repair-release.js';
@@ -237,18 +237,61 @@ export function goalParts({ home, programme, list, read }) {
   return found;
 }
 
-/** The parts of the programme's `README.md` its goals name, live and archived. */
-export function partsCut({ home, programme, list, read }) {
-  return new Set(goalParts({ home, programme, list, read }).flatMap(({ named }) => [...named]));
+/**
+ * When a goal's LOG.md says it was dropped: the `at` of the entry that moved it into `dropped` (the first of the
+ * entries at the end of the log whose stage is `dropped`), to the minute, or null when there is none.
+ */
+export function droppedAt({ dir, read }) {
+  let text;
+  try { text = read(join(dir, LOG_FILE)); } catch { return null; }
+  let at = null;
+  for (const entry of parseLog(text ?? '')) at = entry.stage === 'dropped' ? at ?? entry.at : null;
+  return at;
+}
+
+const MINUTE = 60_000;
+
+/**
+ * Whether a goal no longer counts toward the cut: its stage is `dropped`, and its drop (`droppedAt`) falls in or
+ * before the minute of `readyAt`, the instant the order was last set ready. A goal dropped after that minute, one whose
+ * drop its log does not say, any other stage, and every goal of a record without `ready_at` still count.
+ */
+export function superseded({ goal, dir }, readyAt, read) {
+  if (goal.stage !== 'dropped' || !readyAt) return false;
+  const at = droppedAt({ dir, read });
+  const dropped = at === null ? NaN : Date.parse(at);
+  const ready = Date.parse(readyAt);
+  if (!Number.isFinite(dropped) || !Number.isFinite(ready)) return false;
+  return Math.floor(dropped / MINUTE) <= Math.floor(ready / MINUTE);
+}
+
+/** The instant the programme's record says its order was last set ready, or null. */
+export function readyAtOf({ home, programme, read }) {
+  const found = readRecord(join(home, programme), { read });
+  return found.status === 'valid' ? found.record.ready_at ?? null : null;
 }
 
 /**
- * The goals, live and archived, that name no part of the programme's `README.md`: goals written by hand or cut
+ * The goals that count toward the cut (mc-run.md, "The cut of a ready order"): every goal of `goalParts` but a dropped
+ * one the order was set ready after (`superseded`). `readyAt` is the record's `ready_at` unless given. The one filter
+ * `partsCut`, `programmeDue` and `cutParts` read, the documentation goal included.
+ */
+export function countedGoals({ home, programme, list, read, readyAt = readyAtOf({ home, programme, read }) }) {
+  return goalParts({ home, programme, list, read }).filter((one) => !superseded(one, readyAt, read));
+}
+
+/** The parts of the programme's `README.md` its goals name, live and archived, that count (`countedGoals`). */
+export function partsCut({ home, programme, list, read }) {
+  return new Set(countedGoals({ home, programme, list, read }).flatMap(({ named }) => [...named]));
+}
+
+/**
+ * The goals, live and archived, that count (`countedGoals`) and name no part of the programme's `README.md`: goals written by hand or cut
  * from another document. A programme holding one is written by hand and is not cut. The programme's last goal,
  * Documentation, is cut from the order and is not one of them.
  */
 export function goalsNamingNoPart({ home, programme, list, read }) {
-  return goalParts({ home, programme, list, read }).filter(({ named, goal }) => !named.size && goal.documentation !== true).map(({ name }) => name).sort();
+  return countedGoals({ home, programme, list, read }).filter(({ named, goal }) => !named.size && goal.documentation !== true).map(({ name }) => name).sort();
 }
 
 /**
@@ -295,7 +338,7 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
   if (repair) {
     if (record.record.repair.reconciled?.revision === repair.release.revision) return { due: false, reason: 'its release is reconciled', notice: null };
   } else {
-    const goals = goalParts({ home, programme, list, read }).map(({ goal }) => goal);
+    const goals = countedGoals({ home, programme, list, read }).map(({ goal }) => goal);
     const lastCut = goals.some((goal) => goal.documentation === true) || !goals.some(cutFromOrder);
     if (lastCut && cutProblems({ home, programme, list, read }).length === 0) return { due: false, reason: 'its goals are already cut', notice: null };
     const unnamed = goalsNamingNoPart({ home, programme, list, read });
@@ -342,12 +385,13 @@ export function goalSlug(title, number, taken = new Set()) {
 }
 
 /**
- * The cut: for each part of `programme`'s README.md that no goal names, live or archived, one goal — its directory
+ * The cut: for each part of `programme`'s README.md that no goal that counts names (`countedGoals`: a goal dropped
+ * before the order was last set ready does not), live or archived, one goal — its directory
  * named from the part's heading, GOAL.json (version 2) in `build · ready` with `part` and `phase` the part's number,
  * the title the heading's name, the repositories of the README's `Repositories:` line (`repositories(text)` is the
  * caller's reading of it: `{ repos: [{ repo }] }` or `{ error }`), a document that points at README.md labelled
  * `Part <n>`, no criterion and no other text — and LOG.md with the runner's first entry. Then, where the programme has
- * none, live or archived, one more goal, last: `<programme>-documentation`, titled Documentation, marked
+ * none that counts, live or archived, one more goal, last: `<programme>-documentation`, titled Documentation, marked
  * `documentation` in place of `part`, in the phase after the highest part; one that is live is moved to that phase
  * when a part has been added since. A name is unique among the
  * programme's goals, live and archived, and among the live goals of every other programme, since a goal's branch
@@ -363,7 +407,7 @@ export function cutParts({ programme, home, list, read, write, repositories, now
   if (text === null || text === undefined) throw new Error('README.md is missing');
   const found = repositories(text);
   if (found.error) throw new Error(found.error);
-  const goals = goalParts({ home, programme, list, read });
+  const goals = countedGoals({ home, programme, list, read });
   const named = new Set(goals.flatMap((one) => [...one.named]));
   const live = (one) => list(join(home, one, GOALS_DIR)).filter((name) => !name.startsWith('.'));
   const taken = new Set([

@@ -834,6 +834,65 @@ it('resume and cache reads refuse a prior green whose batch ran another timeout,
   assert.equal(read(), null, 'a version-5 green whose only launch ran another timeout is never read');
 });
 
+it('a run stopped before it launched every file hands on the passed files its valid batches ran, and nothing else', (t) => {
+  const { request } = fixture(t);
+  const req = request();
+  const { root, measurement } = { root: req.gate.root, measurement: req.measurement };
+  const flags = ['--import', './x.mjs', '--test-timeout=1000'];
+  const plan = resolveTestPlan({ flags });
+  const identity = executionIdentity(plan);
+  // Five covered files: the one batch that launched ran three, and the ceiling came before the rest.
+  const files = ['a.test.js', 'b.test.js', 'c.test.js', 'd.test.js', 'e.test.js'];
+  const coverage = { kind: 'affected', files, commands: [], flags, pattern: null, selector: 'selector', execution: identity };
+  const outcomes = { 'a.test.js': 'passed', 'b.test.js': 'failed', 'c.test.js': 'unfinished', 'd.test.js': 'not-started',
+    // Recorded passed, yet in no batch: nothing proves how it ran.
+    'e.test.js': 'passed' };
+  const batch = (over = {}) => ({ ...spawnedBatch({ plan, files: ['a.test.js', 'b.test.js', 'c.test.js'] }), ...over });
+  let ended = 0;
+  const stopped = (run, { batches = [batch()], cover = coverage } = {}) => persistGateReceipt({ root, receipt: gateReceipt({
+    measurement: { ...measurement, run }, before: measurement.candidate, after: measurement.candidate,
+    started: '2026-01-01T00:00:00Z', ended: `2026-01-01T00:00:0${++ended}Z`,
+    result: { ok: false, code: 1, stopped_at: 'timeout', coverage: cover,
+      execution: { tests: { exit: null, finished: false, totals: {}, batches }, commands: [] },
+      members: { files: files.map((file) => ({ file, how: 'ran', from: null, outcome: outcomes[file] })), commands: [] } } }) });
+  const resumable = () => findResumable({ root, measurement: { ...measurement, run: 'gate-next' }, flags, pattern: null });
+  const sources = () => Object.fromEntries([...resumable().files].map(([file, { from }]) => [file, from]));
+
+  // Another Node, another timeout, other flags in the batch: the batch does not prove the policy, and nothing is handed on.
+  const otherTimeout = batch();
+  otherTimeout.argv = otherTimeout.argv.map((word) => (word === '--test-timeout=1000' ? '--test-timeout=600000' : word));
+  otherTimeout.timeoutMs = executedTimeoutOf(otherTimeout.argv);
+  stopped('gate-node', { batches: [batch({ nodeVersion: 'v0.0.1' })] });
+  stopped('gate-timeout', { batches: [otherTimeout] });
+  stopped('gate-flags', { batches: [batch({ argv: batch().argv.filter((word) => word !== './x.mjs') })] });
+  // No batch, and an identity that is missing or disagrees with the requested flags.
+  stopped('gate-anonymous', { batches: [], cover: { ...coverage, execution: undefined } });
+  stopped('gate-disagrees', { batches: [], cover: { ...coverage, execution: { ...identity, timeoutSource: 'default' } } });
+  stopped('gate-disagrees-batched', { cover: { ...coverage, execution: { ...identity, timeoutMs: 2000 } } });
+  assert.deepEqual(sources(), {}, 'no source whose launch or identity is wrong hands on a file');
+
+  const source = stopped('gate-stopped');
+  assert.deepEqual(sources(), { 'a.test.js': 'gate-stopped' },
+    'only the passed file a valid batch ran: not the failed, unfinished or never-started ones, nor a passed one in no batch');
+
+  // The next attempt runs the rest to a pass: green, and read back as a green receipt.
+  const prior = resumable();
+  const members = files.map((file) => (prior.files.has(file)
+    ? { file, how: 'reused', from: prior.files.get(file).from, outcome: 'passed' }
+    : { file, how: 'ran', from: null, outcome: 'passed' }));
+  const rest = files.filter((file) => !prior.files.has(file));
+  const resumed = gateReceipt({ measurement: { ...measurement, run: 'gate-next' }, before: measurement.candidate, after: measurement.candidate,
+    started: '2026-01-01T00:01:00Z', ended: '2026-01-01T00:01:01Z',
+    result: { ok: true, code: 0, coverage, members: { files: members, commands: [] }, resumed: { from: ['gate-stopped'], files: { 'a.test.js': 'gate-stopped' }, commands: [] },
+      execution: { tests: { exit: 0, finished: true, totals: { tests: 4, pass: 4, fail: 0 }, batches: [spawnedBatch({ plan, files: rest })] }, commands: [] } } });
+  assert.equal(resumed.outcome, 'green');
+  const path = persistGateReceipt({ root, receipt: resumed });
+  assert.equal(readGreenReceipt({ root, repo: 'repo', repository: resumed.repository, run: 'gate-next', sessionRun: resumed.session_run,
+    goalRevision: resumed.goal_revision, configuration: resumed.configuration })?.run, 'gate-next');
+  assert.equal(JSON.parse(readFileSync(source, 'utf8')).outcome, 'red', 'the stopped source itself never reads as green');
+  assert.ok(path);
+});
+
 const SELECTOR_CANDIDATE = { repository: '/repo/.git', tree: 'a'.repeat(40), fingerprint: 'bytes' };
 
 it('a selector sidecar is created whole and exclusively; a different content for the same run is refused, never overwritten', () => {
