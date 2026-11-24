@@ -33,7 +33,10 @@ import { nightlyReading, readNightlyHistory, recordNightlyRun } from '../../src/
 import { fullRun, fullRunDue, fullRunTick, loggedTick, repairFromRun, scheduledRound } from '../../src/mc/nightly-loop.js';
 import { readDeployMends, requestDeployRepair } from '../../src/mc/deploy-repair.js';
 import { requestMainRepair } from '../../src/mc/main-repair.js';
-import { awaitClaim, claimFullRun, liveClaims, releaseClaim } from '../../src/mc/full-run-claim.js';
+import { addClaimGroup, awaitClaim, claimFullRun, liveClaims, releaseClaim } from '../../src/mc/full-run-claim.js';
+import { processAlive } from '../../src/mc/lease-owner.js';
+import { realLock } from '../../src/mc/runner-lock.js';
+import { runGate } from '../../src/mc/repo-gate.js';
 
 await preloadVerbs('test', 'repo');
 
@@ -541,6 +544,129 @@ describe('a full run, one at a time per tree — whoever starts it', () => {
         assert.ok(claim);
       } finally { rmSync(root2, { recursive: true, force: true }); }
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  // A starter killed (SIGKILL, OOM) while its suite runs on in the full-run
+  // checkout: the claim holds while a group its run recorded lives.
+  const SUITE = 7001;
+  it('a claim whose starter is dead and one of whose groups lives is live for all four checks, and void when all are gone', async () => {
+    const root = home();
+    try {
+      const claim = held(root, { sha: OTHER });
+      addClaimGroup(claim, SUITE, { root });
+      const living = new Set([SUITE]);
+      const checks = { alive: () => false, groupAlive: (pgid) => living.has(pgid) };
+
+      assert.deepEqual(liveClaims({ root, ...checks }).map((one) => [one.pid, one.groups]), [[OTHER_PID, [SUITE]]], 'liveClaims: held by its group');
+      const second = claimFullRun({ repo: 'memoro', sha: SHA, verb: 'mc deploy', root, pid: 5555, ...checks });
+      assert.equal(second.claimed, false, 'claimFullRun: the checkout is not given to another tree');
+      assert.equal(second.waitFor?.pid, OTHER_PID);
+
+      // Another run's release keeps it; its own release while the group lives keeps it, released.
+      const other = claimFullRun({ repo: 'memoro-cli', sha: SHA, verb: 'full run', root, pid: 6666, alive: () => true, groupAlive: checks.groupAlive }).claim;
+      releaseClaim(other, { root, ...checks });
+      assert.deepEqual(liveClaims({ root, ...checks }).map((one) => one.pid), [OTHER_PID], 'releaseClaim of another run keeps it');
+      releaseClaim(claim, { root, ...checks });
+      assert.deepEqual(liveClaims({ root, alive: () => true, groupAlive: checks.groupAlive }).map((one) => [one.pid, one.released]), [[OTHER_PID, true]], 'releaseClaim of its own: kept while the group lives');
+
+      let polls = 0;
+      await awaitClaim(claim, { root, ...checks, pollMs: 1, sleep: async () => { polls += 1; if (polls === 3) living.delete(SUITE); } });
+      assert.equal(polls, 3, 'awaitClaim waited until the group was gone');
+
+      assert.deepEqual(liveClaims({ root, ...checks }), [], 'all gone: no claim');
+      assert.equal(claimFullRun({ repo: 'memoro', sha: SHA, verb: 'mc deploy', root, pid: 5555, ...checks }).claimed, true, 'all gone: the checkout is free');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a run waiting for a stopped starter\'s suite says so, and measures once the group is gone', async () => {
+    const root = home();
+    try {
+      const claim = held(root, { sha: OTHER });
+      addClaimGroup(claim, SUITE, { root });
+      const living = new Set([SUITE]);
+      const events = [];
+      const said = [];
+      await fullRun(REPO, {
+        root, sha: SHA, say: (message) => said.push(message), repair: null,
+        round: () => { events.push('round'); return report(); },
+        claims: { alive: (pid) => pid !== OTHER_PID, groupAlive: (pgid) => living.has(pgid), pollMs: 1, sleep: async () => { events.push('wait'); living.delete(SUITE); } },
+      });
+      assert.deepEqual(events, ['wait', 'round'], 'measured only after the orphaned suite had ended');
+      assert.match(said.join('\n'), /a full run of bbbbbbb is using the full-run checkout \(the suite of a stopped starter \(group 7001\)\); waiting for it before measuring aaaaaaa/u);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  function spawnFixture() {
+    const root = home();
+    const dir = join(root, 'repo');
+    mkdirSync(dir);
+    const commandMark = join(root, 'command-pid');
+    writeFileSync(join(root, 'repo-gates.json'), JSON.stringify({
+      repo: {
+        prepare: null, prepare_why: 'fixture installs nothing',
+        select_full: 'printf \'{"files":["tests/tiny.test.cjs"]}\\n\'',
+        extra_gates: [{ name: 'fixture-gate', command: `printf '%s' "$$" > "${commandMark}"` }],
+        merge_log: null,
+      },
+    }));
+    const fakeGit = (args) => {
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        const checkout = args.at(-2);
+        mkdirSync(join(checkout, 'tests'), { recursive: true });
+        writeFileSync(join(checkout, '.git'), 'gitdir: fixture\n');
+        writeFileSync(join(checkout, 'tests', 'tiny.test.cjs'), "require('node:test')('tiny', () => {});\n");
+      }
+      const stdout = args[0] === 'symbolic-ref' ? 'origin/main' : args[0] === 'rev-parse' ? SHA : '';
+      return { status: args[0] === 'rev-parse' && args.includes('--verify') ? 1 : 0, stdout, stderr: '' };
+    };
+    const round = (args) => scheduledRound({
+      ...args, gate: (options) => runGate({ ...options, git: fakeGit, candidateCwds: () => [] }),
+    });
+    const run = (lock) => fullRun({ name: 'memoro', path: dir }, {
+      root, env: { ...process.env, MC_HOME: root, MC_WORK_ROOT: root }, sha: SHA, repair: null, claims: { lock }, round,
+    });
+    return { root, commandMark, run, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  }
+
+  it('a real full-run batch and command gate add their live groups to the claim as they spawn', async () => {
+    const fx = spawnFixture();
+    const started = [];
+    const observed = new Set();
+    const lock = (root, fn, options) => realLock(root, () => {
+      const answer = fn();
+      for (const held of liveClaims({ root })) for (const pgid of held.groups || []) {
+        if (observed.has(pgid)) continue;
+        observed.add(pgid);
+        started.push([pgid, processAlive(pgid)]);
+      }
+      return answer;
+    }, options);
+    try {
+      const result = await fx.run(lock);
+      assert.equal(result.verdict, 'green', result.reason);
+      assert.equal(result.tests, 1, 'the real batch ran its test');
+      assert.equal(started.length, 2, 'test batch and command gate each reached the claim');
+      assert.deepEqual(started.map(([, live]) => live), [true, true]);
+      assert.equal(started.at(-1)[0], Number(readFileSync(fx.commandMark, 'utf8')), 'the command observed the same group');
+      assert.deepEqual(liveClaims({ root: fx.root }), [], 'given back at the end, its groups gone');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a real full run cuts its child and refuses when the batch group cannot be recorded', async () => {
+    const fx = spawnFixture();
+    let writes = 0;
+    const lock = (root, fn, options) => realLock(root, () => {
+      if (liveClaims({ root }).length && ++writes === 1) throw new Error('claim disk is full');
+      return fn();
+    }, options);
+    try {
+      const result = await fx.run(lock);
+      assert.equal(result.stopped_at, 'threw', result.reason);
+      const [, pgid] = result.reason.match(/could not record process group (\d+) in the full-run claim: claim disk is full/u) || [];
+      assert.ok(pgid, result.reason);
+      assert.equal(processAlive(Number(pgid)), false);
+      assert.equal(existsSync(fx.commandMark), false, 'no later command gate was started');
+    } finally { fx.cleanup(); }
   });
 });
 

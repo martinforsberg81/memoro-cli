@@ -29,6 +29,7 @@
  * a test with nothing real behind it.
  */
 import { deployWorktreePath, ensureReleaseWorktree, placeWorktree, strayLines, takeHolder } from './deploy-worktree.js';
+import { setTimeout as delay } from 'node:timers/promises';
 import { KEPT_HOLD_SECONDS, mainIdleSecondsOf, stopServer } from './dev-servers.js';
 import { verdictOf } from './gate-output.js';
 import { run as runGit } from './git.js';
@@ -173,8 +174,9 @@ function mendWords(entries) {
  */
 export async function measureFull({
   sha, path, env = process.env, dryRun = false, say = () => {}, deps = {}, root = mcHome(env), mendRoot = workRoot(env),
-  branch = null, recorded = null, deferMainRepair = false,
+  branch = null, recorded = null, deferMainRepair = false, signal = null, preparation = null,
 }) {
+  signal?.throwIfAborted();
   const history = deps.history || readNightlyHistory;
   const found = fullRunVerdict(recorded ? [recorded] : history(path, { root }).runs, sha);
   let { state, run } = found;
@@ -191,9 +193,13 @@ export async function measureFull({
     const start = () => (deps.fullRun || fullRun)({ name: REPO, path }, {
       root, env, sha, deploy: true, ...(branch ? { ref: releaseRef(branch) } : {}),
       ...(deferMainRepair ? { deferMainRepair: true } : {}),
+      // A stopped preparation (`--stop-preparation`) ends its round, or its wait for another.
+      ...(signal ? { signal, handover: signal } : {}),
+      ...(preparation ? { preparation } : {}),
       say: (line) => say(`mc:   ${line}`), narrate: (line) => say(`mc:   ${line}`),
     });
     let given = await start();
+    if (signal?.aborted) throw new Error('the preparation was stopped');
     // A run this one followed measured what its starter found, which may be a
     // main that has since moved: the tree that would ship is then still
     // unmeasured, and is measured now — the followed run is over, so nothing
@@ -201,6 +207,7 @@ export async function measureFull({
     if (given?.joined && given.commit && given.commit !== sha) {
       say(`mc: full run — the one followed measured ${short(given.commit)}, not ${short(sha)}; starting one of ${short(sha)}`);
       given = await start();
+      signal?.throwIfAborted();
     }
     const ran = normalized(given);
     started = true;
@@ -240,18 +247,19 @@ export function withMendsNow(full, { env = process.env, deps = {} } = {}) {
  */
 export async function measureGate({
   sha, path, acceptRed = false, dryRun = false, env = process.env, say = () => {}, deps = {}, suites = {}, stage = () => {}, own = false,
-  outputDir = null, branch = null, recorded = null, deferMainRepair = false,
+  outputDir = null, branch = null, recorded = null, deferMainRepair = false, signal = null, preparation = null, onLocalSpawn = null,
 }) {
   stage('full-run');
   const full = await measureFull({
-    sha, path, env, dryRun, say, deps, root: deps.root, mendRoot: deps.mendRoot, branch, recorded, deferMainRepair,
+    sha, path, env, dryRun, say, deps, root: deps.root, mendRoot: deps.mendRoot, branch, recorded, deferMainRepair, signal, preparation,
   });
+  if (signal?.aborted) throw new Error('the preparation was stopped');
   const unmeasured = full.state === 'unmeasured' || full.state === 'moved';
   const redFull = full.state === 'red' || full.state === 'stalled';
   if (unmeasured || (redFull && !dryRun && !acceptRed)) return { full, exercise: null };
   stage('suites', full);
   say(`mc: suites — starting a local server of ${short(sha)} and running what .mc/test.json declares`);
-  const exercise = await exerciseApp({ sha, env, say, deps: suites, own, outputDir, gateRef: branch ? sha : GATE_REF, branch, path });
+  const exercise = await exerciseApp({ sha, env, say, deps: suites, own, outputDir, gateRef: branch ? sha : GATE_REF, branch, path, signal, onLocalSpawn });
   return { full, exercise };
 }
 
@@ -395,14 +403,18 @@ function gitIn(worktree, args) {
  */
 export async function exerciseApp({
   sha, env = process.env, say = () => {}, deps = {}, own = false, outputDir = null, gateRef = GATE_REF, branch = null, path = null,
+  signal = null, onLocalSpawn = null,
 }) {
+  signal?.throwIfAborted();
+  const startedServers = [];
   const d = {
     sharedWorktree, readDeclaration, ensureAppServer, ensureDevServer, runSuites, tokenFor, head: headOf, dirty: dirtyOf,
-    gitIn, servingWorktree, mainHold, now: () => Date.now(), sleep: (ms) => new Promise((done) => { setTimeout(done, ms); }),
+    gitIn, servingWorktree, mainHold, now: () => Date.now(), sleep: (ms) => delay(ms, undefined, signal ? { signal } : {}),
     takeHolder, placeWorktree, ensureReleaseWorktree, serversFor, stopServer, deployWorktree: deployWorktreePath, alive: processAlive,
     ...deps,
   };
-  if (own) return exerciseOwn({ sha, env, say, deps, d, outputDir, gateRef, branch, path });
+  const cancellation = { signal, onLocalSpawn, startedServers };
+  if (own) return exerciseOwn({ sha, env, say, deps, d, outputDir, gateRef, branch, path, ...cancellation });
   const worktree = d.sharedWorktree(env);
   if (!worktree) return cannot(NO_SHARED_WORKTREE);
   const dirtyNow = d.dirty(worktree);
@@ -417,7 +429,7 @@ export async function exerciseApp({
 
   const before = d.head(worktree);
   if (!sameCommit(before, sha)) {
-    const held = await awaitHold({ d, worktree, services: [serviceFor(declared.declaration, 'app'), serviceFor(declared.declaration, 'static')], env, say });
+    const held = await awaitHold({ d, worktree, services: [serviceFor(declared.declaration, 'app'), serviceFor(declared.declaration, 'static')], env, say, signal });
     if (held) return cannot(held);
     const placed = placeCheckout({ d, worktree, sha });
     if (placed) return cannot(placed);
@@ -425,7 +437,18 @@ export async function exerciseApp({
   }
 
   // Every ensure pins: the checkout is where it was placed, and following main would move it.
-  return runDeclared({ d, deps, worktree, sha, env, say, pinned: true, outputDir, gateRef });
+  try {
+    return await runDeclared({ d, deps, worktree, sha, env, say, pinned: true, outputDir, gateRef, ...cancellation });
+  } finally {
+    if (signal?.aborted) for (const server of startedServers) {
+      if (d.alive(server.pid)) stopExerciseServer(server, d, say);
+    }
+  }
+}
+
+function stopExerciseServer(server, d, say) {
+  const stopped = d.stopServer(server);
+  if (!stopped?.ok) say(`mc: suites — could not stop ${server.instance_id}, which the exercise started: ${stopped?.error || 'no reason given'}`);
 }
 
 /**
@@ -443,16 +466,17 @@ export async function exerciseApp({
  * 4. whatever happened, the servers the exercise started are stopped and the holder is released;
  *    a server that was already there is left.
  */
-async function exerciseOwn({ sha, env, say, deps, d, outputDir, gateRef, branch, path }) {
+async function exerciseOwn({ sha, env, say, deps, d, outputDir, gateRef, branch, path, signal, onLocalSpawn, startedServers }) {
   const worktree = d.deployWorktree(env);
   // No bound on the wait: a holder that is alive is waited for and said each minute (`takeHolder`), a holder
   // that is gone is taken over, and elapsed time is never the reason the suites do not run (D6, D16).
   const taken = await d.takeHolder({
-    env, verb: 'deploy suites', say, now: d.now, sleep: d.sleep, alive: d.alive, lock: d.holderLock, root: d.holderRoot, waitMs: Infinity,
+    env, verb: 'deploy suites', say, now: d.now, sleep: d.sleep, alive: d.alive, lock: d.holderLock, root: d.holderRoot, waitMs: Infinity, signal,
   });
   if (!taken.ok) return cannot(taken.reason);
   let already = null;
   try {
+    signal?.throwIfAborted();
     const git = d.git || ((cwd, args) => {
       const asked = d.gitIn(cwd, args);
       return asked.status === 0 ? String(asked.stdout || '').trim() : null;
@@ -463,17 +487,14 @@ async function exerciseOwn({ sha, env, say, deps, d, outputDir, gateRef, branch,
     if (placed.moved) say(`mc: suites — the deploy worktree ${worktree} stands at ${short(sha)} now (${placed.how === 'reset' ? 'moved back from' : 'fast-forwarded from'} ${short(placed.from)})`);
     for (const line of strayLines(placed.strays)) say(line);
     already = new Set(d.serversFor(worktree, { root: d.root }).map((server) => server.instance_id));
-    return await runDeclared({ d, deps, worktree, sha, env, say, pinned: false, outputDir, gateRef });
+    return await runDeclared({ d, deps, worktree, sha, env, say, pinned: false, outputDir, gateRef, signal, onLocalSpawn, startedServers });
   } finally {
     // Its own servers only: one that was there before the exercise is somebody's, and left.
-    if (already) {
-      for (const server of d.serversFor(worktree, { root: d.root })) {
-        if (already.has(server.instance_id)) continue;
-        const stopped = d.stopServer(server);
-        if (!stopped?.ok) say(`mc: suites — could not stop ${server.instance_id}, which the exercise started: ${stopped?.error || 'no reason given'}`);
+    try {
+      if (already) for (const server of d.serversFor(worktree, { root: d.root })) {
+        if (!already.has(server.instance_id)) stopExerciseServer(server, d, say);
       }
-    }
-    taken.release();
+    } finally { taken.release(); }
   }
 }
 
@@ -482,7 +503,7 @@ async function exerciseOwn({ sha, env, say, deps, d, outputDir, gateRef, branch,
  * themselves — the same on both routes. `pinned` is the shared checkout's: it is placed once and no
  * ensure may follow main, which would move it.
  */
-async function runDeclared({ d, deps, worktree, sha, env, say, pinned, outputDir = null, gateRef }) {
+async function runDeclared({ d, deps, worktree, sha, env, say, pinned, outputDir = null, gateRef, signal, onLocalSpawn, startedServers }) {
   const read = d.readDeclaration(worktree);
   if (!read.ok) return cannot(read.error);
   const { declaration } = read;
@@ -508,13 +529,20 @@ async function runDeclared({ d, deps, worktree, sha, env, say, pinned, outputDir
     return null;
   };
   const pin = pinned ? { pin: true } : {};
-  const staticEnsure = () => d.ensureDevServer(worktree, declaration, { holderVerb: 'deploy', ...deps, service: staticService, ...pin });
-  const appEnsure = (json) => d.ensureAppServer(worktree, declaration, {
+  const tracked = async (ensuring) => {
+    const result = await ensuring;
+    if (result.started && result.server) startedServers.push(result.server);
+    signal?.throwIfAborted();
+    return result;
+  };
+  const cancel = signal ? { signal, onSpawn: onLocalSpawn } : {};
+  const staticEnsure = () => tracked(d.ensureDevServer(worktree, declaration, { holderVerb: 'deploy', ...deps, service: staticService, ...pin, ...cancel }));
+  const appEnsure = (json) => tracked(d.ensureAppServer(worktree, declaration, {
     json,
     stdout: { write: (text) => { if (!json) say(String(text).replace(/\n$/u, '')); } },
     answer: { write: () => {} },
-    deps: { holderVerb: 'deploy', ...deps, ...pin },
-  });
+    deps: { holderVerb: 'deploy', ...deps, ...pin, ...cancel },
+  }));
 
   let server = null;
   let staticServer = null;
@@ -540,6 +568,7 @@ async function runDeclared({ d, deps, worktree, sha, env, say, pinned, outputDir
   const commit = servedCommit(server || staticServer, worktree, d.head);
 
   const held = await d.tokenFor(declaration, env);
+  signal?.throwIfAborted();
   const suiteEnvironment = held.token ? { ...env, [held.name]: held.token } : env;
   const probeFor = (suite) => (tierOf(suite) === 'static' && staticServer ? staticServer : server || { health_url: `${baseUrl}/api/version` });
   // A server brought back is checked like the first one: a revive that lands on another tree is no revive.
@@ -563,11 +592,12 @@ async function runDeclared({ d, deps, worktree, sha, env, say, pinned, outputDir
   };
   const { results, gone, skipped: neverRan } = await d.runSuites({
     declaration: gated, worktree, baseUrl, staticBaseUrl, only: null, env: suiteEnvironment,
-    stillThere: (suite) => (deps.answers || answers)(probeFor(suite)),
+    stillThere: (suite) => (deps.answers || answers)(probeFor(suite), signal ? { signal } : {}),
     revive,
     onStart: null,
     onEnd: (result) => say(`mc:   ${result.skipped ? 'skip' : result.ok ? 'ok  ' : 'RED '} ${result.name} ${result.seconds}s${result.output_path && !result.ok && !result.skipped ? ` — whole output: ${result.output_path}` : ''}`),
     ...(outputDir ? { outputDir } : {}),
+    ...(signal ? { signal, onSpawn: onLocalSpawn } : {}),
   });
 
   // `tail` is what a reading says of the suite: the verdict lines it closes with when it is red (and nothing when
@@ -651,7 +681,7 @@ export function gateSet({ tip, shipped }) {
  * refusal (D6, D16). Only a hold whose holder's process is gone and which was
  * never released is refused: stale state of mc's own, which no waiting ends.
  */
-async function awaitHold({ d, worktree, services, env, say }) {
+async function awaitHold({ d, worktree, services, env, say, signal }) {
   const idleMs = mainIdleSecondsOf(env) * 1000;
   const began = d.now();
   const why = (hold) => (hold === 'kept'
@@ -660,6 +690,7 @@ async function awaitHold({ d, worktree, services, env, say }) {
   let saidFor = null;
   let saidAt = null;
   for (;;) {
+    signal?.throwIfAborted();
     let held = null;
     for (const service of services.filter(Boolean)) {
       const running = d.servingWorktree(worktree, { root: d.root, service });

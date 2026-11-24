@@ -31,9 +31,11 @@ import { closeSync, existsSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { getSecret, setSecret, deleteSecret } from '../lib/keychain.js';
 import { defaultRepos } from './brief-collect.js';
+import { runTool } from './child-async.js';
 import { run as runGit } from './git.js';
 import {
   admit, isMainServer, KEPT_HOLD_SECONDS, keptHolds, lastUsedAt, listServers, mainIdleSecondsOf, processCwd, refusalText,
@@ -438,8 +440,24 @@ export function editedSince(server, worktree, deps = {}) {
  * person knows whose.
  */
 export async function ensureDevServer(worktree, declaration, deps = {}) {
+  const cancellation = {};
+  try { return await ensureDevServerInner(worktree, declaration, deps, cancellation); }
+  catch (error) {
+    if (deps.signal?.aborted) cancellation.cleanup?.();
+    throw error;
+  }
+}
+
+async function ensureDevServerInner(worktree, declaration, deps, cancellation) {
+  const { signal } = deps;
+  signal?.throwIfAborted();
   const now = deps.now || (() => Date.now());
-  const sleep = deps.sleep || ((ms) => new Promise((done) => { setTimeout(done, ms); }));
+  const sleep = async (ms) => {
+    signal?.throwIfAborted();
+    if (deps.sleep) await deps.sleep(ms);
+    else await delay(ms, undefined, signal ? { signal } : {});
+    signal?.throwIfAborted();
+  };
   const fetchImpl = deps.fetch || fetch;
   const readyMs = deps.readyTimeoutMs ?? READY_TIMEOUT_MS;
   const root = deps.root;
@@ -485,7 +503,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   // The server this start replaces, when there is one. Its slot is the caller's: admission counts it as
   // theirs, and it is stopped only once admission has said yes, so a refused start leaves it running.
   let replacing = null;
-  if (running && !(await answers(running, { fetch: fetchImpl, sleep, attempts: 2, delayMs: 2000, timeoutMs: 5000 }))) {
+  if (running && !(await answers(running, { fetch: fetchImpl, sleep, attempts: 2, delayMs: 2000, timeoutMs: 5000, signal }))) {
     // A live pid is not an answer. A server that is alive and does not answer
     // its health URL twice in a row is hung, and reusing it hands every suite
     // a connection that never comes back. Stopped through its own stop
@@ -552,6 +570,10 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       log('dev-reservation-disown-failed', { reservation, error: error.message });
     }
   };
+  if (signal?.aborted) {
+    letGo([process.pid]);
+    signal.throwIfAborted();
+  }
 
   // Admitted, so the server being replaced may go now: through its own stop command. A registration still
   // there after that is not a stop, and nothing is started over it.
@@ -600,6 +622,21 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       letGo([process.pid]);
       return { ok: false, waited_ms: admitted.waited_ms ?? 0, error: `${start.service} could not be started: ${error.message}` };
     }
+    const stopStarting = () => {
+      if (Number.isInteger(child?.pid) && child.exitCode == null && child.signalCode == null) {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone; the stopper checks the group */ }
+      }
+      letGo([process.pid, child.pid]);
+      forgetChild();
+    };
+    cancellation.cleanup = () => {
+      // Registered servers have a stop protocol. Before registration the
+      // wrapper and its children are ours and have no such protocol yet.
+      try { if (server) (deps.stopServer || stopServer)(server); }
+      finally { stopStarting(); }
+    };
+    try { if (child.pid) deps.onSpawn?.(child.pid); }
+    catch (error) { stopStarting(); throw error; }
 
     // Stage one: has it said where it will serve? One window, and one more if the
     // wrapper spawned here is still alive when the first lapses — see REGISTER_TIMEOUT_MS.
@@ -706,7 +743,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   // time round.
   const readyBy = now() + readyMs;
   while (now() < readyBy) {
-    if (await answers(server, { fetch: fetchImpl, attempts: 1 })) {
+    if (await answers(server, { fetch: fetchImpl, attempts: 1, signal })) {
       (deps.touchServer || touchServer)(server.instance_id, { ...(root ? { root } : {}), holder });
       return {
         ok: true, server, started, service: start.service, profile: start.profile, restartedFrom, replacedHung, followed, unfollowed,
@@ -791,7 +828,7 @@ export async function ensureAppServer(worktree, declaration, {
   }
   const slotWaitMs = ensured.waited_ms ?? 0;
   const serverMs = Math.max(0, clock() - started - slotWaitMs);
-  return { ok: true, server, baseUrl, timing: { slot_wait_ms: slotWaitMs, server_ms: serverMs } };
+  return { ok: true, server, baseUrl, ...(deps.signal ? { started: ensured.started } : {}), timing: { slot_wait_ms: slotWaitMs, server_ms: serverMs } };
 }
 
 /** The line a held main server says: why it was not restarted, and what it serves against the checkout. */
@@ -870,17 +907,22 @@ export function newestLogTail(worktree, { lines = 20 } = {}) {
  */
 export async function answers(server, deps = {}) {
   const fetchImpl = deps.fetch || fetch;
-  const sleep = deps.sleep || ((ms) => new Promise((done) => { setTimeout(done, ms); }));
+  const { signal } = deps;
+  const sleep = deps.sleep || ((ms) => delay(ms, undefined, signal ? { signal } : {}));
   const attempts = deps.attempts ?? 3;
   const delayMs = deps.delayMs ?? 2000;
   const timeoutMs = deps.timeoutMs ?? 10_000;
   const url = server.health_url || `${String(server.url).replace(/\/+$/u, '')}/api/version`;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    signal?.throwIfAborted();
     try {
-      const response = await fetchImpl(url, { cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
+      const timeout = AbortSignal.timeout(timeoutMs);
+      const response = await fetchImpl(url, { cache: 'no-store', signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+      signal?.throwIfAborted();
       if (response.ok) return true;
     } catch {
+      signal?.throwIfAborted();
       // Fall through to the next attempt.
     }
     if (attempt < attempts) await sleep(delayMs);
@@ -993,7 +1035,7 @@ export function accountAvailable(declaration, env = process.env) {
  */
 export async function runSuites({
   declaration, worktree, baseUrl: appBaseUrl, staticBaseUrl: staticUrl = null, only = null, env = process.env,
-  stillThere = null, revive = null, onStart = null, onEnd = null, onRevive = null, outputDir = null,
+  stillThere = null, revive = null, onStart = null, onEnd = null, onRevive = null, outputDir = null, signal = null, onSpawn = null,
 }, deps = {}) {
   let baseUrl = appBaseUrl;
   let staticBaseUrl = staticUrl;
@@ -1034,11 +1076,13 @@ export async function runSuites({
   };
 
   for (const suite of chosen) {
+    signal?.throwIfAborted();
     const tier = tierOf(suite);
     if (gone.has(tier)) { neverRan.push(suite.name); continue; }
     // Before, so a round that cannot measure anything says that instead of
     // spending six minutes proving it one suite at a time.
     if (!await there(suite) && !await brought(tier)) { neverRan.push(suite.name); continue; }
+    signal?.throwIfAborted();
 
     onStart?.(suite);
     const startedAt = now();
@@ -1051,12 +1095,20 @@ export async function runSuites({
     // (`gate-output.js`); without one the output is held in memory, as it was.
     const output = outputDir ? openOutput(outputDir, suite.name) : null;
     let finished;
+    let recordError = null;
     try {
-      finished = runOne(command, args, output
+      finished = signal ? await runTool(command, args, {
+        cwd: worktree, env: suiteEnvironment, signal, group: true, killOnAbort: true, outputFd: output?.fd,
+        maxBuffer: 32 * 1024 * 1024, onSpawn: (pid) => {
+          try { onSpawn?.(pid); } catch (error) { recordError = error; throw error; }
+        },
+      }) : runOne(command, args, output
         ? { cwd: worktree, env: suiteEnvironment, stdio: ['ignore', output.fd, output.fd], shell: false }
         : { cwd: worktree, env: suiteEnvironment, encoding: 'utf8', shell: false, maxBuffer: 32 * 1024 * 1024 });
       // A suite that could not start wrote nothing: the file says why.
       if (output && finished.error) writeSync(output.fd, `${finished.error.message || String(finished.error)}\n`);
+      signal?.throwIfAborted();
+      if (recordError) throw recordError;
     } finally {
       if (output) closeSync(output.fd);
     }

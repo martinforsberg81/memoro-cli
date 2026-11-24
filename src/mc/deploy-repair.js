@@ -32,10 +32,12 @@ export const REPOS = ['memoro-cli', 'memoro'];
  * has classified — is technical (D2: an unknown stop is technical). `dirty` and `ahead` are sent only for a
  * worktree with main that is not mc's own; mc's own deploy worktree dirty or ahead is `own-dirty`/`own-ahead`,
  * state mc owns, and technical (D4). `usage`, `headless` and `dry-run` write no row today; were one written,
- * it is a decision.
+ * it is a decision. `stopped` is a preparation a person stopped (`mc deploy --stop-preparation`): their
+ * decision, not a fault.
  */
 export const NOT_TECHNICAL = Object.freeze([
   'usage', 'headless', 'dry-run', 'running', 'language', 'backwards', 'taken-back', 'unmeasured', 'red', 'dirty', 'ahead', 'replaced',
+  'stopped',
 ]);
 
 /**

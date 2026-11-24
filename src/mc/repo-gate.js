@@ -225,6 +225,10 @@ export async function runGate({
   // How a process's group is read and how a process is ended, for the processes this round left in its worktree.
   processGroupOf = realProcessGroup,
   killProcess = realKill,
+  // Told the process group of each test batch and command gate group as it starts:
+  // a full run's claim records them, so a starter that is gone still holds the
+  // claim while its suite lives (`full-run-claim.js`).
+  onSpawn = null,
 } = {}) {
   const startedAt = clock();
   const origin = monotonic();
@@ -332,9 +336,18 @@ export async function runGate({
   // The process groups this round's own spawns lead (`spawned`, told at each spawn):
   // what stands in the round's own worktree after it and leads back to one of these is its own.
   const ownGroups = new Set();
+  let groupRecordError = null;
   // `where` names this round in the too-slow file (`recordTooSlow`): its pull requests, or the whole suite.
   const timesOf = { root, repo: lane, where: numbers.length ? numbers.map((n) => `#${n}`).join(' ') : 'full', track: progress.track, complete: progress.complete,
-    trackProcesses: progress.trackProcesses, completeProcesses: progress.completeProcesses, spawned: (pid) => { if (Number.isInteger(pid)) ownGroups.add(pid); } };
+    trackProcesses: progress.trackProcesses, completeProcesses: progress.completeProcesses, spawned: (pid) => {
+      if (!Number.isInteger(pid)) return;
+      ownGroups.add(pid);
+      try { onSpawn?.(pid); }
+      catch (error) {
+        groupRecordError = new Error(`could not record process group ${pid} in the full-run claim: ${error.message}`, { cause: error });
+        throw groupRecordError;
+      }
+    } };
   // Every test the round's runs measured, all on the candidate: the ones over the
   // slow-test indicator are named in the report (`slow_tests`), never its red.
   const measuredTests = [];
@@ -480,6 +493,10 @@ export async function runGate({
   };
 
   const finish = (stoppedAt, reason) => {
+    if (groupRecordError) {
+      stoppedAt = 'threw';
+      reason = groupRecordError.message;
+    }
     // A full run's recorded reds are its answer: the end of the list is red when
     // any of them is, and a stop that ends the round early still names them.
     if (toEnd && reds.length) {
@@ -612,7 +629,14 @@ export async function runGate({
   const ownSpawn = (options) => (pid) => { timesOf.spawned(pid); options?.onSpawn?.(pid); };
   const trackedCommand = async (command, options) => {
     activeCommands.add(command);
-    try { return await runShell(command, { ...options, onSpawn: ownSpawn(options) }); }
+    try {
+      const finished = await runShell(command, { ...options, onSpawn: ownSpawn(options) });
+      if (groupRecordError) {
+        deadlineController.abort(groupRecordError);
+        throw groupRecordError;
+      }
+      return finished;
+    }
     finally { activeCommands.delete(command); progressed(); }
   };
 
@@ -1479,6 +1503,7 @@ export async function runGate({
     measuredToEnd = true;
     return finish(null, null);
   } catch (error) {
+    if (groupRecordError) return finish('threw', groupRecordError.message);
     if (error instanceof RoundAborted && stalled) return finish('stalled', stallReason);
     if (error instanceof RoundAborted) return finish('gone', error.message);
     throw error;
@@ -2846,8 +2871,18 @@ export async function realTests({ cwd, files, flags = [], plan = null, onBatch =
 /** test-stdio-blocking.mjs, loaded by every batch (`runTestBatch`). */
 const STDIO_BLOCKING = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'test-stdio-blocking.mjs')).href;
 
+function recordStartedGroup(child, recorder) {
+  if (!child.pid) return null;
+  try { recorder?.(child.pid); }
+  catch (error) {
+    try { process.kill(-child.pid, 'SIGKILL'); } catch { /* the child may have already exited */ }
+    return error;
+  }
+  return null;
+}
+
 function runTestBatch({ cwd, files, plan = null, flags = [], onBatch = null, onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), resource = 'standard', signal = null, times = null, progressMs = SUITE_PROGRESS_MS } = {}) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     // Stopped before it started: nothing is spawned, and no batch is recorded.
     if (signal?.aborted) return resolve({ code: null, tap: '', timedOut: false, aborted: true, timeoutMs });
     const clean = suiteEnv(env);
@@ -2914,7 +2949,7 @@ function runTestBatch({ cwd, files, plan = null, flags = [], onBatch = null, onL
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });
-    times?.spawned?.(child.pid);
+    const recordError = recordStartedGroup(child, times?.spawned);
     // Launched: this is what the batch was given, whatever becomes of it.
     onBatch?.(record());
     let timedOut = false;
@@ -2959,6 +2994,7 @@ function runTestBatch({ cwd, files, plan = null, flags = [], onBatch = null, onL
       clearInterval(beat);
       const { tests, cut } = noteTimes();
       settle(); signal?.removeEventListener('abort', onAbort);
+      if (recordError) return reject(recordError);
       resolve({ code: cut.length && code === 0 ? -1 : code, tap, stderr, timedOut, timeoutMs, aborted, lanes: resolved.concurrencyDeclared ? null : lanes, tests, cut });
     });
   });
@@ -3103,7 +3139,7 @@ export function suiteProgressLine({ beatFile = null, tap = '', startedAt, total 
  * that names nothing.
  */
 export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null, times = null, progressMs = SUITE_PROGRESS_MS } = {}) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     // Stopped before it started: nothing is spawned.
     if (signal?.aborted) return resolve({ code: null, tap: '', timedOut: false, aborted: true, timeoutMs });
     // The suite is started in a clean test context, not this process's.
@@ -3165,7 +3201,7 @@ export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = 
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });
-    times?.spawned?.(child.pid);
+    const recordError = recordStartedGroup(child, times?.spawned);
     let timedOut = false;
     // Stopped from outside: the process group goes at once, and the close says
     // `aborted`. A child that cannot be signalled as a group is signalled alone.
@@ -3210,6 +3246,7 @@ export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = 
       clearInterval(beat);
       const { cut, tests, covered } = noteTimes();
       settle(); signal?.removeEventListener('abort', onAbort);
+      if (recordError) return reject(recordError);
       resolve({ code: cut.length && code === 0 ? -1 : code, tap, timedOut, timeoutMs, aborted, cut, tests, covered });
     });
   });

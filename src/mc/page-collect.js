@@ -224,6 +224,8 @@ export function preparationOf(record, { alive = pidAlive, now = new Date() } = {
     pid: Number(record.pid) || null,
     age_seconds: Number.isNaN(since) ? null : Math.max(0, Math.round((now.getTime() - since) / 1000)),
     error: record.error || null,
+    // Why a person stopped it (`mc deploy --stop-preparation`), for a stopped one.
+    reason: state === 'stopped' ? record.reason || null : null,
     // The directory holding each suite's whole output (an old record has none).
     output_dir: record.output_dir || null,
   };
