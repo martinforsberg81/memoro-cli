@@ -75,7 +75,11 @@ process.exitCode = await run(['--budget', '0.02'], {
       env: { ...process.env, MC_HOME: state, MC_SCRATCH: root, MC_TEST_LANES: '2' },
     });
     assert.equal(command.status, 3, command.stderr || command.error?.message);
-    assert.match(command.stdout, /^RUNNING/u);
+    // Under the suite the fake-git preload rides NODE_OPTIONS into this gate (the fixture's
+    // repository is the model's): a loader run, which says so first and passes as diagnostic.
+    assert.match(command.stdout, /^(?:mc gate: NODE_OPTIONS loads code \(--import\)[^\n]*\n)?RUNNING/u);
+    const loaded = command.stdout.startsWith('mc gate: NODE_OPTIONS loads code');
+    const passed = loaded ? 'diagnostic' : 'green';
     const lockPath = join(cwd, '.git', 'mc-gate.json');
     const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
     workerPid = lock.pid;
@@ -100,16 +104,17 @@ process.exitCode = await run(['--budget', '0.02'], {
     output = '';
     assert.equal(await gateCommand(['--wait', '--json'], deps), interrupt ? 1 : 0);
     const result = JSON.parse(output);
-    assert.equal(result.evidence.outcome, interrupt ? 'red' : 'green');
+    assert.equal(result.evidence.outcome, interrupt ? 'red' : passed);
     assert.equal(existsSync(lockPath), false);
     const context = { root: state, repo: 'repo', repository: measurement.candidate.repository,
       run: measurement.run, configuration: measurement.configuration };
     const receipt = readGreenReceipt(context);
-    if (interrupt) assert.equal(receipt, null);
-    else {
-      assert.equal(receipt.outcome, 'green');
+    if (interrupt || loaded) assert.equal(receipt, null, 'a red or a diagnostic run is never read as a green');
+    if (!interrupt) {
+      // The worker's receipt outlives the command that started it, unchanged on a second read.
       const bytes = readFileSync(result.evidence.path, 'utf8');
-      assert.deepEqual(readGreenReceipt(context), receipt, 'a subsequent session discovers the same receipt');
+      assert.deepEqual([JSON.parse(bytes).outcome, JSON.parse(bytes).loader], [passed, loaded]);
+      if (!loaded) assert.deepEqual(readGreenReceipt(context), receipt, 'a subsequent session discovers the same receipt');
       assert.equal(readFileSync(result.evidence.path, 'utf8'), bytes);
     }
   } finally {
