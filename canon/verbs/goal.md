@@ -89,7 +89,7 @@ its check, and each worktree's state.
   canonically, reconciles the goal, then finishes or explicitly returns/hands it off.
   In a headless session, follow the assigned role: build/review resolve their own acceptance obstacles and report a wrong goal with `mc goal defect`; only merge failure uses mend. An actual choice uses goal-bound `mc ask` in its current stage with exactly what is needed (the one way to ask, `mc goal martin` being gone); the call answers inside itself and the session continues with the answer. What reaches Martin is in [asking-martin](../tasks/asking-martin.md).
 - **Refused.** mc refuses every session except the interactive Martin and unattended decision roles a backward move, naming both stages
-  — a person (`MC_TOOL=person`, or none) and interactive Martin or decision may move a stage back, with truthful attribution. It refuses `done` from every session, Martin's administrative `done` too; `dropped` is allowed for interactive Martin or decision, any
+  — a person (`MC_TOOL=person`, or none) and interactive Martin or decision may move a stage back, with truthful attribution. It refuses `done` from every session and from decision; interactive Martin's `done` (never under `MC_HEADLESS=1`) finishes a goal with nothing to land, under the truth rule: every criterion met (`criterion met`), or for a goal cut from an order, which has no criteria, `mc goal done <programme>/<goal> --evidence "<what was checked and where it is recorded>"`, written to LOG.md with the done entry; it is refused while the goal has an open pull request (its registered `prs` not landed or closed, or `gh pr list --head goal/<goal>` in any of its repositories), and when GitHub cannot be read, so a goal that should land still lands through the merger; `dropped` is allowed for interactive Martin or decision, any
   move but `build → review` from a build session, any but `review →
   merge|build` from a review, `merge` or `build` from a review without a REVIEW.md in its fixed form,
   `finish` from everyone (a name kept for old records), every stage move from a mend session, and
@@ -128,7 +128,7 @@ its check, and each worktree's state.
 
 The unattended `decision` desk role has Martin's goal mutation authority,
 including backward moves, ready, goal/criterion rewrites and dropping, but
-never administrative done. It logs `by decision`, runs criteria before marking
+never `done`. It logs `by decision`, runs criteria before marking
 them met, and preserves gate, review, publication and merger evidence. The
 interactive Martin role remains refused with `MC_HEADLESS=1`. The headless
 refusals of reserved acts still hold for decision; what waits on one becomes a
