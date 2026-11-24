@@ -88,7 +88,7 @@
  */
 import { spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { stripAnsi } from '../../lib/prompt.js';
@@ -107,7 +107,7 @@ import {
   releaseCutLines, releaseOpenLine, releaseShippedLines, releaseStateLine, releaseSummary, releaseWaitLine, sameRelease, settleCut, RELEASE_CUTTING,
 } from '../deploy-release.js';
 import { changeRelease, ensureMergeBack, finishReleaseRow, settleReleaseReturn } from '../release-return.js';
-import { awaitClaim, liveClaims, overlaps } from '../full-run-claim.js';
+import { awaitClaim, claimsOf, groupAlive as realGroupAlive, liveClaims, overlaps } from '../full-run-claim.js';
 import {
   classifyStop, deployMendLine, deployMendReading, FINISHED, gateStopCode, readDeployMends, requestDeployRepair,
 } from '../deploy-repair.js';
@@ -120,7 +120,7 @@ import { endReleaseMends, FINISHED as MAIN_FINISHED, readMainMends, requestMainR
 import { repairFromStop, repairReleaseRun } from '../nightly-loop.js';
 import { mainRecord } from '../selector-miss.js';
 import {
-  preparationLogPath, preparationServes, preparationState, patchPreparation, readPreparation, STAGE_WORDS,
+  preparationLogPath, preparationServes, preparationState, patchPreparation, readPreparation, recordLogPath, STAGE_WORDS,
   writePreparation,
 } from '../deploy-prepare.js';
 import { mcDiskPressure } from '../disk-admission.js';
@@ -163,7 +163,7 @@ export function parseDeployArgs(argv) {
     const opts = { dryRun: Boolean(parsed.dryRun), json: Boolean(parsed.json), follow: false, acceptRed: null };
     return parsed.error ? { ...opts, error: parsed.error } : { ...opts, takeBack: parsed };
   }
-  const scanned = scanArgs(argv, { booleans: ['--dry-run', '--json', '--follow'], strictValues: ['--accept-red', '--drop-release'] });
+  const scanned = scanArgs(argv, { booleans: ['--dry-run', '--json', '--follow'], strictValues: ['--accept-red', '--drop-release', '--stop-preparation'] });
   const opts = { dryRun: false, json: false, follow: false, acceptRed: null };
   if (scanned.error) return { ...opts, error: scanned.error };
   if (scanned.positional.length) {
@@ -173,6 +173,12 @@ export function parseDeployArgs(argv) {
   // the record, so a blank one is no reason and the flag is refused with it.
   const accepted = scanned.flags['accept-red'];
   const dropped = scanned.flags['drop-release'];
+  const stopping = scanned.flags['stop-preparation'];
+  if (stopping !== null && (!stopping.trim() || accepted !== null || dropped !== null
+    || scanned.flags.follow || scanned.flags['dry-run'] || scanned.flags.json)) {
+    return { ...opts, error: '--stop-preparation needs a reason and takes no other flag' };
+  }
+  if (stopping !== null) return { ...opts, stopPreparation: stopping.trim() };
   if (dropped !== null && (!dropped.trim() || accepted !== null || scanned.flags.follow || scanned.flags['dry-run'])) {
     return { ...opts, error: '--drop-release needs a reason and cannot be combined with --accept-red, --follow or --dry-run' };
   }
@@ -1062,12 +1068,17 @@ export async function run(argv, deps = {}) {
   // A deploy is refused to an unattended session (2026-11-14): refused before anything is read —
   // no fetch, no history, no full run, no suite. The reading (`--dry-run`) and
   // the watching (`--follow`) change nothing in production and stay allowed.
+  if (env.MC_HEADLESS === '1' && opts.stopPreparation) {
+    stderr.write('mc: an unattended session does not stop a preparation — a stop is made by whoever types it, and no one typed this (headless, MC_HEADLESS=1); nothing was stopped\n');
+    return 1;
+  }
   if (env.MC_HEADLESS === '1' && !opts.dryRun && !opts.follow) {
     stderr.write(opts.takeBack
       ? 'mc: an unattended session does not take a release back — a take-back is made by whoever types it, and no one typed this (headless, MC_HEADLESS=1); nothing was taken back. mc deploy take-back --dry-run is the reading.\n'
       : 'mc: an unattended session does not deploy — a deploy is made by whoever types it, and no one typed this (headless, MC_HEADLESS=1); nothing was deployed. mc deploy --dry-run is the reading.\n');
     return opts.takeBack ? 2 : 1;
   }
+  if (opts.stopPreparation) return stopPreparation(opts.stopPreparation, { env, stdout, stderr, deps });
   const root = deps.root || workRoot(env);
   const lock = deps.lock || realLock;
   const cutting = deps.releaseCutting ?? RELEASE_CUTTING;
@@ -1497,6 +1508,12 @@ export async function run(argv, deps = {}) {
   return followDeploy({ log: deployer.log, pid: deployer.pid, key, env, stdout, deps });
 }
 
+/** The log of the preparation the record names, as a mend copies it: under its own name. */
+function preparationLog(root) {
+  const path = recordLogPath(root, readPreparation(root));
+  return { name: basename(path), path };
+}
+
 /**
  * A technical stop queues one repair (`requestDeployRepair`, deploy-repair.js), the copies of the logs with it.
  * Never throws and never changes the deploy's exit code, row or output; the runner's retry queues nothing.
@@ -1513,7 +1530,7 @@ function queueRepair({ row, code = '', holder, acceptRed, deps, root, full = nul
     const fullRun = code === 'full-run' ? { repo: REPO, holders: full?.run?.holders || [] } : {};
     return (deps.queueRepair || requestDeployRepair)({
       row, holder, acceptRed: Boolean(acceptRed), ...(release ? { release } : {}), root, ...(deps.mend || {}), ...fullRun,
-      logs: [{ name: 'deploy.log', path: deployLogPath(root) }, { name: 'deploy-prepare.log', path: preparationLogPath(root) }],
+      logs: [{ name: 'deploy.log', path: deployLogPath(root) }, preparationLog(root)],
     });
   } catch { return null; }
 }
@@ -1985,13 +2002,14 @@ const PREPARER_RUN = fileURLToPath(new URL('../deploy-prepare-run.js', import.me
 
 /**
  * The preparation, started detached: `deploy-prepare-run.js` with the job as
- * its one argument, its output in `deploy-prepare.log`. Its own process group
+ * its one argument, its output in its own log (`job.log`, which the record
+ * names: `deploy-prepare-<started>.log`). Its own process group
  * — a terminal lost on the way, over SSH or at the page, reaches only the
  * watcher. `{ pid, log }`, or `{ pid: null, error }`.
  */
 export function startPreparerDefault(job, { env = process.env, spawnProcess = spawn } = {}) {
   return startDetached(job, {
-    script: join('src', 'mc', 'deploy-prepare-run.js'), fallback: PREPARER_RUN, log: preparationLogPath(job.root),
+    script: join('src', 'mc', 'deploy-prepare-run.js'), fallback: PREPARER_RUN, log: job.log || preparationLogPath(job.root, job.started),
     cwd: job.path, env, spawnProcess,
   });
 }
@@ -2046,6 +2064,8 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
     let said = stale;
     if (stale) { /* said above */ } else if (record && !same) {
       said = `mc: the last preparation was of ${short(record.sha)}${state === 'running' ? ' and is still running' : ''}, main is ${plan.short} now — starting a new one, of ${plan.short}`;
+    } else if (record && state === 'stopped') {
+      said = `mc: the preparation of ${plan.short} started ${when(record.started)} was stopped: ${record.reason} — starting a new one`;
     } else if (record && state === 'interrupted') {
       said = `mc: the preparation of ${plan.short} started ${when(record.started)} was interrupted at ${STAGE_WORDS[record.stage] || record.stage} — starting a new one`;
     } else if (record && state === 'failed') {
@@ -2053,8 +2073,9 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
     } else if (record && state === 'done') {
       said = `mc: the preparation of ${plan.short} skipped the suites, which --accept-red needs — preparing again`;
     }
-    const log = preparationLogPath(root);
     const started = new Date().toISOString();
+    // Each preparation its own log, named in its record (`deploy-prepare.js`).
+    const log = preparationLogPath(root, started);
     const job = { root, sha: plan.sha, path: plan.path, started, acceptRed: Boolean(opts.acceptRed), log, holder: holder.name, ownWorktree: own,
       ...(release ? { branch: release.branch, release, ...(release.head === release.cut.sha ? { recorded: release.cut_run } : {}) } : {}),
       ...(deferMainRepair ? { deferMainRepair: true } : {}) };
@@ -2079,7 +2100,7 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
   if (chosen.join) {
     record = chosen.join;
     say(`mc: ${plan.short} is already being prepared (${STAGE_WORDS[record.stage] || record.stage}, pid ${record.pid}, since ${when(record.started)}) — following it, not starting a second`);
-    watch = { pid: Number(record.pid), log: record.log || preparationLogPath(root) };
+    watch = { pid: Number(record.pid), log: recordLogPath(root, record) };
   } else {
     if (chosen.said) say(chosen.said);
     const { job, preparer } = chosen.started;
@@ -2119,10 +2140,98 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
     stderr.write(`mc: ${note} — nothing was deployed\n`);
     return { code: 1, note, stop: 'prepare' };
   }
+  if (state === 'stopped') {
+    // A person stopped it (`--stop-preparation`): nothing technical went wrong, and no mend is asked.
+    const note = `the preparation of ${plan.short} was stopped: ${ended.reason}`;
+    stderr.write(`mc: ${note} — nothing was deployed; mc deploy starts a new one\n`);
+    return { code: 1, note, stop: 'stopped' };
+  }
   const why = state === 'failed' ? `failed — ${ended.error}` : `was interrupted at ${STAGE_WORDS[ended.stage] || ended.stage} (its process is gone)`;
   const note = `the preparation of ${plan.short} ${why}`;
   stderr.write(`mc: ${note} — nothing was deployed; mc deploy starts a new one\n`);
   return { code: 1, note, stop: 'prepare' };
+}
+
+/** How long a stop waits for the preparer and its full run's groups to end before it ends them itself. */
+export const STOP_WAIT_MS = 60_000;
+
+/** A process's whole command line (Linux `/proc`), or null when it cannot be read. */
+function commandLineOf(pid) {
+  try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean).join(' ') || null; } catch { return null; }
+}
+
+/** Whether `line` is the preparer of `record`: `deploy-prepare-run.js` with a job of the record's sha and start. */
+function preparerOf(record, line) {
+  if (!line || !line.includes('deploy-prepare-run.js')) return false;
+  return line.includes(`"sha":"${record.sha}"`) && line.includes(`"started":"${record.started}"`);
+}
+
+/**
+ * `mc deploy --stop-preparation "<reason>"`: the preparation that is running,
+ * stopped on purpose. Under the register's lock it reads the record, makes sure
+ * its pid lives and is the preparer of that record's sha and start, writes
+ * `ended`, `result: 'stopped'` and the reason into it, and only then sends the
+ * preparer SIGTERM — so the record says `stopped` before anything ends, and the
+ * preparer's own end never writes over it. Then it waits up to `STOP_WAIT_MS`
+ * for the preparer and the groups its full run's claim recorded to end, and
+ * kills those still alive. No mend: a stop is a person's, not a fault.
+ * 0 stopped, 1 none running.
+ */
+async function stopPreparation(reason, { env, stdout, stderr, deps }) {
+  const root = deps.root || workRoot(env);
+  const lock = deps.lock || realLock;
+  const alive = deps.alive || processAlive;
+  const groupLives = deps.groupAlive || realGroupAlive;
+  const kill = deps.kill || ((pid, signal) => process.kill(pid, signal));
+  const commandLine = deps.commandLine || commandLineOf;
+  const sleep = deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
+  const clock = deps.clock || (() => Date.now());
+  const historyRoot = deps.gate?.root ?? mcHome(env);
+
+  const stopped = lock(root, () => {
+    const record = readPreparation(root);
+    if (preparationState(record, { alive }) !== 'running' || !record.pid) return null;
+    const pid = Number(record.pid);
+    if (!alive(pid) || !preparerOf(record, commandLine(pid))) return null;
+    if (!writePreparation(root, { ...record, ended: new Date(clock()).toISOString(), result: 'stopped', reason })) {
+      return { record, error: `the record ${record.started} could not be written` };
+    }
+    try { kill(pid, 'SIGTERM'); } catch (error) { return { record, signalled: false, error: error?.message || String(error) }; }
+    return { record, signalled: true };
+  }, { name: 'deploy-prepare' });
+
+  if (!stopped) {
+    stdout.write('mc: no preparation is running — nothing was stopped\n');
+    return 1;
+  }
+  const { record } = stopped;
+  if (stopped.error && stopped.signalled === undefined) {
+    stderr.write(`mc: ${stopped.error} — nothing was stopped\n`);
+    return 1;
+  }
+  const pid = Number(record.pid);
+  stdout.write(`mc: stopped the preparation of ${short(record.sha)} started ${String(record.started).slice(11, 16)} (pid ${pid}) — ${reason}; no mend is queued\n`);
+
+  // The preparer ends its round on the signal; the groups its full run's claim
+  // recorded are waited for, and those still alive after the wait are ended here.
+  const groups = new Set();
+  const look = () => { for (const claim of claimsOf(pid, { root: historyRoot })) for (const pgid of claim.groups || []) groups.add(pgid); };
+  look();
+  const deadline = clock() + STOP_WAIT_MS;
+  for (;;) {
+    look();
+    const left = [...groups].filter((pgid) => groupLives(pgid));
+    if (!alive(pid) && !left.length) return 0;
+    if (clock() >= deadline) break;
+    await sleep(1000);
+  }
+  const left = [...groups].filter((pgid) => groupLives(pgid));
+  if (alive(pid)) left.unshift(pid);
+  for (const pgid of left) {
+    try { kill(-pgid, 'SIGKILL'); } catch { /* gone in between */ }
+  }
+  if (left.length) stdout.write(`mc: ${left.map((pgid) => `group ${pgid}`).join(', ')} still ran after ${STOP_WAIT_MS / 1000} s — killed\n`);
+  return 0;
 }
 
 /* --------------------------------------------------------------- deployer */
@@ -2289,7 +2398,7 @@ async function follow({ env, stdout, deps }) {
       stdout.write(`mc: following the preparation of ${short(record.sha)} (${STAGE_WORDS[record.stage] || record.stage}, pid ${record.pid}, started ${String(record.started).slice(0, 16).replace('T', ' ')}) — mc deploy joins it\n`);
       if (record.output_dir) stdout.write(`mc: the whole output of each suite and command is kept in ${record.output_dir}\n`);
       const stopped = await followLog({
-        log: record.log || preparationLogPath(root), pid: Number(record.pid), stdout, deps,
+        log: recordLogPath(root, record), pid: Number(record.pid), stdout, deps,
         stopped: `the preparation goes on (pid ${record.pid}); mc deploy joins it`,
       });
       return stopped ?? 0;

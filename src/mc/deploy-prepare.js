@@ -24,15 +24,27 @@
  * preparation that was interrupted (its process was killed); the next
  * `mc deploy` of that commit starts a new one.
  *
+ * A person stops one with `mc deploy --stop-preparation "<reason>"`, which
+ * writes `ended`, `result: 'stopped'` and `reason` into the record before it
+ * signals the preparer. Such a record is `stopped`, not `interrupted`: nothing
+ * technical went wrong, so no mend is asked, and the preparer's own end never
+ * writes over it (`patchPreparation`).
+ *
+ * Each preparation writes its own log, `runner/log/deploy-prepare-<started>.log`,
+ * which its record names as `log`; a preparer removes such logs older than
+ * `PREPARATION_LOG_DAYS` when it starts, unless the record or an open deploy
+ * mend names them (`prunePreparationLogs`).
+ *
  * One record, the latest preparation. A preparation superseded by a newer one
  * (main moved) goes on to the end — its full run is written to the history
  * like any other — but no longer writes the record.
  */
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { basename, join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { measureGate } from './deploy-gate.js';
+import { readDeployMends, UNFINISHED } from './deploy-repair.js';
 import { changeRelease } from './release-return.js';
 import { outputDir } from './gate-output.js';
 import { processAlive } from './lease-owner.js';
@@ -66,9 +78,58 @@ export function preparationPath(root) {
   return join(root, 'runner', 'deploy-prepare.json');
 }
 
-/** What the preparation says while it runs: the same file `deploy.log` is, one level down. */
-export function preparationLogPath(root) {
-  return join(root, 'runner', 'log', 'deploy-prepare.log');
+/** A preparation's log is kept this many days after its last write. */
+export const PREPARATION_LOG_DAYS = 30;
+
+const LOG_NAME = /^deploy-prepare-.+\.log$/u;
+
+/**
+ * What the preparation started at `started` says while it runs, one file per
+ * preparation beside `deploy.log`. Without `started`, the one shared file the
+ * preparations wrote before each had its own: a record from then names it.
+ */
+export function preparationLogPath(root, started = null) {
+  const dir = join(root, 'runner', 'log');
+  if (!started) return join(dir, 'deploy-prepare.log');
+  return join(dir, `deploy-prepare-${String(started).replace(/[^0-9A-Za-z._-]/gu, '-')}.log`);
+}
+
+/** The log a preparation record names, or the shared one a record from before per-preparation logs used. */
+export function recordLogPath(root, record) {
+  return record?.log || preparationLogPath(root);
+}
+
+/**
+ * Remove the preparations' own logs not written for `days` days, except the
+ * one the current record names and those an open deploy mend names (the mend
+ * keeps a copy, and its row names the file). Never throws: a log that stays is
+ * only disk. The removed paths.
+ */
+export function prunePreparationLogs(root, {
+  now = Date.now(), days = PREPARATION_LOG_DAYS, record = readPreparation(root), mends = null,
+} = {}) {
+  const dir = join(root, 'runner', 'log');
+  const keep = new Set();
+  if (record?.log) keep.add(basename(record.log));
+  try {
+    for (const entry of mends ?? readDeployMends({ root })) {
+      if (!UNFINISHED.includes(entry.state)) continue;
+      for (const row of entry.rows || []) for (const name of row.logs || []) keep.add(name);
+    }
+  } catch { /* an unreadable mend file names nothing; nothing is removed that it might */ return []; }
+  const removed = [];
+  let names = [];
+  try { names = readdirSync(dir); } catch { return removed; }
+  for (const name of names) {
+    if (!LOG_NAME.test(name) || keep.has(name)) continue;
+    const path = join(dir, name);
+    try {
+      if (now - statSync(path).mtimeMs <= days * 24 * 60 * 60 * 1000) continue;
+      rmSync(path, { force: true });
+      removed.push(path);
+    } catch { /* gone already, or not ours to remove */ }
+  }
+  return removed;
 }
 
 /** The record, or null: absent, unreadable or another schema all read as none. */
@@ -82,12 +143,13 @@ export function readPreparation(root) {
 }
 
 /**
- * `running`, `done`, `failed` (it ended on an error of its own) or
- * `interrupted` (no end, and its process is gone) — null for no record.
+ * `running`, `done`, `failed` (it ended on an error of its own), `stopped` (a
+ * person stopped it, `mc deploy --stop-preparation`) or `interrupted` (no end,
+ * and its process is gone) — null for no record.
  */
 export function preparationState(record, { alive = processAlive, now = Date.now() } = {}) {
   if (!record) return null;
-  if (record.ended) return record.error ? 'failed' : 'done';
+  if (record.ended) return record.result === 'stopped' ? 'stopped' : record.error ? 'failed' : 'done';
   const live = record.pid ? alive(record.pid) : now - Date.parse(record.started) < START_GRACE_MS;
   return live ? 'running' : 'interrupted';
 }
@@ -122,12 +184,14 @@ export function writePreparation(root, record) {
 
 /**
  * Patch the record of the preparation started at `started`. A record of another
- * start — a newer preparation took over — is left alone.
+ * start — a newer preparation took over — is left alone, and so is one a person
+ * stopped: the stop is its end, and the preparer's own end writes nothing over it.
  */
 export function patchPreparation(root, started, fields, { lock = realLock } = {}) {
   return lock(root, () => {
     const record = readPreparation(root);
     if (!record || record.started !== started) return false;
+    if (record.result === 'stopped') return false;
     return writePreparation(root, { ...record, ...fields });
   }, { name: 'deploy-prepare' });
 }
@@ -138,10 +202,15 @@ export function patchPreparation(root, started, fields, { lock = realLock } = {}
  * used — saying what it does on `stdout`, which is the log, and writes the
  * result into the record. 0 when it measured (whatever it found), 1 when it
  * could not.
+ *
+ * `signal` is the stop: `deploy-prepare-run.js` aborts it on SIGTERM or SIGHUP,
+ * which `mc deploy --stop-preparation` sends after it wrote the stop into the
+ * record. The full run is ended through it, as the repository ceiling ends one,
+ * and the preparation then writes nothing of its own end.
  */
 export async function prepare(job, {
   stdout = process.stdout, env = process.env, deps = {}, now = () => new Date(), lock = realLock,
-  beat = realBeat, beatMs = PREPARE_BEAT_MS,
+  beat = realBeat, beatMs = PREPARE_BEAT_MS, signal = null,
 } = {}) {
   // Whatever stage it is in, a measurement that says nothing for a minute says
   // that it is going on, how long, and in which stage: a long run never looks
@@ -157,13 +226,20 @@ export async function prepare(job, {
     if (at - lastSaid < beatMs - 1000) return;
     say(`mc: still preparing — ${STAGE_WORDS[stage] || stage}, ${Math.round((at - began) / 60000)} min so far`);
   }, beatMs);
+  const stopped = () => {
+    if (!signal?.aborted) return false;
+    say('mc: the preparation was stopped');
+    return true;
+  };
+  // The logs of earlier preparations, a month old, go now.
+  prunePreparationLogs(job.root, { now: began });
   try {
     // Every suite writes its whole output here as it runs; the record says where.
     const dir = outputDir(job.root, job.started);
     patch({ output_dir: dir });
     const measured = await measureGate({
       sha: job.sha, path: job.path, acceptRed: Boolean(job.acceptRed), own: Boolean(job.ownWorktree), branch: job.branch, env, say,
-      outputDir: dir, recorded: job.recorded, deferMainRepair: job.deferMainRepair,
+      outputDir: dir, recorded: job.recorded, deferMainRepair: job.deferMainRepair, signal,
       deps: deps.gate || {}, suites: deps.suites || {}, stage: (next, full) => {
         stage = next;
         if (job.release && next === 'suites' && full.state === 'green') {
@@ -173,10 +249,12 @@ export async function prepare(job, {
         return patch({ stage: next });
       },
     });
+    if (stopped()) return 1;
     patch({ stage: 'done', ended: now().toISOString(), result: measured });
     say('mc: the preparation is done');
     return 0;
   } catch (error) {
+    if (stopped()) return 1;
     const message = error?.message || String(error);
     patch({ stage: 'done', ended: now().toISOString(), error: message });
     say(`mc: the preparation failed — ${message}`);

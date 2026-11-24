@@ -173,7 +173,7 @@ function mendWords(entries) {
  */
 export async function measureFull({
   sha, path, env = process.env, dryRun = false, say = () => {}, deps = {}, root = mcHome(env), mendRoot = workRoot(env),
-  branch = null, recorded = null, deferMainRepair = false,
+  branch = null, recorded = null, deferMainRepair = false, signal = null,
 }) {
   const history = deps.history || readNightlyHistory;
   const found = fullRunVerdict(recorded ? [recorded] : history(path, { root }).runs, sha);
@@ -191,9 +191,12 @@ export async function measureFull({
     const start = () => (deps.fullRun || fullRun)({ name: REPO, path }, {
       root, env, sha, deploy: true, ...(branch ? { ref: releaseRef(branch) } : {}),
       ...(deferMainRepair ? { deferMainRepair: true } : {}),
+      // A stopped preparation (`--stop-preparation`) ends its round, or its wait for another.
+      ...(signal ? { signal, handover: signal } : {}),
       say: (line) => say(`mc:   ${line}`), narrate: (line) => say(`mc:   ${line}`),
     });
     let given = await start();
+    if (signal?.aborted) throw new Error('the preparation was stopped');
     // A run this one followed measured what its starter found, which may be a
     // main that has since moved: the tree that would ship is then still
     // unmeasured, and is measured now — the followed run is over, so nothing
@@ -240,12 +243,13 @@ export function withMendsNow(full, { env = process.env, deps = {} } = {}) {
  */
 export async function measureGate({
   sha, path, acceptRed = false, dryRun = false, env = process.env, say = () => {}, deps = {}, suites = {}, stage = () => {}, own = false,
-  outputDir = null, branch = null, recorded = null, deferMainRepair = false,
+  outputDir = null, branch = null, recorded = null, deferMainRepair = false, signal = null,
 }) {
   stage('full-run');
   const full = await measureFull({
-    sha, path, env, dryRun, say, deps, root: deps.root, mendRoot: deps.mendRoot, branch, recorded, deferMainRepair,
+    sha, path, env, dryRun, say, deps, root: deps.root, mendRoot: deps.mendRoot, branch, recorded, deferMainRepair, signal,
   });
+  if (signal?.aborted) throw new Error('the preparation was stopped');
   const unmeasured = full.state === 'unmeasured' || full.state === 'moved';
   const redFull = full.state === 'red' || full.state === 'stalled';
   if (unmeasured || (redFull && !dryRun && !acceptRed)) return { full, exercise: null };

@@ -244,13 +244,15 @@ export function deployLines(lines, c, wide, production, expand) {
   // process of its own — a lost terminal does not stop it.
   const prep = p.preparation;
   if (prep && !(prep.state === 'done' && p.sha === prep.sha)) {
-    const tone = prep.state === 'running' ? 'green' : prep.state === 'done' ? 'green' : 'red';
+    // A stopped one is a person's decision, not a fault: yellow, not red.
+    const tone = prep.state === 'running' ? 'green' : prep.state === 'done' ? 'green' : prep.state === 'stopped' ? 'yellow' : 'red';
     operationFrame(lines, c, wide, tone, (body, room) => {
       const states = {
         running: `PREPARING ${prep.short} · ${prep.stage_words}`,
         done: `PREPARED  ${prep.short} · done, \`mc deploy\` ships it`,
         failed: `PREPARATION FAILED ${prep.short}`,
         interrupted: `PREPARATION INTERRUPTED ${prep.short} · \`mc deploy\` starts a new one`,
+        stopped: `PREPARATION STOPPED ${prep.short}${prep.reason ? ` · ${prep.reason}` : ''} · \`mc deploy\` starts a new one`,
       };
       const pid = prep.state === 'running' && prep.pid ? ` · pid ${prep.pid}` : '';
       const since = prep.age_seconds == null ? '' : ` · started ${age(prep.age_seconds)}`;

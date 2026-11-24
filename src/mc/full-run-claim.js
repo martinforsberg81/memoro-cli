@@ -58,6 +58,11 @@ function readAll(root) {
   }
 }
 
+/** The stored claims `pid` started, live or not — what a stop of that starter reads its groups from. */
+export function claimsOf(pid, { root = mcHome() } = {}) {
+  return readAll(root).filter((claim) => claim.pid === pid);
+}
+
 /** Whether the process group `pgid` has a process left: `kill(-pgid, 0)`, EPERM counting as alive. */
 export function groupAlive(pgid, { kill = process.kill.bind(process) } = {}) {
   if (!Number.isInteger(pgid) || pgid <= 0) return false;
