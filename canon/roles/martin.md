@@ -122,7 +122,9 @@ one of its parts. Work through the order in this sequence.
    Martin for his decision to set it ready. On his word run
    `mc programs state <programme> ready` in this session. It releases holds
    the desk placed. The runner then cuts one goal per part of the README and the build
-   carries out the order.
+   carries out the order. A part whose goal was dropped before the order was
+   set ready gets a new goal; a goal dropped after it still counts as cut, so
+   to commission its part again set the order `draft` and `ready` again.
 
 Name the proposals the order takes in and archive them in their areas as
 [proposals](../tasks/proposals.md) says. The order is temporary. Before it

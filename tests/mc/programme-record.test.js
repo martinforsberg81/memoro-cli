@@ -51,6 +51,12 @@ describe('the record validator', () => {
     assert.deepEqual(validateRecord(DRAFT), []);
     assert.deepEqual(validateRecord(READY), []);
     assert.deepEqual(validateRecord({ ...DRAFT, state: 'done' }), []);
+    assert.deepEqual(validateRecord({ ...READY, ready_at: '2026-11-24T19:05:33Z' }), [], 'when the order was set ready');
+    assert.deepEqual(validateRecord({ ...DRAFT, ready_at: '2026-11-24T19:05:33Z' }), [], 'kept through draft');
+    for (const bad of ['2026-11-24T19:05Z', '2026-11-24', 'yesterday', 7]) {
+      assert.deepEqual(validateRecord({ ...READY, ready_at: bad }), ['ready_at: an ISO instant in UTC to the second, when the order was last set ready'], String(bad));
+    }
+    assert.deepEqual(Object.keys(normalized({ ...READY, phases: { order: 'stated' }, ready_at: '2026-11-24T19:05:33Z' })), ['schema', 'version', 'horizon', 'end', 'state', 'ready_at', 'created', 'created_by', 'phases']);
   });
 
   it('names each wrong key', () => {
@@ -214,6 +220,9 @@ describe('mc programs create and state', () => {
       assert.equal(readyRes.code, 0);
       assert.match(readyRes.out, /mc: alpha · state ready/u);
       assert.equal(recordOf(a.home, 'alpha').state, 'ready');
+      // Order goal-routes, Part 2: ready writes when it was set ready, to the second, after the state.
+      assert.equal(recordOf(a.home, 'alpha').ready_at, '2026-11-14T10:20:30Z');
+      assert.deepEqual(Object.keys(recordOf(a.home, 'alpha')), ['schema', 'version', 'horizon', 'end', 'state', 'ready_at', 'created', 'created_by', 'phases']);
 
       // 4. Goal creation succeeds now that state is ready
       const readyGoal = await callGoal();
@@ -225,6 +234,7 @@ describe('mc programs create and state', () => {
       assert.equal(backRes.code, 0);
       assert.match(backRes.out, /mc: alpha · state draft/u);
       assert.equal(recordOf(a.home, 'alpha').state, 'draft');
+      assert.equal(recordOf(a.home, 'alpha').ready_at, '2026-11-14T10:20:30Z', 'draft keeps when it was set ready');
 
       // 6. Goal creation refused again
       const draftGoal2 = await callGoal();
@@ -329,6 +339,11 @@ describe('mc programs record and show', () => {
       assert.match(text.out, /state {4}draft/u);
       const json = JSON.parse((await call(['show', 'alpha', '--json'], a.env)).out);
       assert.deepEqual(json, { name: 'alpha', record: { horizon: 'mc-autonomy', end: 'Alpha done.', state: 'draft', created: '2026-11-14T10:20:30Z', created_by: 'person', phases: { order: 'stated' } } });
+      assert.doesNotMatch(text.out, /ready at/u, 'a record never set ready has no line for it');
+      // Set ready: the line after state, to the minute, and the key in the JSON.
+      assert.equal((await call(['state', 'alpha', 'ready'], { ...a.env, MC_ROLE: 'martin' })).code, 0);
+      assert.match((await call(['show', 'alpha'], a.env)).out, /\n {2}state {4}ready\n {2}ready at 2026-11-14 10:20Z\n {2}created /u);
+      assert.deepEqual(Object.entries(JSON.parse((await call(['show', 'alpha', '--json'], a.env)).out).record).slice(2, 4), [['state', 'ready'], ['ready_at', '2026-11-14T10:20:30Z']]);
       mkdirSync(join(a.home, 'plain'));
       const none = await call(['show', 'plain'], a.env);
       assert.equal(none.code, 0);
