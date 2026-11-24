@@ -45,7 +45,7 @@ work where it stands; archive as described below even if the enduring direction 
    Elsewhere settle decisions first, then cut fully investigated, measured and designed work into [goals](references/goal-design.md) headless sessions can build to the end.
 2. Order by prerequisites and shared files. In an order a part waits for the part before it unless it holds the line `In parallel with the previous part.`, and ready writes the record from that. A programme whose record states its phases and has no order runs independent phases side by side: state a prerequisite with `mc programs after`. Elsewhere independent goals share a phase and dependent goals go later. In both a prerequisite is a phase dependency, never a note.
 3. Move every complete goal to `build`; a draft is never started. A consumer needing a producer
-   goes to `build` in a dependent phase.
+   goes to `build` in a dependent phase. A goal that would consume what its own change lands is two goals ([writing a goal](writing-a-goal.md)).
 
 ## When a goal lands
 

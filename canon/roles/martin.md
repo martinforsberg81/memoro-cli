@@ -71,7 +71,7 @@ Take the waiting items one at a time. Present each brief as it is stored on the 
 
 ## Horizons
 
-A horizon is what Martin has decided is worked toward, and the order of the open ones is the priority. A horizon is set only here, on his word. Before drafting, read [writing-a-horizon](../tasks/writing-a-horizon.md). When he states one, write its title and its playback in English, the playback under the five headings `mc martin horizon set` requires (how it is read, how one sees that it is reached, what is built first, what is not built, the strangest thing its wording permits), say it back to him in Swedish part by part, and change it until he says it is right. Store it only then, at the place in the order he gives: `mc martin horizon set <slug> --title "<title>" --file <path|-> [--position <n>]`. The system never sets a horizon: no other role and no unattended session can, and you set none he has not confirmed in this conversation. On his word you change the wording of an open one by editing its `playback.md` as [writing-a-horizon](../tasks/writing-a-horizon.md) says, move one in the order (`mc martin horizon move`), mark one reached with what is now true for the user (`mc martin horizon reached`), reopen a reached one he says is not reached (`mc martin horizon reopen <slug> --reason`), and drop one (`mc martin horizon drop <slug> --reason`).
+A horizon is what Martin has decided is worked toward, and the order of the open ones is the priority. A horizon is set only here, on his word. Before drafting, read [writing-a-horizon](../tasks/writing-a-horizon.md). When he states one, write its title and its playback in English, the playback under the five headings `mc martin horizon set` requires (how it is read, how one sees that it is reached, what is built first, what is not built, the strangest thing its wording permits). When its content follows from what he has said, store it at the place in the order he gives, or the evident one, and tell him in one Swedish line; he changes the wording afterwards if he wants (Martin, 2026-11-20: "Jag behöver inte godkänna horisonten!"). Ask him only when the aim itself is unclear. Store it with `mc martin horizon set <slug> --title "<title>" --file <path|-> [--position <n>]`. The system never sets a horizon: no other role and no unattended session can, and you set none he has not asked for in this conversation. On his word you change the wording of an open one by editing its `playback.md` as [writing-a-horizon](../tasks/writing-a-horizon.md) says, move one in the order (`mc martin horizon move`), mark one reached with what is now true for the user (`mc martin horizon reached`), reopen a reached one he says is not reached (`mc martin horizon reopen <slug> --reason`), and drop one (`mc martin horizon drop <slug> --reason`).
 
 ## Programme orders and design
 
@@ -92,10 +92,12 @@ one of its parts. Work through the order in this sequence.
    attribution under Decided. The desk resolves technical choices and gathers
    evidence using [asking-martin](../tasks/asking-martin.md). A proposed change
    to an agreed user outcome or design goes back through the same conversation.
-   On his word, change the app just far enough to show the design in a
-   worktree that never merges. Capture it with `mc shot` in light theme. Keep
-   the proposals apart from the order, put the chosen design in
-   `designs/part-<n>/` and remove the preview worktree.
+   The order reuses what exists and changes it only as far as the asked
+   outcome requires; a wider rebuild is a separate candidate
+   ([writing a programme document](../tasks/writing-a-programme-document.md)).
+   A design picture is a static sketch, never a build of the feature, as that
+   page says. Keep the proposals apart from the order and put the chosen
+   design in `designs/part-<n>/`.
    Use one picture per decision, up to ten per order. For a change in behaviour
    on an existing surface, show that surface and state the change. Show a text
    surface as text.

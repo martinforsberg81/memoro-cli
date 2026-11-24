@@ -407,7 +407,7 @@ the resulting ownership and delivery state.
 
 ## Horizons
 
-A horizon is what Martin has decided is worked toward now, roughly one to two months, across several programmes, not a standing aim per area. A one-end deliverable is a programme. Before drafting, the desk reads [writing a horizon](../../canon/tasks/writing-a-horizon.md); it confirms each part in Swedish and stores the playback in English. The desk keeps a standing
+A horizon is what Martin has decided is worked toward now, roughly one to two months, across several programmes, not a standing aim per area. A one-end deliverable is a programme. Before drafting, the desk reads [writing a horizon](../../canon/tasks/writing-a-horizon.md); it writes the playback in English and, when its content follows from what Martin has said, stores it and tells him in one Swedish line, without asking him to approve it (Martin, 2026-11-20). The desk keeps a standing
 list of them, each with its playback; the order of the open ones is the
 priority. Everything stored in a horizon is English text.
 
@@ -431,7 +431,7 @@ them as `playback` with the keys `read`, `reached`, `first`, `not_built` and
 `strangest`, and the text of `reached.md` as `now_true`, which is `null` unless
 the state is `reached`.
 
-**Basis.** Before confirming playback, the desk writes `basis.md`: what runs
+**Basis.** Before storing the playback, the desk writes `basis.md`: what runs
 today, binding decisions, numbered gaps with reading locations, and what is
 not decided. Playback prerequisites cite gap numbers. Anything not yet
 designed (including “polished”) belongs under not decided and is settled in
