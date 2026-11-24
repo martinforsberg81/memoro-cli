@@ -456,6 +456,8 @@ export async function landJob(batch, {
   repairMain = (request) => requestMainRepair({ ...request, root, read, write, lock, now }),
   git = (cwd, args) => runTool('git', args, { cwd }),
   sweepMendWorktrees = defaultSweep,
+  // `(job, report)` after a landing on the default branch: `landerFor` pulls
+  // the installation to the report's `default_branch` and `merge_commit`.
   afterLanding = null,
   // A drop may happen during the gate. Recheck ownership at admission and
   // immediately before the irreversible GitHub merge call.
@@ -496,7 +498,7 @@ export async function landJob(batch, {
     const flags = { ...(requeued ? { requeued: true } : {}), ...(back ? { back: true } : {}), ...(moved ? { moved: true } : {}), ...(offline ? { offline: true } : {}) };
     answers.push({ job, landed, report: given, ...flags });
     if (landed && !given.release_mend && afterLanding) {
-      try { await afterLanding(job); } catch (error) { say(`${job.repo}: could not pull the installation (${error.message})`); }
+      try { await afterLanding(job, given); } catch (error) { say(`${job.repo}: could not pull the installation (${error.message})`); }
     }
     await tell(job, landed, given, {
       root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), requeued, back, moved, offline, setGoal, goalsOf, noteGoal, repairMain, sweepMendWorktrees, git,
@@ -650,7 +652,7 @@ export const LOGGED_RED_LINES = 400;
  */
 export function landerFor(deps) {
   return (batch, lane, extra = {}) => landJob(batch, {
-    afterLanding: (job) => deployPull({ git: (args, options) => runGitAsync(options.cwd, args), repoPath: job.repo_path, env: process.env, say: deps.say || (() => {}), installs: sourceLinkedInstallations }),
+    afterLanding: (job, report) => deployPull({ git: (args, options) => runGitAsync(options.cwd, args), repoPath: job.repo_path, env: process.env, say: deps.say || (() => {}), installs: sourceLinkedInstallations, branch: report?.default_branch ?? null, landed: report?.merge_commit ?? null }),
     ...deps, lane, ...extra,
   });
 }
