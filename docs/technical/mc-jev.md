@@ -161,8 +161,11 @@ Role `ask-reader` (`canon/roles/ask-reader.md`), model list `decision`
 `mc ask` itself and never by the runner. It mirrors independent document reading: a
 fresh session that reads and does not edit.
 
-- **Model.** `chooseAskReader` takes the first model of the `decision` list
-  that is not the asker's own, and the whole list when nothing else can run.
+- **Model.** The [reader walk](mc-run.md#the-build-list-and-capacity-ruling-59)
+  tries the `decision` list without the asker's own model first, then allows
+  it if no other candidate can run. A tool that cannot launch or a candidate
+  with unavailable billing is skipped. If the walk finds no usable reader,
+  the call is unread and names each skipped candidate and its reason.
 - **The tree.** The reader works in a read-only copy of the asker's worktree
   (`snapshotTree`): the tracked and untracked files git lists, with the working
   tree's bytes, not the ignored ones and no `.git`; only regular text files up

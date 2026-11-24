@@ -526,7 +526,9 @@ when Martin takes it up. `mc martin prepare [<id>]` remains a person's manual
 entry: one fresh headless turn per named item (or up to three waiting items) in
 the item's directory, `MC_ROLE=desk-prepare`, `MC_HEADLESS=1`, no goal or
 programme identity, a fifteen-minute limit, on the `build` list. A per-item PID
-claim prevents simultaneous preparations. The role
+claim prevents simultaneous preparations. Candidate selection uses the
+[reader walk](mc-run.md#the-build-list-and-capacity-ruling-59); if it finds
+no usable reader it reports why without starting a preparation attempt. The role
 (`canon/roles/desk-prepare.md`) only writes `prepared.md` and runs
 `prepared --sort mechanical|technical|text|reserved`; goal verbs and `mc ask`
 refuse it. Two failed attempts write a `prepared.md` saying so and set
@@ -656,6 +658,12 @@ text the desk already amended. An item's label is the first
 line of the `Martin` entry of its minute, so a defect is never shown under
 another entry that shares the minute.
 
+A build model's decline is not a defect or an unamended stop.
+`no progress: every build model declined` enters the decision pass as a
+mechanical stop, not a brief. The pass can build the goal itself or hand it to
+a model that has not declined the current text. It briefs the mechanical
+stop only when every available model has declined.
+
 A session ending without closing or briefing appends `{at, reason, state}` to
 `decision_failures`, `state` being the state the item was in when the session
 failed; an entry without `state` was written while prepared and counts as
@@ -668,11 +676,11 @@ counts for that state only). After the second in the current state,
 the runner writes a Swedish failure brief with every reason and session log
 path, sets `for-martin`, sort `mechanical`, `reversible: false`, `due_at: null`,
 and keeps the goal waiting on Martin. Such an item is the runner's stop, not a
-proposal: the opening lists it only as stuck, under *Not ready*. A quota ending, an offline ending, and a
-login ending that refused the provider (a launch that is not codex, on
-subscription billing) write no failure and no goal entry, and spend no attempt:
-the item is taken again when the provider answers. Admission refusals spend no
-attempt. The runner's existing mechanical `Martin` settings are unchanged; the
+proposal: the opening lists it only as stuck, under *Not ready*. Quota, offline,
+provider-refusing login on a plan route (agy, claude or codex) and
+[host-refused](mc-run.md#launch-settings) endings write no failure or goal
+entry and spend no attempt: the item is eligible for another pick.
+Admission refusals also spend no attempt. The runner's existing mechanical `Martin` settings are unchanged; the
 pass handles what they leave rather than moving their ownership into the runner.
 
 ## Lessons and the learning pass
@@ -729,7 +737,8 @@ and gives it to Martin (`decision_failures`); one per item. (6) `repeat` is read
 from existing records.
 
 **Area learning.** A person runs `mc learning` or the runner starts a scheduled
-turn. When no lesson is eligible, the terminal command prints
+turn. Both use the [reader walk](mc-run.md#the-build-list-and-capacity-ruling-59)
+on the `decision` list. When no lesson is eligible, the terminal command prints
 `mc: no area information to update` and exits successfully without launching
 the role. Both launch paths use `canon/roles/learning.md` with
 `MC_ROLE=learning` and `MC_HEADLESS=1`. This role makes no programme or goal and does not repeat the

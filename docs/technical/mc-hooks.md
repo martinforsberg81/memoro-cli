@@ -53,7 +53,7 @@ which mc keeps exactly one top-level entry, `mc`:
 ```json
 "mc": {
   "SessionStart": [{ "type": "command", "command": "mc hook session-start --tool agy 2>/dev/null || true" }],
-  "PreToolUse": [{ "matcher": "run_command|read_file|view_file|edit_file|write_to_file", "hooks": [{ "type": "command", "command": "mc hook pre-tool --tool agy 2>/dev/null || true" }] }],
+  "PreToolUse": [{ "matcher": "run_command|read_file|view_file|edit_file|write_file|write_to_file", "hooks": [{ "type": "command", "command": "mc hook pre-tool --tool agy 2>/dev/null || true" }] }],
   "Stop": [{ "type": "command", "command": "mc hook stop --tool agy 2>/dev/null || true" }]
 }
 ```
@@ -62,7 +62,9 @@ which mc keeps exactly one top-level entry, `mc`:
 Claude file above in the same run; a foreign entry or a file that is not JSON is
 left as it is. `--tool agy` selects the dialect: agy's stdin carries
 `{ toolCall: { name, args }, cwd }`, which mc reads as the Claude-shaped input
-(`run_command` is Bash, the writers Write and Edit, the readers Read), so the
+(`run_command` is Bash, `write_file` and `write_to_file` are Write,
+`edit_file` is Edit, and `read_file` and `view_file` are Read). File tools
+pass their path (such as `args.Path`) as `file_path`. The
 same decisions below apply with the same answers, and a tool outside that
 mapping keeps its name and meets no rule of Claude's. The hooks act only in mc
 territory, as Claude's do. `--check` covers both files and exits 1 on drift in
