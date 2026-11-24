@@ -87,7 +87,8 @@ function publicTargetError(target, index, viewports) {
  * Which memoro worktree `mc shot` and `mc dev open` read: the one you stand in
  * when it has `.mc/shot.json`, else the shared checkout; `here` forces the
  * first, and `main` is the shared checkout's server from any worktree (how the
- * app is now). `{ worktree }`, or `{ error }` saying why there is none.
+ * app is now). `{ worktree, standing?: true }`, or `{ error }` saying why
+ * there is none. Only a caller's declared app checkout is marked standing.
  */
 export function shotWorktree({
   cwd = process.cwd(), env = process.env, here = false, main = false, deps = {},
@@ -96,9 +97,11 @@ export function shotWorktree({
     const shared = sharedWorktree(env);
     return shared ? { worktree: shared } : { error: NO_SHARED_WORKTREE };
   }
-  const standing = (deps.callerWorktree || callerWorktree)(cwd);
-  const standsInMemoro = Boolean(standing && (deps.existsSync || existsSync)(join(standing, SHOT_FILE)));
-  const worktree = here || standsInMemoro ? standing : sharedWorktree(env);
+  const caller = (deps.callerWorktree || callerWorktree)(cwd);
+  if (caller && (deps.existsSync || existsSync)(join(caller, SHOT_FILE))) {
+    return { worktree: caller, standing: true };
+  }
+  const worktree = here ? caller : sharedWorktree(env);
   if (worktree) return { worktree };
   return {
     error: here ? '--here needs a git worktree, and this is not one' : NO_SHARED_WORKTREE,

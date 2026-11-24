@@ -1346,7 +1346,7 @@ describe('main: the shared checkout\'s server stays up and follows main', () => 
       const standing = join(fx.home, 'work', 'memoro-feature');
       const deps = { callerWorktree: () => standing, existsSync: () => true };
       assert.deepEqual(shotWorktree({ cwd: standing, env: fx.env, main: true, deps }), { worktree: shared });
-      assert.deepEqual(shotWorktree({ cwd: standing, env: fx.env, deps }), { worktree: standing });
+      assert.deepEqual(shotWorktree({ cwd: standing, env: fx.env, deps }), { worktree: standing, standing: true });
     } finally { fx.cleanup(); }
   });
 });

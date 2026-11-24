@@ -442,14 +442,75 @@ describe('mc shot next', () => {
     assert.equal(none.code, 1);
     assert.equal(none.stderr, 'mc: no browser is kept — mc shot <dev|prod> <target> --keep keeps one\n');
   });
+});
 
+describe('mc shot next and close: session selection', () => {
   it('two sessions elsewhere and none here: name one', async () => {
     const fx = fixture();
     await fakeSession(fx, { id: 's1', worktree: fx.other });
     await fakeSession(fx, { id: 's2', worktree: fx.other });
     const ran = await mc(['next', '--click', 'x'], fx, { callerWorktree: () => join(fx.home, 'elsewhere'), env: { MC_REPOS_HOME: join(fx.home, 'none') } });
     assert.equal(ran.code, 2);
-    assert.match(ran.stderr, /2 browsers are kept and none is this worktree's — name one: s1 \(dev vault, memoro-b\), s2 \(dev vault, memoro-b\)/u);
+    const label = `${basename(fx.home)}/memoro-b`;
+    assert.equal(ran.stderr, `mc: 2 browsers are kept and none is this worktree's — name one: s1 (dev vault, ${label}), s2 (dev vault, ${label})\n`);
+  });
+
+  for (const argv of [['next', '--no-shot', '--click', 'x'], ['close']]) {
+    for (const state of ['live', 'dead']) {
+      it(`refuses id-less ${argv[0]} in a memoro worktree with only a ${state} foreign session`, async () => {
+        const fx = fixture();
+        let alive = state === 'live';
+        const fake = await fakeSession(fx, { id: 's3', worktree: fx.other, onClose: () => { alive = false; } });
+        const signalled = [];
+        const deps = { callerWorktree: () => fx.worktree, alive: () => alive, kill: (...args) => signalled.push(args) };
+        const label = basename(fx.home);
+        for (const args of [argv, [...argv, '--any-worktree']]) {
+          const ran = await mc(args, fx, deps);
+          assert.equal(ran.code, 2, ran.stderr || ran.stdout);
+          assert.equal(ran.stdout, '');
+          assert.equal(ran.stderr,
+            `mc: no browser is kept for this worktree (…/${label}/memoro) — s3 (${label}/memoro-b) belongs to another; `
+            + 'start one with mc shot dev … --keep, or name s3 with --any-worktree\n');
+          assert.deepEqual(fake.received, []);
+          assert.deepEqual(signalled, []);
+          assert.equal(existsSync(fake.file), true, 'leave the foreign record alone, even if dead');
+        }
+      });
+    }
+  }
+
+  it('lists both foreign sessions in the same refusal from a memoro worktree', async () => {
+    const fx = fixture();
+    const a = await fakeSession(fx, { id: 's1', worktree: fx.other });
+    const b = await fakeSession(fx, { id: 's2', worktree: join(fx.home, 'study-hub', 'memoro') });
+    const ran = await mc(['next', '--click', 'x'], fx, { callerWorktree: () => fx.worktree });
+    assert.equal(ran.code, 2);
+    const label = basename(fx.home);
+    assert.equal(ran.stderr,
+      `mc: no browser is kept for this worktree (…/${label}/memoro) — these belong to other worktrees: `
+      + `s1 (${label}/memoro-b), s2 (study-hub/memoro); start one with mc shot dev … --keep, or name one with --any-worktree\n`);
+    assert.deepEqual(a.received, []);
+    assert.deepEqual(b.received, []);
+  });
+
+  it('outside a memoro worktree next and close still pick the only kept session', async () => {
+    const fx = fixture();
+    mkdirSync(join(fx.home, 'repos', 'memoro.git'), { recursive: true });
+    let alive = true;
+    const fake = await fakeSession(fx, { id: 's3', worktree: fx.other, onClose: () => { alive = false; } });
+    const signalled = [];
+    const deps = {
+      callerWorktree: () => null, env: { MC_REPOS_HOME: undefined, MC_WORK_ROOT: fx.home },
+      alive: () => alive, kill: (...args) => signalled.push(args),
+    };
+    const stepped = await mc(['next', '--no-shot', '--click', 'x'], fx, deps);
+    assert.equal(stepped.code, 0, stepped.stderr);
+    assert.deepEqual(fake.received.map((step) => step.actions), [[{ kind: 'click', selector: 'x' }]]);
+    const closed = await mc(['close'], fx, { ...deps, callerWorktree: () => join(fx.home, 'memoro-cli') });
+    assert.equal(closed.code, 0, closed.stderr);
+    assert.deepEqual(fake.received[1], { close: true });
+    assert.deepEqual(signalled, []);
+    assert.equal(existsSync(fake.file), false);
   });
 });
 
@@ -577,7 +638,7 @@ describe('mc shot --keep and next: ids, records and ownership', () => {
     assert.equal(readFileSync(socket, 'utf8'), 'the newcomer\'s socket', 'and its socket');
     assert.equal(existsSync(join(fx.sessions, 's1.lock')), false, 'the id\'s lock is released');
     const listed = await mc(['sessions'], fx);
-    assert.match(listed.stdout, /^s1  dev vault  memoro  desktop  idle 0 min$/mu, 'the newcomer is a live session');
+    assert.equal(listed.stdout, `s1  dev vault  ${basename(fx.home)}/memoro  desktop  idle 0 min\n`, 'the newcomer is a live session');
 
     const kept = await mc(['dev', 'home', '--keep', '--out', join(fx.home, 'race.png')], fx, { runKeep: slowKeep(0, browser()) });
     assert.equal(kept.code, 0, kept.stderr);
@@ -681,7 +742,7 @@ describe('mc shot sessions and close', () => {
     const dead = await fakeSession(fx, { id: 's2', pid: spawnSync(process.execPath, ['-e', '']).pid });
     const listed = await mc(['sessions'], fx);
     assert.equal(listed.code, 0);
-    assert.equal(listed.stdout, 's1  dev vault  memoro  desktop  idle 7 min\n');
+    assert.equal(listed.stdout, `s1  dev vault  ${basename(fx.home)}/memoro  desktop  idle 7 min\n`);
     assert.equal(existsSync(dead.file), false);
     assert.equal(existsSync(dead.session.log), false);
   });
@@ -702,11 +763,33 @@ describe('mc shot sessions and close', () => {
     const none = await mc(['sessions'], fx);
     assert.match(none.stdout, /no browser is kept/u);
   });
+
+  it('close needs --any-worktree to end an explicitly named foreign browser', async () => {
+    const fx = fixture();
+    let alive = true;
+    const fake = await fakeSession(fx, { id: 's3', worktree: fx.other, onClose: () => { alive = false; } });
+    const signalled = [];
+    const deps = { callerWorktree: () => fx.worktree, alive: () => alive, kill: (...args) => signalled.push(args) };
+    const denied = await mc(['close', 's3'], fx, deps);
+    assert.equal(denied.code, 2, denied.stderr || denied.stdout);
+    assert.ok(denied.stderr.includes(fx.worktree) && denied.stderr.includes(fx.other), denied.stderr);
+    assert.match(denied.stderr, /--any-worktree/u);
+    assert.deepEqual(fake.received, []);
+    assert.deepEqual(signalled, []);
+    assert.equal(existsSync(fake.file), true);
+
+    const allowed = await mc(['close', 's3', '--any-worktree'], fx, deps);
+    assert.equal(allowed.code, 0, allowed.stderr);
+    assert.equal(allowed.stdout, 'mc: closed s3\n');
+    assert.deepEqual(fake.received, [{ close: true }]);
+    assert.deepEqual(signalled, []);
+    assert.equal(existsSync(fake.file), false);
+  });
 });
 
 describe('mc shot --help', () => {
   it('lists the forms and the example', () => {
-    for (const form of ['--keep', 'mc shot next [<id>] [step flags]', 'mc shot close [<id>|--all]', 'mc shot sessions',
+    for (const form of ['--keep', 'mc shot next [<id>] [step flags]', 'mc shot close [<id>|--all] [--any-worktree]', 'mc shot sessions',
       '--goto <path|target>', '--reload', '--no-shot',
       "mc shot dev /app/tools/vault --keep --fill 'input[name=setupPassword]=…'",
       "mc shot next --click 'text=New entry' --eval 'document.activeElement.name'"]) {
