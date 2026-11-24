@@ -40,8 +40,7 @@ the work that uses the act's result, in a dependent phase. Planning makes that s
   standard; `untouched` gives the reason, and the review holds the diff against it. Criteria apply the standards, never set new ones.
 - **Risks:** how this change can go wrong; each is settled by a criterion, by the protection, or is accepted with its reason.
 - **Criteria:** each states an observable outcome and pass/fail boundary; its `check` gives runnable commands, working directory, prerequisites
-  and expected results, and can run now, on the runner's host, before merge; native-only behaviour is checked through the web path and
-  recorded as not run, as [the programme document](writing-a-programme-document.md) says under Proved by. For branch comparisons, use `git diff origin/main...HEAD`. A file,
+  and expected results, and can run now, on the runner's host, before merge. For branch comparisons, use `git diff origin/main...HEAD`. A file,
   keyword or green gate alone does not prove content. No check waits for anyone or passes through a reserved act: it exercises the
   mechanism below the reserved command and stops short of the act. Put policy
   choices in planning, not acceptance.
