@@ -101,7 +101,7 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc goal done [<programme>/<goal>] [--reason \"…\"] [--evidence \"…\"]   stage done, by hand; the merger sets it when the pull request lands.\n",
     "                                    Interactive Martin's done (no session's, none under MC_HEADLESS=1, never decision's) finishes a goal with nothing to land:\n",
     "                                    every criterion met, or, for a goal cut from an order, --evidence \"<what was checked and where it is recorded>\", written to LOG.md;\n",
-    "                                    refused while a pull request is open (its prs, or gh pr list --head goal/<goal>), and when GitHub cannot be read\n",
+    "                                    refused while a pull request is open (its prs, or one GitHub lists on goal/<goal>), and when GitHub cannot be read\n",
     "        mc goal drop [<programme>/<goal>] --reason \"…\"   abandon delivery: persist dropped, close exclusive PRs, cancel merge rows and archive immediately when safe; only interactive Martin or a person may drop\n",
     "        mc goal pr <programme>/<goal> <repo>#<n>...   the pull requests that carry the goal; done when every one has landed or closed\n",
     "        mc goal archive <programme>/<goal>... | <programme> | --all   safely archive done or dropped goals, --all every programme's, naming each refusal; a goal a live session owns is refused; the runner archives done goals at its next pass\n",
