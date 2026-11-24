@@ -5093,6 +5093,24 @@ describe('mc deploy — cutting a measured release', () => {
     assert.equal(f.calls.mainRepair, undefined, 'release reds go to the release, not a main mend');
   });
 
+  it('cuts at the measured tip when main moved on while it was measured', async (t) => {
+    const f = releaseFixture(t);
+    let newer = null;
+    const measured = f.d.gate.fullRun;
+    const d = { ...f.d, gate: { fullRun: async (repo, options) => {
+      const result = await measured(repo, options);
+      fixtureGit(f.dir, 'commit --allow-empty -qm "landed during the full run"');
+      newer = fixtureGit(f.dir, 'rev-parse HEAD');
+      fixtureGit(f.dir, 'push -q origin main');
+      return result;
+    } } };
+    assert.equal(await run([], d), 0, f.output.out.stderr);
+    assert.deepEqual([f.calls.full, f.calls.ship], [[f.tip], []]);
+    assert.deepEqual(f.remoteReleases(), [`${f.tip}\trefs/heads/${f.branch}`]);
+    assert.equal(readRelease(f.root).cut.sha, f.tip);
+    assert.match(f.output.out.stdout, new RegExp(`mc: main moved to ${newer.slice(0, 7)} while ${f.tip.slice(0, 7)} was measured; the newer commits wait for the release to go back to main\nmc: cut ${f.branch} at ${f.tip.slice(0, 7)} — 2 commits would ship`, 'u'));
+  });
+
   it('uses the verdict of a run in flight rather than cutting from its older red', async (t) => {
     const f = releaseFixture(t);
     f.record(f.tip, { red: reds });

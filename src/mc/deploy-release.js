@@ -80,11 +80,19 @@ function remoteHead(path, git, ref) {
   return result === null ? null : result.split(/\s+/u)[0];
 }
 
-export function confirmCutTip(path, git, sha) {
-  const tip = remoteHead(path, git, 'refs/heads/main');
-  return tip === sha ? null : tip
-    ? `main moved to ${short(tip)}; mc deploy reads the new tip`
-    : 'could not confirm the tip of main on origin';
+/** Where main stands on origin when a measured commit is cut. The full run takes
+ * long and main keeps landing meanwhile: a tip that moved on is not a reason to
+ * drop the measurement, so the cut stands at the measured commit as long as
+ * origin's main still contains it. `{ tip }` is origin's main now; `{ error }`
+ * when it cannot be read or no longer contains the commit. */
+export function cutTipOnMain(path, git, sha) {
+  if (git(path, ['fetch', 'origin', 'main', '--quiet']) === null) return { error: 'could not read the tip of main on origin' };
+  const tip = git(path, ['rev-parse', '--verify', 'origin/main']);
+  if (!tip) return { error: 'could not read the tip of main on origin' };
+  if (tip === sha) return { tip };
+  return git(path, ['merge-base', '--is-ancestor', sha, tip]) === null
+    ? { error: `main on origin (${short(tip)}) no longer contains ${short(sha)}; mc deploy reads the new tip` }
+    : { tip };
 }
 
 /** The intent and its settlement take the register's lock, not the network
@@ -144,14 +152,17 @@ export function releaseStateLine({ state, state_at, head, reds, build, merge_bac
   }
 }
 
-export function releaseCutLines(plan, full, { dryRun }) {
+export function releaseCutLines(plan, full, { dryRun, mainTip = null }) {
   const branch = releaseBranch(plan.tip);
   const count = releaseRedNames(full.run).length;
   const verdict = full.state === 'stalled' ? 'STALLED' : `RED (${count})`;
   const gap = plan.gap == null ? 'the number of commits is unknown' : `${plan.gap} commit${plan.gap === 1 ? '' : 's'} would ship`;
   return [
     `mc: main's tip ${short(plan.tip)} is ${verdict}, and nothing after live ${short(plan.live)} is green`,
-    `mc: ${dryRun ? 'would cut' : 'cut'} ${branch} at main's tip — ${gap}`,
+    ...(mainTip && mainTip !== plan.tip
+      ? [`mc: main moved to ${short(mainTip)} while ${short(plan.tip)} was measured; the newer commits wait for the release to go back to main`]
+      : []),
+    `mc: ${dryRun ? 'would cut' : 'cut'} ${branch} at ${mainTip && mainTip !== plan.tip ? short(plan.tip) : "main's tip"} — ${gap}`,
     dryRun ? 'mc: --dry-run — nothing was cut'
       : 'mc: the release is repaired, measured and shipped by itself; mc deploy --follow watches it',
   ];
