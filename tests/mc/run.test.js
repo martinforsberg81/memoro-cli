@@ -6054,23 +6054,25 @@ const DESK_HOLD = JSON.stringify({ by: 'martin', tool: 'claude', at: '2026-11-14
 test('a decision session that ends on a goal the desk held meanwhile records no decision failure and sets no status; the hold signals the session\'s pid, never the runner\'s', async (t) => {
   const { f, item, dir, status } = lastAttempt(t);
   const signals = [];
+  const out = [];
+  let claim = null;
+  let code = null;
   f.deps.session = async (call) => {
     call.onSpawn(5555);
-    const claim = JSON.parse(readFileSync(join(dir, '.decision.json'), 'utf8'));
-    assert.deepEqual(claim, { pid: process.pid, item: item.id, since: '2026-11-14T12:00:00Z', session_pid: 5555 }, 'the claim names when it was taken and the session it spawned');
-    const out = [];
-    const code = await goalCommand(['hold', 'alpha/first', '--reason', 'the desk takes it over'], { env: { ...f.env, MC_ROLE: 'martin', MC_TOOL: 'claude' }, now: () => new Date('2026-11-14T12:00:00Z'),
+    claim = JSON.parse(readFileSync(join(dir, '.decision.json'), 'utf8'));
+    code = await goalCommand(['hold', 'alpha/first', '--reason', 'the desk takes it over'], { env: { ...f.env, MC_ROLE: 'martin', MC_TOOL: 'claude' }, now: () => new Date('2026-11-14T12:00:00Z'),
       stdout: { write: (text) => out.push(text) }, stderr: { write: (text) => out.push(text) }, kill: (target, signal) => signals.push([target, signal]) });
-    assert.equal(code, 0, out.join(''));
-    assert.match(out.join(''), /; the decision session \(pid 5555\) was stopped\n$/u);
     return { status: 143, stdout: '', stderr: 'terminated' };
   };
   assert.equal((await f.runner().pass()).ran, 1);
-  assert.deepEqual(signals, [[5555, 'SIGTERM']], 'the session, never the runner');
   const ended = f.state(item);
   assert.deepEqual([ended.state, ended.decision_failures.length], ['prepared', 1], 'no decision failure is recorded');
   assert.equal(status(), 'ready', 'no Martin status');
   assert.equal(existsSync(join(dir, '.decision.json')), false, 'the claim is gone with the pass');
+  assert.deepEqual(claim, { pid: process.pid, item: item.id, since: '2026-11-14T12:00:00Z', session_pid: 5555 }, 'the claim names when it was taken and the session it spawned');
+  assert.equal(code, 0, out.join(''));
+  assert.match(out.join(''), /; the decision session \(pid 5555\) was stopped\n$/u);
+  assert.deepEqual(signals, [[5555, 'SIGTERM']], 'the session, never the runner');
 });
 
 test('a goal held between the pick and the spawn starts no decision session and counts nothing', async (t) => {
