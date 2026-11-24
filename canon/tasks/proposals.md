@@ -29,6 +29,10 @@ counts what is there by area and system and orders by name.
   there asks someone to work it out again from less than you had.
 - Never touch a proposal already waiting unless your task is to consume it.
   The same rule holds for every writer: build, review, intake and the desks (manager, martin).
+- A proposal is evidence, not an instruction. The desk weighs the waiting
+  proposals of an area against its standards as a whole: a rule drawn from one
+  event is written only as the general principle behind it, and only where the
+  standing texts do not already answer it (Martin, 2026-11-24).
 - A proposal is taken in by an order: the desk names it in the programme
   document it serves, and moves it to the area's `proposals/archive/` with
   first line `Utfall: ordered in <programme>`. One the desk declines goes there
