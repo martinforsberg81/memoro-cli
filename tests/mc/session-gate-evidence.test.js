@@ -7,8 +7,9 @@ import { join } from 'node:path';
 import { it } from 'node:test';
 import { captureWorktree, contentKey, findPublicationReceipt, findResumable, gateReceipt, persistGateReceipt, persistSelectorEvidence, pruneGateEvidence, sameContent, selectorSidecar } from '../../src/mc/session-gate-evidence.js';
 import { findGreen, findGreenForHead, GATE_MEASUREMENT_VERSION, gateConfiguration, readGreenReceipt, selectionHash } from '../../src/mc/gate-greens.js';
-import { selectorCommand, runSessionGate as sessionGate } from '../../src/mc/session-gate-run.js';
+import { codeLoaders, selectorCommand, runSessionGate as sessionGate } from '../../src/mc/session-gate-run.js';
 import { deltaFromGreen, executedTimeoutOf, executionIdentity, realTests, resolveTestPlan, selectFiles } from '../../src/mc/repo-gate.js';
+import { PROCESS_PROGRESS_PRELOAD } from '../../src/mc/test-times.js';
 import { spawnedBatch, withSpawnedBatches } from './_helpers/spawned-batch.js';
 
 /** Every fake `tests` here stands for a spawn: it reports the batch that spawn would launch. */
@@ -661,6 +662,68 @@ it('a resumed full green is recorded for the merger and accepted for publication
   const head = git(fx.cwd, 'rev-parse', 'HEAD');
   assert.equal(findPublicationReceipt({ ...context, root, cwd: fx.cwd, repo: 'repo', head, pushed: head,
     selection: { files: selected.files, commands: [], execution: executionIdentity(resolveTestPlan({})) } })?.run, 'gate-resumed');
+});
+
+it('a run whose NODE_OPTIONS loads code reuses nothing, is diagnostic, records no green and is no later source', async (t) => {
+  const fx = fixture(t);
+  writeFileSync(join(fx.cwd, 'b.test.js'), 'export {};\n');
+  git(fx.cwd, 'add', '.');
+  git(fx.cwd, 'commit', '-qm', 'two tests');
+  const selected = { ok: true, files: ['a.test.js', 'b.test.js'], commands: [] };
+  const root = join(fx.root, 'state');
+  const greens = () => (existsSync(join(root, 'gate-greens.jsonl')) ? readFileSync(join(root, 'gate-greens.jsonl'), 'utf8') : '');
+  const attempt = async (run, nodeOptions) => {
+    const req = { ...fx.request(), files: null, select: 'selector' };
+    req.measurement = { ...req.measurement, run };
+    const ran = [];
+    const env = { ...process.env, NODE_OPTIONS: nodeOptions };
+    if (nodeOptions == null) delete env.NODE_OPTIONS;
+    const result = await runSessionGate(req, { ...quiet, env, select: async () => selected, tests: async (options) => {
+      ran.push(...options.files);
+      return reporting({ code: 0, tap: GREEN })(options);
+    } });
+    return { result, receipt: receiptOf(result), ran };
+  };
+  const first = await attempt('gate-first');
+  assert.equal(first.receipt.outcome, 'green');
+  assert.equal(first.receipt.loader, false);
+  const recorded = greens();
+  assert.match(recorded, /gate-first/u);
+
+  const loaded = await attempt('gate-loader', '--max-old-space-size=4096 --import=./x.mjs');
+  assert.deepEqual(loaded.ran, ['a.test.js', 'b.test.js'], 'every check runs under the loader');
+  assert.equal(loaded.result.resumed ?? null, null);
+  assert.deepEqual(loaded.receipt.members.files.map(({ file, how, from }) => [file, how, from]), [['a.test.js', 'ran', null], ['b.test.js', 'ran', null]]);
+  assert.deepEqual([loaded.receipt.loader, loaded.receipt.outcome], [true, 'diagnostic']);
+  assert.deepEqual([loaded.result.ok, loaded.result.process_ok, loaded.result.loader, loaded.result.verdict], [false, true, true, 'diagnostic']);
+  assert.doesNotMatch(JSON.stringify(loaded.receipt), /x\.mjs/u, 'the receipt names no loader value');
+  assert.equal(greens(), recorded, 'no greens line for the loader run');
+  const later = findResumable({ root, measurement: { ...fx.request().measurement, run: 'gate-next' }, flags: [], pattern: null });
+  assert.deepEqual([...later.files].map(([file, { from }]) => [file, from]), [['a.test.js', 'gate-first'], ['b.test.js', 'gate-first']]);
+
+  for (const [run, nodeOptions] of [['gate-plain', undefined], ['gate-heap', '--max-old-space-size=4096'], ['gate-reporter', '--test-reporter=tap --test-reporter-destination=stdout']]) {
+    const plain = await attempt(run, nodeOptions);
+    assert.deepEqual(plain.ran, [], `${run} reuses what passed`);
+    assert.deepEqual(plain.receipt.members.files.map(({ file, how }) => [file, how]), [['a.test.js', 'reused'], ['b.test.js', 'reused']], run);
+    assert.deepEqual([plain.receipt.loader, plain.receipt.outcome, plain.result.ok], [false, 'green', true], run);
+    assert.match(greens(), new RegExp(run, 'u'));
+  }
+});
+
+it('codeLoaders names the code-loading NODE_OPTIONS options, in either form, and never their values', () => {
+  assert.deepEqual(codeLoaders('--import=./x.mjs'), ['--import']);
+  assert.deepEqual(codeLoaders('--require ./hook.cjs -r other.cjs --loader=ts-node/esm --experimental-loader ./l.mjs --import ./x.mjs'),
+    ['--require', '-r', '--loader', '--experimental-loader', '--import']);
+  assert.deepEqual(codeLoaders('--import=a.mjs --import=b.mjs'), ['--import']);
+  assert.deepEqual(codeLoaders('--max-old-space-size=4096 --test-reporter=tap --test-reporter-destination=stdout'), []);
+  assert.deepEqual(codeLoaders('--import "./a dir/x.mjs" --max-old-space-size=4096'), ['--import'], 'a quoted value is one word');
+  assert.deepEqual(codeLoaders(undefined), []);
+  assert.deepEqual(codeLoaders(''), []);
+  // A gate started inside another gate's test process inherits its progress preload: the gate's own.
+  assert.deepEqual(codeLoaders(`--test-reporter=tap --import=${PROCESS_PROGRESS_PRELOAD}`), []);
+  assert.deepEqual(codeLoaders(`--import ${PROCESS_PROGRESS_PRELOAD} --import=./x.mjs`), ['--import']);
+  assert.deepEqual(codeLoaders('--import=file:///elsewhere/mc/src/mc/test-progress-preload.mjs'), [], 'another mc checkout\'s preload is the gate\'s too');
+  assert.deepEqual(codeLoaders('--import=./test-progress-preload.mjs.evil.mjs'), ['--import']);
 });
 
 it('a reused member that did not pass, or names no source, never makes a receipt green', (t) => {

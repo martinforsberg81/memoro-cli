@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { changedAgainst, flagsOf, measuredDeclaration } from '../gate-fast.js';
-import { selectorCommand } from '../session-gate-run.js';
+import { codeLoaders, selectorCommand } from '../session-gate-run.js';
 import { gateLines, namedCommand, rerunLine, summarizeGate, timedTestLines } from '../gate-local.js';
 import { changedRanges, slowTestLines } from '../test-times.js';
 import { tryGit } from '../git.js';
@@ -207,6 +207,9 @@ export async function run(argv, deps = {}) {
   if (mergeBase && changed) {
     for (const file of (files.length ? files : addedTests).filter((one) => changed.includes(one))) timed[file] = timedRanges(io, root, mergeBase, file);
   }
+  // The caller's NODE_OPTIONS loads code into every test process (`codeLoaders`): the
+  // run measures other code than this tree. Only the option names, never their values.
+  const loader = codeLoaders(env.NODE_OPTIONS);
 
   const launchPath = `${lockPath}.launch`;
   const launch = io.claim(launchPath, { pid: process.pid });
@@ -238,10 +241,12 @@ export async function run(argv, deps = {}) {
     try {
       io.mkdir(dir);
       io.write(requestPath, JSON.stringify({ cwd: root, files: commandId != null ? null : files.length ? files : null, commands: commandId != null ? [commandId] : undefined, addedTests, timed, flags: effectiveFlags, declared: flags ?? [], pattern, select, base, mainOnly: scanned.flags['whole-selection'] ? declaration?.main_only ?? [] : [],
-        round_timeout_ms: declaration?.round_timeout_ms ?? null,
+        round_timeout_ms: declaration?.round_timeout_ms ?? null, loader,
         log: logPath, fresh: commandId != null || Boolean(scanned.flags.fresh), defer: false,
         measurement: candidate && frozenBase ? { repo: gate.repo, run, base: frozenBase, candidate, configuration,
           session_run: deps.measurementBinding?.session_run ?? null, goal_revision: deps.measurementBinding?.goal_revision ?? null } : null, gate }));
+      // Under --json stdout holds the verdict object alone, so the notice goes to stderr.
+      if (loader.length) (scanned.flags.json ? stderr : stdout).write(`mc gate: NODE_OPTIONS loads code (${loader.join(', ')}) — a diagnostic run: nothing is reused by it or from it, and it is not a green\n`);
       const fd = io.open(logPath);
       // The worker owns the test children and the result.
       child = io.spawn(process.execPath, [SESSION_RUN, requestPath], {
@@ -282,7 +287,7 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
   const output = readText(io, lock.log);
   let result = null;
   try { result = JSON.parse(readText(io, `${lock.request}.result`)); } catch { /* an older gate or interrupted worker */ }
-  const summary = summarizeGate(output, { exitCode: outcome.code, unavailableCommands: result?.unavailable_commands || [] });
+  const summary = summarizeGate(output, { exitCode: outcome.code, unavailableCommands: result?.unavailable_commands || [], loader: result?.loader === true });
   if (result?.files) lock.command.files = result.files;
   // A gate that reached the repository's ceiling was stopped, not failed: its
   // verdict names what did not finish and the slowest files that did, and the

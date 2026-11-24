@@ -120,8 +120,12 @@ export function persistSelectorEvidence({ root, run, bytes }) {
   return { path, file: basename(path), sha256: hash(bytes), bytes: Buffer.byteLength(bytes) };
 }
 
-/** No running/unknown/empty/partially executed attempt can become green. */
-export function gateReceipt({ measurement, before, after, result, started, ended, selector = null }) {
+/**
+ * No running/unknown/empty/partially executed attempt can become green. Nor can a
+ * run whose test processes loaded the caller's code through NODE_OPTIONS (`loader`,
+ * `codeLoaders`): it records `loader: true`, and what would be green is `diagnostic`.
+ */
+export function gateReceipt({ measurement, before, after, result, started, ended, selector = null, loader = false }) {
   const coverage = result.coverage || null;
   const execution = result.execution || null;
   const commands = execution?.commands || [];
@@ -137,15 +141,16 @@ export function gateReceipt({ measurement, before, after, result, started, ended
   const unchanged = sameContent(measurement.candidate, before) && sameContent(before, after);
   const valid = Boolean(measurement.repo && measurement.run && /^[0-9a-f]{40,64}$/u.test(measurement.base || '')
     && Number.isFinite(Date.parse(started)) && Date.parse(ended) >= Date.parse(started));
-  const outcome = !unchanged ? 'invalid' : result.ok === true && result.code === 0 && complete && valid ? 'green'
+  const measured = !unchanged ? 'invalid' : result.ok === true && result.code === 0 && complete && valid ? 'green'
     : result.code === 1 ? 'red' : 'incomplete';
+  const outcome = loader === true && measured === 'green' ? 'diagnostic' : measured;
   return freeze(JSON.parse(JSON.stringify({
     schema: 'mc-session-gate-evidence', version: 1, gate_version: GATE_MEASUREMENT_VERSION,
     repo: measurement.repo, repository: measurement.candidate.repository, run: measurement.run,
     session_run: measurement.session_run ?? null, goal_revision: measurement.goal_revision ?? null,
     configuration: measurement.configuration ?? null,
     base: measurement.base, tree: measurement.candidate.tree, fingerprint: measurement.candidate.fingerprint,
-    started, ended, outcome, coverage, execution, exit: result.code ?? null,
+    started, ended, outcome, loader: loader === true, coverage, execution, exit: result.code ?? null,
     stopped_at: result.stopped_at ?? null, members, resumed: result.resumed ?? null,
     // Optional references, not verdict inputs: the selector sidecar this run wrote
     // (or why it could not), and the phase intervals (`phaseLedger`). A receipt
@@ -260,7 +265,8 @@ const FILTERING = /^--test-(name-pattern|skip-pattern|only|shard)(=|$)/u;
  * 2026-11-06: a rerun on unchanged content resumes; any change runs it all).
  * A source is a persisted receipt of another run with the same repo and
  * repository, the same tree and fingerprint, the same measurement version,
- * configuration and test flags, no name pattern, and valid content, whose
+ * configuration and test flags, no name pattern, no loader (`loader: true`, a run
+ * under the caller's NODE_OPTIONS code), and valid content, whose
  * recorded batches were each spawned under its execution identity
  * (`launchedFiles`). It need not have launched every file: a run stopped at the
  * ceiling or interrupted still hands on what it saw pass. From it, a test file
@@ -285,7 +291,7 @@ export function findResumable({ root, measurement, flags = [], pattern = null } 
     try { receipt = JSON.parse(readFileSync(join(dir, `${run}.json`), 'utf8')); } catch { continue; }
     if (receipt?.schema !== 'mc-session-gate-evidence' || receipt.version !== 1 || receipt.gate_version !== GATE_MEASUREMENT_VERSION
       || receipt.run !== run || receipt.repo !== measurement.repo || !sameContent(receipt, candidate)
-      || receipt.configuration !== measurement.configuration || receipt.outcome === 'invalid'
+      || receipt.configuration !== measurement.configuration || receipt.outcome === 'invalid' || receipt.loader === true
       || ['content-changed', 'evidence'].includes(receipt.stopped_at)
       || receipt.coverage?.pattern !== null || JSON.stringify(receipt.coverage?.flags) !== JSON.stringify(flags)
       || !Array.isArray(receipt.members?.files) || !Array.isArray(receipt.members?.commands)
@@ -315,7 +321,7 @@ export function findResumable({ root, measurement, flags = [], pattern = null } 
 /** Only an entire unfiltered selector result is compatible with the existing
  * cache. Named files are still limited even if they happen to equal it. */
 export function recordReceiptGreen({ root, receipt, path }) {
-  if (receipt.outcome !== 'green' || !fullCoverage(receipt.coverage)) return false;
+  if (receipt.outcome !== 'green' || receipt.loader === true || !fullCoverage(receipt.coverage)) return false;
   recordGreen({ root, entry: {
     repo: receipt.repo, tree: receipt.tree, head_tree: receipt.tree, base: receipt.base,
     selection: selectionHash(receipt.coverage), gate_version: receipt.gate_version,

@@ -76,12 +76,16 @@ process.exitCode = await run(['--budget', '0.02'], {
       env: { ...process.env, MC_HOME: state, MC_SCRATCH: root, MC_TEST_LANES: '2' },
     });
     assert.equal(command.status, 3, command.stderr || command.error?.message);
-    assert.match(command.stdout, /^RUNNING/u);
     const lockPath = join(cwd, '.git', 'mc-gate.json');
     const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
     workerPid = lock.pid;
     log = lock.log;
-    const { measurement } = JSON.parse(readFileSync(lock.request, 'utf8'));
+    const { measurement, loader } = JSON.parse(readFileSync(lock.request, 'utf8'));
+    // Under the suite the fake-git default adds its preload to this spawn's NODE_OPTIONS (the
+    // fixture's repository is the model's): a loader run, which says so first and passes as diagnostic.
+    const loaded = loader.length > 0;
+    assert.match(command.stdout, loaded ? /^mc gate: NODE_OPTIONS loads code \(--import\)[^\n]*\nRUNNING/u : /^RUNNING/u);
+    const passed = loaded ? 'diagnostic' : 'green';
     let output = '';
     const deps = { cwd, env: { ...process.env, MC_HOME: state }, stdout: { write: (s) => { output += s; } },
       stderr: { write: (s) => { output += s; } } };
@@ -101,16 +105,17 @@ process.exitCode = await run(['--budget', '0.02'], {
     output = '';
     assert.equal(await gateCommand(['--wait', '--json'], deps), interrupt ? 1 : 0);
     const result = JSON.parse(output);
-    assert.equal(result.evidence.outcome, interrupt ? 'red' : 'green');
+    assert.equal(result.evidence.outcome, interrupt ? 'red' : passed);
     assert.equal(existsSync(lockPath), false);
     const context = { root: state, repo: 'repo', repository: measurement.candidate.repository,
       run: measurement.run, configuration: measurement.configuration };
     const receipt = readGreenReceipt(context);
-    if (interrupt) assert.equal(receipt, null);
-    else {
-      assert.equal(receipt.outcome, 'green');
+    if (interrupt || loaded) assert.equal(receipt, null, 'a red or a diagnostic run is never read as a green');
+    if (!interrupt) {
+      // The worker's receipt outlives the command that started it, unchanged on a second read.
       const bytes = readFileSync(result.evidence.path, 'utf8');
-      assert.deepEqual(readGreenReceipt(context), receipt, 'a subsequent session discovers the same receipt');
+      assert.deepEqual([JSON.parse(bytes).outcome, JSON.parse(bytes).loader], [passed, loaded]);
+      if (!loaded) assert.deepEqual(readGreenReceipt(context), receipt, 'a subsequent session discovers the same receipt');
       assert.equal(readFileSync(result.evidence.path, 'utf8'), bytes);
     }
   } finally {

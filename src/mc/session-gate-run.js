@@ -5,14 +5,14 @@
  * the change scope without cost deferral; --whole-selection is optional wide scope. */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { setPriority } from 'node:os';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runShell } from './child-async.js';
 import { executionIdentity, realTests, resolveTestPlan, selectFiles, suiteEnv, suiteTimeoutMs, testScriptOf } from './repo-gate.js';
 import { redTests, tapTotals } from './tap-red.js';
 import { awaitDeploy, deployHolding } from './await-deploy.js';
 import { BUILD_LANE } from './gate-lock.js';
-import { fileOutcomes, readTestTimes, outputCut, progressTracker, sessionFiles, slowTests, touchedTests } from './test-times.js';
+import { PROCESS_PROGRESS_PRELOAD, fileOutcomes, readTestTimes, outputCut, progressTracker, sessionFiles, slowTests, touchedTests } from './test-times.js';
 import { captureWorktree, findResumable, gateReceipt, persistGateReceipt, persistSelectorEvidence, recordReceiptGreen, sameContent, selectorSidecar } from './session-gate-evidence.js';
 import { classifiedEmptyChange, commandIdentity, emptyChangeCoverage } from './gate-greens.js';
 import { settleRed } from './gate-settle.js';
@@ -32,6 +32,45 @@ export function selectorCommand(command, { base = 'origin/main', changed = [] } 
   const withoutBase = command.replace(/\s+--base-ref(?:=|\s+)(?:'[^']*'|"[^"]*"|\S+)/gu, '');
   return `${withoutBase} --base-ref ${quote(base)}${changed.map((path) => ` --changed-path ${quote(path)}`).join('')}`;
 }
+
+/** The node options that load code into every test process, each with `=` or a separate value. */
+const CODE_LOADING = new Set(['--import', '--require', '-r', '--loader', '--experimental-loader']);
+
+/**
+ * The code-loading options an inherited `NODE_OPTIONS` names (`--import`, `--require`,
+ * `-r`, `--loader`, `--experimental-loader`), each once, in order; [] when it names
+ * none. Only the names: a value is never returned. It reads the caller's own
+ * `NODE_OPTIONS`, before the gate adds its progress preload and reporter flags; the
+ * declared test flags travel in argv and are not in it. A gate started inside another
+ * gate's test process inherits that gate's progress preload: the gate's own, not read
+ * either, whichever mc checkout it comes from (`GATE_PRELOAD`). A run under such an option measures other code than the tree its receipt
+ * names: a diagnostic run.
+ */
+const GATE_PRELOAD = new RegExp(`^file://.*/${basename(fileURLToPath(PROCESS_PROGRESS_PRELOAD)).replace('.', '\\.')}$`, 'u');
+export function codeLoaders(nodeOptions) {
+  const words = String(nodeOptions ?? '').match(/(?:[^\s"]+|"(?:[^"\\]|\\.)*"?)+/gu) || [];
+  const found = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const at = words[i].indexOf('=');
+    const name = at < 0 ? words[i] : words[i].slice(0, at);
+    if (!CODE_LOADING.has(name)) continue;
+    const value = at < 0 ? words[i + 1] : words[i].slice(at + 1);
+    if (at < 0) i += 1;
+    if (name === '--import' && GATE_PRELOAD.test(value ?? '')) continue;
+    if (!found.includes(name)) found.push(name);
+  }
+  return found;
+}
+
+/**
+ * A run whose test processes loaded caller-supplied code: shown, never a green. A
+ * passing one is `diagnostic` (exit 0, `process_ok`, not `ok`), a red stays red,
+ * an incomplete stays incomplete; each carries `loader: true` and the option names.
+ */
+const asDiagnostic = (result, loader) => (!loader.length || !result ? result : {
+  ...result, loader: true, loader_options: [...loader],
+  ...(result.ok === true ? { ok: false, process_ok: true, verdict: 'diagnostic' } : {}),
+});
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
@@ -94,6 +133,9 @@ export async function runSessionGate(request, {
   // run: the run's times files are gone once its process closes.
   let tracker = null;
   let stopped = null;
+  // The code-loading options the caller's NODE_OPTIONS names (`codeLoaders`): the
+  // request's, or read here from the environment the test processes inherit.
+  const loader = Array.isArray(request.loader) ? request.loader : codeLoaders((deps.env ?? process.env).NODE_OPTIONS);
   const execute = async () => {
     spans.execution = openSpan(clock, 'execution');
     const controller = new AbortController();
@@ -173,7 +215,7 @@ export async function runSessionGate(request, {
       captured = structuredClone(spans);
     }
   };
-  if (!request.measurement) return execute();
+  if (!request.measurement) return asDiagnostic(await execute(), loader);
   // Each member as this attempt ran or reused it, for the receipt: what a later
   // attempt on the same content may resume from (`findResumable`).
   const withMembers = (result) => {
@@ -203,7 +245,8 @@ export async function runSessionGate(request, {
     return { ...result, members: { files, commands } };
   };
   // A `--command` request reuses nothing, as `--fresh` does: it is a reviewer's own measurement.
-  if (!request.fresh && !request.commands) {
+  // Nor does a loader run: every check it was asked for runs under the loader.
+  if (!request.fresh && !request.commands && !loader.length) {
     try { prior = findResumable({ root: request.gate?.root, measurement: request.measurement, flags: request.flags || [], pattern: request.pattern ?? null }); }
     catch { /* nothing to resume from: the whole selection runs */ }
   }
@@ -253,7 +296,7 @@ export async function runSessionGate(request, {
   }
   result = { ...result, phases: phaseLedger({ execution: captured?.execution ?? null,
     entries: [...(captured ? [captured.selection, captured.tests, ...captured.commands] : []), fingerprint.before, fingerprint.after, sidecar].filter(Boolean) }) };
-  const receipt = gateReceipt({ measurement: request.measurement, before, after, result, started, ended: now(), selector });
+  const receipt = gateReceipt({ measurement: request.measurement, before, after, result, started, ended: now(), selector, loader: loader.length > 0 });
   const path = persist({ root: request.gate.root, receipt });
   try { record({ root: request.gate.root, receipt, path }); }
   catch (error) {
@@ -261,7 +304,7 @@ export async function runSessionGate(request, {
     // attempt. The merger simply measures again when the cache is absent.
     (deps.write || ((text) => process.stdout.write(text)))(`Warning: gate reuse cache not updated: ${error.message}\n`);
   }
-  return { ...result, evidence: { path, outcome: receipt.outcome } };
+  return { ...asDiagnostic(result, loader), evidence: { path, outcome: receipt.outcome } };
 }
 
 async function executeSessionGate(request, {

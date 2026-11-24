@@ -290,6 +290,35 @@ describe('mc gate <test files…>', () => {
       ok: false, state: 'unavailable', unavailable: true });
   });
 
+  it('a run whose NODE_OPTIONS loads code says so before it starts and passes as DIAGNOSTIC, never GREEN', async () => {
+    const NOTICE = 'mc gate: NODE_OPTIONS loads code (--import) — a diagnostic run: nothing is reused by it or from it, and it is not a green\n';
+    const loaded = { MC_SCRATCH: '/scratch', NODE_OPTIONS: '--max-old-space-size=4096 --import=./x.mjs' };
+    const human = harness({ tests: ['a.test.js'], finishAfter: 1, output: GREEN, result: { code: 0, ok: false, process_ok: true, loader: true, verdict: 'diagnostic' } });
+    human.deps.env = loaded;
+    assert.equal(await run(['a.test.js'], human.deps), 0);
+    assert.deepEqual(JSON.parse(human.files.get(`${LOG}.request.json`)).loader, ['--import'], 'the option name, not its value');
+    assert.ok(human.out.stdout.startsWith(`${NOTICE}DIAGNOSTIC — node --test a.test.js — 1 tests, 0 failed — `), human.out.stdout);
+    assert.doesNotMatch(human.out.stdout, /GREEN|x\.mjs/u);
+
+    const json = harness({ tests: ['a.test.js'], finishAfter: 1, output: GREEN, result: { code: 0, ok: false, process_ok: true, loader: true, verdict: 'diagnostic' } });
+    json.deps.env = loaded;
+    assert.equal(await run(['a.test.js', '--json'], json.deps), 0);
+    const parsed = JSON.parse(json.out.stdout);
+    assert.deepEqual([parsed.ok, parsed.process_ok, parsed.loader, parsed.verdict, parsed.exit], [false, true, true, 'diagnostic', 0]);
+    assert.equal(json.out.stderr, NOTICE, 'under --json the notice leaves stdout to the verdict');
+
+    const red = harness({ tests: ['a.test.js'], finishAfter: 1, code: 1, output: 'ℹ tests 1\nℹ pass 0\nℹ fail 1\n', result: { code: 1, ok: false, loader: true } });
+    red.deps.env = loaded;
+    assert.equal(await run(['a.test.js'], red.deps), 1);
+    assert.match(red.out.stdout, /^mc gate: NODE_OPTIONS loads code[^\n]*\nRED —/u);
+
+    const plain = harness({ tests: ['a.test.js'], finishAfter: 1, output: GREEN });
+    plain.deps.env = { MC_SCRATCH: '/scratch', NODE_OPTIONS: '--max-old-space-size=4096 --test-reporter=tap' };
+    assert.equal(await run(['a.test.js'], plain.deps), 0);
+    assert.deepEqual(JSON.parse(plain.files.get(`${LOG}.request.json`)).loader, []);
+    assert.match(plain.out.stdout, /^GREEN —/u);
+  });
+
   it('does not infer unavailable state from stderr-like log wording', async () => {
     const h = harness({ tests: ['a.test.js'], finishAfter: 1, output: `unavailable on this machine\n${GREEN}` });
     assert.equal(await run(['a.test.js'], h.deps), 0);
