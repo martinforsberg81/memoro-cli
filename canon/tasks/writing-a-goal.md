@@ -26,6 +26,8 @@ Work that is several pieces in order is several goals in phases. In a programme 
 phase its own is stated to wait for is done or dropped (`mc programs after`); in every other programme, when every goal in a lower phase is. `mc goal phase
 <p>/<g> <n>` changes the order later; goals of one phase run side by side; a `draft` goal holds back the phases that wait for its phase. The cut into goals and
 phases is [designing a programme](designing-a-programme.md): a complete brief enters `build` only after its acceptance procedure and setup are verified.
+When a criterion needs an act or an input that exists only after the goal's own change has landed, the goal is two goals: the change, ready now, and
+the work that uses the act's result, in a dependent phase. Planning makes that split itself and never asks the desk for the input.
 
 - **Readiness:** before creating a goal, including a `draft` skeleton, apply [goal design](references/goal-design.md): establish the problem,
   choose the solution, and define success criteria and exclusions. Missing investigation stays with the proposal. A goal that waits on others
@@ -38,7 +40,8 @@ phases is [designing a programme](designing-a-programme.md): a complete brief en
   standard; `untouched` gives the reason, and the review holds the diff against it. Criteria apply the standards, never set new ones.
 - **Risks:** how this change can go wrong; each is settled by a criterion, by the protection, or is accepted with its reason.
 - **Criteria:** each states an observable outcome and pass/fail boundary; its `check` gives runnable commands, working directory, prerequisites
-  and expected results, and can run now, on the runner's host, before merge. For branch comparisons, use `git diff origin/main...HEAD`. A file,
+  and expected results, and can run now, on the runner's host, before merge; native-only behaviour is checked through the web path and
+  recorded as not run, as [the programme document](writing-a-programme-document.md) says under Proved by. For branch comparisons, use `git diff origin/main...HEAD`. A file,
   keyword or green gate alone does not prove content. No check waits for anyone or passes through a reserved act: it exercises the
   mechanism below the reserved command and stops short of the act. Put policy
   choices in planning, not acceptance.

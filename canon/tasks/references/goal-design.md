@@ -91,7 +91,11 @@ change rather than adding a fixed number of criteria.
   [writing-tests](../writing-tests.md) for any commissioned test work.
 - Read each criterion against its check: could the check pass while the
   promised behaviour is wrong? If so, repair the check or narrow the claim
-  honestly. Missing or partial evidence leaves the criterion unmet.
+  honestly. Ask the converse too: could the check fail although everything
+  promised is right? Scope a presence or absence check to the output, section
+  or change it is about, including a historical quotation the change must
+  keep, and make sure a fixture does not trip the rule on its own. Missing or
+  partial evidence leaves the criterion unmet.
 - Distinguish measured, historical and missing proof. Record revision, scope
   and logs; partial, skipped or unavailable evidence is not green. A criterion
   is marked met only after its whole check holds. Follow

@@ -12,8 +12,9 @@ A user suggestion is evidence of a problem or a need. A selection of suggestions
 
 Work through each part's product design with Martin in the conversation. Establish what the person is trying to do, check the report against the running app, related work and the binding standards, then present one concrete design at a time with what the person will see and do. Include the cases and constraints that can change the design: existing workflows and controls, which item or session owns the work, phone and desktop behaviour, loading and failure, accessibility, and what is stored or shared. Show the appearance or write out the behaviour as appropriate. A reporter's proposed fix is input to the design.
 
-Record Martin's existing decisions for each part. Bring him a concrete proposal for each decision still open about the user experience, and mark it as pending in the draft.
-The desk resolves technical choices using [asking-martin](asking-martin.md).
+An order delivers what was asked by reusing what exists: it changes an existing component only as far as the asked outcome requires. A wider rebuild the desk thinks would serve better is told to Martin as a separate candidate, a proposal in its area, and is never written into the order (Martin, 2026-11-20: "Varför bygger vi om det som redan finns? Det var inte uppdraget."). When Martin has decided that a surface follows a provider's own model (Gmail's mail as Gmail shows it), the provider's documented behaviour answers how that surface looks and behaves. Read it, apply it and name it as the source in the part; never put a variant the provider already defines to him, and never invent a word the provider does not use (Martin, 2026-11-22).
+
+Record Martin's existing decisions for each part. Bring him a concrete proposal for each decision still open about the user experience, and mark it as pending in the draft. The desk resolves technical choices using [asking-martin](asking-martin.md).
 
 ## What the order settles
 
@@ -31,8 +32,7 @@ Keep the findings for the chosen technical solution in the programme's evidence 
 - One thing to say yes or no to. If Martin could want half, it is two programmes.
 - Three to eight parts, cut by user outcome, not layer. Each can land alone and keeps its number. Each waits for the part before it unless it holds the line `In parallel with the previous part.`
 - Order says the sequence of the parts and what the desk does beside the build; it holds no step of Martin's.
-- Aim for 1,500 words, but never cut a user case to fit (Martin, 2026-11-18).
-  Cut unnecessary construction first; split into programmes if that makes the choices clearer.
+- Aim for 1,500 words, but never cut a user case to fit (Martin, 2026-11-18). Cut unnecessary construction first; split into programmes if that makes the choices clearer.
   Describe what runs today as users meet it, from the app and standards; read code only for facts the order needs.
 
 ## A part
@@ -44,14 +44,14 @@ Keep the findings for the chosen technical solution in the programme's evidence 
   Show the new thing at one width in light theme, one picture per choice Martin makes.
   Add a phone picture only for a distinct choice. Do not picture dark: it follows memoro's `docs/technical/design-tokens.md`.
   Describe failed, empty, working, cut and return states in words, naming the app component they follow.
-  Name and show an unchanged component in place. Show text as text. Say "Nothing a user sees" where true. At most ten pictures across the document.
+  Name and show an unchanged component in place. Show text as text. Say "Nothing a user sees" where true. At most ten pictures across the document. A picture is a static sketch made at the desk in the app's tokens, fonts and components: HTML rendered to an image, or an existing screen captured with `mc shot` with the change drawn over it. It is detailed enough that the result is predictable. Building the feature, even partly, is never how an order is designed (Martin, 2026-11-20). Where the same characters can be literal data or syntax (a final period after an address, a quote inside a value), give one example and an adjacent counter-example with the same characters, so the part settles the boundary itself.
 - **Proved by.** What would fail if the user outcome were wrong and how to check it. Name the workspace, prerequisites and usable data or fixtures; dependency setup in a memoro worktree is `npm run deps:ensure`, never `npm ci` or `npm install`, which a build is refused ([publish-and-merge](publish-and-merge.md)).
-  Verify the setup that can be checked now. The build exercises the finished behaviour.
+  Verify the setup that can be checked now. The build exercises the finished behaviour. The check runs unattended with the tools mc provides on the runner's host. Behaviour only a native device shows is checked through the app's own web path (a simulated visualViewport for the keyboard, for example) and recorded in `docs/technical/` as not run, with its reason; it is never a gate the build cannot pass (Martin, 2026-11-20).
 - **Not in this part.** The nearest thing someone would expect and does not get.
 
 ## What is Martin's
 
-Under Decided, give each choice Martin could have made otherwise one line and attribute it to him or the desk. Show any interpretation of his words as an image or text there. Mark uncertainty and state the proposal.
+Under Decided, give each choice that shapes the order one line with its source: Martin's own decisions with his name and date, technical choices to the desk with the evidence that settled them. Attribution is not a request for sign-off. Show any interpretation of his words about the user experience as an image or text there and bring it to him in the conversation; technical uncertainty the desk investigates and settles ([asking-martin](asking-martin.md)).
 Before offering readiness, give every part an agreed outcome and design, a chosen solution supported by completed investigations, and the acceptance procedure above. This includes behaviour-only changes and repairs.
 Read every part for a step that waits on him. Settle it now, make it measurable or move his act before ready or after done; verification by him, on a Mac or on a device leaves the order for the horizon's basis. Review the current text once with `mc programs review <programme>` (Martin, 2026-11-18) and settle its findings; run it again only when a changed part needs fresh feedback, never until a reading comes back clean (Martin, 2026-11-21).
 When Martin says the order is ready, the desk runs `mc programs state <programme> ready`.

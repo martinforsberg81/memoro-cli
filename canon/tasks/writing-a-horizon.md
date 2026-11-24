@@ -4,11 +4,11 @@ description: Drafting a horizon playback from the app and its records.
 ---
 # Writing a horizon
 
-A horizon is what is worked toward now, over roughly one to two months. It is not a standing aim or one per area; do not invent one for an inactive part of the app. It takes several programmes. A deliverable with one end and one programme is a programme, not a horizon. Split wording too large for the period before confirmation.
+A horizon is what is worked toward now, over roughly one to two months. It is not a standing aim or one per area; do not invent one for an inactive part of the app. It takes several programmes. A deliverable with one end and one programme is a programme, not a horizon. Split wording too large for the period before storing it.
 
 Before drafting, read the area pages, archived programmes of the relevant part, open ends on record and the app (with `mc shot`). Distinguish facts actually read from unavailable evidence; do not present an assumption as an observation. The enduring direction belongs to the area, not the horizon.
 
-Before confirmation, the desk writes `basis.md` beside `playback.md`: what runs today, binding decisions, numbered gaps with where each was read, and what is not decided. Playback prerequisites name basis gaps by number. Anything not yet designed (a new thing or “polished”) goes under not decided: a programme document settles it, never the cut into goals. The basis is authored context, not parsed. Verification that follows the orders (by Martin, on a Mac or on a device) is listed in the basis as information, under the gap it belongs to; no programme carries it (Martin, 2026-11-21).
+Before storing, the desk writes `basis.md` beside `playback.md`: what runs today, binding decisions, numbered gaps with where each was read, and what is not decided. Playback prerequisites name basis gaps by number. Anything not yet designed (a new thing or “polished”) goes under not decided: a programme document settles it, never the cut into goals. The basis is authored context, not parsed. Verification that follows the orders (by Martin, on a Mac or on a device) is listed in the basis as information, under the gap it belongs to; no programme carries it (Martin, 2026-11-21).
 
 Draft English playback with exactly these five non-empty headings in order:
 
