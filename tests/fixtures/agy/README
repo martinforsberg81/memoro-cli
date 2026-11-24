@@ -37,3 +37,15 @@ Recorded (tests/mc/run-plan.test.js, the agy-stream reader)
   (runner log goal-org-detail-hero-scene-card-…), copied unchanged. Each
   ended at exit 3 on "There was a network issue connecting to the server" and
   `dial tcp: lookup … server misbehaving`; they read as `offline`.
+
+Recorded hook input (tests/mc/hooks.test.js, tests/adapters/antigravity-cli.test.js,
+tests/mc/commands/hook-install.test.js)
+  pretool-write_file-goal-20261124T2029Z.json,
+  pretool-write_file-notes-20261124T2029Z.json: the PreToolUse stdin of two
+  `write_file` calls, saved by a hook whose command wrote its stdin to a file,
+  from one agy 1.5.16 session (gemini-3.8-flash-medium) in a scratch directory
+  on 2026-11-24, copied unchanged. The first writes
+  `<cwd>/programs/demo/goals/one/GOAL.json`, the second `<cwd>/notes.txt`; the
+  path is `toolCall.args.Path`. agy's transcripts on this host hold `write_file`
+  (args Content, Path, sometimes Overwrite) and `edit_file` (Path, Target,
+  Replacement), and no `write_to_file`.

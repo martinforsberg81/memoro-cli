@@ -1143,7 +1143,7 @@ export function agyHookInput(input) {
   const args = isPlainObject(call.args) ? call.args : {};
   const path = AGY_PATH_KEYS.map((key) => args[key]).find((value) => typeof value === 'string' && value) || '';
   const cwd = typeof input?.cwd === 'string' && input.cwd ? input.cwd : null;
-  const named = { run_command: 'Bash', write_to_file: 'Write', edit_file: 'Edit', read_file: 'Read', view_file: 'Read' };
+  const named = { run_command: 'Bash', write_file: 'Write', write_to_file: 'Write', edit_file: 'Edit', read_file: 'Read', view_file: 'Read' };
   const tool_name = named[call.name] || String(call.name || '');
   const tool_input = tool_name === 'Bash' ? { command: typeof args.CommandLine === 'string' ? args.CommandLine : '' }
     : ['Write', 'Edit', 'Read'].includes(tool_name) ? { file_path: path } : args;

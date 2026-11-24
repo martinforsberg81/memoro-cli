@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -788,11 +788,31 @@ describe('agy: its own hooks file and its own hook input', () => {
     assert.deepEqual(hookTargets({ env: {}, home: '/h', installed: () => { throw new Error('no'); } }).map((target) => target.dialect), ['claude']);
   });
 
-  it('the entry runs mc with --tool agy, ends each command in `|| true`, and matches the five file tools', () => {
+  it('the entry runs mc with --tool agy, ends each command in `|| true`, and matches the shell and the file tools', () => {
     const entry = agyHooksEntry(agy().spec);
     assert.deepEqual(Object.keys(entry), ['SessionStart', 'PreToolUse', 'Stop']);
     for (const command of [entry.SessionStart[0].command, entry.PreToolUse[0].hooks[0].command, entry.Stop[0].command]) assert.match(command, /^mc hook (session-start|pre-tool|stop) --tool agy 2>\/dev\/null \|\| true$/u);
-    assert.equal(entry.PreToolUse[0].matcher, 'run_command|read_file|view_file|edit_file|write_to_file');
+    assert.equal(entry.PreToolUse[0].matcher, 'run_command|read_file|view_file|edit_file|write_file|write_to_file');
+  });
+
+  it('the recorded agy write_file of a goal\'s GOAL.json gets the same refusal as a Claude Write; an ordinary write passes', async () => {
+    const recorded = (name) => readFileSync(new URL(`../fixtures/agy/pretool-write_file-${name}-20261124T2029Z.json`, import.meta.url), 'utf8');
+    const preTool = async (argv, raw, root) => {
+      const out = [];
+      const deps = { stdout: { write: (text) => out.push(JSON.parse(text)) }, stderr: { write() {} }, readStdin: async () => raw, env: { MC_WORK_ROOT: root },
+        inMcTerritory: () => true, repoHookDecision: () => null, pathInKnownRepo: () => false };
+      assert.equal(await run(argv, deps), 0);
+      return out;
+    };
+    const goal = JSON.parse(recorded('goal'));
+    assert.deepEqual(agyHookInput(goal), { tool_name: 'Write', tool_input: { file_path: goal.toolCall.args.Path }, cwd: goal.cwd });
+    const [agyAnswer] = await preTool(['pre-tool', '--tool', 'agy'], recorded('goal'), goal.cwd);
+    const [claudeAnswer] = await preTool(['pre-tool'], JSON.stringify({ cwd: goal.cwd, tool_name: 'Write', tool_input: { file_path: goal.toolCall.args.Path, content: '{}' } }), goal.cwd);
+    assert.equal(agyAnswer?.decision, 'deny');
+    assert.equal(agyAnswer.reason, claudeAnswer.hookSpecificOutput.permissionDecisionReason, 'the same refusal text');
+    assert.match(agyAnswer.reason, /^mc: This file is mc's/u);
+    const notes = JSON.parse(recorded('notes'));
+    assert.deepEqual(await preTool(['pre-tool', '--tool', 'agy'], recorded('notes'), notes.cwd), [], 'an ordinary file write passes');
   });
 
   it('registration: absent, other, then right; install adds the entry and keeps the rest', () => {
