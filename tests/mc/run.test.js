@@ -5191,15 +5191,16 @@ test('a goal keeps no slot once its session has ended', async () => {
 const HEAD = 'abc1234def5678';
 const builtBy = (who, at = '2026-08-28T10:00Z') => `## ${at} · ${who} · review · ready\n\nDone: built it\n`;
 
-/** A goal in review whose branch has `pr` open at `head` (null: none), as `gh pr list --head` answers. */
-function reviewFixture({ log = builtBy('codex gpt-6.2-sol'), pr = 31, head = HEAD, goals = {} } = {}) {
-  const f = goalFixture({ judged: { stage: 'review', log }, ...goals });
+/** A goal in review; `gh pr list --head` answers from `openByRepo`, or with `pr` open at `head` (null: none). */
+function reviewFixture({ log = builtBy('codex gpt-6.2-sol'), pr = 31, head = HEAD, goal = {}, goals = {}, openByRepo } = {}) {
+  const f = goalFixture({ judged: { stage: 'review', log, ...goal }, ...goals });
   const { gh } = f.deps;
   f.head = head;
   f.deps.gh = (cwd, args) => {
     if (args.includes('--head')) {
       f.calls.gh.push([cwd, ...args]);
-      return { ok: true, stdout: JSON.stringify(pr === null ? [] : [{ number: pr, headRefOid: f.head }]) };
+      const open = openByRepo ? openByRepo[cwd.split('/').at(-1)] : pr === null ? [] : [{ number: pr, headRefOid: f.head }];
+      return { ok: true, stdout: JSON.stringify(open ?? []) };
     }
     return gh(cwd, args);
   };
@@ -5382,12 +5383,22 @@ test('a review releases its lane after merge handoff so the next assignment can 
 });
 
 test('a goal in review gets a review session: the goal-review role, the review model, its pull request and head', async () => {
-  const f = reviewFixture();
+  const f = reviewFixture({
+    // Repository order, not PR registration order or the lane that asks first.
+    goal: { repos: 'memoro,memoro-cli', prs: ['memoro-cli#47', 'memoro#31'] },
+    openByRepo: {
+      memoro: [{ number: 31, headRefOid: HEAD }],
+      'memoro-cli': [{ number: 47, headRefOid: 'def5678abc1234' }],
+    },
+  });
   f.answer = judges(f, 'merge');
-  const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro-cli' })).ran, 0);
+  const r = await runner.pass({ repo: 'memoro' });
   assert.equal(r.name, 'goal:prog/judged');
   const [call] = f.calls.sessions;
   assert.equal(call.env.MC_ROLE, 'review-session:goal');
+  assert.equal(call.env.MC_REPO, 'memoro');
   assert.equal(call.env.MC_GOAL, 'prog/judged');
   assert.equal(call.env.MC_MODEL, TEST_CATALOG.review[0].model);
   assert.match(call.args.join('\n'), /ROLE review-session:goal/u);
@@ -5397,6 +5408,43 @@ test('a goal in review gets a review session: the goal-review role, the review m
   assert.ok(Number.isFinite(Date.parse(call.env.MC_SESSION_STARTED)), 'when it began, for the Stop hook');
   assert.match(call.prompt.split('\n')[0], /Your role says the rest\.$/u, 'the first line says where; the brief follows');
   assert.match(call.prompt, /\nCRITERIA 0\/1\n  1 ✗ it works\n      check: a test/u, 'the review is briefed with the goal as mc goal show renders it');
+});
+
+test('a review with a PR registered only in the second repository starts there on that PR', async () => {
+  const f = reviewFixture({
+    goal: { repos: 'memoro-cli,memoro', prs: ['memoro#31'] },
+    openByRepo: { memoro: [{ number: 31, headRefOid: HEAD }] },
+  });
+  f.answer = judges(f, 'merge');
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro-cli' })).ran, 0);
+  assert.equal(where(f, 'judged'), 'review · ready', 'the first repository lane leaves it for the second');
+  assert.equal((await runner.pass({ repo: 'memoro', lane: 1 })).name, 'goal:prog/judged');
+  const [call] = f.calls.sessions;
+  const cwd = `${GOALS}/judged/memoro`;
+  assert.equal(call.cwd, cwd);
+  assert.equal(call.env.MC_WORKAREA, cwd);
+  assert.equal(call.env.MC_REPO, 'memoro');
+  assert.equal(call.env.MC_REVIEW_PR, '31');
+  assert.equal(call.env.MC_REVIEW_HEAD, HEAD);
+  assert.match(call.prompt, /pull request is #31, at head abc1234def5678/u);
+  const current = Object.entries(f.duringSession[0]).find(([path]) => path.includes('/current-'));
+  const { repo, lane, worktree } = JSON.parse(current[1]);
+  assert.deepEqual({ repo, lane, worktree }, { repo: 'memoro', lane: 1, worktree: cwd });
+});
+
+test('a review with no open PR in its registered repository returns to build, not to another repository', async () => {
+  const f = reviewFixture({
+    goal: { repos: 'memoro-cli,memoro', prs: ['memoro#31'] },
+    openByRepo: { 'memoro-cli': [{ number: 47, headRefOid: 'def5678abc1234' }] },
+  });
+  f.answer = judges(f, 'merge');
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  assert.equal(where(f, 'judged'), 'build · ready');
+  assert.match(goalEntries(f).at(-1).comment, /^in review without an open pull request/u);
+  assert.deepEqual(f.calls.sessions, []);
+  assert.deepEqual(f.calls.gh.filter(([, ...args]) => args.includes('--head')).map(([repo]) => repo), ['/home/memoro']);
 });
 
 test('a goal whose every review candidate is its build model is reviewed on that model, not left waiting', async () => {

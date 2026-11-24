@@ -1723,7 +1723,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     * runner starts a session on (`goalSession`: `build · ready`, `review ·
     * ready` (a repair when REVIEW.md names what to fix), `merge · blocked` when unqueued, and `merge ·
     * ready` after a red while its pull request is out of the merger's line), on
-    * one of `repos` (its first repository),
+    * one of `repos` (its first repository, or the first with a registered PR for review),
    * held by nobody — a current file on this machine, or a claim while its lane
    * is on the way to writing one — and, for a review, with a model it may run
    * on (`reviewRoute`). A review that cannot run now is left out, so it does
@@ -1769,13 +1769,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const programmes = [...new Set(all.map(goal => goal.programme))];
     // Each programme's record, once for this pick (D10): who may start what is read where it is decided.
     const orders = new Map(programmes.map(programme => [programme, orderOf(programme)]));
-    return all
-      .filter((goal) => goalSession(goal, merge) !== null
-        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && !decisionClaimed(join(goal.dir, '.decision.json')) && phaseOpen(goal, all, orders.get(goal.programme)) && !heldBy(goal) && may(goal) && !heldForMain(goal))
-      .map((goal) => {
-        const kind = goalSession(goal, merge);
-        return { name: goalName(goal), repo: goal.repos[0], kind, variant: goalVariant(kind), since: goal.log.at(-1)?.at ?? '', resumed: false, goal };
-      });
+    return all.flatMap((goal) => {
+      const kind = goalSession(goal, merge);
+      if (!kind) return [];
+      const reviewRepo = kind === 'review' ? goal.repos.find((repo) => goal.prs.some((pr) => pr.repo === repo)) : null;
+      const repo = reviewRepo ?? goal.repos[0];
+      const name = goalName(goal);
+      if (!names.includes(repo) || held.has(name) || decisionClaimed(join(goal.dir, '.decision.json'))
+        || !phaseOpen(goal, all, orders.get(goal.programme)) || heldBy(goal) || !may(goal) || heldForMain(goal)) return [];
+      return [{ name, repo, kind, variant: goalVariant(kind), since: goal.log.at(-1)?.at ?? '', resumed: false, goal }];
+    });
   }
 
 
@@ -1813,13 +1816,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * One goal session, claimed for its length: `{ ran, name, goal }`, `{ stop }`,
    * or `{ ran: 0 }` when it did not start.
    */
-  async function goalPass(goal, { lane, label }) {
+  async function goalPass({ goal, repo }, { lane, label }) {
     const name = goalName(goal);
     claims.add(name);
-    claimRepos.set(name, goal.repos[0]);
+    claimRepos.set(name, repo);
     let outcome;
     try {
-      outcome = await runGoal(goal, { lane });
+      outcome = await runGoal(goal, { repo, lane });
     } finally {
       claims.delete(name);
       claimRepos.delete(name);
@@ -3419,13 +3422,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * its work where it was, in the tree. Nothing is merged, aborted or
    * committed here for the same reason.
    */
-  async function runGoal(goal, { lane = 0 } = {}) {
+  async function runGoal(goal, { repo: repoName, lane }) {
     const name = goalName(goal);
     const release = goalRelease(goal);
     if (release?.problems) return 'skipped:held';
     const revision = release?.release?.revision;
     const logPath = join(goal.dir, LOG_FILE);
-    const [repoName] = goal.repos;
     const worktree = join(goal.dir, repoName);
     const kind = goalKind(goal);
     if (!kind) return 'skipped:draft';
@@ -3456,7 +3458,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const settings = routed.settings ?? routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) { say(`${name}: ${settings.tool} is not available on this machine (${launch?.hint || launch?.reason}), skip`); return 'skipped:tool-missing'; }
-    // Every session on a goal stands in its first repository's worktree.
     const cwd = worktree;
     const slot = await waitForSlot(name, { repo: repoName, lane });
     if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
@@ -3518,7 +3519,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // The untouched areas the branch changed: the one function the move out of review checks against (`review-verdict.js`).
       // A goal cut from an order has no stand and is judged by one line, `part`: no area is read for it and no write-back line asked.
       const cut = cutFromOrder(goal);
-      if (review) found = cut ? { tripped: [] } : trippedAreas({ goal, dir: goal.dir, head: pr.head, git: deps.git, exists: deps.exists });
+      if (review) found = cut ? { tripped: [] } : trippedAreas({ goal, dir: goal.dir, reviewRepo: repoName, head: pr.head, git: deps.git, exists: deps.exists });
       // The areas judged as the user sees it, asked once here: the prompt names them and MC_REVIEW_SEEN holds the same list.
       const judged = review && !cut ? seenAreas({ goal, dir: goal.dir, tripped: found.tripped ?? [], git: deps.git, exists: deps.exists }) : { seen: [] };
       // The write-back line: asked of a version 2 goal's review when its programme has a record, so what the programme
@@ -3916,7 +3917,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         ? await mainMendPass(pick, { lane })
         : pick.deployMend
         ? await deployMendPass(pick, { lane })
-        : await goalPass(pick.goal, { lane, label });
+        : await goalPass(pick, { lane, label });
       if (ran.ran || ran.stop || ran.waited) return ran;
       passed.add(pick.name);
     }
