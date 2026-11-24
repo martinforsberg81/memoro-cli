@@ -124,6 +124,11 @@ moves forward. You do one of two things to it, nothing else:
   What reaches Martin is in asking-martin. A check that passes through a reserved
   act is not such a choice: it is the goal defect above. Follow asking-martin
   for evidence.
+- **Work beyond you:** the goal's text holds and the work is in scope, but you
+  judge it beyond what you can build. Say so one way: `mc goal log --comment
+  "declined: <your reason>"`, a LOG.md entry beginning `declined:`, then end
+  the session. It is no defect and no question. The runner counts the session
+  toward neither stop below and gives the goal's next build to another model.
 - Otherwise the goal stays `build · ready`: the next session continues from
   your `Next`.
 

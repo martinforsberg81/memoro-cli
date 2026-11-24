@@ -71,7 +71,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addBranchWorktree, addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, BUILD_SESSION, BUILD_SESSION_LIMIT, BUILD_SESSION_STOP, buildSessionCount, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, WAITS_FOR_MAIN, PROGRESS_AGAIN, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addBranchWorktree, addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, BUILD_SESSION, BUILD_SESSION_LIMIT, BUILD_SESSION_STOP, buildSessionCount, DECLINED_STOP, declinedComment, declinedModels, declineEntry, declinesWork, modelKey, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, WAITS_FOR_MAIN, PROGRESS_AGAIN, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { cutFromOrder } from './goal-parts.js';
 import { realLock } from './runner-lock.js';
@@ -134,7 +134,7 @@ import { applyCollectedCapacity, applyRefusal, CAPACITY_POLL_MS, normaliseCapaci
 import { chooseCandidate } from './model-choice.js';
 import { readModels } from './model-config.js';
 import { billingRoute, billingRouteNow, disabledReserve, gatewayLaunch, gatewayRefusal, heldReserve, RESERVE_RETRY_MS } from './billing-route.js';
-import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf } from './roles.js';
+import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf, textDigest } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { attachRepoDepsAsync } from './shared-deps.js';
 import { runTool } from './child-async.js';
@@ -947,11 +947,21 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     return `skipped:no-capacity (${why})`;
   }
 
-  /** The candidate a catalog list runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read. */
-  function routeClass(cls, { avoid = null, catalog = null } = {}) {
+  /**
+   * The candidate a catalog list runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read.
+   * `passBy` holds `<tool>:<model>` keys (`modelKey`) the list's candidates are judged without: the models that declined a
+   * goal's build. When it leaves the list no candidate, the answer is `{ ok: false, declined: true }`, not a wait.
+   */
+  function routeClass(cls, { avoid = null, catalog = null, passBy = [] } = {}) {
     try {
       const saved = deps.catalog();
-      const chosen = chooseCandidate({ cls, catalog: catalog ?? saved, capacity: capacity.read(), now: deps.now(), avoid, priority: saved.providerPriority ?? 'auto', launchable: (tool) => Boolean(deps.launch(tool)?.ok), waitForReserve });
+      let given = catalog ?? saved;
+      if (passBy.length) {
+        const left = (given[cls] ?? []).filter((candidate) => !passBy.includes(modelKey(candidate)));
+        if (!left.length && given[cls]?.length) return { ok: false, declined: true, class: cls, reason: `every ${cls} candidate declined the work — ${passBy.join(', ')}` };
+        given = { ...given, [cls]: left };
+      }
+      const chosen = chooseCandidate({ cls, catalog: given, capacity: capacity.read(), now: deps.now(), avoid, priority: saved.providerPriority ?? 'auto', launchable: (tool) => Boolean(deps.launch(tool)?.ok), waitForReserve });
       // A class sent to the API reserve waits instead when that provider's API is off.
       const provider = declared(chosen?.candidate?.tool, 'BILLING_PROVIDER');
       if (chosen?.billing === 'credits' && provider && apiOff(provider)) {
@@ -3128,7 +3138,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const now = stateNow(goal);
     appendEntry({ dir, entry: { at: logStamp(deps.now()), tool: 'runner', model: null, ...now, done: null, comment, next: null }, read: deps.read, write: deps.write });
     say(`${name}: ${comment}`);
-    const last = inStage(parseLog(deps.read(join(dir, LOG_FILE)) ?? ''), 'build').filter((item) => !noProgressEntry(item)).slice(-3);
+    const last = inStage(parseLog(deps.read(join(dir, LOG_FILE)) ?? ''), 'build').filter((item) => !noProgressEntry(item) && !declineEntry(item)).slice(-3);
     if (now.stage !== 'build' || now.status !== 'ready' || last.length < 3 || last.some((item) => item.tool !== 'runner')) return;
     goalState(goal, name, { status: 'Martin' }, { comment: 'three sessions ended without a word — see the logs under runner/log' });
   }
@@ -3217,6 +3227,33 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
+   * The digest of a goal's own text, what a decline holds for (`declinedModels`): a part's section of its order, the
+   * order whole for the documentation goal, else the goal's text as `mc goal show` renders it with every criterion
+   * unmet and without evidence, so meeting one is no change of text. Null when it cannot be read.
+   */
+  function goalTextDigest(goal, release) {
+    if (cutFromOrder(goal)) {
+      const text = release?.snapshot ? release.snapshot.text : orderText({ home: programsHome(deps.env), programme: goal.programme, read: deps.read });
+      if (goal.documentation === true) return textDigest(text ?? null);
+      return textDigest(text === null || text === undefined ? null : partOfOrder(text, goal.part)?.section ?? null);
+    }
+    if (!goal.title) return null;
+    const criteria = (goal.success_criteria ?? []).map(({ criterion, check }) => ({ criterion, check, met: false }));
+    return textDigest(renderGoalText(goalOfRecord({ ...goal, success_criteria: criteria })));
+  }
+
+  /**
+   * After a build or repair session that declined the work (`declinesWork`): one runner entry naming its candidate and
+   * the goal text it declined (`declinedComment`), and nothing counted — the next build passes that model by. A goal
+   * the session left out of `build · ready` is not the runner's to answer.
+   */
+  function afterDecline(goal, name, candidate, digest) {
+    const now = stateNow(goal);
+    if (now.stage !== 'build' || now.status !== 'ready') { say(`${name}: declined, and left ${now.stage} · ${now.status}`); return; }
+    goalState(goal, name, {}, { comment: declinedComment(modelKey(candidate), digest) });
+  }
+
+  /**
    * One goal session: the lane and total caps, the class routing and the
    * billing, in the goal's worktree with the goal role. Returns 'ran', 'stop'
    * or a `skipped` word. A goal in `review` gets a review
@@ -3258,9 +3295,17 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const role = deps.role(roleName);
     if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
     const routeList = kind === 'build' ? 'build' : repair ? 'finish' : kind;
-    const routed = review ? reviewRoute(goal) : { route: routeClass(routeList) };
+    // A build or repair passes by every model that declined the goal's text as it is now (`declinedModels`).
+    const textBefore = kind === 'build' || repair ? goalTextDigest(goal, release) : null;
+    const declined = textBefore ? declinedModels(parseLog(deps.read(logPath) ?? ''), textBefore) : [];
+    const routed = review ? reviewRoute(goal) : { route: routeClass(routeList, { passBy: declined }) };
     if (review && !routed.ok) { say(`${name}: its review waits — ${routed.reason}`); return 'skipped:no-capacity'; }
     const { route } = routed;
+    if (route.declined) {
+      if (heldBy(goal)) return 'skipped:held';
+      goalState(goal, name, { status: 'Martin' }, { comment: `${DECLINED_STOP} — ${declined.join(', ')}` });
+      return 'skipped:declined';
+    }
     if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
     const settings = routed.settings ?? routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const launch = deps.launch(settings.tool);
@@ -3466,6 +3511,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       refuseProvider(read, launch, picked.billing, settings.model);
       const entriesAfter = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner');
       const spoke = entriesAfter.length > entriesBefore;
+      // A build or repair that declined the work answers nothing about the goal's progress (`afterDecline`).
+      const declining = spoke && progressBefore && entriesAfter.slice(entriesBefore).some(declinesWork);
       // A goal held when its session ends belongs to its hold's owner (D2): no stage, status or entry is written here.
       const holdAtEnd = readHold(goal.dir, deps.read);
       if (revision && goalRelease(goal, revision)?.problems) say(`${name}: repair release changed while the session ran — its result cannot advance delivery`);
@@ -3475,6 +3522,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       else if (mend && !read.quota && !read.interrupted) afterMend(goal, name, { stage: goal.stage, status: goal.status });
       // An offline ending answers nothing about the goal: no review entry, no runner entry.
       else if (review && read.interrupted !== 'offline') afterReview(goal, name);
+      else if (declining) afterDecline(goal, name, route.candidate, textBefore);
       else if (spoke && progressBefore && !read.quota && !read.interrupted) afterBuild(goal, name, progressBefore);
       else if (!spoke && read.interrupted !== 'offline') goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
       const note = spoke ? read.note : `${read.note},no-log`;
