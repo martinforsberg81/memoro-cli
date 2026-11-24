@@ -195,7 +195,7 @@ order without a model call:
    and once it is no longer in the merger's line. A merge failure or a queued main-red request wakes a mend session; legacy blocked work outside merge is reconciled to Martin without a launch; `finish · ready` (a name kept for old records) is moved to `build · ready` with a log entry before any session starts, and a build in `build · ready` after a review's rejection is a repair build. `Martin`
    waits for the desk decision pass, not a delivery session: this includes a
    goal reported by `mc goal defect` and one stopped after three build sessions
-   without progress or after five build sessions (`no progress:`; *What a build session does* in
+   without progress, after five build sessions or after every build candidate declined (`no progress:`; *What a build session does* in
    [mc-goals.md](mc-goals.md)), which start no session until `mc goal ready`. A `build · ready` goal whose last entry is the runner's main-red wait (*What a build session does* in [mc-goals.md](mc-goals.md)) is held while a main-red repair of one of its repositories is queued, running or published. `draft · ready`, `done` and `dropped` start no
    session: nothing is ever started on a draft (Martin, 2026-11-21). A recorded ready programme whose README.md has a part no goal names is cut by the runner itself before the goals are read, with no session: one goal in `build · ready` per such part, and one more for the documentation (*The cut of a ready order*). A goal that is a part whose part is no longer a heading of README.md is held, and the runner says so once: `<goal>: its part has left the order — restore Part <n> in README.md or drop the goal — no session is started`.
 3. Hold any goal whose phase is not open in its programme. The runner reads
@@ -347,16 +347,21 @@ slot and goal/programme claims after the child closes. Partial queue failures
 write no receipt and leave the session able to retry. A review must
 write its records before the final stage command.
 
-If a session ends
-without writing a log entry, the runner writes one; three such build ends
-in succession set the goal Martin; the stage stays build. A normal build end with more work
-leaves it build · ready for the next session.
+When the runner counts a build ending without a log entry, it writes one;
+three such ends in succession set the goal Martin; the stage stays build.
+A normal build end with more work leaves it build · ready for the next
+session. See [goal recovery](mc-goals.md#what-a-build-session-does) for
+build stops and declines.
 
-A session that ends because the API server cannot be reached (`apiInterruption`
-kind `offline`: `connection_failed`, or the result says `Can't reach the API
-server`, ENOTFOUND, ECONNREFUSED or ETIMEDOUT) is no answer about its goal: it
-writes no runner entry and records no refusal, and its `runs.tsv` note is
-`offline`. It holds every new model session of any kind — build, review, repair,
+**Offline.** An unreachable API is an `offline` interruption, not a goal
+failure. Claude reports `connection_failed` or text such as `Can't reach the API
+server`, ENOTFOUND, ECONNREFUSED or ETIMEDOUT. agy recognizes the same text
+messages, plus `network issue connecting to the server`, `dial tcp`,
+`no such host` and `server misbehaving`, in failed output or stderr.
+A retryable marker alone does not make an agy failure offline, and its
+login and quota matches take precedence. The ending writes no goal entry.
+Its `runs.tsv` note is `offline` (with `,no-log` on a goal run without
+a session entry). It holds every new model session of any kind — build, review, repair,
 mend, the helper and the intake — for `offlineBackoffMs(n)`: a
 minute, doubling, at most fifteen, with `n` the offline endings in a row. The
 hold is in memory, so a restart starts without one. A session that ends any
@@ -364,7 +369,47 @@ other way clears it and resets `n` only when it started after the hold was set.
 A session that started before the hold ends without clearing it, and the runner
 says so in one line. Sessions already running are otherwise untouched.
 
+**Cut-short reviews.** A [cut-short review](mc-goals.md#what-a-review-session-does)
+leaves the goal alone. The runner says
+`goal:<programme>/<goal>: review cut short by <tool>:<model> (<note>, <seconds> s) — no answer about the goal, it runs again`
+in `runner.log`. Two cut-short reviews in a row for the same `tool:model`,
+across any goals, set aside just that model for the 30-minute quota sleep
+(`QUOTA_SLEEP_MS`), preserving a longer model refusal. The runner logs
+`<tool>:<model> set aside until <time> — two reviews cut short in a row`.
+The streak is stored as `model_cut_short` beside the model refusals in
+`model-capacity.json`. Setting the model aside or a goal session on it that
+is not cut short resets the streak; a cut-short non-review or a host-refused
+ending leaves it alone. Plan quota and login refusals still apply separately.
+
 ### Launch settings
+
+**Claude host permissions.** Before choosing a runner route, mc reads the
+user's `~/.claude/settings.json` and repository trust in `~/.claude.json`
+(or the corresponding files under `CLAUDE_CONFIG_DIR`). The settings must
+allow unscoped Bash and either unscoped `Read` or `Read(.../**)` rules covering
+both the mc work root (normally `~/mc`) and the Claude skills directory.
+An unscoped deny of either tool fails the check. Every `*.git` under
+`~/mc/repos` (or the configured repository directory) must be trusted at its real path
+in `projects` with `hasTrustDialogAccepted: true`.
+
+A failed check writes a Claude provider refusal in the capacity snapshot,
+not a machine-wide offline hold: other providers can still take the work.
+It uses the offline backoff duration (one minute, doubling up to fifteen
+minutes). `runner.log` says `claude set aside — the host refuses its tools: <cause>`
+when the hold starts. A passing check clears the refusal it set, not a
+separate refusal, and says `claude usable again — the host allows its tools`.
+The check does not edit the files or set an API-reserve hold.
+
+Independently, a Claude goal session that wrote no LOG.md entry and, for
+review, did not change REVIEW.md, is `host-refused` if the stream has at
+least one tool result and all results are permission denials. Claude's denial
+events and recorded calls count, as do tool errors such as `requires approval`,
+`you haven't granted it yet` or `has not been trusted`. Mixed results and
+streams with no tool result do not qualify. The runner writes the same
+provider refusal and a `host-refused` note in `runs.tsv`, not a goal entry
+or a failure count. A refusal inferred only from the stream lapses on its
+own backoff. An unfinished decision session with all tools refused likewise
+spends no failure attempt.
 
 `mc model priority [auto|codex|claude|agy]` saves one global provider preference in
 `runner/models.json`; an absent value is `auto`. The runner rereads it for each
@@ -563,14 +608,22 @@ that declares none is refused by name where the refusal is written:
   until the reset, as before, and Claude's `plan.refused_until` is written as it
   always was.
 
-The provider is refused whole in three cases only: a plan-scoped quota, a login
-refusal on a tool whose plan counts it (`LOGIN_REFUSES_PLAN`: agy, claude), and
-a full measured window (agy's `/usage` read at 100 %). A quota read whose model
-is not known is written provider-wide.
+Plan refusals are provider-wide for a plan-scoped quota or a login refusal on
+a tool whose plan counts it (`LOGIN_REFUSES_PLAN`: agy, claude, codex). A quota
+read whose model is not known is also written provider-wide. A full agy
+window read by `/usage` without a reset, a Codex capacity read refused at
+login and a [Claude host refusal](#launch-settings) can also set a
+provider-wide refusal in the snapshot.
 
-The refusal is written by `refusePlanOnRead` (`plan-refusal.js`), the one rule
-every unattended caller uses, to `model-capacity.json` as `model_refusals` — an
-optional map per provider, model slug to ISO instant, beside `refusal_until`. A
+For Codex, a non-zero exit is a login interruption if an `error` or
+`turn.failed` event or stderr reports a 401 (such as `401 Unauthorized`),
+`token_revoked` or `refresh token was revoked`, unless quota matched first.
+A 401 on stderr does not turn an exit 0 into a login refusal.
+
+Session plan refusals go through `refusePlanOnRead` (`plan-refusal.js`) to
+`model-capacity.json`: a provider-wide refusal is `refusal_until`, and a
+model refusal goes in `model_refusals`, an optional map per provider from
+model slug to ISO instant. A
 file without the map reads as empty, and an instant that has passed holds
 nothing. `chooseCandidate` judges the provider's refusal first and then the
 candidate's own model refusal; a model refusal is never a reason to route to an
@@ -691,6 +744,18 @@ candidates have none waits, naming each and "no API route". A candidate whose
 tool cannot be launched here (agy not on `PATH`) is *unavailable*, never
 chosen, and review falls through to the next.
 
+**Reader walks.** Programme review walks the `review` list;
+[the ask reader](mc-jev.md#the-reader) and learning use `decision`, and
+manual desk preparation uses `build`. Each keeps its own author rule. In
+selecting a launch, the walk sets aside a candidate whose tool cannot launch
+or whose billing is `unavailable`, then asks the router again without that
+`tool:model`. It reports each set-aside once:
+`mc: <kind> <target>: <tool>:<model> cannot read — <reason>; trying the next reader`.
+That line goes to stderr, or to `runner.log` for scheduled learning. If no
+route remains, the stop lists the candidates set aside and why, along with
+the final routing reason. This is selection before the turn, not a retry
+of a reader that launched but gave no verdict.
+
 **The catalog** is Martin's. `mc model` is its only writer, and the file is
 written whole or not at all:
 
@@ -753,7 +818,7 @@ never zero.
   recorded (`tests/fixtures/agy/README`).
 - **A plan refusal is written by every unattended caller.** A session whose
   read is `quota`, or a `login` on a tool whose plan counts it as a refusal
-  (agy, claude), on the plan route, is written as a refusal until the reset it
+  (agy, claude, codex), on the plan route, is written as a refusal until the reset it
   names, else for the quota sleep — the model's for a model-scoped quota, the
   provider's otherwise (*Quota scope*) — by one function
   (`plan-refusal.js`) the runner's `refuseProvider`, the helper
@@ -770,8 +835,10 @@ never zero.
   `model/list`, every page of the list up to five. It is never sent a thread or a
   turn, so no model is asked anything and no rate-limit reset is spent, and
   `send` refuses any other method. It is bounded to 20 s and 1 MiB. Credits are
-  not read: they are not subscription headroom. Claude makes only a GET to the
-  fixed `https://api.anthropic.com/api/oauth/usage` origin using the installed
+  not read: they are not subscription headroom. If the failed Codex read's
+  JSON-RPC error or app-server stderr matches the same login refusal as a
+  session, the failure also sets Codex's provider refusal for the quota sleep.
+  Claude makes only a GET to the fixed `https://api.anthropic.com/api/oauth/usage` origin using the installed
   Claude Code login (Keychain service on macOS, otherwise its standard
   credentials file); redirects are denied. It parses subscription
   `five_hour`/`seven_day` usage only, never overage credits. Each Claude window
@@ -1315,7 +1382,8 @@ as `mc decision [<id>]`; nesting it inside a session is refused.
 
 The shared daily desk ceiling is rechecked before launch; unset means no
 ceiling. One unfinished ending retries once; a second in the item's current
-state, not counting a quota, offline or provider-refusing login ending, makes a
-non-reversible mechanical brief that waits on Martin instead of looping. A
+state makes a non-reversible mechanical brief that waits on Martin instead
+of looping. Quota, offline, provider-refusing login and host-refused
+endings do not count. A
 for-martin brief is never lane work, and no clock carries one out. See [mc-martin.md](mc-martin.md#unattended-decision-pass)
 for item state, failure evidence, authority and the fixed Swedish brief shape.

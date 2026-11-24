@@ -40,6 +40,7 @@ build    ── build session: done with the task ──────────
 build    ── legacy blocked state ──────────────────────────────▶ build · Martin
 build    ── three sessions without a word (runner) ───────────▶ build · Martin
 build    ── three sessions without progress (runner) ──────────▶ build · Martin
+build    ── every candidate for this build declined (runner) ──▶ build · Martin (automatic decision)
 build    ── mc goal defect (build session) ───────────────────▶ build · Martin
 review   ── mc goal defect (review session) ──────────────────▶ review · Martin
 review   ── review: OK, mc goal stage merge (queues its head) ▶ merge
@@ -48,8 +49,9 @@ review   ── further NOT OK, repair limit reached ─────────
 review   ── no open pull request (runner, first time) ─────────▶ build
 review   ── no open pull request (runner, second time) ────────▶ review · Martin
 finish   ── an old record, in finish · ready (runner) ─────────▶ build
-review   ── the review died (runner) ─────────────────────────▶ review · ready, reviewed again
-review   ── a second review died (runner) ────────────────────▶ review · Martin
+review   ── review cut short (runner) ────────────────────────▶ review · ready, not counted
+review   ── counted review ended without a stage move ─────────▶ review · ready, reviewed again
+review   ── second counted review without a stage move ────────▶ review · Martin
 merge    ── merger landed ────────────────────────────────────▶ done
 merge    ── first/second failed merge ────────────────────────▶ merge · blocked
 merge    ── mend repairs, gates and returns ready ────────────▶ merge · ready
@@ -1094,8 +1096,27 @@ not a goal defect, since the goal's text is not what is wrong. Questions use
 `mc ask` under the question contract in [mc-jev.md](mc-jev.md): jev first, then a
 reader, and only a reserved act or a defect waits on Martin. No build exit goes through pre-merge mend.
 
+**A model can decline in-scope work.** If the goal text holds but the work
+is beyond the model, a build or repair build ends with a LOG.md entry whose
+Done or Comment starts `declined:` and gives the reason. It does not count
+toward the three-in-a-row or five-session build stops below. A goal left in
+`build · ready` gets the runner
+entry `<tool>:<model> declined the work — the next build goes to another model`
+with `Goal text: <digest>`. Future builds of this goal pass by models whose
+declines match its current text. An amendment makes them eligible; marking
+a criterion met does not. The digest is of the part's section for a cut
+goal, the whole order for Documentation, and the goal's own text otherwise.
+Other goals are unaffected.
+
+If every candidate on the applicable list (`build` or `finish` for a repair
+build) has declined, the runner records
+`no progress: every build model declined — <tool>:<model>, …` and sets the
+internal status `Martin` for [automatic decision](mc-martin.md#unattended-decision-pass).
+A remaining candidate temporarily unable to run is a capacity wait, not
+an all-declined stop.
+
 **A build that makes no progress stops.** After each build session that spoke
-(and did not end by quota, login or interruption), the runner reads the goal's
+(and did not decline or end by quota, login or interruption), the runner reads the goal's
 heads (`git rev-parse HEAD` of each repository worktree) and its met count. A
 session is *without progress* when it wrote a log entry, left the goal
 `build · ready`, did not raise the met count and left every head unchanged.
@@ -1134,8 +1155,9 @@ ready after a stop. A change of stage alone, such as a review sending the goal
 back to build, does not start it again: five build sessions are five, whatever
 reviews lie between them. Sessions that end without a word, and quota, login or
 offline endings, are not counted here; the three-silent rule covers the first.
-The runner's count entries are skipped by the three-silent rule as its
-no-progress entries are. `blocked` is for
+A [host-refused ending](mc-run.md#launch-settings) writes no goal entry and
+does not count toward any of these stops. The three-silent rule skips the
+runner's count, no-progress and decline entries. `blocked` is for
 compatibility only: a `blocked` goal before merge, left by an older session, is
 reconciled to Martin by the runner without a session and wakes no mend. A build session
 publishes; it never authorizes PR landing, sets `done` or moves the goal
@@ -1276,6 +1298,24 @@ under a name not already there. The default directory is swept by `mc tidy` afte
 hours (`mc-shot.md`, *Where the file goes*); a goal's directory keeps what is put in
 it and is archived whole, so REVIEW.md, each `REVIEW-<round>.md` and a repair build
 find the files. A path outside `shots/` is refused.
+
+**Review recovery.** A review is cut short when it leaves no new session
+entry in LOG.md, leaves REVIEW.md unchanged and ends on quota, on any
+interruption or with a non-zero exit. The goal stays `review · ready` for
+another pick. There is no goal entry, not even the runner's no-log entry,
+and no step toward the second-ending stop. See
+[the runner's session endings](mc-run.md#the-session) for model set-asides.
+An offline ending after the reviewer wrote something still skips review
+recovery, as does a [host-refused ending](mc-run.md#launch-settings).
+
+Other endings that leave the goal `review · ready` count, including an
+exit 0 that wrote nothing and a failed exit after writing a verdict but
+not moving the stage. The first writes
+`the review ended with the goal still in review (failed, 412 s) — a review runs again`
+(with the actual note and duration). The second counted ending in the same
+review stage adds `, a second time — review recovery cannot continue` after
+the ending in parentheses and sets the internal status `Martin`. Neither
+case stages a verdict for the reviewer.
 
 **Rounds.** A rejection moves the goal `review → build` with the reviewer's
 `--reason`; a repair build session (*Repair and mend*) fixes the NOT OK items
@@ -1450,7 +1490,7 @@ Each stage has one owner, and a goal passes each once:
   never a draft: it is written in `build · ready` (*A goal that is a part*).
   (Named `plan` until 2026-11-07.)
 - `build` — the runner's build sessions, while it is `ready`; legacy `blocked` outside merge reconciles to Martin without a launch. Three sessions in a row without a commit or a criterion met, or five build sessions since it began building or was last set ready after a stop, stop it with `no progress:` and `Martin`; a build session that finds the goal wrong reports it with `mc goal defect`, also `Martin`.
-- `review` — one review session decides; one that dies is run again once, a second crash or dirty refusal waits directly on Martin. A review that finds the goal wrong reports it with `mc goal defect`.
+- `review` — one review session decides. A cut-short review is retried without counting; an ending subject to *Review recovery* above is retried once. A review that finds the goal wrong reports it with `mc goal defect`.
 - `finish` — no longer entered. A goal found in it (`finish · ready`) is moved to `build` by the runner with a log entry; with REVIEW.md it gets a repair build.
 - `merge` — the merger's; the runner starts no session, except one mend session for an unqueued merge failure.
 - `done` — set by the merger or the runner when every pull request the goal
