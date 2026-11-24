@@ -14,9 +14,9 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { beforeEach, describe, it } from 'node:test';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import {
   continueRelease, deployPlan, deploySource, deployWorktreePath, leftoverStamps, parseDeployArgs, planLines, readScriptOutput, run,
@@ -24,12 +24,12 @@ import {
   worktreeState, DISK_BUSY_WAIT_MS, takenBackFloor,
 } from '../../../src/mc/commands/deploy.js';
 import { beforePath, readBeforeFile, statePath, takeBeforeReading } from '../../../src/mc/deploy-check.js';
-import { classifyStop, readDeployMends, retryVerdict } from '../../../src/mc/deploy-repair.js';
+import { classifyStop, readDeployMends, requestDeployRepair, retryVerdict } from '../../../src/mc/deploy-repair.js';
 import { readMainMends, requestMainRepair } from '../../../src/mc/main-repair.js';
 import { createDiskPressure } from '../../../src/mc/disk-pressure.js';
 import { exerciseApp, gateSet, measureGate, pickCommit } from '../../../src/mc/deploy-gate.js';
 import { readRelease, releaseBranch, writeRelease } from '../../../src/mc/deploy-release.js';
-import { claimFullRun, releaseClaim } from '../../../src/mc/full-run-claim.js';
+import { addClaimGroup, claimFullRun, releaseClaim } from '../../../src/mc/full-run-claim.js';
 import { readNightlyHistory, recordNightlyRun } from '../../../src/mc/nightly-history.js';
 import { fullRun } from '../../../src/mc/nightly-loop.js';
 import { git as fixtureGit, makeTempRepo } from '../_helpers/git-fixture.js';
@@ -37,7 +37,7 @@ import { tryGit } from '../../../src/mc/git.js';
 import {
   HOLDER_WAIT_MS, holderPath, placeWorktree, readHolder, takeHolder,
 } from '../../../src/mc/deploy-worktree.js';
-import { preparationLogPath, preparationPath, prepare, readPreparation, writePreparation } from '../../../src/mc/deploy-prepare.js';
+import { preparationLogPath, preparationPath, preparationState, prepare, readPreparation, writePreparation } from '../../../src/mc/deploy-prepare.js';
 import { processAlive } from '../../../src/mc/lease-owner.js';
 import { deployBar, deployProgress, readDeployProgress } from '../../../src/mc/deploy-progress.js';
 import { mainWorktree } from '../../../src/mc/git.js';
@@ -2614,6 +2614,249 @@ describe('mc deploy — the preparation, in a process of its own', () => {
     assert.deepEqual(JSON.parse(calls[0].args[1]), job);
     assert.equal(calls[0].options.detached, true, 'its own process group: a lost terminal does not reach it');
     assert.equal(calls[0].options.stdio[0], 'ignore', 'the preparation asks nothing');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A preparation stopped on purpose (deploy-release part 3): `mc deploy
+// --stop-preparation` writes the stop before it signals, a stopped preparation
+// is not an interrupted one, and each preparation writes a log of its own.
+// ---------------------------------------------------------------------------
+
+const PREPARER = 31337;
+/** The command line of the preparer of `job`, as `/proc` gives it. */
+const preparerLine = (job) => `${process.execPath} /x/src/mc/deploy-prepare-run.js ${JSON.stringify(job)}`;
+
+/** The stop's own seams: the preparer goes on the SIGTERM, every signal is recorded with the record as it stood. */
+function stopSeams(state, job, extra = {}) {
+  const signals = [];
+  return {
+    signals,
+    deps: {
+      alive: (pid) => (pid === PREPARER ? state.up : processAlive(pid)),
+      commandLine: (pid) => (pid === PREPARER ? preparerLine(job()) : null),
+      kill: (pid, signal) => { signals.push({ pid, signal, record: readPreparation(work) }); if (pid === PREPARER && signal === 'SIGTERM') state.up = false; },
+      groupAlive: () => false,
+      sleep: async () => {},
+      ...extra,
+    },
+  };
+}
+
+describe('mc deploy --stop-preparation — a preparation stopped on purpose', () => {
+  const STARTED = '2026-11-24T07:01:00.000Z';
+  const recorded = (extra = {}) => {
+    const job = { root: work, sha: SHA, path: PATH, started: STARTED, acceptRed: false, log: preparationLogPath(work, STARTED), holder: 'm' };
+    writePreparation(work, { sha: SHA, pid: PREPARER, started: STARTED, stage: 'full-run', log: job.log, accept_red: false, holder: 'm', ...extra });
+    return job;
+  };
+
+  it('writes stopped, its time and the reason before it signals, and the preparer\'s own end does not write over it', async () => {
+    const job = recorded();
+    const state = { up: true };
+    const seams = stopSeams(state, () => job);
+    const { out, stdout, stderr } = io();
+    const code = await run(['--stop-preparation', 'the wrong commit'], { ...deps(seams.deps), stdout, stderr });
+    assert.equal(code, 0, out.stderr);
+    assert.equal(out.stdout, 'mc: stopped the preparation of 1a2b3c4 started 07:01 (pid 31337) — the wrong commit; no mend is queued\n');
+    assert.deepEqual(seams.signals.map(({ pid, signal }) => [pid, signal]), [[PREPARER, 'SIGTERM']], 'one SIGTERM, to the preparer; it ended, nothing was killed');
+    const atSignal = seams.signals[0].record;
+    assert.deepEqual([atSignal.result, atSignal.reason, typeof atSignal.ended], ['stopped', 'the wrong commit', 'string'], 'the record said stopped when the signal was sent');
+    assert.equal(preparationState(atSignal), 'stopped');
+
+    // The preparer's measurement ends after the stop, and writes its end: refused.
+    const fake = gateFake({ runs: [] });
+    await prepare(job, { stdout: { write() {} }, env: { ...process.env, MC_WORK_ROOT: work }, deps: deps({ gate: fake.gate, suites: fake.suites }), beat: () => () => {} });
+    assert.equal(fake.calls.fullRun.length, 1, 'the late preparer did measure');
+    const after = readPreparation(work);
+    assert.deepEqual([after.result, after.reason, after.ended, after.error, after.stage], ['stopped', 'the wrong commit', atSignal.ended, undefined, 'full-run'], 'the stop stands');
+  });
+
+  it('a watched preparation stopped mid-run is stopped, not interrupted: no deploy mend, and the next mc deploy starts a new one', async () => {
+    const fake = gateFake({ runs: [] });
+    const { state, extra } = detachedPreparer(fake);
+    const stopper = io();
+    let stopCode = null;
+    const seams = stopSeams(state, () => state.jobs.at(-1));
+    const watched = io();
+    const code = await run([], {
+      ...deps({
+        ...extra,
+        // While the terminal watches, someone else types the stop.
+        sleep: async () => {
+          if (stopCode !== null) return;
+          stopCode = await run(['--stop-preparation', 'main is about to move'], { ...deps({ ...extra, ...seams.deps }), stdout: stopper.stdout, stderr: stopper.stderr });
+        },
+      }),
+      stdout: watched.stdout,
+      stderr: watched.stderr,
+    });
+    assert.equal(stopCode, 0, stopper.out.stderr);
+    assert.equal(code, 1);
+    assert.match(watched.out.stderr, /^mc: the preparation of 1a2b3c4 was stopped: main is about to move — nothing was deployed; mc deploy starts a new one$/mu);
+    assert.doesNotMatch(watched.out.stderr + watched.out.stdout, /interrupted/u);
+    assert.equal(preparationState(readPreparation(work), { alive: () => false }), 'stopped');
+    assert.equal(fake.calls.fullRun.length, 0, 'the stopped preparer measured nothing');
+    const row = lastAttempt({ MC_WORK_ROOT: work });
+    assert.equal(row.outcome, 'refused');
+    assert.match(row.note, /the preparation of 1a2b3c4 was stopped: main is about to move/u);
+    assert.deepEqual(readDeployMends({ root: work }), [], 'a person\'s stop queues no deploy mend');
+
+    // The next mc deploy names the stop and starts a new preparation.
+    const stop = refusingAdmission();
+    const next = io();
+    const again = await run([], {
+      ...deps({ ...extra, lock: stop.lock, startDeployer: stop.startDeployer, sleep: async () => { await state.pending(); } }),
+      stdout: next.stdout,
+      stderr: next.stderr,
+    });
+    stop.end();
+    assert.equal(again, 1, 'stopped at the refusing admission');
+    assert.equal(stop.raced.ran, 1, 'the new preparation passed its gate and reached the admission');
+    assert.match(next.out.stdout, /^mc: the preparation of 1a2b3c4 started \d{4}-\d\d-\d\d \d\d:\d\d was stopped: main is about to move — starting a new one$/mu);
+    assert.equal(state.starts, 2);
+    assert.equal(fake.calls.fullRun.length, 1);
+    assert.deepEqual(readDeployMends({ root: work }), []);
+  });
+
+  it('a preparer killed with no end record is still interrupted, and its watcher queues a mend with that preparation\'s own log', async () => {
+    const fake = gateFake({ runs: [] });
+    const { state, extra } = detachedPreparer(fake);
+    const { out, stdout, stderr } = io();
+    // The process dies under the watcher (SIGKILL, OOM): no stop was written.
+    const code = await run([], { ...deps({ ...extra, sleep: async () => { state.up = false; } }), stdout, stderr });
+    assert.equal(code, 1);
+    assert.match(out.stderr, /the preparation of 1a2b3c4 was interrupted at .* \(its process is gone\)/u);
+    assert.equal(preparationState(readPreparation(work), { alive: () => false }), 'interrupted');
+    const [request, ...others] = readDeployMends({ root: work });
+    assert.equal(others.length, 0);
+    assert.equal(request.state, 'queued');
+    assert.match(request.rows[0].note, /the preparation of 1a2b3c4 was interrupted at/u);
+    assert.ok(request.rows[0].logs.includes(basename(state.jobs[0].log)), `the mend copied ${basename(state.jobs[0].log)}: ${request.rows[0].logs}`);
+    assert.match(basename(state.jobs[0].log), /^deploy-prepare-2\d{3}-.+\.log$/u);
+  });
+
+  it('with none running it stops nothing and exits 1; a record whose pid is not its preparer is not one to stop', async () => {
+    const none = io();
+    const signals = [];
+    const kill = (pid, signal) => { signals.push([pid, signal]); };
+    assert.equal(await run(['--stop-preparation', 'x'], { ...deps({ kill }), stdout: none.stdout, stderr: none.stderr }), 1);
+    assert.equal(none.out.stdout, 'mc: no preparation is running — nothing was stopped\n');
+
+    const job = recorded();
+    const reused = io();
+    // The pid lives, but it is another program now (pid reuse), or a preparer of another start.
+    for (const line of ['/usr/bin/vim notes.txt', preparerLine({ ...job, started: '2026-11-23T07:01:00.000Z' })]) {
+      assert.equal(await run(['--stop-preparation', 'x'], { ...deps({ kill, alive: (pid) => pid === PREPARER, commandLine: () => line }), stdout: reused.stdout, stderr: reused.stderr }), 1);
+    }
+    assert.match(reused.out.stdout, /^mc: no preparation is running — nothing was stopped\n/u);
+    assert.deepEqual(signals, [], 'nothing was signalled');
+    assert.equal(readPreparation(work).ended, undefined, 'the record is untouched');
+  });
+
+  it('a blank reason or another flag exits 2, and an unattended session is refused; nothing is signalled or written', async () => {
+    const job = recorded();
+    const signals = [];
+    const seams = { alive: (pid) => pid === PREPARER, commandLine: () => preparerLine(job), kill: (pid, signal) => { signals.push([pid, signal]); } };
+    for (const argv of [['--stop-preparation', '   '], ['--stop-preparation'], ['--stop-preparation', 'x', '--follow'], ['--stop-preparation', 'x', '--accept-red', 'y'], ['--stop-preparation', 'x', '--dry-run']]) {
+      const { out, stdout, stderr } = io();
+      assert.equal(await run(argv, { ...deps(seams), stdout, stderr }), 2, argv.join(' '));
+      assert.match(out.stderr, /--stop-preparation needs a reason and takes no other flag|--stop-preparation needs a value/u, argv.join(' '));
+    }
+    const headless = io();
+    const code = await run(['--stop-preparation', 'x'], { ...deps({ ...seams, env: { ...process.env, MC_WORK_ROOT: work, MC_HEADLESS: '1' } }), stdout: headless.stdout, stderr: headless.stderr });
+    assert.equal(code, 1);
+    assert.match(headless.out.stderr, /an unattended session does not stop a preparation .*headless, MC_HEADLESS=1.*nothing was stopped/u);
+    assert.deepEqual(signals, []);
+    assert.equal(readPreparation(work).ended, undefined);
+  });
+
+  it('waits up to 60 s for the preparer and its full run\'s groups, then kills those still alive', async () => {
+    const job = recorded();
+    const { claim } = claimFullRun({ root: work, repo: 'memoro', sha: SHA, verb: 'deploy', pid: PREPARER, alive: (pid) => pid === PREPARER });
+    addClaimGroup(claim, 5151, { root: work });
+    addClaimGroup(claim, 5252, { root: work });
+    let now = Date.parse('2026-11-24T07:30:00Z');
+    const living = new Set([5151, 5252]);
+    const state = { up: true };
+    const seams = stopSeams(state, () => job, {
+      // The preparer ends on the signal, one group ends after 10 s, the other never does.
+      groupAlive: (pgid) => living.has(pgid),
+      clock: () => now,
+      sleep: async (ms) => { now += ms; if (now - Date.parse('2026-11-24T07:30:00Z') >= 10_000) living.delete(5151); },
+    });
+    const kill = seams.deps.kill;
+    seams.deps.kill = (pid, signal) => { kill(pid, signal); if (signal === 'SIGKILL') living.delete(-pid); };
+    const { out, stdout, stderr } = io();
+    assert.equal(await run(['--stop-preparation', 'too slow'], { ...deps({ ...seams.deps, gate: { root: work } }), stdout, stderr }), 0, out.stderr);
+    assert.deepEqual(seams.signals.map(({ pid, signal }) => [pid, signal]), [[PREPARER, 'SIGTERM'], [-5252, 'SIGKILL']]);
+    assert.equal(now - Date.parse('2026-11-24T07:30:00Z'), 60_000, 'it waited the whole 60 s, not more');
+    assert.match(out.stdout, /^mc: group 5252 still ran after 60 s — killed$/mu);
+  });
+});
+
+describe('mc deploy — each preparation writes a log of its own', () => {
+  it('two preparations write two log files, each named in its record', async () => {
+    const fake = gateFake({ runs: [] });
+    const { state, extra } = detachedPreparer(fake);
+    const signals = new EventEmitter();
+    await run([], { ...deps({ ...extra, signals, sleep: async () => { signals.emit('SIGINT'); } }), ...io() });
+    const first = readPreparation(work);
+    state.up = false;
+    await new Promise((resolve) => { setTimeout(resolve, 5); });
+    const stop = refusingAdmission();
+    await run([], { ...deps({ ...extra, lock: stop.lock, startDeployer: stop.startDeployer, sleep: async () => { await state.pending(); } }), ...io() });
+    stop.end();
+    const second = readPreparation(work);
+    assert.equal(state.starts, 2);
+    assert.notEqual(first.started, second.started);
+    assert.deepEqual([first.log, second.log], [preparationLogPath(work, first.started), preparationLogPath(work, second.started)]);
+    assert.notEqual(first.log, second.log);
+    assert.deepEqual(state.jobs.map((job) => job.log), [first.log, second.log], 'each preparer wrote the log its record names');
+    for (const log of [first.log, second.log]) assert.ok(existsSync(log), log);
+  });
+
+  it('--follow reads the log the record names, not the shared one', async () => {
+    const started = '2026-11-24T07:01:00.000Z';
+    const log = preparationLogPath(work, started);
+    mkdirSync(dirname(log), { recursive: true });
+    writeFileSync(log, 'mc:   progress — 40 of ~250 test files done\n');
+    writeFileSync(preparationLogPath(work), 'mc: an older preparation\'s line\n');
+    writePreparation(work, { sha: SHA, pid: PREPARER, started, stage: 'full-run', log });
+    let up = true;
+    const { out, stdout, stderr } = io();
+    const code = await run(['--follow'], { ...deps({ alive: (pid) => pid === PREPARER && up, sleep: async () => { up = false; } }), stdout, stderr });
+    assert.equal(code, 0);
+    assert.match(out.stdout, /progress — 40 of ~250 test files done/u);
+    assert.doesNotMatch(out.stdout, /an older preparation's line/u);
+  });
+
+  it('a preparer removes the logs a month old, except the one its record names and those an open deploy mend names', async () => {
+    const dir = join(work, 'runner', 'log');
+    mkdirSync(dir, { recursive: true });
+    const name = (day) => `deploy-prepare-2026-10-${day}T07-01-00.000Z.log`;
+    const old = Date.now() / 1000 - 31 * 24 * 60 * 60;
+    for (const day of ['10', '11', '12', '13']) {
+      writeFileSync(join(dir, name(day)), 'x\n');
+      utimesSync(join(dir, name(day)), old, old);
+    }
+    writeFileSync(join(dir, 'deploy-prepare-2026-11-23T07-01-00.000Z.log'), 'a day old\n');
+    writeFileSync(join(dir, 'deploy.log'), 'not a preparation\'s\n');
+    utimesSync(join(dir, 'deploy.log'), old, old);
+    // An open deploy mend names day 11's log; a finished one names day 12's.
+    requestDeployRepair({ row: { started: '2026-10-11T07:30:00Z', sha: SHA, outcome: 'refused', note: 'x' }, logs: [{ name: name('11'), path: join(dir, name('11')) }], root: work });
+    requestDeployRepair({ row: { started: '2026-10-12T07:30:00Z', sha: OLDER, outcome: 'refused', note: 'y' }, logs: [{ name: name('12'), path: join(dir, name('12')) }], root: work, mend: {} });
+    const mends = readDeployMends({ root: work });
+    assert.equal(mends.length, 1, 'the second row joins the open request');
+    // The record the preparer starts under names day 13's log (a record of before kept by name).
+    const started = '2026-11-24T07:01:00.000Z';
+    writePreparation(work, { sha: SHA, pid: PREPARER, started, stage: 'starting', log: join(dir, name('13')) });
+    const fake = gateFake({ runs: [] });
+    await prepare({ root: work, sha: SHA, path: PATH, started, acceptRed: false, log: join(dir, name('13')), holder: 'm' },
+      { stdout: { write() {} }, env: { ...process.env, MC_WORK_ROOT: work }, deps: deps({ gate: fake.gate, suites: fake.suites }), beat: () => () => {} });
+    const left = readdirSync(dir).sort();
+    assert.equal(left.includes(name('10')), false, 'the 31-day-old log no one names is removed');
+    for (const kept of [name('11'), name('12'), name('13'), 'deploy-prepare-2026-11-23T07-01-00.000Z.log', 'deploy.log']) assert.ok(left.includes(kept), `${kept} stays: ${left}`);
   });
 });
 
