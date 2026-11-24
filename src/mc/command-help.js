@@ -93,7 +93,7 @@ export const COMMAND_USAGE = Object.freeze({
     "                                    going to build, a branch with no commits of its own is remade from origin/main, and a draft goal needs a complete text;\n",
     "                                    merge executes the session decision for every registered pull request; done after all land\n",
     "        mc goal blocked|ready [<programme>/<goal>] [--reason \"…\"]   set the goal's status; its stage stays\n",
-    "        mc goal hold [<programme>/<goal>] --reason \"…\"   an interactive takeover's hold: the runner starts no session on the goal until release; stage and status stay, nothing is asked of Martin\n",
+    "        mc goal hold [<programme>/<goal>] --reason \"…\"   an interactive takeover's hold: the runner starts no session on the goal until release; stage and status stay, nothing is asked of Martin; interactive Martin's hold also stops a decision session working on the goal (its writes wait for that session until then)\n",
     "        mc goal release [<programme>/<goal>] [--reason \"…\"]   hands a held goal back: the hold removed, one log entry with each worktree's state\n",
     "        (mc goal martin is gone: it exits 2 and prints the mc ask call to make; a question goes through mc ask)\n",
     "        mc goal defect [<programme>/<goal>] --part \"<the part or criterion that is wrong>\" --found \"<what is wrong, with the file and line or the command and output>\"   the goal itself is wrong: one entry, status Martin, no options; the session's last act\n",

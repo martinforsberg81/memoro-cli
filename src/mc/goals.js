@@ -1167,6 +1167,28 @@ export function readTextOrNull(path) {
 export const HOLD_FILE = '.hold.json';
 
 /**
+ * The claim the runner's decision pass writes in a goal's directory while it works on it:
+ * `{ pid, item, since, session_pid }` — the runner's pid, the desk item, when it was claimed, and,
+ * once the decision session is spawned, that session's pid.
+ */
+export const DECISION_CLAIM = '.decision.json';
+
+/**
+ * The live decision claim on the goal in `dir`, as `{ pid, item, since, session_pid }`, or null: a claim
+ * whose runner `pid` is not alive (`alive(pid)`), a missing file and one that does not parse are none.
+ * `since` and `session_pid` are null when the claim does not carry them.
+ */
+export function readDecisionClaim(dir, { read = readTextOrNull, alive }) {
+  let claim;
+  try { claim = JSON.parse(read(join(dir, DECISION_CLAIM)) ?? ''); } catch { return null; }
+  const pid = Number(claim?.pid);
+  if (!Number.isInteger(pid) || pid <= 0 || !alive(pid)) return null;
+  const session = Number(claim.session_pid);
+  return { pid, item: claim.item ?? null, since: typeof claim.since === 'string' ? claim.since : null,
+    session_pid: Number.isInteger(session) && session > 0 ? session : null };
+}
+
+/**
  * The hold on the goal in `dir`, or null when it has none. A hold file that
  * parses reads as `{ by, tool, at, reason, created }`; `created` is true only
  * for the creation hold `mc goal new` writes for a draft made without

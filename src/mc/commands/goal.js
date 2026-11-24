@@ -83,7 +83,7 @@ import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
 import { readGoalDeskItem } from '../desk-items.js';
-import { addPr, backward, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, goalReferences, inStage, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, partProgramme, phaseOpen, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { addPr, backward, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readDecisionClaim, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, goalReferences, inStage, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, partProgramme, phaseOpen, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { addItem, cutFromOrder, ITEM_PARTS, ITEM_WORDS, moveGate, partsLacks, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { buildWaitsForMain } from '../main-repair.js';
@@ -235,6 +235,10 @@ export async function run(argv, deps = {}) {
     readKeys: deps.readKeys || (() => readKeysDotenv({ env, home: env.HOME || process.env.HOME }).values),
     // A stage move or a release wakes the runner's idle lanes (`wakeRunner`); a test stands in for it.
     wake: deps.wake || (() => wakeRunner(workRoot(env))),
+    // The signal `mc goal hold` sends a decision session it takes a goal over from; a test stands in for it.
+    kill: deps.kill || ((target, signal) => process.kill(target, signal)),
+    // Whether this verb writes to the goal it names: the desk's writes wait for a live decision claim (`decisionWaits`).
+    writes: !DESK_FREE.includes(verb),
   };
   const { flags } = scanned;
 
@@ -1617,6 +1621,8 @@ function holdCallerRefusal(target, env) {
  * `mc goal release`. Stage and status stay, so nothing is asked of Martin and no desk item opens. Writes
  * `.hold.json` (by, tool, at, reason) and one log entry, `held: <reason>`. Refused, with nothing written, for a
  * headless caller, a session of another goal, no reason, a goal in done or dropped, and a goal already held.
+ * Interactive Martin's hold is the desk's takeover from the decision pass: it also stops the decision session
+ * working on the goal (`stopDecisionSession`), and its line says so.
  */
 function holdVerb(args, flags, ctx) {
   const { stdout, stderr, env, read, write } = ctx;
@@ -1640,14 +1646,30 @@ function holdVerb(args, flags, ctx) {
     stderr.write(`mc: ${target.name} is already held by ${held.by ?? '—'} since ${held.at ?? '—'} — mc goal release ${target.name} hands it back\n`);
     return 2;
   }
-  const running = ctx.active(target);
   const hold = { by: writerRole(env) || 'person', tool: env.MC_TOOL || 'person', at: logStamp(ctx.now), reason };
   write(join(target.dir, HOLD_FILE), `${JSON.stringify(hold, null, 2)}\n`);
-  const comment = `held: ${reason}${running ? ' — a session is running on it now; the hold does not stop it' : ''}`;
+  // The desk's takeover stops a decision session working on the goal, written after the hold so the runner reads it at the session's end.
+  const stopped = env.MC_ROLE === 'martin' ? stopDecisionSession(target, ctx) : null;
+  const running = !stopped && ctx.active(target);
+  const stoppedWords = stopped ? `; the decision session (pid ${stopped}) was stopped` : '';
+  const comment = `held: ${reason}${stoppedWords}${running ? ' — a session is running on it now; the hold does not stop it' : ''}`;
   appendEntry({ dir: target.dir, entry: { at: hold.at, tool: hold.tool, model: env.MC_MODEL || null, role: writerRole(env), stage: goal.stage, status: goal.status, done: null, comment, next: null }, read, write });
-  stdout.write(`mc: ${target.name} held — the runner starts no session on it until mc goal release ${target.name}\n`);
+  stdout.write(`mc: ${target.name} held — the runner starts no session on it until mc goal release ${target.name}${stoppedWords}\n`);
   if (running) stdout.write(`mc: a session is running on ${target.name} now; the hold does not stop it\n`);
   return 0;
+}
+
+/**
+ * The desk's takeover of a goal a decision session works on: SIGTERM to the live decision claim's `session_pid`,
+ * never to the runner's own `pid`. The pid stopped, or null when there is no live claim, it names no session pid
+ * yet, or the signal could not be sent.
+ */
+function stopDecisionSession(target, ctx) {
+  const claim = readDecisionClaim(target.dir, { read: ctx.read, alive: ctx.alive });
+  const session = claim?.session_pid;
+  if (!session || session === claim.pid) return null;
+  try { ctx.kill(session, 'SIGTERM'); } catch { return null; }
+  return session;
 }
 
 /**
@@ -2074,7 +2096,8 @@ function ghIn(cwd, args) {
  * The goal a verb names: `<programme>/<goal>` as given, or MC_GOAL's when none
  * is, as `{ programme, goal, name, dir }`; `{ error }` when neither is a goal name.
  */
-function goalNamed(arg, { env, home }) {
+function goalNamed(arg, ctx) {
+  const { env, home } = ctx;
   const given = arg ?? env.MC_GOAL;
   if (!given) return { error: 'which goal? mc goal <programme>/<goal>, or MC_GOAL in a goal session' };
   const parts = given.split('/');
@@ -2082,7 +2105,25 @@ function goalNamed(arg, { env, home }) {
     return { error: `${given} is not <programme>/<goal> — lower-case letters, digits and hyphens` };
   }
   const [programme, goal] = parts;
-  return { programme, goal, name: given, dir: goalDirIn(home, programme, goal) };
+  const target = { programme, goal, name: given, dir: goalDirIn(home, programme, goal) };
+  const waits = decisionWaits(target, ctx);
+  return waits ? { error: waits } : target;
+}
+
+/** The verbs that write nothing to a goal, and `hold`: the desk's takeover of a goal a decision session works on. */
+const DESK_FREE = ['show', 'list', 'areas', 'hold'];
+
+/**
+ * Why the desk (`MC_ROLE=martin`) may not change the goal `target` names now, or null. A verb that writes to a
+ * goal waits while the runner's decision claim on it is live (its `pid` alive): the desk and the decision pass
+ * never change one goal at once. A goal held since — the desk's takeover with `mc goal hold` — is the desk's.
+ */
+function decisionWaits(target, ctx) {
+  if (ctx.env.MC_ROLE !== 'martin' || !ctx.writes) return null;
+  const claim = readDecisionClaim(target.dir, { read: ctx.read, alive: ctx.alive });
+  if (!claim || readHold(target.dir, ctx.read)) return null;
+  const since = /^\d{4}-\d\d-\d\dT(\d\d:\d\d)/u.exec(claim.since ?? '')?.[1] ?? '—';
+  return `${target.name}: a decision session (since ${since}) is working on this goal — wait for it, or take it over with mc goal hold ${target.name} --reason "…"`;
 }
 
 /**

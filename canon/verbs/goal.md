@@ -78,7 +78,10 @@ its check, and each worktree's state.
   [publish-and-merge](../tasks/publish-and-merge.md). Do this on every
   takeover, even in an existing conversation. Hold the goal first with
   `mc goal hold --reason "…"`: the runner starts no session on a held goal, and
-  `mc goal release` hands it back with the worktree's state in the log.
+  `mc goal release` hands it back with the worktree's state in the log. Under
+  `MC_ROLE=martin` a verb that writes to a goal a decision session is working
+  on is refused until that session ends or the goal is held; the hold stops
+  the decision session (SIGTERM to its own pid, never the runner's).
   Resolve the blocker yourself
   within the current stage, including implementation, checks and publication
   when needed; then follow that stage's normal transition. Merely clearing
