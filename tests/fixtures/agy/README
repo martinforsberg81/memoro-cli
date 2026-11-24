@@ -30,3 +30,10 @@ Plan quota (tests/mc/agy-capacity.test.js, `agy -p /usage --output-format text`)
   be absent. The parse takes only a percentage 0-100 beside those two names. A
   window with no printed reset is not stored; one at its limit with none is a
   refusal for QUOTA_SLEEP_MS. Output with no such line is a failed read.
+
+Recorded (tests/mc/run-plan.test.js, the agy-stream reader)
+  network-20261117T191632Z.json.err, network-20261117T192619Z.json.err: the
+  stderr of two agy reviews of org-detail/hero-scene-card on 2026-11-17
+  (runner log goal-org-detail-hero-scene-card-…), copied unchanged. Each
+  ended at exit 3 on "There was a network issue connecting to the server" and
+  `dial tcp: lookup … server misbehaving`; they read as `offline`.
