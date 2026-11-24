@@ -721,7 +721,7 @@ test('a session\'s backward move is refused naming both stages, whatever its rol
   }
 });
 
-test('interactive Martin can return, move backward/forward and drop with attribution; cannot mark done or use headless authority', async () => {
+test('interactive Martin can return, move backward/forward and drop with attribution; cannot mark done past an open pull request or use headless authority', async () => {
   const MARTIN = { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'martin' };
   for (const [from, to, expected] of [['merge', 'build', 'build · ready'], ['build', 'review', 'review · ready'], ['build', 'build', 'build · ready']]) {
     const f = fixture({ files: inStage(from), env: MARTIN });
@@ -740,8 +740,11 @@ test('interactive Martin can return, move backward/forward and drop with attribu
   const returned = fixture({ files: inStage('review', 'Martin'), env: MARTIN });
   assert.equal(await run(['ready'], returned.deps), 0, returned.err());
   assert.equal(stateOf(returned), 'review · ready'); assert.equal(parseLog(returned.store[`${DIR}/LOG.md`]).at(-1).role, 'martin');
+  // A goal in merge has its pull request open: the merger sets done when it lands, not the desk (deskDoneRefusal; the desk's done has its own test).
   const done = fixture({ files: inStage('merge'), env: MARTIN });
-  assert.equal(await run(['stage', 'done'], done.deps), 2); assert.match(done.err(), /does not mark a goal done administratively/u);
+  done.deps.gh = (_cwd, args) => ok(args[1] === 'list' ? '[{"number":31}]' : '{"state":"OPEN"}');
+  assert.equal(await run(['stage', 'done'], done.deps), 2); assert.equal(done.err(), 'mc: mc/plain: it has an open pull request (memoro-cli#31) — the merger sets done when it lands\n');
+  assert.equal(stateOf(done), 'merge · ready');
   const unattended = fixture({ files: inStage('build'), env: { ...MARTIN, MC_HEADLESS: '1' } });
   assert.equal(await run(['stage', 'review'], unattended.deps), 2); assert.match(unattended.err(), /interactive-only/u);
 });
@@ -3743,6 +3746,106 @@ test('a build session moves a goal that is a part to review with a clean worktre
   assert.equal(bare.code, 1);
   assert.match(bare.err(), /mc\/plain is not moved to review — mc\/plain has no criterion — mc goal criterion add mc\/plain/u);
   assert.equal((await callWith(MOVES_TO_REVIEW[0], v2Files(fullEvidence()), { git: worktreeGit({ heads: { ...TWO_HEADS }, dirty: ['memoro'] }) })).code, 0);
+});
+
+// Order goal-routes, Part 1: the desk can finish a goal with nothing to land, under the truth rule.
+test('interactive Martin sets done on a goal with nothing to land: every criterion met or a cut goal\'s --evidence, no open pull request, GitHub read', async () => {
+  const MARTIN = { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'martin' };
+  /** A fixture whose GitHub answers `view` (a registered PR's state, or a failure) and `list` (the open PRs on goal/plain); each call kept. */
+  const desk = (files, { env = MARTIN, view = 'MERGED', list = [], fail = null } = {}) => {
+    const f = fixture({ files, env });
+    f.gh = [];
+    f.deps.gh = (cwd, args) => {
+      f.gh.push({ cwd, args });
+      if (fail) return failed(`${fail}\n`);
+      return ok(JSON.stringify(args[1] === 'list' ? list : { state: view }));
+    };
+    return f;
+  };
+  const doneEntry = (f) => parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
+
+  // Every criterion met, no pull request: done from review and from build, by each verb that sets it.
+  for (const [from, argv] of [['review', ['done']], ['build', ['done']], ['review', ['stage', 'done']], ['build', ['log', '--done', 'released', '--stage', 'done']]]) {
+    const f = desk(inStage(from));
+    assert.equal(await run(argv, f.deps), 0, `${from} ${argv.join(' ')}: ${f.err()}`);
+    assert.equal(stateOf(f), 'done · ready', `${from} ${argv.join(' ')}`);
+    assert.deepEqual([doneEntry(f).stage, doneEntry(f).role], ['done', 'martin']);
+    assert.match(f.store[`${DIR}/LOG.md`], /## 2026-11-01T20:00Z · claude · done · ready · by martin\n/u);
+    assert.equal(f.out(), 'mc: mc/plain · done · ready\n');
+    assert.deepEqual(f.gh.map((call) => [call.cwd, call.args.join(' ')]), [['/home/m/memoro-cli.git', 'pr list --state open --head goal/plain --json number']], 'GitHub is asked about the goal branch in its repository');
+  }
+
+  // A goal cut from an order has no criteria: done with --evidence, written to the done entry; refused without it.
+  const cut = desk(partFiles({}, { stage: 'review' }));
+  assert.equal(await run(['done', '--evidence', 'Proved by ran: node --test tests/x.test.js, 4 pass; LOG.md 2026-11-24'], cut.deps), 0, cut.err());
+  assert.equal(stateOf(cut), 'done · ready');
+  assert.equal(doneEntry(cut).done, 'evidence: Proved by ran: node --test tests/x.test.js, 4 pass; LOG.md 2026-11-24');
+  assert.equal(cut.gh.length, 2, 'both of its repositories are asked');
+  for (const argv of [['done'], ['stage', 'done'], ['done', '--evidence', '  ']]) {
+    const bare = desk(partFiles({}, { stage: 'review' }));
+    const code = await run(argv, bare.deps);
+    assert.equal(code, 2, argv.join(' '));
+    assert.equal(bare.store[`${DIR}/LOG.md`], PART_LOG, `${argv.join(' ')}: nothing written`);
+    assert.equal(bare.gh.length, 0, 'GitHub is not asked for a goal whose truth does not hold');
+  }
+  const refusedCut = desk(partFiles({}, { stage: 'review' }));
+  await run(['done'], refusedCut.deps);
+  assert.equal(refusedCut.err(), 'mc: mc/plain: it was cut from an order and has no criteria — done needs --evidence "…"\n');
+
+  // An unmet criterion refuses, naming it; nothing is written and GitHub is not asked.
+  const unmet = desk(seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'review', success_criteria: [MET[0], { criterion: 'it lasts', check: 'b test', met: false }] }) }));
+  assert.equal(await run(['done'], unmet.deps), 2);
+  assert.equal(unmet.err(), 'mc: mc/plain: criterion 2 is not met — done needs every criterion met\n');
+  assert.equal(unmet.store[`${DIR}/LOG.md`], LOG_TEXT);
+  assert.equal(unmet.gh.length, 0);
+
+  // An open pull request refuses: a registered one GitHub says is open, and one found only by gh pr list on goal/plain.
+  const withPrs = (prs) => inStage('review', 'ready', { [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'review', success_criteria: MET, prs }) });
+  const registered = desk(withPrs(['memoro-cli#123']), { view: 'OPEN' });
+  assert.equal(await run(['done'], registered.deps), 2);
+  assert.equal(registered.err(), 'mc: mc/plain: it has an open pull request (memoro-cli#123) — the merger sets done when it lands\n');
+  const listed = desk(inStage('review'), { list: [{ number: 45 }] });
+  assert.equal(await run(['done'], listed.deps), 2);
+  assert.equal(listed.err(), 'mc: mc/plain: it has an open pull request (memoro-cli#45) — the merger sets done when it lands\n');
+  for (const f of [registered, listed]) {
+    assert.equal(stateOf(f), 'review · ready');
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT);
+  }
+  // A registered pull request that landed or closed does not hold the goal.
+  for (const view of ['MERGED', 'CLOSED']) {
+    const landed = desk(withPrs(['memoro-cli#123']), { view });
+    assert.equal(await run(['done'], landed.deps), 0, `${view}: ${landed.err()}`);
+    assert.equal(stateOf(landed), 'done · ready');
+  }
+
+  // GitHub that cannot be read refuses with its reason, and nothing is changed.
+  for (const files of [inStage('review'), withPrs(['memoro-cli#123'])]) {
+    const down = desk(files, { fail: 'HTTP 502: Bad Gateway' });
+    assert.equal(await run(['done'], down.deps), 1);
+    assert.match(down.err(), /^mc: mc\/plain: its pull requests could not be read \(memoro-cli(#123)?: HTTP 502: Bad Gateway\) — nothing was changed\n$/u);
+    assert.equal(stateOf(down), 'review · ready');
+    assert.equal(down.store[`${DIR}/LOG.md`], LOG_TEXT);
+  }
+
+  // Unattended Martin, the decision pass and a session are refused before anything is read.
+  for (const [env, said] of [
+    [{ ...MARTIN, MC_HEADLESS: '1' }, 'mc: the Martin role is interactive-only; unattended sessions cannot use Martin authority\n'],
+    [{ ...MARTIN, MC_ROLE: 'decision', MC_HEADLESS: '1' }, 'mc: the decision pass does not mark a goal done — preserve the normal review, publish and merger handoff\n'],
+    [BUILD, 'mc: a session does not set done — move it to review; the merger sets done when the pull request lands\n'],
+  ]) {
+    const f = desk(inStage('review'), { env });
+    assert.equal(await run(['done'], f.deps), 2, JSON.stringify(env));
+    assert.equal(f.err(), said, JSON.stringify(env));
+    assert.equal(stateOf(f), 'review · ready');
+    assert.equal(f.gh.length, 0);
+  }
+  assert.equal(refusedMove({ from: 'review', to: 'done', env: { MC_ROLE: 'martin' } }), null);
+
+  // A person's done is unchanged: no truth rule asked of it and no GitHub read.
+  const person = desk(seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'review' }) }), { env: {} });
+  assert.equal(await run(['done', 'mc/plain'], person.deps), 0, person.err());
+  assert.equal(stateOf(person), 'done · ready');
+  assert.equal(person.gh.length, 0);
 });
 
 // Order mc-parts-are-goals, Part 3: the programme's last goal is cut from the order as a part's goal is, and is treated as one.

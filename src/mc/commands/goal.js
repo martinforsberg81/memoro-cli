@@ -37,7 +37,8 @@
  *   mc goal martin …   gone: exits 2 and prints the mc ask call to make (`retiredMartin`)
  *   mc goal defect [<programme>/<goal>] --part "…" --found "…" [--evidence "…"|--evidence-file <path|->] [--next "…"|--next-file <path|->]
  *                  the goal itself is wrong: one entry, status Martin, no options and no jev (`reportDefect`)
- *   mc goal done [<programme>/<goal>] [--reason "…"]   stage done, a person's (the merger sets it when the pull request lands)
+ *   mc goal done [<programme>/<goal>] [--reason "…"] [--evidence "…"]   stage done, a person's (the merger sets it when the pull request lands),
+ *                                  or interactive Martin's for a goal with nothing to land (`deskDoneRefusal`)
  *   mc goal drop [<programme>/<goal>] --reason "…"   let go without landing: `dropped`, never `done`
  *   mc goal pr <programme>/<goal> <repo>#<n>…   the pull requests named carry the goal (`prs`)
  *   mc goal archive <programme>/<goal>… | <programme> | --all   a done or dropped goal to goals/.archive/, its
@@ -70,6 +71,7 @@ import { appendFileSync, existsSync, readFileSync, readdirSync, realpathSync, un
 import { isAbsolute, join, relative, sep } from 'node:path';
 
 import { commandUsage } from '../command-help.js';
+import { unmetCriteria } from '../criteria.js';
 import { buildDispatches } from '../goal-dispatch-evidence.js';
 import { isSourceArea, proposedStand, proposedWords, readAreas } from '../areas.js';
 import { checkVerdict, trippedAreas } from '../review-verdict.js';
@@ -152,6 +154,8 @@ export const ROUTES = Object.fromEntries([
 
 /** The flags verb `verb` takes, or null when it is not one: a status verb takes --reason. */
 function verbFlagsOf(verb) {
+  // The desk's done on a goal cut from an order names what was checked (`deskDoneRefusal`).
+  if (verb === 'done') return [...VERB_FLAGS.status, '--evidence'];
   if (STATUS_VERBS.includes(verb)) return VERB_FLAGS.status;
   return Object.hasOwn(VERB_FLAGS, verb) ? VERB_FLAGS[verb] : null;
 }
@@ -271,7 +275,8 @@ export async function run(argv, deps = {}) {
   }
   if (verb === 'defect') return reportDefect(rest, flags, ctx);
   if (verb === 'drop' && !flags.reason) { stderr.write('mc: drop needs --reason "…" — why the goal is let go\n'); return 2; }
-  if (STATUS_VERBS.includes(verb)) return logEntry(rest, { stage: null, status: null, ...STATUS_VERB_FIELDS[verb], done: null, comment: flags.reason, next: null }, ctx);
+  if (verb === 'done' && flags.evidence !== null && !flags.evidence.trim()) { stderr.write('mc: done needs --evidence with text in it, or leave it out\n'); return 2; }
+  if (STATUS_VERBS.includes(verb)) return logEntry(rest, { stage: null, status: null, ...STATUS_VERB_FIELDS[verb], done: verb === 'done' && flags.evidence !== null ? `evidence: ${flags.evidence.trim()}` : null, comment: flags.reason, next: null, evidence: verb === 'done' ? flags.evidence : null }, ctx);
   if (verb === 'pr') return carryPrs(rest, ctx);
   if (verb === 'archive') return archiveGoals(rest, ctx, flags.all);
   if (verb === 'show') return showGoal(rest, ctx);
@@ -451,6 +456,10 @@ function logEntry(args, fields, ctx) {
   }
   const refused = reset ? null : refusedMove({ from: goal.stage, to: fields.stage, status: fields.status, env });
   if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
+  if (fields.stage === 'done' && goal.stage !== 'done' && env.MC_ROLE === 'martin') {
+    const unfinished = deskDoneRefusal(goal, target, fields.evidence ?? null, ctx);
+    if (unfinished) { stderr.write(`mc: ${target.name}: ${unfinished.text}\n`); return unfinished.code; }
+  }
   if (env.MC_ROLE === 'decision' && goal.stage === 'review' && goal.status === 'Martin'
       && (fields.stage !== null || fields.status === 'ready')) {
     const log = parseLog(read(join(target.dir, LOG_FILE)) ?? '');
@@ -2097,7 +2106,8 @@ export function refusedMove({ from, to = null, status = null, env }) {
   if (env.MC_ROLE === 'programme-review') return 'a programme-review session reads and writes only PROGRAMME-REVIEW.md; it changes no goal and asks no one';
   if (['martin', 'decision'].includes(env.MC_ROLE)) {
     if (env.MC_ROLE === 'martin' && env.MC_HEADLESS === '1') return 'the Martin role is interactive-only; unattended sessions cannot use Martin authority';
-    if (to === 'done') return 'Martin does not mark a goal done administratively — preserve the normal review, publish and merger handoff';
+    // The interactive desk finishes a goal with nothing to land, under the truth rule (`deskDoneRefusal`); the decision pass never does.
+    if (to === 'done' && env.MC_ROLE === 'decision') return 'the decision pass does not mark a goal done — preserve the normal review, publish and merger handoff';
     return null;
   }
   if (env.MC_ROLE === LEARNING_ROLE) return learningRefusal('stage');
@@ -2127,6 +2137,52 @@ export function refusedMove({ from, to = null, status = null, env }) {
   if (moves && !(from === 'build' && to === 'review')) return `a build session moves a goal only from build to review, not ${from} → ${to}`;
   if (status === 'ready') return 'a build session does not set a goal ready — a person does';
   return null;
+}
+
+/**
+ * Why the interactive desk (`MC_ROLE=martin`) may not set `goal` done, as `{ text, code }`, or null when it may. The
+ * truth rule holds without the merger: a goal with criteria needs every one met (`criterion met`, its check run and
+ * recorded); a goal cut from an order has none of its own and needs `evidence`, what was checked and where it is
+ * recorded; a goal without either is refused. A goal with an open pull request lands through the merger: its
+ * registered `prs` not merged or closed, and `gh pr list --head goal/<goal>` in each of its repositories. When GitHub
+ * cannot say, nothing is changed. Asked in that order, so GitHub is read only for a goal whose truth holds.
+ */
+function deskDoneRefusal(goal, target, evidence, ctx) {
+  const criteria = goal.success_criteria ?? [];
+  if (criteria.length) {
+    const unmet = unmetCriteria(goal);
+    if (unmet.length) return { code: 2, text: `${unmet.length === 1 ? `criterion ${unmet[0]} is` : `criteria ${unmet.join(', ')} are`} not met — done needs every criterion met` };
+  } else if (cutFromOrder(goal)) {
+    if (evidence === null || !evidence.trim()) return { code: 2, text: 'it was cut from an order and has no criteria — done needs --evidence "…"' };
+  } else return { code: 2, text: 'it has no criterion — done needs every criterion met' };
+  const unread = (reason) => ({ code: 1, text: `its pull requests could not be read (${reason}) — nothing was changed` });
+  const said = (answer) => `${answer.stderr ?? ''}`.trim().split('\n').at(-1) || 'gh failed';
+  const open = new Map();
+  const pathOf = (repo) => ctx.known().find((path) => repoNameOf(path) === repo);
+  for (const item of goal.prs ?? []) {
+    const path = pathOf(item.repo);
+    if (!path) return unread(`${item.repo} is not a repository mc knows`);
+    const answer = ctx.gh(path, ['pr', 'view', String(item.pr), '--json', 'state']);
+    if (!answer.ok) return unread(`${prRef(item)}: ${said(answer)}`);
+    let state;
+    try { state = JSON.parse(answer.stdout || 'null')?.state; } catch { state = null; }
+    if (!['OPEN', 'MERGED', 'CLOSED'].includes(state)) return unread(`${prRef(item)}: GitHub gave no state`);
+    if (state === 'OPEN') open.set(prRef(item), true);
+  }
+  const branch = `goal/${target.goal}`;
+  for (const repo of goal.repos ?? []) {
+    const path = pathOf(repo);
+    if (!path) return unread(`${repo} is not a repository mc knows`);
+    const answer = ctx.gh(path, ['pr', 'list', '--state', 'open', '--head', branch, '--json', 'number']);
+    if (!answer.ok) return unread(`${repo}: ${said(answer)}`);
+    let listed;
+    try { listed = JSON.parse(answer.stdout || '[]'); } catch { listed = null; }
+    if (!Array.isArray(listed)) return unread(`${repo}: GitHub gave no list of pull requests`);
+    for (const pr of listed) if (Number.isInteger(pr?.number)) open.set(prRef({ repo, pr: pr.number }), true);
+  }
+  if (!open.size) return null;
+  const refs = [...open.keys()];
+  return { code: 2, text: `it has ${refs.length === 1 ? 'an open pull request' : 'open pull requests'} (${refs.join(', ')}) — the merger sets done when it lands` };
 }
 
 const LEARNING_ROLE = 'learning';
