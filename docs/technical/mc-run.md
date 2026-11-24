@@ -942,8 +942,9 @@ so a goal the cut makes is a candidate of that same pick. `programmeDue`
 (`programme-turn.js`) is model-free. A programme is due when all hold:
 
 - the record is valid and `ready`, and `README.md` exists and has parts;
-- a part of `README.md` is named by no goal, live or archived (`partsCut`),
-  or the programme has no documentation goal, live or archived. A programme
+- a part of `README.md` is named by no goal that counts, live or archived
+  (`partsCut`; *A dropped goal*, below), or the programme has no documentation
+  goal that counts, live or archived. A programme
   whose every part is named and none of whose goals was cut by code is of the
   old form: its goals write `docs/technical/` themselves, it gets no
   documentation goal and it is not due;
@@ -958,6 +959,24 @@ so a goal the cut makes is a candidate of that same pick. `programmeDue`
 Otherwise nothing is cut. What the desk must do, a horizon that is missing or
 not open and a state file that is unreadable are each said once in
 `runner.log` while they last; a programme that simply is not due is silent.
+
+**A dropped goal.** `mc programs state <programme> ready` writes the instant
+it was set ready into the record, `ready_at` (second precision), each time;
+`draft` and `done` keep it ([mc-plan.md](mc-plan.md)). Every goal of the
+programme, live or archived and of every stage, counts toward the cut, but
+one: a `dropped` goal whose drop (the first entry of the run of `dropped`
+entries that ends its LOG.md, minute precision) falls in or before the minute
+of `ready_at` no longer counts. One filter (`countedGoals`,
+`programme-turn.js`) gives the goals that count to `partsCut`,
+`goalsNamingNoPart`, `programmeDue`, `cutParts` and the dependency reading of
+`state ready`, the documentation goal included. So a revised order set ready
+after its old goals were dropped gets a new goal for each such part, and a
+new documentation goal when its old one was dropped. A goal dropped after the
+minute the order was set ready still counts, so dropping a goal of an
+unchanged order never starts replacement work by itself: the desk sets the
+order `draft` and `ready` again to commission its part. A `done` goal always
+counts, a drop whose log does not say when counts, and a record without
+`ready_at` (every record set ready before 2026-11-24) counts every goal.
 
 **What a part waits for.** A part waits for the part before it, unless it holds
 the line `In parallel with the previous part.` (read leniently on surrounding
@@ -992,8 +1011,8 @@ entry, `Done: cut from Part <n> of README.md`. The cut is made under the
 runner lock, on a second reading of what is due; a lock that cannot be had is
 said and tried again at the next pick.
 
-**The last goal.** Where the programme has no documentation goal, live or
-archived, the same cut adds one after the parts: directory
+**The last goal.** Where the programme has no documentation goal that counts,
+live or archived, the same cut adds one after the parts: directory
 `<programme>-documentation` (a number added while the name is taken), title
 `Documentation`, the same repositories, `"documentation": true` in place of
 `part`, a `documents` entry labelled `The order`, and the phase after the
@@ -1307,7 +1326,15 @@ machine-wide lane total, behind mend and ahead of other delivery sessions.
 `decisionWork`, `decisionPass` and `runDecision` use the same slot, disk,
 capacity, billing, worktree, watch/check-in and log machinery as main-red mend.
 Two items of the same goal cannot run together; goal delivery also honours the
-decision claim. A decision current file carries the item id as `name` and the
+decision claim. The claim (`.decision.json` in the goal's directory) is `{ pid,
+item, since }` when it is taken and gains `session_pid`, the decision session's
+own pid, at spawn; the interactive desk's goal writes wait for it, and its
+`mc goal hold` stops that session ([mc-goals.md](mc-goals.md), `hold`).
+`runDecision` reads the goal's hold again before it spawns, and a goal held
+meanwhile starts no session (`<item>: <p>/<g> was held meanwhile — no decision
+session is started`); and after the session ends, when an unfinished ending
+on a goal held while it ran counts no decision failure and sets no status
+(`… was held while the decision session ran — no failure is counted`). A decision current file carries the item id as `name` and the
 goal reference separately, so handovers exclude the goal, not just that item.
 The role runs headless with goal identity only for a goal item. Each launch
 adds a `decision` row named by item id. The same launch is exposed to the person

@@ -576,13 +576,27 @@ directory without goal identity. Every session writes a `runs.tsv` row of kind
 `decision`, named by item id, including usage and cost. Goal claims and current
 files exclude other sessions on that goal; a short lock and live-PID
 `.decision.json` claim in the goal directory (or non-goal item directory) also
-exclude concurrent manual decision launches. The claim is removed on exit.
+exclude concurrent manual decision launches. The claim is `{ pid, item, since,
+session_pid }`: the runner's pid, the item, when it was taken, and, once the
+session is spawned, the session's own pid. It is removed on exit.
+
+The desk and the decision pass never change one goal at once. While a goal's
+claim is live (its runner `pid` alive), the interactive desk's `mc goal`
+verbs that write to it are refused until the session ends or the desk takes
+the goal over with `mc goal hold`, which sends SIGTERM to the claim's
+`session_pid`, never to the runner (`hold` in [mc-goals.md](mc-goals.md)). The
+runner reads the hold again before it spawns the session and after it ends: a
+goal held meanwhile starts none, and a session that ends unfinished on a held
+goal records no decision failure and sets no status
+([mc-run.md](mc-run.md#decision-lane)).
 
 The role reads prepared evidence when an item has it, the live source, the whole goal log,
 worktree and stage instructions, records takeover and tests the question's
 frame before answering it. It may finish, rewrite or drop the goal with the
 desk's authority; acceptance checks, independent review, gate, publication
-and merge remain mandatory. Only the merger marks done. Martin's interactive
+and merge remain mandatory. It never marks a goal done: the merger does, and
+the interactive desk for a goal with nothing to land (`done` in
+[mc-goals.md](mc-goals.md)). Martin's interactive
 role remains refused unattended. Headless deploy, admin override, production
 data and credential hooks still apply to decision sessions.
 

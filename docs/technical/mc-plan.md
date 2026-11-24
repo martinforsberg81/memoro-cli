@@ -45,6 +45,7 @@ and `legacy` remain readable on old records but are not written:
 | `area` | optional: `<repo>/<id>`, an area a repository declares; allowed only with `horizon` `null` |
 | `end` | one non-empty sentence saying when the programme is done |
 | `state` | `draft`, `ready`, `done` or `Martin` with a repair scope stop |
+| `ready_at` | optional: an ISO instant in UTC to the second, when the order was last set ready; `mc programs state <p> ready` writes it each time, `draft` and `done` keep it. A goal dropped in or before its minute no longer counts toward the cut ([mc-run.md](mc-run.md#the-cut-of-a-ready-order)) |
 | `created` | an ISO instant in UTC to the second |
 | `created_by` | `person`, `martin`, `repair` or the historical `manager` |
 | `phases` | optional: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}`; `mc programs state <p> ready` writes it from the order's parts, keyed by part number |
@@ -225,7 +226,8 @@ The complete record template is the first markdown fence of
 short template in `repair-page.md`. The older recordless page is
 `programme-readme.md`. `create` fills name, end, horizon/area and purpose.
 the no-record page only when no README exists. `mc programs show` prints the
-`area` line and `--json` the key.
+`area` line and `--json` the key, and for a record with `ready_at` the line
+`  ready at 2026-11-24 19:05Z` after `state`, with the key in `--json`.
 
 ### Repair drafts
 

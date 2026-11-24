@@ -47,6 +47,7 @@ review   ── review: a NOT OK line, mc goal stage build ───────
 review   ── further NOT OK, repair limit reached ─────────────▶ review · Martin (automatic decision)
 review   ── no open pull request (runner, first time) ─────────▶ build
 review   ── no open pull request (runner, second time) ────────▶ review · Martin
+build, review ── interactive Martin's done, nothing to land ──▶ done
 finish   ── an old record, in finish · ready (runner) ─────────▶ build
 review   ── the review died (runner) ─────────────────────────▶ review · ready, reviewed again
 review   ── a second review died (runner) ────────────────────▶ review · Martin
@@ -172,7 +173,9 @@ written, and a write that would make one is refused with the field named.
   is its programme's `README.md` and whose label carries explicit `Part <n>`
   references (`Part 1`, `Parts 1 and 2`, `Part 1; Part 2`; no range) names those
   parts of the programme document: the cut of a ready order reads them from
-  parsed live and archived goals, with no stage excluded (*The cut of a ready
+  parsed live and archived goals of every stage, but a `dropped` goal whose
+  drop falls in or before the minute the order was last set ready (the
+  record's `ready_at`) no longer counts (`countedGoals`; *The cut of a ready
   order* in [mc-run.md](mc-run.md#the-cut-of-a-ready-order)). A path that
   resolves to another file counts for nothing. The goal file has no other form
   for it.
@@ -587,15 +590,32 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   the decision for retry and runner recovery. Existing `merging` records and
   log entries are read as `merge`; new writes use `merge`.
 - **`blocked|ready [<p>/<g>] [--reason "…"]`** — sets the status; the stage stays.
-- **`hold [<p>/<g>] --reason "…"` · `release [<p>/<g>] [--reason "…"]`** — an interactive session's hold. `hold` writes `.hold.json` (`by`, `tool`, `at`, `reason`) in the goal's directory and a log entry; stage and status stay, so nothing is asked of Martin and no desk item opens. The runner starts no session on a held goal — delivery or decision — and when a session that was already running ends on a goal that is held, it sets no stage or status on the goal and writes no entry: the hold's owner decides the goal's state. A running session, the merger and landing are not stopped. `release` removes the file and logs each worktree's state: changed files, commits past `origin/main`, last commit. Both are refused with `MC_HEADLESS=1`. A draft made by `mc goal new` without `MC_HEADLESS=1` is held from creation (`created: true` in the file); a stage move out of `draft` by a caller without `MC_HEADLESS=1`, or `release`, frees it. `blocked` is not a hold: outside merge the runner reconciles it to Martin.
+- **`hold [<p>/<g>] --reason "…"` · `release [<p>/<g>] [--reason "…"]`** — an interactive session's hold. `hold` writes `.hold.json` (`by`, `tool`, `at`, `reason`) in the goal's directory and a log entry; stage and status stay, so nothing is asked of Martin and no desk item opens. The runner starts no session on a held goal — delivery or decision — and when a session that was already running ends on a goal that is held, it sets no stage or status on the goal and writes no entry: the hold's owner decides the goal's state. A running session, the merger and landing are not stopped, but for one: interactive Martin's hold (`MC_ROLE=martin`) is the desk's takeover from the decision pass, and when the goal's live decision claim (`.decision.json`, *Unattended decision pass* in [mc-martin.md](mc-martin.md#unattended-decision-pass)) names a `session_pid` that is not the runner's own `pid`, it sends that session SIGTERM — never the runner — and its line and entry add `; the decision session (pid 4242) was stopped`. While that claim's runner `pid` is alive and the goal is not held, every `mc goal` verb under `MC_ROLE=martin` that writes to the goal (all but `show`, `list`, `areas` and `hold`; `new`, `archive` and `convert` are not refused) is refused with nothing written: `mc: <p>/<g>: a decision session (since 14:50) is working on this goal — wait for it, or take it over with mc goal hold <p>/<g> --reason "…"`. A dead claim refuses nothing. `release` removes the file and logs each worktree's state: changed files, commits past `origin/main`, last commit. Both are refused with `MC_HEADLESS=1`. A draft made by `mc goal new` without `MC_HEADLESS=1` is held from creation (`created: true` in the file); a stage move out of `draft` by a caller without `MC_HEADLESS=1`, or `release`, frees it. `blocked` is not a hold: outside merge the runner reconciles it to Martin.
 - **`martin …`** — gone: `mc goal martin` exits 2 in every role and prints the
   `mc ask` call to make. A question goes through `mc ask` ([mc-jev.md](mc-jev.md)),
   which asks jev and then a reader inside the one call. A goal waits on Martin only
   for a reserved act (`mc ask --reserved <act>`) and for a goal defect (`mc goal
   defect`); who may set `Martin` (`refusedMove`) is unchanged, and so are the
   runner's own recovery settings of `Martin`.
-- **`done [<p>/<g>] [--reason "…"]`** — stage `done`, a person's act;
-  the merger sets it when the pull request lands.
+- **`done [<p>/<g>] [--reason "…"] [--evidence "…"]`** — stage `done`, a person's act;
+  the merger sets it when the pull request lands. Interactive Martin
+  (`MC_ROLE=martin`, never under `MC_HEADLESS=1`) finishes with it, from any
+  stage, a goal with nothing to land — work that was evidence or a release —
+  under the truth rule (`deskDoneRefusal`); the entry says `by martin`. A goal
+  with criteria needs every one met (`criterion met`, its check run and
+  recorded): `mc: <p>/<g>: criterion 2 is not met — done needs every criterion
+  met`. A goal cut from an order has no criteria of its own and needs
+  `--evidence "<what was checked and where it is recorded>"`, written to
+  LOG.md as `Done: evidence: <text>`: `mc: <p>/<g>: it was cut from an order
+  and has no criteria — done needs --evidence "…"`. A goal with neither is
+  refused (`it has no criterion — done needs every criterion met`). A goal with
+  an open pull request lands through the merger: each registered `prs` entry
+  is read with `gh pr view` (open counts, merged and closed do not) and each
+  repository with `gh pr list --state open --head goal/<g>`; one found is
+  `mc: <p>/<g>: it has an open pull request (memoro#123) — the merger sets
+  done when it lands`, and GitHub that cannot be read is `mc: <p>/<g>: its pull
+  requests could not be read (<reason>) — nothing was changed` (exit 1). The
+  decision pass and every session are refused `done`.
 - **`drop [<p>/<g>] --reason "…"`** — abandons delivery: stage `dropped`, never
   `done`; it holds no later phase back. The reason is required. Only a person, interactive Martin or decision
   drops a goal. After persisting the stage, the command closes
@@ -662,7 +682,9 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   evidence at the head it publishes (*Evidence and heads*). The session decides when to merge.
   Interactive Martin and unattended decision also have validated goal-field and criterion set/remove,
   drop and any-stage authority. Neither can make a criterion met administratively
-  or bypass review, acceptance, publication or merge evidence. `MC_HEADLESS=1`
+  or bypass review, acceptance, publication or merge evidence. Interactive
+  Martin may set `done` only on a goal with nothing to land, under the truth
+  rule of `done` above; decision never sets it. `MC_HEADLESS=1`
   Martin authority is refused; decision authority is allowed, but headless deploy, admin, production-data and credential hooks remain enforced. Decision may use `mc ask` at any active stage, not just the stage of a delivery role. Its mutations log `by decision`; criterion rewrites remain unmet until checked. Build, review and mend retain their ordinary limits.
 - **`show <p>/<g>`** — a status line (`<p>/<g> · stage · status · phase <n> · repos ·
   criteria <met>/<all> · created …`, with `· prs …` when set), the goal as text (*Seen, not only stored*), the
@@ -1454,7 +1476,8 @@ Each stage has one owner, and a goal passes each once:
 - `finish` — no longer entered. A goal found in it (`finish · ready`) is moved to `build` by the runner with a log entry; with REVIEW.md it gets a repair build.
 - `merge` — the merger's; the runner starts no session, except one mend session for an unqueued merge failure.
 - `done` — set by the merger or the runner when every pull request the goal
-  carries has landed, or by a person. Final.
+  carries has landed, by a person, or by interactive Martin for a goal with
+  nothing to land (`done` under *The verbs*). Final.
 - `dropped` — delivery abandoned (`mc goal drop`), by a person, decision or interactive Martin, from any
   stage. Final; it holds no later phase back, and is immediately finalized and
   archived when cleanup is safe. A dropped goal never wakes a mend session or
