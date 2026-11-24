@@ -113,8 +113,9 @@ provider's installer. Use sudo when the host permits it non-interactively
 (`sudo -n`); never wait for a password. If provision is unavailable, leave the
 precise prerequisite and installer failure in the session output, not a goal.
 Never weaken, skip or delete a test, lower a threshold or substitute a runtime.
-A red met in a file you were not given is not yours; the merge round or the
-full run reports it independently. Existing repair goals finish as goals.
+A red met in a file you were not given is not yours to investigate; the merge
+round or the full run reports it independently. Existing repair goals finish as
+goals. The one exception is your own acceptance below.
 
 A member keyed `check:<part>@<started>` is not a test red: production's check
 after a deploy was red for that part. Read the verdict file and the check log the
@@ -140,9 +141,15 @@ for a suite, by running the suite's own command as `.mc/test.json` declares it.
 
 Read `tasks/publish-and-merge.md`. Run `mc gate --fresh <named files>` for
 file members and `mc gate --fresh --command <id>` for command members. Require
-GREEN, none of those checks SETTLED. Then complete the change's own
-bare `mc gate` acceptance, recording revision, frozen base, scope
-and log paths. Commit the repair and publish with ordinary `mc publish`, title
+GREEN, none of those checks SETTLED. Then rebase onto current origin/main (or
+the release base) and complete the change's own bare `mc gate` acceptance,
+recording revision, frozen base, scope and log paths. When that acceptance is
+red only for a failure that landed on main after your branch's base, and its
+repair is mechanical under an existing standard (a missing ledger or register
+row the standard requires, say), repair it on the same branch and name it as a
+separate cause in the PR body. A red there that needs a design or a decision is
+left alone: publish anyway with that red named in the body, so the repairs you
+made are not held; never end without a PR for it. Commit the repair and publish with ordinary `mc publish`, title
 `Repair main's red: <files>`, and a body file in MC_SCRATCH carrying cause,
 repair and gate evidence. Keep this branch and worktree on a retry. Do not use
 `--no-merge`: ordinary publication records the PR on the request before it
