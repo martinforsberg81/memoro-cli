@@ -314,7 +314,7 @@ describe('mc shot next', () => {
     });
     const ran = await mc([
       'next', '--fill', 'input[name=title]=Bank', '--click', 'text=Save', '--eval', 'document.activeElement.name',
-      '--press', 'Enter', '--wait-for', '.entry', '--timeout', '20',
+      '--hover', '.row .actions', '--press', 'Enter', '--wait-for', '.entry', '--timeout', '20',
     ], fx, { callerWorktree: () => fx.other });
     assert.equal(ran.code, 0, ran.stderr);
     assert.equal(elsewhere.received.length + older.received.length, 0, 'the most recently used of this worktree');
@@ -327,6 +327,7 @@ describe('mc shot next', () => {
       { kind: 'fill', selector: 'input[name=title]', text: 'Bank' },
       { kind: 'click', selector: 'text=Save' },
       { kind: 'eval', script: 'document.activeElement.name' },
+      { kind: 'hover', selector: '.row .actions' },
       { kind: 'press', key: 'Enter' },
       { kind: 'wait-for', selector: '.entry' },
     ]);

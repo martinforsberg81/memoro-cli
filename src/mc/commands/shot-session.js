@@ -37,7 +37,7 @@ import { answer, servedTree, usage } from './shot.js';
 export const STEP_FLAGS = {
   booleans: ['--full', '--json', '--open', '--reload', '--no-shot', '--any-worktree'],
   strictValues: ['--wait-for', '--scroll', '--measure', '--el', '--shell', '--timeout', '--out', '--goto'],
-  repeatable: ['--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
+  repeatable: ['--click', '--context-click', '--hover', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
   check: refuseStep,
 };
 export const CLOSE_FLAGS = { booleans: ['--all'], check: refuseClose };
