@@ -53,6 +53,7 @@ import { run as programmesCommand } from '../../src/mc/commands/programs.js';
 import { run as gitRun } from '../../src/mc/git.js';
 import { lessonsReading } from '../../src/mc/page-maintenance.js';
 import { openFilesIn } from '../../src/mc/standing.js';
+import { fixture as decisionLane, result as decisionResult } from './_helpers/decision-fixture.js';
 
 /**
  * The project a path under the fixture's root belongs to: `/w/step/<p>/…`
@@ -6034,6 +6035,58 @@ test('a held Martin goal with a prepared desk item gets no decision session; unh
   const free = decisionFixture();
   assert.equal((await createRunner({ deps: free.deps }).pass({ repo: 'memoro' })).ran, 1, 'unheld: the decision starts');
   assert.equal(free.calls.sessions[0].env.MC_ROLE, 'decision');
+});
+
+// goal-routes Part 3: the desk and the decision pass never change one goal at once. The fault protected: a decision
+// session that ends on a goal the desk took over meanwhile counted a failure and could set the goal `Martin`, and a goal
+// held between the pick and the spawn still got its session. Real runner and store, fake tool session (decision-fixture.js).
+/** A goal item one unsettled ending from the limit, on a goal in `build · ready`: an ending that counted would make it `for-martin` and the goal `Martin`. */
+const lastAttempt = (t) => {
+  const f = decisionLane(t);
+  const item = f.add('alpha/first', { decision_failures: [{ at: '2026-11-14T10:05:00Z', reason: 'an earlier session exited', state: 'prepared' }] });
+  const dir = join(f.root, 'programs', 'alpha', 'goals', 'first');
+  writeFileSync(join(dir, 'GOAL.json'), goalJson({ status: 'ready' }));
+  const status = () => JSON.parse(readFileSync(join(dir, 'GOAL.json'), 'utf8')).status;
+  return { f, item, dir, status };
+};
+const DESK_HOLD = JSON.stringify({ by: 'martin', tool: 'claude', at: '2026-11-14T12:00Z', reason: 'the desk takes it over' });
+
+test('a decision session that ends on a goal the desk held meanwhile records no decision failure and sets no status; the hold signals the session\'s pid, never the runner\'s', async (t) => {
+  const { f, item, dir, status } = lastAttempt(t);
+  const signals = [];
+  f.deps.session = async (call) => {
+    call.onSpawn(5555);
+    const claim = JSON.parse(readFileSync(join(dir, '.decision.json'), 'utf8'));
+    assert.deepEqual(claim, { pid: process.pid, item: item.id, since: '2026-11-14T12:00:00Z', session_pid: 5555 }, 'the claim names when it was taken and the session it spawned');
+    const out = [];
+    const code = await goalCommand(['hold', 'alpha/first', '--reason', 'the desk takes it over'], { env: { ...f.env, MC_ROLE: 'martin', MC_TOOL: 'claude' }, now: () => new Date('2026-11-14T12:00:00Z'),
+      stdout: { write: (text) => out.push(text) }, stderr: { write: (text) => out.push(text) }, kill: (target, signal) => signals.push([target, signal]) });
+    assert.equal(code, 0, out.join(''));
+    assert.match(out.join(''), /; the decision session \(pid 5555\) was stopped\n$/u);
+    return { status: 143, stdout: '', stderr: 'terminated' };
+  };
+  assert.equal((await f.runner().pass()).ran, 1);
+  assert.deepEqual(signals, [[5555, 'SIGTERM']], 'the session, never the runner');
+  const ended = f.state(item);
+  assert.deepEqual([ended.state, ended.decision_failures.length], ['prepared', 1], 'no decision failure is recorded');
+  assert.equal(status(), 'ready', 'no Martin status');
+  assert.equal(existsSync(join(dir, '.decision.json')), false, 'the claim is gone with the pass');
+});
+
+test('a goal held between the pick and the spawn starts no decision session and counts nothing', async (t) => {
+  const { f, item, dir, status } = lastAttempt(t);
+  f.deps.attachDeps = async () => { writeFileSync(join(dir, '.hold.json'), DESK_HOLD); return { ok: true }; };
+  f.deps.session = () => assert.fail('a held goal starts no decision session');
+  assert.equal((await f.runner().pass()).ran, 0);
+  assert.deepEqual([f.state(item).state, f.state(item).decision_failures.length], ['prepared', 1]);
+  assert.equal(status(), 'ready');
+  // Unheld, the same item gets its session and an ending counts as before.
+  rmSync(join(dir, '.hold.json'));
+  f.deps.attachDeps = async () => ({ ok: true });
+  f.deps.session = async () => decisionResult;
+  assert.equal((await f.runner().pass()).ran, 1);
+  assert.equal(f.state(item).state, 'for-martin');
+  assert.equal(status(), 'Martin');
 });
 
 test('multiple legacy blocked goals reconcile without duplicate diagnostic launches across lanes', async () => {

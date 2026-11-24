@@ -1764,6 +1764,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     return ran;
   }
 
+  /** The `since` of the decision claim at `path`, or now when it carries none. */
+  function claimedSince(path) {
+    try { return JSON.parse(deps.read(path))?.since || stamp(); } catch { return stamp(); }
+  }
   function decisionClaimed(path) {
     try { const claim = JSON.parse(deps.read(path)); return Boolean(claim && alive(claim.pid)); }
     catch { return false; }
@@ -1793,7 +1797,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const { name, repo: repoName, claimName, claimPath, goal } = item;
     const claimed = lock(root, () => {
       if (claims.has(claimName) || decisionClaimed(claimPath) || stepsHeld().some(x => x.name === claimName)) return false;
-      writeJson(claimPath, { pid, item: name });
+      // `since` is when the claim was taken; `session_pid` is added at spawn (`runDecision`), for `mc goal hold` to stop.
+      writeJson(claimPath, { pid, item: name, since: stamp() });
       claims.add(claimName); claimRepos.set(claimName, repoName);
       return true;
     }, { strict: true, name: 'decision-claim' });
@@ -1807,8 +1812,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       remove(claimPath); claims.delete(claimName); claimRepos.delete(claimName);
     }
   }
+  /**
+   * One decision session on `item`. A goal the desk has taken over with `mc goal hold` meanwhile is the desk's:
+   * the hold is read again before the session is spawned, which then starts none, and after it ends, which then
+   * records no decision failure and sets no status (the hold stopped it, or the desk works on the goal now).
+   */
   async function runDecision(item, { lane }) {
-    const { name, repo: repoName, goal } = item;
+    const { name, repo: repoName, goal, claimPath } = item;
+    const heldNow = () => Boolean(goal && readHold(goal.dir, deps.read));
     const role = deps.role('decision');
     if (!role?.overlay) return 'skipped:role-missing';
     const route = routeClass('decision');
@@ -1838,6 +1849,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (updateRequested()) return 'skipped:update';
       const currentItem = deps.deskItems.read(name);
       if (!decisionEligible(currentItem)) return 'skipped:changed';
+      if (heldNow()) { say(`${name}: ${goalName(goal)} was held meanwhile — no decision session is started`); return 'skipped:held'; }
       try {
         const budget = deskBudget({ env: deps.env, now: deps.now(), read: deps.read });
         if (budget.held) { say(`${name}: desk ceiling reached ($${budget.spent} of $${budget.ceiling})`); return 'skipped:desk-ceiling'; }
@@ -1861,7 +1873,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing, runnerAdmission: true });
       try {
         const pending = runnerSession(tool, { cwd, logPath: `${out}.jsonl`,
-          onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
+          onSpawn: childPid => {
+            current.session_pid = childPid; writeJson(currentPath, current);
+            if (claimPath) writeJson(claimPath, { pid, item: name, since: claimedSince(claimPath), session_pid: childPid });
+          },
           ...watchFor(launch, settings, { prompt, name, checkInText: () => `Continue decision item ${name}. End closed or for-martin; preserve goal evidence and handoffs.`, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           env: { MC_HEADLESS: '1', MC_ROLE: 'decision', MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch,
             ...(goal ? { MC_GOAL: currentItem.reference, MC_PROGRAMME: goal.programme, MC_REPO: repoName, MC_WORKAREA: cwd } : {}) },
@@ -1886,7 +1901,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // It counts for nothing and writes nothing; the item is taken again when the provider answers.
       const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
       const reason = `decision session exited ${result.status ?? 1} without settling the item (${read.note}); log: ${out}.jsonl${result.stderr ? `; ${String(result.stderr).slice(0, 1000)}` : ''}`;
-      if (unfinished && !providerEnding) {
+      // A goal held while the session ran is the desk's: its ending says nothing about the item.
+      const heldEnding = unfinished && heldNow();
+      if (heldEnding) say(`${name}: ${goalName(goal)} was held while the decision session ran — no failure is counted`);
+      if (unfinished && !providerEnding && !heldEnding) {
         // The failure goes on the record read under the lock, by the runner's own lock and item seams; a record settled meanwhile gets none.
         // The turn ran and was paid for: a lock that cannot be had leaves the failure uncounted, never the run row below unwritten.
         let failed = { item: null, lessonError: null };

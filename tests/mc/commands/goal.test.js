@@ -2269,6 +2269,62 @@ test('mc goal release removes a creation hold and logs it as released, as it doe
   assert.match(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).comment, /^released: held by person since 2026-11-01T19:00Z \(draft being written by its author\)/u);
 });
 
+/* ------------------------------------------------- the desk and the decision pass (goal-routes Part 3) */
+
+// The fault protected: the interactive desk amended a goal while a decision session worked on it (2026-11-15), and a
+// takeover that signals the runner's own pid would stop every lane. RUNNER is the runner's pid the claim holds,
+// SESSION_PID the decision session's.
+const RUNNER = 4242;
+const SESSION_PID = 4243;
+const claimOf = (fields = {}) => ({ [`${DIR}/.decision.json`]: JSON.stringify({ pid: RUNNER, item: 'abc123', since: '2026-11-01T14:50:00Z', ...fields }) });
+const runnerAlive = (pid) => pid === RUNNER;
+const WAIT_LINE = 'mc: mc/plain: a decision session (since 14:50) is working on this goal — wait for it, or take it over with mc goal hold mc/plain --reason "…"\n';
+const DESK_WRITES = [['stage', 'mc/plain', 'review'], ['criterion', 'met', 'mc/plain', '1', '--evidence', 'the check held'], ['log', 'mc/plain', '--comment', 'amended']];
+
+test('the desk\'s goal writes wait for a live decision claim: refused with the wait line, nothing written; a dead claim, a held goal and a read go through', async () => {
+  for (const argv of DESK_WRITES) {
+    const f = fixture({ files: inStage('build', 'ready', claimOf()), env: DESK, alive: runnerAlive });
+    const before = { ...f.store };
+    assert.equal(await run(argv, f.deps), 2, argv.join(' '));
+    assert.equal(f.err(), WAIT_LINE, argv.join(' '));
+    assert.deepEqual(f.store, before, `${argv.join(' ')} writes nothing`);
+  }
+  for (const argv of [['log', 'mc/plain', '--comment', 'amended'], ['criterion', 'unmet', 'mc/plain', '1']]) {
+    for (const [label, files, alive] of [['a dead claim', inStage('build', 'ready', claimOf()), () => false], ['a goal the desk holds', inStage('build', 'ready', { ...claimOf(), [`${DIR}/.hold.json`]: HELD }), runnerAlive]]) {
+      const f = fixture({ files, env: DESK, alive });
+      const before = f.store[`${DIR}/LOG.md`];
+      assert.equal(await run(argv, f.deps), 0, `${label}: ${argv.join(' ')} — ${f.err()}`);
+      assert.notEqual(f.store[`${DIR}/LOG.md`], before, `${label}: ${argv.join(' ')} wrote its entry`);
+    }
+  }
+  const reading = fixture({ files: inStage('build', 'ready', claimOf()), env: DESK, alive: runnerAlive });
+  assert.equal(await run(['show', 'mc/plain'], reading.deps), 0, reading.err());
+  const build = fixture({ files: inStage('build', 'ready', claimOf()), env: { ...DESK, MC_ROLE: 'decision' }, alive: runnerAlive });
+  assert.equal(await run(['log', 'mc/plain', '--comment', 'the decision session writes'], build.deps), 0, 'the decision session itself is not refused');
+});
+
+test('the desk\'s hold takes a goal over from a live decision claim: SIGTERM to session_pid only, never the runner\'s pid, and nothing when it has none', async () => {
+  const cases = [
+    ['a spawned session', claimOf({ session_pid: SESSION_PID }), [[SESSION_PID, 'SIGTERM']], `; the decision session (pid ${SESSION_PID}) was stopped`],
+    ['a claim before spawn', claimOf(), [], ''],
+    ['a session_pid that is the runner\'s', claimOf({ session_pid: RUNNER }), [], ''],
+  ];
+  for (const [label, claim, signals, words] of cases) {
+    const f = fixture({ files: inStage('build', 'ready', claim), env: DESK, alive: runnerAlive });
+    const sent = [];
+    f.deps.kill = (target, signal) => { sent.push([target, signal]); };
+    assert.equal(await run(['hold', 'mc/plain', '--reason', HOLD_REASON], f.deps), 0, `${label}: ${f.err()}`);
+    assert.deepEqual(sent, signals, label);
+    assert.ok(sent.every(([target]) => target !== RUNNER), `${label}: the runner is never signalled`);
+    assert.equal(f.out(), `mc: mc/plain held — the runner starts no session on it until mc goal release mc/plain${words}\n`, label);
+    assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).comment, `held: ${HOLD_REASON}${words}`, label);
+    assert.ok(f.store[`${DIR}/.hold.json`], `${label}: the hold is written`);
+  }
+  const dead = fixture({ files: inStage('build', 'ready', claimOf({ session_pid: SESSION_PID })), env: DESK, alive: () => false });
+  dead.deps.kill = () => assert.fail('a dead claim is not signalled');
+  assert.equal(await run(['hold', 'mc/plain', '--reason', HOLD_REASON], dead.deps), 0, dead.err());
+});
+
 test('a held goal shows its hold on the list line and in show, and a hold on a goal with a session running says the hold does not stop it', async () => {
   const running = fixture({
     files: { ...inStage('build'), '/w/runner/current-x.json': JSON.stringify({ name: 'mc/plain', pid: 4242 }) },
