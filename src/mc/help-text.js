@@ -34,6 +34,7 @@ RUN AND LAND
 SEE AND SHIP
   mc test dev | prod              Measure the running app, locally or live
   mc shot dev | prod <target>     A PNG of the running app; prints its path
+  mc image --prompt "<text>" --out <file>  An image on the Codex plan
   mc dev list                     Which dev server runs in which worktree
   mc deploy [--dry-run]            memoro's main, asks nothing; --dry-run reads
   mc asc build                    Does memoro need a new iOS binary?
@@ -94,6 +95,8 @@ ${commandReference('merge')}
 ${commandReference('dev')}
 
 ${commandReference('shot')}
+
+${commandReference('image')}
 
 ${commandReference('deploy')}
 

@@ -20,6 +20,7 @@ export const VERB_MODULES = {
   gate: './mc/commands/gate.js',
   keys: './mc/commands/keys.js',
   shot: './mc/commands/shot.js',
+  image: './mc/commands/image.js',
   hook: './mc/commands/hook.js',
   publish: './mc/commands/publish.js',
   dev: './mc/commands/dev.js',
