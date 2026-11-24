@@ -113,7 +113,7 @@ function sink() {
 }
 
 async function compare(argv, {
-  measures = {}, warnings = {}, refuse = null, clicked = {}, extra = {}, ambiguous = false, cwd = null,
+  measures = {}, warnings = {}, refuse = null, clicked = {}, extra = {}, ambiguous = false, cwd = null, writePictures = false,
 } = {}) {
   const waits = [];
   const holders = [];
@@ -162,6 +162,7 @@ async function compare(argv, {
     runCapture: ({ worktree: ran, request }) => {
       captures.push({ ran, request });
       const side = request.base_url.endsWith('8787') ? 'here' : 'ref';
+      if (writePictures) writeFileSync(request.out, side);
       return {
         ok: true,
         result: {
@@ -176,6 +177,54 @@ async function compare(argv, {
 }
 
 describe('mc shot dev --compare', () => {
+  const access = { requires: 'admin', account: 'seeded', role: 'user', expected: 'denied', page: 'denied', status: 403, holds: true };
+
+  it('removes a not-loaded picture and still reports the other side', async (t) => {
+    const reason = '.app-loading still visible';
+    const message = `the page did not load — ${reason}`;
+    const notLoaded = { ok: false, code: 'not-loaded', error: reason };
+    for (const json of [false, true]) {
+      const result = await compare(['dev', 'assistant', '--measure', '@layout', '--compare', 'main', ...(json ? ['--json'] : [])], {
+        writePictures: true,
+        extra: json ? { here: { access }, ref: notLoaded } : { here: notLoaded, ref: { access } },
+      });
+      t.after(() => {
+        for (const { request } of result.captures) rmSync(request.out, { force: true });
+      });
+      assert.equal(result.code, 1);
+      assert.ok(result.stderr.includes(`mc: ${json ? 'main' : 'here'}: ${message}\n`), result.stderr);
+      const [here, ref] = result.captures.map(({ request }) => request.out);
+      assert.equal(existsSync(json ? ref : here), false, 'the incomplete PNG must not remain');
+      assert.ok(existsSync(json ? here : ref), 'the other PNG must remain');
+      if (json) {
+        const answer = JSON.parse(result.stdout);
+        assert.equal(answer.here.file, here);
+        assert.deepEqual(answer.here.access, access);
+        const { served, ...failure } = answer.ref.result;
+        assert.equal(served.line, 'ref-tree');
+        assert.deepEqual(failure, { ...notLoaded, error: message });
+        assert.deepEqual(answer.diff, []);
+      } else {
+        assert.deepEqual(result.stdout.trimEnd().split('\n'), [
+          ref,
+          'main: access: requires admin — seeded (user) denied, as its role expects',
+        ]);
+      }
+    }
+  });
+
+  it('prints a role-gate failure and both paths, and exits 1', async () => {
+    const result = await compare(['dev', 'assistant', '--compare', 'other'], {
+      extra: { here: { access }, ref: { access: { ...access, page: 'granted', status: 200, holds: false } } },
+    });
+    assert.equal(result.code, 1, result.stderr);
+    assert.ok(result.stderr.includes(`mc: ${result.other}: the admin gate did not hold: seeded (user) should be denied, the page was granted 200\n`), result.stderr);
+    assert.deepEqual(result.stdout.trimEnd().split('\n'), [
+      ...result.captures.map(({ request }) => request.out),
+      'here: access: requires admin — seeded (user) denied, as its role expects',
+    ]);
+  });
+
   it('serves both trees, captures both with this tree\'s script, prints two paths then the diff', async () => {
     const result = await compare(['dev', 'assistant', '--viewport', 'iphone', '--measure', '@layout', '--compare', 'origin/main'], {
       measures: {
@@ -216,20 +265,21 @@ describe('mc shot dev --compare', () => {
     });
     assert.equal(refOnly.code, 1);
     assert.match(refOnly.stderr, /mc: main: the picture at /u);
-    assert.equal(refOnly.stdout, '');
+    assert.equal(refOnly.stdout, `${refOnly.captures[0].request.out}\n`);
   });
 
   it('receipt: a missing compare receipt names the installed mc and the script actually used on either side', async () => {
     for (const side of ['here', 'ref']) {
       const result = await compare(['dev', 'assistant', '--click', '.tab', '--compare', 'origin/main'], {
-        clicked: side === 'ref' ? { here: true } : {},
+        clicked: { [side === 'here' ? 'ref' : 'here']: true },
       });
       assert.equal(result.code, 1);
       const label = side === 'here' ? 'here' : 'main';
       assert.ok(result.stderr.includes(`mc: ${label}: the picture at `), result.stderr);
       assert.ok(result.stderr.includes(`this installed mc does not understand the result from ${SHOT_JSON.argv.join(' ')} in ${result.worktree}`), result.stderr);
       assert.doesNotMatch(result.stderr, /<unknown worktree>|<unknown script>/u);
-      assert.equal(result.stdout, '');
+      const working = result.captures[side === 'here' ? 1 : 0].request.out;
+      assert.equal(result.stdout, `${working}\n`);
     }
   });
 
