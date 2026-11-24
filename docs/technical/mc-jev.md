@@ -66,6 +66,16 @@ mc ask [<programme>/<goal>] --reason "<the question>" \
   worktree, programme planning worktree, or (without programme context) the
   working directory's git top level. Escaping symlinks are refused with a
   warning. Goal-listed documents are sent as they were written.
+- A document in one of the goal's repositories whose worktree is gone (`mc
+  tidy` released it) is read without a checkout: `git show
+  goal/<goal>:<path>` in that repository as mc knows it, then
+  `origin/main:<path>`, and stderr says where it came from (`mc: <path> read
+  from goal/<goal> (worktree released)`, `… read from origin/main (not on the
+  goal branch)`); one found in neither keeps `mc: <path> cannot be read — not
+  sent to jev`. A `--document <repo>/<path>` there is accepted when `<repo>` is
+  one of the goal's repositories and the normalised path stays inside it; one
+  that leaves it (`memoro/../x`) is refused before any git runs. A present
+  worktree is read from disk as before; the trace is unchanged.
 - `--kind` is accepted and ignored: an old call still parses, and stderr says
   `mc: --kind is not read — whether a text of Martin’s would change is the reader’s finding`.
 - `--reserved <act>` names an act only Martin may do (`deploy`,
