@@ -79,7 +79,7 @@ function red() {
  * candidate files readable — which is a refusal, so every test written before
  * this still means what it meant.
  */
-function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, pullFails = false, defaultBranch = 'origin/main', ancestor = true, movedFiles = [], candidateFiles = [], net = { fetch: false, forge: false, merge: false } } = {}) {
+function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, defaultBranch = 'origin/main', ancestor = true, movedFiles = [], candidateFiles = [], net = { fetch: false, forge: false, merge: false }, install: installState = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-repo-merge-'));
   const repoPath = join(root, 'repo');
   const mcHome = join(root, 'home');
@@ -93,8 +93,26 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
   // The head GitHub reports for the pull request — the measured one until a
   // test says a push has moved it.
   const forge = { head: verdict.pr.head_sha };
+  // The source-linked installation, when a test says one runs from the repo:
+  // the branch it stands on (null is a detached HEAD), whether its tree is
+  // dirty, whether main can be fast-forwarded, and whether the HEAD it reaches
+  // contains the landed commit. Its HEAD moves only by a fast-forward, to `tip`.
+  const install = { branch: 'main', dirty: false, ffFails: false, contains: true, head: BASE, tip: LANDED, ...installState };
   const git = (args, opts = {}) => {
     calls.push({ tool: 'git', args, cwd: opts.cwd });
+    if (args[0] === 'symbolic-ref' && args.at(-1) === 'HEAD') {
+      return install.branch ? { status: 0, stdout: `${install.branch}\n` } : { status: 1, stdout: '' };
+    }
+    if (args[0] === 'status' && args[1] === '--porcelain') return { status: 0, stdout: install.dirty ? ' M src/mc/cli.js\n' : '' };
+    if (args[0] === 'merge' && args[1] === '--ff-only') {
+      if (install.ffFails) return { status: 128, stderr: 'fatal: Not possible to fast-forward, aborting.' };
+      install.head = install.tip;
+      return { status: 0, stdout: 'Updating\n' };
+    }
+    if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { status: 0, stdout: `${install.head}\n` };
+    if (args[0] === 'merge-base' && args[1] === '--is-ancestor' && args[3] === 'HEAD') {
+      return install.contains ? { status: 0, stdout: '' } : { status: 1, stdout: '' };
+    }
     // `net` is the network failing under the round: switched by a test while it runs.
     if (args[0] === 'fetch' && net.fetch) return { status: 128, stderr: "fatal: unable to access 'https://github.com/example/memoro-cli.git/': Could not resolve host: github.com" };
     if (args[0] === 'symbolic-ref') {
@@ -113,9 +131,9 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
       const three = String(args[2] || '').includes('...');
       return { status: 0, stdout: `${(three ? candidateFiles : movedFiles).join('\n')}\n` };
     }
-    if (args[0] === 'pull') {
-      return pullFails ? { status: 1, stderr: 'diverged' } : { status: 0, stdout: 'Updating\n' };
-    }
+    // The branch's upstream is up to date: what a bare `git pull --ff-only`
+    // on any branch answered, and why it could not tell a side branch from main.
+    if (args[0] === 'pull') return { status: 0, stdout: 'Already up to date.\n' };
     return { status: 0, stdout: '' };
   };
   const gh = (args, opts = {}) => {
@@ -146,6 +164,7 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
     calls,
     forge,
     net,
+    install,
     ran: (tool) => calls.filter((call) => call.tool === tool),
     log: () => readFileSync(logPath, 'utf8'),
     lease: () => readLease(repoPath, { root: mcHome }),
@@ -708,44 +727,101 @@ describe('one lease across the whole round', () => {
 });
 
 describe('deploying is part of the round, and never undoes it', () => {
+  const here = (fx) => () => [{ root: fx.repoPath, command: 'mc', bin: '/usr/local/bin/mc', source: 'x' }];
+  // What would change the installation: none of these may run when it is not
+  // on main with a clean tree, because it may hold someone's work.
+  const changing = (fx) => fx.ran('git').filter((call) => ['merge', 'pull', 'checkout', 'switch', 'stash', 'reset'].includes(call.args[0]));
+
   it('pulls nothing when no installation runs from this checkout', async () => {
     const fx = fixture();
     try {
       const report = await fx.run();
       assert.equal(report.deploy.attempted, false);
-      assert.deepEqual(fx.ran('git').filter((call) => call.args[0] === 'pull'), []);
+      assert.deepEqual(changing(fx), []);
     } finally { fx.cleanup(); }
   });
 
-  it('pulls the installation that does run from it', async () => {
+  it('an installation on main that is behind is fast-forwarded to origin/main and contains the landing', async () => {
     const fx = fixture();
     try {
-      const report = await fx.run({
-        installs: () => [{ root: fx.repoPath, command: 'mc', bin: '/usr/local/bin/mc', source: 'x' }],
-      });
+      const report = await fx.run({ installs: here(fx) });
       assert.equal(report.deploy.attempted, true);
-      assert.equal(report.deploy.ok, true);
-      const pull = fx.ran('git').find((call) => call.args[0] === 'pull');
-      assert.deepEqual(pull.args, ['pull', '--ff-only']);
-      assert.equal(pull.cwd, fx.repoPath);
-      assert.match(fx.log(), /Live via deploy pull/u);
+      assert.equal(report.deploy.ok, true, report.deploy.reason);
+      const merge = fx.ran('git').find((call) => call.args[0] === 'merge');
+      assert.deepEqual(merge.args, ['merge', '--ff-only', 'origin/main'], 'explicitly to origin/main, not through an upstream');
+      assert.equal(merge.cwd, fx.repoPath);
+      assert.equal(fx.install.head, LANDED);
+      assert.equal(report.deploy.at, LANDED);
+      assert.ok(fx.ran('git').some((call) => call.args.join(' ') === `merge-base --is-ancestor ${LANDED} HEAD`), 'the landed commit was asked about');
+      assert.match(fx.log(), /Live via deploy pull\./u);
     } finally { fx.cleanup(); }
   });
 
-  it('a failed pull leaves the merge standing and says to pull by hand', async () => {
-    // The merge has landed and cannot be taken back. A round that reported
-    // failure here would describe a repository state that is not the one on
-    // disk, which is worse than a machine one commit behind.
-    const fx = fixture({ pullFails: true });
+  it('an installation on a side branch whose upstream is up to date is not Live: it is named, and left as it was', async () => {
+    // 2026-11-16: `git pull --ff-only` on the side branch exited 0, and every
+    // landing for a day logged Live while the installation stayed behind main.
+    const fx = fixture({ install: { branch: 'docs/ask-decision-opus' } });
     try {
-      const report = await fx.run({
-        installs: () => [{ root: fx.repoPath, command: 'mc', bin: '/usr/local/bin/mc', source: 'x' }],
-      });
+      const report = await fx.run({ installs: here(fx) });
       assert.equal(report.merged, true, 'a failed pull must not unmake the merge');
       assert.equal(report.ok, true, 'a failed pull must not fail the round');
       assert.equal(report.deploy.ok, false);
-      assert.match(report.deploy.reason, /diverged/u);
-      assert.match(fx.log(), /Deploy pull failed .* pull by hand/u);
+      assert.equal(report.deploy.reason, 'installation is on branch docs/ask-decision-opus, not main');
+      assert.equal(fx.install.head, BASE, 'its HEAD moved');
+      assert.deepEqual(changing(fx), [], 'it changed the installation');
+      assert.ok(fx.log().includes('Deploy pull failed (installation is on branch docs/ask-decision-opus, not main) — pull by hand.'), fx.log());
+      assert.doesNotMatch(fx.log(), /Live via deploy pull/u);
+    } finally { fx.cleanup(); }
+  });
+
+  for (const [name, install, reason, changes] of [
+    ['a detached HEAD', { branch: null }, 'installation is on a detached HEAD, not main', []],
+    ['a dirty tree', { dirty: true }, 'installation has uncommitted changes', []],
+    ['a diverged main', { ffFails: true }, 'installation cannot fast-forward to origin/main', [['merge', '--ff-only', 'origin/main']]],
+  ]) {
+    it(`${name} is not Live: it says why, and the installation is left as it was`, async () => {
+      const fx = fixture({ install });
+      try {
+        const report = await fx.run({ installs: here(fx) });
+        assert.equal(report.merged, true);
+        assert.equal(report.ok, true);
+        assert.equal(report.deploy.ok, false);
+        assert.equal(report.deploy.reason, reason);
+        assert.equal(fx.install.head, BASE, 'its HEAD moved');
+        assert.deepEqual(changing(fx).map((call) => call.args), changes, 'only a refused fast-forward may have been tried');
+        assert.ok(fx.log().includes(`Deploy pull failed (${reason}) — pull by hand.`), fx.log());
+      } finally { fx.cleanup(); }
+    });
+  }
+
+  it('a HEAD that does not contain the landed commit is not Live', async () => {
+    // origin/main as the installation fetched it is not where the squash went.
+    const fx = fixture({ install: { contains: false, tip: 'eeee555' } });
+    try {
+      const report = await fx.run({ installs: here(fx) });
+      assert.equal(report.deploy.ok, false);
+      const reason = `installation at eeee555 does not contain the landed ${LANDED.slice(0, 7)}`;
+      assert.equal(report.deploy.reason, reason);
+      assert.ok(fx.log().includes(`Deploy pull failed (${reason}) — pull by hand.`), fx.log());
+    } finally { fx.cleanup(); }
+  });
+
+  it('a landing off the default branch calls no git command in the installation, and says so', async () => {
+    const verdict = green();
+    verdict.pr.base = 'stacked-base';
+    const fx = fixture({ verdict });
+    try {
+      const report = await fx.run({ installs: here(fx) });
+      assert.equal(report.merged, true);
+      assert.equal(report.off_default, true);
+      // The round's last question to git is the default branch's name; the
+      // installation (the same directory here) is asked nothing after it.
+      const calls = fx.ran('git');
+      const named = calls.findLastIndex((call) => call.args.at(-1) === 'refs/remotes/origin/HEAD');
+      assert.ok(named >= 0);
+      assert.deepEqual(calls.slice(named + 1), [], 'git ran in the installation after an off-default landing');
+      assert.equal(report.deploy.attempted, false);
+      assert.match(report.log_line, /No deploy pull: landed on stacked-base, not main\./u);
     } finally { fx.cleanup(); }
   });
 });
@@ -759,7 +835,7 @@ describe('a merge that gh refuses', () => {
       assert.equal(report.stopped_at, 'merge');
       assert.match(report.reason, /not mergeable/u);
       assert.equal(report.merged, false);
-      assert.deepEqual(fx.ran('git').filter((call) => call.args[0] === 'pull'), [], 'it deployed a merge that never happened');
+      assert.deepEqual(fx.ran('git').filter((call) => ['pull', 'merge'].includes(call.args[0])), [], 'it deployed a merge that never happened');
       assert.equal(fx.log().trim().split('\n').length, 2, 'it logged a merge that never happened');
       assert.equal(fx.lease().held, false);
     } finally { fx.cleanup(); }
