@@ -1,0 +1,11 @@
+codex fixtures: recorded, not synthesised.
+
+revoked-login-20261122T101009Z.jsonl and .json.err are the `codex exec --json`
+stream and stderr of a review of lemma-bands/english-word-levels on 2026-11-22
+(runner log goal-lemma-bands-english-word-levels-20261122T101009Z), copied
+unchanged. The login's refresh token had been revoked: the stream holds the
+`error` and `turn.failed` events "refresh token was revoked", the stderr the
+401 Unauthorized `token_revoked` answers, and the session exited 1 after 5 s.
+They read as `interrupted: 'login'` (tests/mc/run-plan.test.js), refuse Codex
+on the plan route (tests/mc/plan-refusal.test.js), and the stderr is what the
+app server says in the capacity read (tests/mc/codex-capacity.test.js).

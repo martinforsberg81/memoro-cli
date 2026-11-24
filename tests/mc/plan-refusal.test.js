@@ -15,7 +15,7 @@ import { applyObservation, capacityPath, readCapacity } from '../../src/mc/model
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { chooseCandidate } from '../../src/mc/model-choice.js';
 import { runnerDir } from '../../src/mc/paths.js';
-import { refusePlanOnRead } from '../../src/mc/plan-refusal.js';
+import { planRefused, refusePlanOnRead } from '../../src/mc/plan-refusal.js';
 import { QUOTA_SLEEP_MS, readSessionOutput } from '../../src/mc/run-plan.js';
 
 const NOW = new Date('2026-11-16T13:31:00Z');
@@ -104,6 +104,20 @@ test('a login refusal on agy refuses the provider, an API-billed refusal writes 
     delete raw.providers.agy.model_refusals;
     writeFileSync(capacityPath(runnerDir(w.env)), JSON.stringify(raw));
     assert.deepEqual(readCapacity({ root: runnerDir(w.env) }).providers.agy.model_refusals, {});
+  } finally { w.done(); }
+});
+
+test('the revoked Codex login of 2026-11-22 refuses Codex on the plan route, and nothing on the API route', () => {
+  const fixture = (name) => readFileSync(new URL(`../fixtures/codex/revoked-login-20261122T101009Z.${name}`, import.meta.url), 'utf8');
+  const read = readSessionOutput({ toolId: 'codex', stdout: fixture('jsonl'), stderr: fixture('json.err'), exitCode: 1, now: NOW, model: 'gpt-6.2-sol' });
+  const CODEX = { id: 'codex' };
+  assert.equal(planRefused(read, CODEX), true);
+  const w = workspace();
+  try {
+    assert.equal(refusePlanOnRead({ read, launch: CODEX, model: 'gpt-6.2-sol', billing: 'credits', env: w.env, now: NOW }), null);
+    const written = refusePlanOnRead({ read, launch: CODEX, model: 'gpt-6.2-sol', billing: 'plan', env: w.env, now: NOW });
+    assert.deepEqual(written, { provider: 'codex', model: null, until: new Date(NOW.getTime() + QUOTA_SLEEP_MS).toISOString() });
+    assert.equal(w.stored().providers.codex.refusal_until, written.until);
   } finally { w.done(); }
 });
 
