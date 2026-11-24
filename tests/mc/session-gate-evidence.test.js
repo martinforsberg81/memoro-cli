@@ -722,6 +722,8 @@ it('codeLoaders names the code-loading NODE_OPTIONS options, in either form, and
   // A gate started inside another gate's test process inherits its progress preload: the gate's own.
   assert.deepEqual(codeLoaders(`--test-reporter=tap --import=${PROCESS_PROGRESS_PRELOAD}`), []);
   assert.deepEqual(codeLoaders(`--import ${PROCESS_PROGRESS_PRELOAD} --import=./x.mjs`), ['--import']);
+  assert.deepEqual(codeLoaders('--import=file:///elsewhere/mc/src/mc/test-progress-preload.mjs'), [], 'another mc checkout\'s preload is the gate\'s too');
+  assert.deepEqual(codeLoaders('--import=./test-progress-preload.mjs.evil.mjs'), ['--import']);
 });
 
 it('a reused member that did not pass, or names no source, never makes a receipt green', (t) => {

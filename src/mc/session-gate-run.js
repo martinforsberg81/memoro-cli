@@ -5,7 +5,7 @@
  * the change scope without cost deferral; --whole-selection is optional wide scope. */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { setPriority } from 'node:os';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runShell } from './child-async.js';
 import { executionIdentity, realTests, resolveTestPlan, selectFiles, suiteEnv, suiteTimeoutMs, testScriptOf } from './repo-gate.js';
@@ -43,9 +43,10 @@ const CODE_LOADING = new Set(['--import', '--require', '-r', '--loader', '--expe
  * `NODE_OPTIONS`, before the gate adds its progress preload and reporter flags; the
  * declared test flags travel in argv and are not in it. A gate started inside another
  * gate's test process inherits that gate's progress preload: the gate's own, not read
- * either. A run under such an option measures other code than the tree its receipt
+ * either, whichever mc checkout it comes from (`GATE_PRELOAD`). A run under such an option measures other code than the tree its receipt
  * names: a diagnostic run.
  */
+const GATE_PRELOAD = new RegExp(`^file://.*/${basename(fileURLToPath(PROCESS_PROGRESS_PRELOAD)).replace('.', '\\.')}$`, 'u');
 export function codeLoaders(nodeOptions) {
   const words = String(nodeOptions ?? '').match(/(?:[^\s"]+|"(?:[^"\\]|\\.)*"?)+/gu) || [];
   const found = [];
@@ -55,7 +56,7 @@ export function codeLoaders(nodeOptions) {
     if (!CODE_LOADING.has(name)) continue;
     const value = at < 0 ? words[i + 1] : words[i].slice(at + 1);
     if (at < 0) i += 1;
-    if (name === '--import' && value === PROCESS_PROGRESS_PRELOAD) continue;
+    if (name === '--import' && GATE_PRELOAD.test(value ?? '')) continue;
     if (!found.includes(name)) found.push(name);
   }
   return found;
