@@ -34,6 +34,9 @@ import { fullRun, fullRunDue, fullRunTick, loggedTick, repairFromRun, scheduledR
 import { readDeployMends, requestDeployRepair } from '../../src/mc/deploy-repair.js';
 import { requestMainRepair } from '../../src/mc/main-repair.js';
 import { addClaimGroup, awaitClaim, claimFullRun, liveClaims, releaseClaim } from '../../src/mc/full-run-claim.js';
+import { processAlive } from '../../src/mc/lease-owner.js';
+import { realLock } from '../../src/mc/runner-lock.js';
+import { runGate } from '../../src/mc/repo-gate.js';
 
 await preloadVerbs('test', 'repo');
 
@@ -588,27 +591,77 @@ describe('a full run, one at a time per tree — whoever starts it', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('a run\'s spawn adds its group to its claim', async () => {
+  function spawnFixture() {
     const root = home();
+    const dir = join(root, 'repo');
+    mkdirSync(dir);
+    const commandMark = join(root, 'command-pid');
+    writeFileSync(join(root, 'repo-gates.json'), JSON.stringify({
+      repo: {
+        prepare: null, prepare_why: 'fixture installs nothing',
+        select_full: 'printf \'{"files":["tests/tiny.test.cjs"]}\\n\'',
+        extra_gates: [{ name: 'fixture-gate', command: `printf '%s' "$$" > "${commandMark}"` }],
+        merge_log: null,
+      },
+    }));
+    const fakeGit = (args) => {
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        const checkout = args.at(-2);
+        mkdirSync(join(checkout, 'tests'), { recursive: true });
+        writeFileSync(join(checkout, '.git'), 'gitdir: fixture\n');
+        writeFileSync(join(checkout, 'tests', 'tiny.test.cjs'), "require('node:test')('tiny', () => {});\n");
+      }
+      const stdout = args[0] === 'symbolic-ref' ? 'origin/main' : args[0] === 'rev-parse' ? SHA : '';
+      return { status: args[0] === 'rev-parse' && args.includes('--verify') ? 1 : 0, stdout, stderr: '' };
+    };
+    const round = (args) => scheduledRound({
+      ...args, gate: (options) => runGate({ ...options, git: fakeGit, candidateCwds: () => [] }),
+    });
+    const run = (lock) => fullRun({ name: 'memoro', path: dir }, {
+      root, env: { ...process.env, MC_HOME: root, MC_WORK_ROOT: root }, sha: SHA, repair: null, claims: { lock }, round,
+    });
+    return { root, commandMark, run, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  }
+
+  it('a real full-run batch and command gate add their live groups to the claim as they spawn', async () => {
+    const fx = spawnFixture();
+    const started = [];
+    const observed = new Set();
+    const lock = (root, fn, options) => realLock(root, () => {
+      const answer = fn();
+      for (const held of liveClaims({ root })) for (const pgid of held.groups || []) {
+        if (observed.has(pgid)) continue;
+        observed.add(pgid);
+        started.push([pgid, processAlive(pgid)]);
+      }
+      return answer;
+    }, options);
     try {
-      let stored = null;
-      await fullRun(REPO, {
-        root, sha: SHA, say: () => {}, repair: null,
-        // The scheduled round, with the gate it starts its batches through: each batch's group goes to the claim.
-        round: (args) => scheduledRound({
-          ...args,
-          gate: async ({ onSpawn }) => {
-            onSpawn(7002);
-            onSpawn(7003);
-            stored = liveClaims({ root, alive: () => true, groupAlive: () => false });
-            return report();
-          },
-        }),
-        claims: { alive: () => true, groupAlive: () => false, pollMs: 1, sleep: async () => {} },
-      });
-      assert.deepEqual(stored.map((one) => [one.pid, one.groups]), [[process.pid, [7002, 7003]]], 'the claim recorded each group as it started');
-      assert.deepEqual(liveClaims({ root, alive: () => true, groupAlive: () => false }), [], 'given back at the end, its groups gone');
-    } finally { rmSync(root, { recursive: true, force: true }); }
+      const result = await fx.run(lock);
+      assert.equal(result.verdict, 'green', result.reason);
+      assert.equal(result.tests, 1, 'the real batch ran its test');
+      assert.equal(started.length, 2, 'test batch and command gate each reached the claim');
+      assert.deepEqual(started.map(([, live]) => live), [true, true]);
+      assert.equal(started.at(-1)[0], Number(readFileSync(fx.commandMark, 'utf8')), 'the command observed the same group');
+      assert.deepEqual(liveClaims({ root: fx.root }), [], 'given back at the end, its groups gone');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a real full run cuts its child and refuses when the batch group cannot be recorded', async () => {
+    const fx = spawnFixture();
+    let writes = 0;
+    const lock = (root, fn, options) => realLock(root, () => {
+      if (liveClaims({ root }).length && ++writes === 1) throw new Error('claim disk is full');
+      return fn();
+    }, options);
+    try {
+      const result = await fx.run(lock);
+      assert.equal(result.stopped_at, 'threw', result.reason);
+      const [, pgid] = result.reason.match(/could not record process group (\d+) in the full-run claim: claim disk is full/u) || [];
+      assert.ok(pgid, result.reason);
+      assert.equal(processAlive(Number(pgid)), false);
+      assert.equal(existsSync(fx.commandMark), false, 'no later command gate was started');
+    } finally { fx.cleanup(); }
   });
 });
 

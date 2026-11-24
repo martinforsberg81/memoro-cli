@@ -37,6 +37,7 @@ import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { processAlive } from './lease-owner.js';
+import { linuxIdentityStatus, readLinuxIdentity } from './linux-runner-service.js';
 import { mcHome } from './paths.js';
 import { realLock } from './runner-lock.js';
 
@@ -49,18 +50,20 @@ export function claimsPath(root = mcHome()) {
   return join(root, 'full-runs.json');
 }
 
-function readAll(root) {
+function readAll(root, { strict = false } = {}) {
   try {
     const raw = JSON.parse(readFileSync(claimsPath(root), 'utf8'));
-    return raw?.schema === CLAIMS_SCHEMA && Array.isArray(raw.claims) ? raw.claims.filter((claim) => claim && claim.pid) : [];
-  } catch {
+    if (raw?.schema !== CLAIMS_SCHEMA || !Array.isArray(raw.claims)) throw new Error('invalid full-run claim register');
+    return raw.claims.filter((claim) => claim && claim.pid);
+  } catch (error) {
+    if (strict && error.code !== 'ENOENT') throw error;
     return [];
   }
 }
 
 /** The stored claims `pid` started, live or not — what a stop of that starter reads its groups from. */
 export function claimsOf(pid, { root = mcHome() } = {}) {
-  return readAll(root).filter((claim) => claim.pid === pid);
+  return readAll(root, { strict: true }).filter((claim) => claim.pid === pid);
 }
 
 /** Whether the process group `pgid` has a process left: `kill(-pgid, 0)`, EPERM counting as alive. */
@@ -74,9 +77,21 @@ export function groupAlive(pgid, { kill = process.kill.bind(process) } = {}) {
   }
 }
 
+/** A reused leader is not our group. A leaderless live group still fences the
+ * checkout, but the stopper must not signal it without verified ownership. */
+export function recordedGroupState(pgid, identity, { groupAlive: lives = groupAlive, identityOf = readLinuxIdentity } = {}) {
+  if (!lives(pgid)) return 'gone';
+  switch (linuxIdentityStatus(identity, identityOf(pgid), true)) {
+    case 'same': return 'running';
+    case 'stale': return 'gone';
+    default: return 'unverified';
+  }
+}
+
 /** The recorded group of `claim` that still lives, or null. */
 function livingGroup(claim, groupLives) {
-  return (Array.isArray(claim.groups) ? claim.groups : []).find((pgid) => groupLives(pgid)) ?? null;
+  return (Array.isArray(claim.groups) ? claim.groups : [])
+    .find((pgid) => recordedGroupState(pgid, claim.group_ids?.[pgid], { groupAlive: groupLives }) !== 'gone') ?? null;
 }
 
 /** Whether `claim` still holds its run: its starter lives (and has not given it back), or one of its recorded groups does. */
@@ -119,7 +134,7 @@ export function overlaps(claim, { repo, sha = null, ref = null }) {
  */
 export function claimFullRun({
   repo, sha = null, ref = null, verb = 'full run', root = mcHome(), alive = processAlive,
-  groupAlive: groupLives = groupAlive, lock = realLock, pid = process.pid, now = () => new Date(), deploy = false,
+  groupAlive: groupLives = groupAlive, lock = realLock, pid = process.pid, now = () => new Date(), deploy = false, preparation = null,
 }) {
   return lock(root, () => {
     const live = readAll(root).filter((claim) => claimLive(claim, { alive, groupAlive: groupLives }));
@@ -129,7 +144,7 @@ export function claimFullRun({
     const write = (claims) => writeJsonAtomic(claimsPath(root), { schema: CLAIMS_SCHEMA, claims }, { mode: 0o600 });
     const others = live.filter((claim) => claim !== reservation);
 
-    const entry = () => ({ repo, sha, pid, started: now().toISOString(), verb, ...(ref ? { ref } : {}) });
+    const entry = () => ({ repo, sha, pid, started: now().toISOString(), verb, ...(ref ? { ref } : {}), ...(preparation ? { preparation } : {}) });
     if (active && overlaps(active, { repo, sha, ref })) {
       if (reservation) write(others);
       return { claimed: false, joined: active };
@@ -148,7 +163,7 @@ export function claimFullRun({
     const claim = entry();
     write([...others, claim]);
     return { claimed: true, claim };
-  }, { name: 'full-run-claim' });
+  }, { name: 'full-run-claim', strict: true });
 }
 
 function sameClaim(a, b) {
@@ -158,20 +173,21 @@ function sameClaim(a, b) {
 
 /**
  * Record that `claim`'s run started process group `pgid` (a test batch, a
- * command gate group), so the claim stays live while it does. Nothing when the
- * claim is no longer stored.
+ * command gate group), so the claim stays live while it does. If recording
+ * fails, the caller must end the child, not run it without a fence.
  */
-export function addClaimGroup(claim, pgid, { root = mcHome(), lock = realLock } = {}) {
-  if (!claim || !Number.isInteger(pgid) || pgid <= 0) return;
+export function addClaimGroup(claim, pgid, { root = mcHome(), lock = realLock, identityOf = readLinuxIdentity } = {}) {
+  if (!claim || !Number.isInteger(pgid) || pgid <= 0) throw new Error('no full-run claim or process group to record');
+  const identity = identityOf(pgid);
   lock(root, () => {
-    const claims = readAll(root);
+    const claims = readAll(root, { strict: true });
     const own = claims.find((other) => sameClaim(other, claim));
-    if (!own) return;
+    if (!own || own.released) throw new Error('the full-run claim is no longer held');
     const groups = Array.isArray(own.groups) ? own.groups : [];
-    if (groups.includes(pgid)) return;
-    own.groups = [...groups, pgid];
+    if (!groups.includes(pgid)) own.groups = [...groups, pgid];
+    own.group_ids = { ...own.group_ids, [pgid]: identity };
     writeJsonAtomic(claimsPath(root), { schema: CLAIMS_SCHEMA, claims }, { mode: 0o600 });
-  }, { name: 'full-run-claim' });
+  }, { name: 'full-run-claim', strict: true });
 }
 
 /**
@@ -190,7 +206,7 @@ export function releaseClaim(claim, { root = mcHome(), lock = realLock, alive = 
       }
     }
     try { writeJsonAtomic(claimsPath(root), { schema: CLAIMS_SCHEMA, claims: rest }, { mode: 0o600 }); } catch { /* the pid's death releases it anyway */ }
-  }, { name: 'full-run-claim' });
+  }, { name: 'full-run-claim', strict: true });
 }
 
 /**

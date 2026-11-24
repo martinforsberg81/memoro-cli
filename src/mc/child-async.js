@@ -37,9 +37,12 @@ const GRACE_MS = 1000;
  * as runShell, so the provider and its tool children share the deadline.
  * `stdoutBuffer` preserves binary stdout; stderr remains text.
  */
-export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal = null, graceMs = GRACE_MS, group = false, input = null, stdoutBuffer = false } = {}) {
+export function runTool(tool, args = [], {
+  cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal = null, graceMs = GRACE_MS, group = false, input = null,
+  stdoutBuffer = false, outputFd = null, onSpawn = null, killOnAbort = false,
+} = {}) {
   return collect(() => {
-    const child = spawn(tool, args, { cwd, env: env || process.env, detached: group, stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+    const child = spawn(tool, args, { cwd, env: env || process.env, detached: group, stdio: [input === null ? 'ignore' : 'pipe', outputFd ?? 'pipe', outputFd ?? 'pipe'] });
     if (input !== null) {
       // A child may exit without reading (e.g. a provider refusal); its process
       // result, not the resulting EPIPE on stdin, reports that failure.
@@ -47,7 +50,7 @@ export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, tim
       child.stdin.end(input);
     }
     return child;
-  }, { maxBuffer, timeoutMs, signal, graceMs, group, stdoutBuffer });
+  }, { maxBuffer, timeoutMs, signal, graceMs, group, stdoutBuffer, onSpawn, killOnAbort });
 }
 
 /**
@@ -64,7 +67,7 @@ export function runShell(command, { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs 
  * the leader of the child's own process group, which a full run records so
  * that what the command leaves standing in its worktree is ended with it.
  */
-function collect(start, { maxBuffer, timeoutMs, signal, graceMs, group = false, onSpawn = null, stdoutBuffer = false }) {
+function collect(start, { maxBuffer, timeoutMs, signal, graceMs, group = false, onSpawn = null, stdoutBuffer = false, killOnAbort = false }) {
   return new Promise((resolve) => {
     const out = [];
     const err = [];
@@ -88,16 +91,28 @@ function collect(start, { maxBuffer, timeoutMs, signal, graceMs, group = false, 
     const stop = (name) => {
       try { if (group) process.kill(-child.pid, name); else child.kill(name); } catch { /* already gone */ }
     };
-    const onAbort = () => kill('ABORT_ERR', 'command interrupted');
+    const onAbort = () => kill('ABORT_ERR', 'command interrupted', killOnAbort);
+    if (signal?.aborted) {
+      error = Object.assign(new Error('command interrupted before it started'), { code: 'ABORT_ERR' });
+      settle(null, null);
+      return;
+    }
     try { child = start(); } catch (thrown) {
       error = thrown;
       settle(null, null);
       return;
     }
-    if (child.pid !== undefined) { try { onSpawn?.(child.pid); } catch { /* a recorder never stops the child */ } }
-    const kill =(code, message) => {
+    if (child.pid !== undefined) {
+      try { onSpawn?.(child.pid); }
+      catch (thrown) {
+        error = thrown;
+        stop('SIGKILL'); // Running without its claim or owner record is unsafe.
+      }
+    }
+    const kill = (code, message, immediate = false) => {
       if (error) return;
       error = Object.assign(new Error(message), { code });
+      if (immediate) { stop('SIGKILL'); return; }
       stop('SIGTERM');
       escalation = setTimeout(() => stop('SIGKILL'), graceMs);
       escalation.unref?.();
@@ -113,8 +128,8 @@ function collect(start, { maxBuffer, timeoutMs, signal, graceMs, group = false, 
       chunks.push(chunk);
       return used + chunk.length;
     };
-    child.stdout.on('data', (chunk) => { if (!error) outBytes = take(out, chunk, outBytes); });
-    child.stderr.on('data', (chunk) => { if (!error) errBytes = take(err, chunk, errBytes); });
+    child.stdout?.on('data', (chunk) => { if (!error) outBytes = take(out, chunk, outBytes); });
+    child.stderr?.on('data', (chunk) => { if (!error) errBytes = take(err, chunk, errBytes); });
     child.on('error', (thrown) => {
       if (!error) error = thrown;
       // A child that never started has no `close` to wait for.

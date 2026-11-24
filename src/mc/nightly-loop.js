@@ -245,7 +245,7 @@ export function runOfReport(repo, report, { startedAt = Date.now(), clock = () =
 export async function fullRun(repo, {
   root = mcHome(), env = process.env, say = () => {}, narrate = say, round = scheduledRound,
   clock = () => Date.now(), signal = null, repair = requestMainRepair, repairFullRun = requestDeployRepair,
-  sha = null, ref = null, claims = {}, handover = null, onMeasuring = null, deploy = false, deferMainRepair = false,
+  sha = null, ref = null, claims = {}, handover = null, onMeasuring = null, deploy = false, deferMainRepair = false, preparation = null,
 } = {}) {
   // One full run of a tree at a time, whoever starts it (`full-run-claim.js`):
   // a run already measuring this main — a deploy's, a hand-typed `--full`, the
@@ -253,14 +253,15 @@ export async function fullRun(repo, {
   // One whose process died without writing it is no answer, and this starts its
   // own.
   for (;;) {
-    const taken = claimFullRun({ repo: repo.name, sha, ref, verb: 'full run', root, deploy: deploy || Boolean(ref), ...claims });
+    if (preparation && signal?.aborted) return null;
+    const taken = claimFullRun({ repo: repo.name, sha, ref, verb: 'full run', root, deploy: deploy || Boolean(ref), preparation, ...claims });
     if (taken.claimed) {
       onMeasuring?.(taken.claim);
       // Each test batch and command gate group the run starts is recorded in
       // its claim, which stays live while one of them does (`full-run-claim.js`).
       const onSpawn = (pgid) => addClaimGroup(taken.claim, pgid, { root, ...claims });
       try {
-        return await measure(repo, { root, env, say, narrate, round, clock, signal, repair, repairFullRun, ref, sha, deferMainRepair, onSpawn });
+        return await measure(repo, { root, env, say, narrate, round, clock, signal, repair, repairFullRun, ref, sha, deferMainRepair, onSpawn, preparation });
       } finally {
         releaseClaim(taken.claim, { root, ...claims });
       }
@@ -465,7 +466,7 @@ function dropped(repo, say) {
 }
 
 async function measure(repo, {
-  root, env, say, narrate, round, clock, signal, repair, repairFullRun, ref, sha, deferMainRepair, onSpawn = null,
+  root, env, say, narrate, round, clock, signal, repair, repairFullRun, ref, sha, deferMainRepair, onSpawn = null, preparation = null,
 }) {
   const startedAt = clock();
   say(`${repo.name} — full run started`);
@@ -473,6 +474,7 @@ async function measure(repo, {
   try {
     report = await round({ repoPath: repo.path, root, env, say: narrate, signal, ...(onSpawn ? { onSpawn } : {}), ...(ref ? { ref, sha } : {}) });
   } catch (error) {
+    if (preparation && signal?.aborted) return null;
     // What it must not do is look like a run that found no failures.
     const threw = {
       repo: repo.name,
@@ -495,6 +497,9 @@ async function measure(repo, {
     return threw;
   }
 
+  // A deliberately cut preparation leaves neither a partial verdict for the
+  // next deploy to reuse nor a repair request from this half of the gate.
+  if (preparation && signal?.aborted) return null;
   const run = runOfReport(repo, report, { startedAt, clock });
   if (ref) run.ref = ref;
   // The history the page reads. It is written here rather than by the round,

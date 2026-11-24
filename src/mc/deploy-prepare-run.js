@@ -11,13 +11,10 @@
  * SIGTERM and SIGHUP stop it: `mc deploy --stop-preparation` has written the
  * stop into the record and then sends SIGTERM. The handler aborts the round's
  * signal, which ends the full run's suite and command groups as the repository
- * ceiling does. A stage that reads no signal (the suites against a local
- * server) is cut after `STOP_GRACE_MS`: the process group is told SIGTERM and
- * the process exits.
+ * ceiling does, or unwinds the local suites through server and holder cleanup.
+ * The stop command owns the deadline and any last-resort signalling.
  */
 import { prepare } from './deploy-prepare.js';
-
-const STOP_GRACE_MS = 30_000;
 
 const job = JSON.parse(process.argv[2] || '{}');
 const stop = new AbortController();
@@ -27,11 +24,6 @@ const onStop = (name) => {
   stopping = true;
   process.stdout.write(`mc: ${name} — stopping the preparation\n`);
   stop.abort(new Error(`the preparation was stopped (${name})`));
-  const cut = setTimeout(() => {
-    try { process.kill(-process.pid, 'SIGTERM'); } catch { /* not a group leader */ }
-    process.exit(143);
-  }, STOP_GRACE_MS);
-  cut.unref();
 };
 process.on('SIGTERM', () => onStop('SIGTERM'));
 process.on('SIGHUP', () => onStop('SIGHUP'));

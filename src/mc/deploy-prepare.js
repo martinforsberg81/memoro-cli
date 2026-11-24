@@ -48,6 +48,7 @@ import { readDeployMends, UNFINISHED } from './deploy-repair.js';
 import { changeRelease } from './release-return.js';
 import { outputDir } from './gate-output.js';
 import { processAlive } from './lease-owner.js';
+import { readLinuxIdentity } from './linux-runner-service.js';
 import { realLock } from './runner-lock.js';
 
 export const PREPARATION_SCHEMA = 'mc-deploy-prepare';
@@ -99,6 +100,33 @@ export function recordLogPath(root, record) {
   return record?.log || preparationLogPath(root);
 }
 
+// Keep per-start details beside the log even if a newer preparation takes the
+// register. A watcher must still see an intentional stop, and a stop must
+// still see local suite and server groups after their starter leaves.
+const detailsPath = (root, started) => `${preparationLogPath(root, started)}.json`;
+
+export function preparationDetails(root, started) {
+  try { return JSON.parse(readFileSync(detailsPath(root, started), 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+}
+
+/** Called while holding the preparation register. */
+export function archivePreparationStop(root, record) {
+  writeJsonAtomic(detailsPath(root, record.started), {
+    ...preparationDetails(root, record.started), stop: record,
+  }, { mode: 0o600 });
+}
+
+function recordLocalGroup(job, pgid, lock) {
+  const identity = readLinuxIdentity(pgid);
+  lock(job.root, () => {
+    const details = preparationDetails(job.root, job.started);
+    writeJsonAtomic(detailsPath(job.root, job.started), {
+      ...details, groups: { ...details.groups, [pgid]: identity },
+    }, { mode: 0o600 });
+  }, { name: 'deploy-prepare', strict: true });
+}
+
 /**
  * Remove the preparations' own logs not written for `days` days, except the
  * one the current record names and those an open deploy mend names (the mend
@@ -126,6 +154,7 @@ export function prunePreparationLogs(root, {
     try {
       if (now - statSync(path).mtimeMs <= days * 24 * 60 * 60 * 1000) continue;
       rmSync(path, { force: true });
+      rmSync(`${path}.json`, { force: true });
       removed.push(path);
     } catch { /* gone already, or not ours to remove */ }
   }
@@ -193,7 +222,7 @@ export function patchPreparation(root, started, fields, { lock = realLock } = {}
     if (!record || record.started !== started) return false;
     if (record.result === 'stopped') return false;
     return writePreparation(root, { ...record, ...fields });
-  }, { name: 'deploy-prepare' });
+  }, { name: 'deploy-prepare', strict: true });
 }
 
 /**
@@ -239,7 +268,8 @@ export async function prepare(job, {
     patch({ output_dir: dir });
     const measured = await measureGate({
       sha: job.sha, path: job.path, acceptRed: Boolean(job.acceptRed), own: Boolean(job.ownWorktree), branch: job.branch, env, say,
-      outputDir: dir, recorded: job.recorded, deferMainRepair: job.deferMainRepair, signal,
+      outputDir: dir, recorded: job.recorded, deferMainRepair: job.deferMainRepair, signal, preparation: job.started,
+      onLocalSpawn: signal ? (pgid) => recordLocalGroup(job, pgid, lock) : null,
       deps: deps.gate || {}, suites: deps.suites || {}, stage: (next, full) => {
         stage = next;
         if (job.release && next === 'suites' && full.state === 'green') {

@@ -321,13 +321,14 @@ export function holderWords(record, at = null) {
  */
 export async function takeHolder({
   env = process.env, verb, say = () => {}, now = () => Date.now(), sleep = realSleep, alive = processAlive,
-  pid = process.pid, lock = realLock, root = null, waitMs = HOLDER_WAIT_MS, pollMs = HOLDER_POLL_MS, sayMs = HOLDER_SAY_MS,
+  pid = process.pid, lock = realLock, root = null, waitMs = HOLDER_WAIT_MS, pollMs = HOLDER_POLL_MS, sayMs = HOLDER_SAY_MS, signal = null,
 } = {}) {
   const file = holderPath(env);
   const lockRoot = root || workRoot(env);
   const began = now();
   let lastSaid = null;
   for (;;) {
+    signal?.throwIfAborted();
     const token = randomUUID();
     const attempt = lock(lockRoot, () => {
       const record = readHolder(env);
