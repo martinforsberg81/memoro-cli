@@ -986,8 +986,9 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    reserve as a build does (`docs/technical/mc-run.md`, *The build list and
    capacity*). The models are compared as the catalog spells them, which is
    how `MC_MODEL` writes them into the heading. The review is told its pull
-   request and head: the open pull request on `goal/<goal>`, asked of GitHub
-   before the launch, and `MC_REVIEW_HEAD`, `MC_REVIEW_PR` and
+   request and head: the open pull request on `goal/<goal>` in the
+   [selected review repository](#review-repository), asked of GitHub before
+   the launch, and `MC_REVIEW_HEAD`, `MC_REVIEW_PR` and
    `MC_SESSION_STARTED` are set for it, with `MC_REVIEW_SEEN` when the review is
    held to `seen` lines (*The verdict, the rounds and the tripped areas*). With none, the goal goes to
    `build · ready` with a runner entry that names the missing pull request
@@ -1244,6 +1245,18 @@ a move to `merge` or `build`, or when the goal is `blocked` or in `Martin`.
 Any other session ends as it will. If the session ends while the goal is still
 `review · ready`, *Review recovery* below governs whether the ending counts.
 
+### Review repository
+
+A goal review runs in the first repository in `goal.repos` order that has a
+pull request registered in `goal.prs`. When none is registered, it uses the
+first repository. That repository determines the claim, lane, existing goal
+worktree, `MC_REPO` and the lookup for the open pull request on `goal/<goal>`.
+`MC_REVIEW_PR` and `MC_REVIEW_HEAD` describe that pull request. If the selected
+repository has no open pull request on the branch, the runner does not look
+in another repository: it returns the goal to build the first time and sets
+it to `review · Martin` the second time, as described under *How the runner
+takes a goal*. The review verdict still covers every repository of the goal.
+
 ### The verdict, the rounds and the tripped areas
 
 REVIEW.md is written before either move and holds one `head: <repo> <sha>` line
@@ -1271,14 +1284,18 @@ programme's write-back: its archive reads no pages again when every goal is done
 ([mc-run.md](mc-run.md#programme-archive-turn)). Free text may
 follow. `mc goal stage merge|build` from a review session checks the file
 (`checkVerdict`, `review-verdict.js`) and refuses, naming each id or line at
-fault, when: the file is missing; a repository's head line is missing or the
-first repository's is not `MC_REVIEW_HEAD`; an id is missing, repeated or not
+fault, when: the file is missing; a repository's head line is missing or does
+not match the judged head; an id is missing, repeated or not
 the goal's; a line is not in form; a `seen` line is not in its form or names a file
 that is not in the goal's directory. `merge` is also refused while a line is NOT
 OK, and `build` while all are OK. Neither the judgement nor the reasons are read.
 After either move REVIEW.md stays and `REVIEW-<round>.md` is its copy, the round
 being the count of reviews since the goal's latest move into draft.
 `mc goal stage finish` is refused for every caller, naming `mc goal stage build`.
+
+The judged head for the repository named by `MC_REPO` is `MC_REVIEW_HEAD`.
+For every other repository it is that goal worktree's `HEAD`. The same
+assignment is used to calculate tripped areas for the review and its verdict.
 
 **Tripped areas.** An obligation that stands `untouched` is a tripwire: when the
 branch's diff against `origin/main` (`git diff --name-only origin/main...<head>`,
@@ -1455,12 +1472,6 @@ memoro and memoro-cli — left the goal for a person to close by hand.
   in another stage, or already blocked is unchanged. A pull request already
   merged is not queued either (`… already merged — not queued`); it counts as
   landed through `prsLanded`.
-- **Review stays on the first repository.** A goal's review session is told
-  the open pull request on `goal/<g>` in its first repository, as before; a
-  second repository's pull request carries the goal and lands it, but is not
-  reviewed by the goal's review. A goal across two repositories whose second
-  half needs review publishes it from that repository's worktree, and plan or
-  a person reads it.
 
 ## The merger
 

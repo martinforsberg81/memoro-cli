@@ -324,6 +324,32 @@ acceptance and authorization, under
 [mc-goals.md](mc-goals.md#integrating-main-into-a-goal). A clean textual merge
 does not establish that the judged tree contains its required dependencies.
 
+### The installation pull
+
+After a gate-round landing, `deployPull` updates a source-linked installation
+of that repository, if there is one on this machine. This is how a checkout
+that runs mc gets the landed code; it is not a production deploy. A landing off
+the default branch runs no Git command in the installation and is reported as
+`No deploy pull: landed on <branch>, not <default>.` Release mends do not pull
+the installation either.
+
+The pull requires a known default branch, the installation already on that
+branch (not detached), and a clean `git status --porcelain`. Only then does it
+fetch `origin` and run `git merge --ff-only origin/<default>`, regardless of
+the branch's configured upstream. If the landing supplied a commit, that
+commit must be an ancestor of the installation's resulting HEAD; without a
+commit only the ancestry check is skipped. The round reports
+`Live via deploy pull.` on success, or `No source-linked installation here.`
+if none matched.
+
+A failed pull does not undo the landing. The round reports
+`Deploy pull failed (<reason>) — pull by hand.` The reason names an unknown
+default branch, the wrong branch or detached HEAD, uncommitted changes, a
+status or fetch error, a refused fast-forward, or the resulting HEAD that does
+not contain the landed commit. The pull never switches branches, stashes or
+resets. A wrong-branch or dirty checkout is left alone; a failed ancestry
+check is reported after the attempted fast-forward, not repaired by resetting
+the checkout.
 
 ### Release branches
 
@@ -1695,7 +1721,9 @@ the one way the runner is: no runner, no full run.
   the main-red mend as before. The runner that comes next finds the claim the
   predecessor holds in `full-runs.json`: it follows a run of the same commit
   and waits for one of another, so no second run measures beside it, and it
-  measures the newer main when the first has ended. A STOP during that drain
+  measures the newer main when the first has ended. The
+  [full-run claim](mc-deploy.md#the-gate) also protects the checkout while a
+  recorded group outlives its starter. A STOP during that drain
   ends the run and exits with `runner exit on STOP`. The runner's own `--once`
   runs no chores and so no full run. `runs.tsv` gets a `kind: nightly` row only
   for a chore pass that started a run.

@@ -306,8 +306,10 @@ pressure tidy remain the retry path, so nothing here adds a time-based rule.
 
 ## The session
 
-`runGoal` works in the first repository's existing goal worktree and keeps its
-branch. An unbuilt branch is remade from origin/main before its first build
+`runGoal` keeps the existing goal worktree and branch. Build, repair and mend
+use the first repository; review uses the
+[selected review repository](mc-goals.md#review-repository). An unbuilt branch
+is remade from origin/main before its first build
 when it has no commits of its own. Main advancing alone does not justify
 synchronization; necessary dependency, acceptance or conflict integration is
 owned by the working session under mc-goals.md, *Integrating main into a goal*.

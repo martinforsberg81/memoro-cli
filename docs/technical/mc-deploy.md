@@ -46,6 +46,7 @@ since removed ([`mc-helper.md`](mc-helper.md) § *the deploy section*).
 mc deploy [--dry-run] [--json]
 mc deploy --accept-red "<reason>"
 mc deploy --follow
+mc deploy --stop-preparation "<reason>"
 mc deploy --drop-release "<reason>"
 ```
 
@@ -285,7 +286,9 @@ even if the active record is replaced.
 ### Reading and following
 
 Only one release can be open. Before merge-back is due, `mc deploy` and
-`mc deploy --dry-run` report it and exit 0 without cutting another one:
+`mc deploy --dry-run` report it and exit 0 without cutting another one,
+except that a plain typed `mc deploy` retries a stopped preparation once its
+processes let go:
 
 ```
 mc: release/1a2b3c4 is open — cut 2026-11-23 01:10, 2 repairs landed
@@ -303,9 +306,8 @@ The second line follows the state:
 | `deploying` | `deploying <sha> since <time>` |
 | `deployed` | `deployed as build <n>; going back to main through memoro#<n>` |
 
-`--follow` prints the opening and state lines and then prints changes to the
-state line, streaming the deployer's log when it runs. For example, the
-release watcher test sees these status lines:
+`--follow` prints changes to the state line and streams the release's current
+preparation log or the deployer's log as each runs. For example:
 
 ```
 mc: release/1a2b3c4 is open — cut 2026-11-23 01:10, 0 repairs landed
@@ -316,14 +318,18 @@ mc: deploying 9f8e7d6 since 2026-11-23 01:10
 mc: deployed as build 11; going back to main through memoro#19
 ```
 
-The watch exits 0 after the return closes, 1 on drop and 130 on ^C, which
-only stops watching. With no open release, it follows the normal preparation
-or deploy. `--json` reports the open release as
+The watch exits 0 after the return closes, 1 on drop or on a stopped
+preparation, and 130 on ^C, which only stops watching. With no open release,
+it follows the normal preparation or deploy. `--json` reports the open
+release as
 `{ release: { branch, cut: { sha, at }, head, state, reds, repairs, merge_back } }`.
 `reds` is a list of names, `repairs` a list of PR numbers, and `merge_back` a PR
 number or null. A cut includes that summary in its plan; a dry run that would
 cut has `would_cut: true` and `release: null`. A return refusal adds
-`refusal` to the summary response.
+`refusal` to the summary response. When reporting an open release paused by
+an intentional preparation stop, `mc deploy --dry-run --json` includes the
+stop note as a top-level string `preparation_stop` alongside `release`. The
+field is omitted when the open-release report has no preparation stop note.
 
 ### Continuation and repairs
 
@@ -335,7 +341,9 @@ main and writes the same history keyed by sha. When green, the head must also
 pass the gate suites against a local server of that exact commit. The gate
 and the check after shipping use the release sha's `.mc/test.json`, not
 `origin/main`'s. A technical stop uses the deploy mend and its one retry;
-a red suite queues a release mend, not a deploy retry.
+a red suite queues a release mend, not a deploy retry. An intentional stop of
+the preparation pauses the release: the runner neither retries it nor queues
+a mend, and a plain typed `mc deploy` prepares the release head again.
 
 Only the release's own repairs can land on its branch, and only while the
 record admits repairs. Ordinary release mends stop at green; a registered
@@ -509,6 +517,8 @@ under [The release branch](#the-release-branch).
 | mc's own worktree is held by another process for 90 minutes (a deployer, `mc language`) | 1 | the deployer's row completed `failed`, stopped at `held`, naming the holder; nothing placed or spawned. `mc deploy` again waits for it once more. The exercise of the suites has no such bound: it waits while the holder lives, saying so each minute, and refuses only a holder whose pid is gone and never released it (stale state, technical) |
 | **an unattended session** (`MC_HEADLESS=1`) | 1 | *"an unattended session does not deploy — a deploy is made by whoever types it, and no one typed this (headless, MC_HEADLESS=1); nothing was deployed. mc deploy --dry-run is the reading."* — before any fetch, history read, full run or suite, and no row: nothing was read. `--dry-run` and `--follow` are allowed |
 | `--accept-red` without a reason | 2 | usage; nothing read |
+| `--stop-preparation` with a missing or blank reason, or with any other flag | 2 | usage; nothing stopped |
+| `--stop-preparation` under `MC_HEADLESS=1`, with no running preparation, or if the stop could not be recorded or confirmed | 1 | says why; see [Stopping a preparation](#stopping-a-preparation) |
 | **no full run of the exact commit is green**, and the result does not cut a release | 1 | red or stalled: names the commit, the red files and commands and the main-red mend that holds them. Stopped without measuring (never green) or measuring another commit: names that. Refused row, the gate's cells filled |
 | **a gate suite is red** | 1 | names the suite and what it states: its closing `verdict: ` lines, at most ten, verbatim and without the prefix, then `whole output: <path>`; a red suite that closes with none is *"suite `<name>` failed (exit N) and states no verdict; whole output: `<path>`"*. Says that a repair is queued and which (the main-red mend's member `suite:<name>`); code `red`; refused row |
 | **a suite could not run** (the server never came up, a suite never started, a holder's pid gone and never released) | 1 | names the suite and why, with `whole output: <path>` where there is one; code `suites`, technical: queues the deploy mend; refused row |
@@ -536,7 +546,7 @@ ahead of `origin/main` — state mc owns, which a repair may mend — the prepar
 mc's own — code `full-run`). These are not: a usage error, `--dry-run`, the headless refusal, another deploy or a language run
 in progress, a pick that would move production backwards, no green commit with a red or unmeasured tip, a red gate suite or a red or stalled full run (a run that names `cut_files`, files it never finished, is read as stalled) (code `red`: a measured red is
 memoro's and goes to the main-red mend, below; `red` stays outside the classification so a refusal on it starts no deploy retry), a
-replaced preparation, and `main` dirty or ahead of `origin/main` in a worktree that is not mc's own (it may be somebody's). A
+replaced or deliberately stopped preparation, and `main` dirty or ahead of `origin/main` in a worktree that is not mc's own (it may be somebody's). A
 stop nobody has classified is technical. Only a technical stop queues a deploy repair ([A stop that is repaired](#a-stop-that-is-repaired)); a `red` stop queues
 the main-red mend's members instead ([A red is queued, once per stop](#a-red-is-queued-once-per-stop)), and a deploy refused on a red is
 not started again by the runner: when the repair has landed, the next typed deploy picks the newest green commit through
@@ -548,6 +558,32 @@ terminal: the verb does not look for one.
 
 `--dry-run` writes no row at all. Nothing was attempted, and a row per person
 checking what would ship would drown the ones that matter.
+
+### Stopping a preparation
+
+`mc deploy --stop-preparation "<reason>"` takes a non-blank reason and no other
+flag. It is a typed action, refused under `MC_HEADLESS=1`, and never stops the
+deployer. Under the preparation register's lock, mc checks that the live pid
+is the preparer for the recorded sha and start. It writes `ended`,
+`result: 'stopped'` and the reason before sending SIGTERM. The preparer's own
+completion cannot overwrite that stop; an existing watcher can still read it
+if a newer preparation replaces the active record.
+
+SIGTERM and SIGHUP abort the preparer's full run and local exercise. The stop
+waits up to 60 seconds for the preparer and its recorded full-run and local
+suite or server groups to end. It then kills remaining processes only where
+their identities still match, and checks that they ended. An unverified live
+group is not signalled by number. If shutdown cannot be confirmed, the command
+reports that the stop was recorded and exits 1, not success.
+
+A confirmed stop exits 0 and says `stopped the preparation of <sha> started
+<time> (pid <pid>) — <reason>; no mend is queued`. With none running it says
+`no preparation is running — nothing was stopped` and exits 1. A watcher of
+the stopped attempt exits 1 with the reason. The deploy panel shows
+`PREPARATION STOPPED` in yellow with the reason, not a failure. The next typed
+deploy can start a new preparation. Only the recorded intent makes the stop
+nontechnical: a starter that disappears with no end record is still
+`interrupted`, a technical stop when `mc deploy` was waiting for the result.
 
 ## The gate
 
@@ -606,13 +642,18 @@ detached process ([`src/mc/deploy-prepare-run.js`](../../src/mc/deploy-prepare-r
 [`src/mc/deploy-prepare.js`](../../src/mc/deploy-prepare.js), started with
 `startDetached` like the deployer) and recorded in
 `~/mc/runner/deploy-prepare.json` (`{ sha, pid, started, stage, log,
-accept_red, ended, result, error, output_dir }`; `output_dir` is where the whole
-output of each suite and command is kept, and a record without it is read as one
-that kept none; the log is
-`~/mc/runner/log/deploy-prepare.log`). `stage` is `starting`, `full-run`,
-`suites` or `done`. The terminal, and the page's deploy panel, only watch it
-(`followLog`): ^C, a closed SSH session or a restarted page stops the
-watching, never the work, and the record is found again from disk.
+accept_red, ended, result, reason, error, output_dir }`; `output_dir` names
+the directory for whole suite and command output when present). `stage` is
+`starting`, `full-run`, `suites` or `done`. The terminal and the page's deploy
+panel only watch it: ^C, a closed SSH session or a restarted page stops
+the watching, not the work. The record is found again from disk.
+
+Each preparation writes its own `~/mc/runner/log/deploy-prepare-<started>.log`
+(the start timestamp made filename-safe). The preparer, `--follow`, the page
+and a deploy mend's copy use the path in that preparation's record. Old
+records without a path still read the legacy `deploy-prepare.log`. At startup
+the preparer removes per-attempt logs not written for more than 30 days,
+except the current record's log and any named by an unfinished deploy mend.
 
 A preparation is **joined by exact sha**, and reused only while the history's
 current verdict for that sha equals the one recorded (a run that went red since
@@ -626,6 +667,7 @@ two terminals cannot both start one (`prepareStage`):
 | done, same sha, red | the refusal as if it had run here; `--accept-red` reads the same result. The main-red mends that hold the red are read as they stand now (`withMendsNow`): one landed or dropped since is not named |
 | another sha (main moved) | a new preparation, said in one line: *"the last preparation was of `<x>`, main is `<y>` now — starting a new one"* |
 | its process gone before it ended | *"interrupted at `<stage>`"*, and a new one |
+| stopped by a person | *"the preparation of `<sha>` was stopped: `<reason>`"*, and a new one when asked and its preparer and local groups have let go |
 | done without suites and `--accept-red` given, whether found done or joined while running | prepares again, once: the suites are what a red needs |
 
 **A measuring preparation is never silent (2026-11-14).** The full run is tens of
@@ -648,8 +690,8 @@ said. Two things write them:
   line from anyone — a stage that reports no progress, such as the suites, or a
   full run followed in another process — says `mc: still preparing — <stage>, <n>
   min so far`. A starter that waits for another full run (`awaitClaim`) says the
-  same once a minute: `still following the full run of <sha> (pid <n>), <n> min so
-  far`.
+  same once a minute: `still following the full run of <sha> (<holder>), <n> min
+  so far`. The holder is named as below.
 
 A deploy's full run is never lost to a lease: it runs isolated and holds no
 repository lease (`holdLease: false`), like the runner's full run. `--dry-run` starts
@@ -660,13 +702,16 @@ it follows a deploy.
 run: this preparation, `mc test <repo> --full`, and the runner's full run.
 Each claims the run first in `<mc home>/full-runs.json`
 ([`src/mc/full-run-claim.js`](../../src/mc/full-run-claim.js)): `{ repo, sha,
-pid, started, verb }`, decided under a lock of the history's own root. A claim
+pid, started, verb, groups }`, decided under a lock of the history's own root.
+Each full run adds its test batch and command gate process groups to the
+claim as they start. A claim stays live until its starter has exited or
+released it **and** no group it still owns is alive. A claim
 overlaps another of the same repository when the shas are equal or either is
 unknown (`mc test --full` does not know what the fetch will find). A starter
 that finds a live overlapping claim does not start a round: it follows the run
 (`awaitClaim`) and reads its answer from the nightly history; a run that died
-without writing one is no answer, and the follower starts its own. A claim
-whose pid is gone is no claim. A known, different sha is another tree and
+without writing one is no answer, and the follower starts its own once the
+claim ends. A known, different sha is another tree and
 waits for the run in flight (`waitFor`), then claims: a repository has one
 checkout for its full run (`<slug>/full`), and a second run must never prepare
 it under the first. A deploy waiting for another commit's full run reserves
@@ -676,7 +721,10 @@ same commit. A reservation is removed when its process exits or when the deploy
 starts or joins a measurement. `mc test <repo> --full` with no pull request is the same
 kind of run as the runner's full run — beside the merge lane, in its own checkout, no
 lease, written to the history (2026-11-14: it stopped twice at `lease` because
-the merger held memoro.git).
+the merger held memoro.git). Wait lines name `pid <pid>` while the starter
+holds the claim, or `the suite of a stopped starter (group <pgid>)` when only
+a group does. If a starter is killed, the next run waits for the orphaned
+groups instead of killing them or checking out code under them.
 
 **An interrupted round.** A gate round whose process is gone without an end
 record is settled by whoever reads it next (`settleInterruptedRounds`,
@@ -951,8 +999,10 @@ remove: the session writes a proposal naming it.
 **The request.** One file, `runner/deploy-mend.json`, written under the runner's lock like `runner/main-mend/`. A request
 has an `id`, `rows[]` (each: `started`, `sha`, `stopped_at`, `note`, `holder`, `accept_red`, `copies`), a state (`queued`,
 `running`, `published`, `repaired`, `retrying`, `Martin`; finished: `deployed`, `stopped`, `not-retried`, `dropped`),
-`failures`, `created`. The deploy log and the preparation log are one file each, emptied by the next deploy, so each stop copies
-them to `runner/deploy-mend/<id>/<row started>/` and the settlement removes the directory. At most one request is unfinished:
+`failures`, `created`. Each technical stop copies `deploy.log` and the preparation
+log named by the register to `runner/deploy-mend/<id>/<row started>/`. The deploy
+log is reused by the next deploy; preparation logs are per attempt. Settlement
+removes the copy directory. At most one request is unfinished:
 a later technical stop joins it with its own copies. A joined request carries `--accept-red` if any row did, takes the first
 row's holder and counts its age from the newest row's `started`. Queueing is done by the typed deploy (or its deployer) after
 the row is written and outside the deploy lock; a failed write or copy changes neither the exit code, the row nor the output.
@@ -1119,6 +1169,12 @@ stripped, from `~/memoro/scripts/deploy.mjs` as it stood on 2026-09-04 (a fifth,
 | `Live /api/version verified: build <n> · <sha>` | `verifyLiveVersion()`, line 495 | `live_commit`, `live_build` |
 | `✓ Deploy complete build <n> · <sha>` | the success banner, line 801 | `build` |
 | `✗ Deploy failed` + the line under it | the catch, line 814 | `note` |
+
+On failure the closing line also relays the script's `Production` row, not
+the temporary `Production meanwhile:` lines or extra detail from the
+failure body. The row can name migrations confirmed applied, whether or not
+a new Worker is live. When the script gives no production row, mc says
+`production may be part-way`.
 
 The fifth line is the script's last: `Deploy branch: <branch>`, matched exactly,
 anywhere in the kept output, the last one winning. It is the only thing mc reads
