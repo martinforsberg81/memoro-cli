@@ -9,6 +9,7 @@ import { captureWorktree, contentKey, findPublicationReceipt, findResumable, gat
 import { findGreen, findGreenForHead, GATE_MEASUREMENT_VERSION, gateConfiguration, readGreenReceipt, selectionHash } from '../../src/mc/gate-greens.js';
 import { codeLoaders, selectorCommand, runSessionGate as sessionGate } from '../../src/mc/session-gate-run.js';
 import { deltaFromGreen, executedTimeoutOf, executionIdentity, realTests, resolveTestPlan, selectFiles } from '../../src/mc/repo-gate.js';
+import { PROCESS_PROGRESS_PRELOAD } from '../../src/mc/test-times.js';
 import { spawnedBatch, withSpawnedBatches } from './_helpers/spawned-batch.js';
 
 /** Every fake `tests` here stands for a spawn: it reports the batch that spawn would launch. */
@@ -718,6 +719,9 @@ it('codeLoaders names the code-loading NODE_OPTIONS options, in either form, and
   assert.deepEqual(codeLoaders('--import "./a dir/x.mjs" --max-old-space-size=4096'), ['--import'], 'a quoted value is one word');
   assert.deepEqual(codeLoaders(undefined), []);
   assert.deepEqual(codeLoaders(''), []);
+  // A gate started inside another gate's test process inherits its progress preload: the gate's own.
+  assert.deepEqual(codeLoaders(`--test-reporter=tap --import=${PROCESS_PROGRESS_PRELOAD}`), []);
+  assert.deepEqual(codeLoaders(`--import ${PROCESS_PROGRESS_PRELOAD} --import=./x.mjs`), ['--import']);
 });
 
 it('a reused member that did not pass, or names no source, never makes a receipt green', (t) => {

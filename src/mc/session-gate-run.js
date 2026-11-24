@@ -12,7 +12,7 @@ import { executionIdentity, realTests, resolveTestPlan, selectFiles, suiteEnv, s
 import { redTests, tapTotals } from './tap-red.js';
 import { awaitDeploy, deployHolding } from './await-deploy.js';
 import { BUILD_LANE } from './gate-lock.js';
-import { fileOutcomes, readTestTimes, outputCut, progressTracker, sessionFiles, slowTests, touchedTests } from './test-times.js';
+import { PROCESS_PROGRESS_PRELOAD, fileOutcomes, readTestTimes, outputCut, progressTracker, sessionFiles, slowTests, touchedTests } from './test-times.js';
 import { captureWorktree, findResumable, gateReceipt, persistGateReceipt, persistSelectorEvidence, recordReceiptGreen, sameContent, selectorSidecar } from './session-gate-evidence.js';
 import { classifiedEmptyChange, commandIdentity, emptyChangeCoverage } from './gate-greens.js';
 import { settleRed } from './gate-settle.js';
@@ -41,8 +41,10 @@ const CODE_LOADING = new Set(['--import', '--require', '-r', '--loader', '--expe
  * `-r`, `--loader`, `--experimental-loader`), each once, in order; [] when it names
  * none. Only the names: a value is never returned. It reads the caller's own
  * `NODE_OPTIONS`, before the gate adds its progress preload and reporter flags; the
- * declared test flags travel in argv and are not in it. A run under such an option
- * measures other code than the tree its receipt names: a diagnostic run.
+ * declared test flags travel in argv and are not in it. A gate started inside another
+ * gate's test process inherits that gate's progress preload: the gate's own, not read
+ * either. A run under such an option measures other code than the tree its receipt
+ * names: a diagnostic run.
  */
 export function codeLoaders(nodeOptions) {
   const words = String(nodeOptions ?? '').match(/(?:[^\s"]+|"(?:[^"\\]|\\.)*"?)+/gu) || [];
@@ -51,8 +53,10 @@ export function codeLoaders(nodeOptions) {
     const at = words[i].indexOf('=');
     const name = at < 0 ? words[i] : words[i].slice(0, at);
     if (!CODE_LOADING.has(name)) continue;
-    if (!found.includes(name)) found.push(name);
+    const value = at < 0 ? words[i + 1] : words[i].slice(at + 1);
     if (at < 0) i += 1;
+    if (name === '--import' && value === PROCESS_PROGRESS_PRELOAD) continue;
+    if (!found.includes(name)) found.push(name);
   }
   return found;
 }
