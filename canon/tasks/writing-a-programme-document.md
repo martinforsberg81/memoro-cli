@@ -45,7 +45,7 @@ Keep the findings for the chosen technical solution in the programme's evidence 
   Add a phone picture only for a distinct choice. Do not picture dark: it follows memoro's `docs/technical/design-tokens.md`.
   Describe failed, empty, working, cut and return states in words, naming the app component they follow.
   Name and show an unchanged component in place. Show text as text. Say "Nothing a user sees" where true. At most ten pictures across the document.
-- **Proved by.** What would fail if the user outcome were wrong and how to check it. Name the workspace, prerequisites and usable data or fixtures.
+- **Proved by.** What would fail if the user outcome were wrong and how to check it. Name the workspace, prerequisites and usable data or fixtures; dependency setup in a memoro worktree is `npm run deps:ensure`, never `npm ci` or `npm install`, which a build is refused ([publish-and-merge](publish-and-merge.md)).
   Verify the setup that can be checked now. The build exercises the finished behaviour.
 - **Not in this part.** The nearest thing someone would expect and does not get.
 
