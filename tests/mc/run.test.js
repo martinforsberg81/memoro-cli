@@ -37,6 +37,7 @@ import * as agyAdapter from '../../src/adapters/antigravity-cli.js';
 import { expandRoleIncludes, sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/model-capacity.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
+import { claudeHostMissing } from '../../src/mc/claude-host.js';
 
 /** The catalog these runner cases run on: the build list is claude opus then codex sol, as `large` was; the role lists are the defaults. */
 const TEST_CATALOG = { ...DEFAULT_CATALOG, build: [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.2-sol', effort: 'high' }] };
@@ -5607,6 +5608,150 @@ test('a review of the same model that is not cut short resets its count: one cut
   assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_MODEL), ['opus', 'opus', 'opus']);
   assert.deepEqual(f.deps.capacity.read().providers.claude.model_cut_short, { opus: 1 }, 'the count beside the refusals holds the last cut-short alone');
   assert.equal(f.deps.capacity.read().providers.claude.model_refusals.opus, undefined);
+});
+
+/** Claude's answers to the tool calls the host refused, as the 2026-11-13 streams and their `.json.err` have them. */
+const HOST_REFUSALS = [
+  { tool: 'Bash', text: 'This command requires approval' },
+  { tool: 'Read', text: "Claude requested permissions to read from /home/martin/mc/programs/prog/goals/mute/LOG.md, but you haven't granted it yet." },
+  { tool: 'Bash', text: 'This Bash command contains multiple operations. The following part requires approval: mc goal show prog/mute' },
+];
+const UNTRUSTED_ERR = 'Ignoring 80 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["/home/martin/mc/repos/memoro.git"].hasTrustDialogAccepted: true in /home/martin/.claude.json.\n';
+/**
+ * A claude session whose every tool call the host refused: it wrote nothing, and exited 0. `results` are its tool
+ * results; one marked `allowed` is a result the host let through.
+ */
+const hostRefusedSession = (results = HOST_REFUSALS) => () => {
+  const id = (i) => `toolu_refused_${i}`;
+  const events = [
+    { type: 'system', subtype: 'init', session_id: 'sid-host' },
+    ...results.flatMap(({ tool, text, allowed = false }, i) => [
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: id(i), name: tool, input: {} }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', content: text, is_error: !allowed, tool_use_id: id(i) }] } },
+    ]),
+    { type: 'result', subtype: 'success', is_error: false, num_turns: results.length + 1, session_id: 'sid-host', result: 'I could not run any tool.', usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 },
+      permission_denials: results.flatMap(({ tool, allowed = false }, i) => (allowed ? [] : [{ tool_name: tool, tool_use_id: id(i), tool_input: {} }])) },
+  ];
+  return { status: 0, stdout: `${events.map((event) => JSON.stringify(event)).join('\n')}\n`, stderr: UNTRUSTED_ERR, timedOut: false };
+};
+/** Build on claude opus, else codex luna, on plan only, both with room. */
+function hostRouted(f) {
+  f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), build: [{ tool: 'claude', model: 'opus', effort: 'high' }, { tool: 'codex', model: 'gpt-6-luna', effort: 'high' }] });
+  f.deps.billing = { readMode: () => 'plan', readState: () => ({}), patchState: () => {}, readApi: () => ({ claude: false, codex: false }) };
+  f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.1 }));
+  return f;
+}
+
+test('a claude session whose every tool the host refused is host-refused: no entry, no step toward the silent builds, a claude refusal, and a codex goal still launches', async () => {
+  const f = hostRouted(goalFixture({ mute: { log: goalLog('2026-08-20T10:00Z') } }));
+  let clock = ROUTING_NOW.getTime();
+  f.deps.now = () => new Date(clock);
+  f.answer = (call) => (call.env.MC_TOOL === 'claude' ? hostRefusedSession()(call) : logsItself(f, 'mute')(call));
+  const runner = createRunner({ deps: f.deps });
+  const logBefore = f.files[`${GOALS}/mute/LOG.md`];
+  // Three refused builds, the claude refusal lifted before each: three silent builds would set the goal Martin.
+  for (const round of [1, 2, 3]) {
+    if (round > 1) { clock += 5 * 60_000; f.deps.capacity.write(applyRefusal(f.deps.capacity.read(), 'claude', null)); }
+    assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
+    assert.equal(f.calls.sessions.at(-1).env.MC_TOOL, 'claude', `build ${round} is claude's`);
+    assert.equal(runRows(f.files).at(-1).note, 'host-refused', `build ${round}`);
+    assert.equal(f.files[`${GOALS}/mute/LOG.md`], logBefore, `build ${round} leaves no runner entry`);
+    assert.equal(where(f, 'mute'), 'build · ready', `build ${round}`);
+    assert.equal(f.log.filter((line) => line.includes('goal:prog/mute: build refused every tool by the host — no answer about the goal, it runs again')).length, round);
+    assert.equal(f.deps.capacity.read().providers.claude.refusal_until, new Date(clock + 60_000 * 2 ** (round - 1)).toISOString(), `build ${round} refuses claude for the offline backoff, doubling`);
+  }
+  assert.equal(buildSessionCount(parseLog(f.files[`${GOALS}/mute/LOG.md`])), buildSessionCount(parseLog(logBefore)), 'the build count is unchanged');
+  assert.equal(f.log.filter((line) => line.endsWith('claude set aside — the host refuses its tools: every tool call of goal:prog/mute was refused')).length, 1, 'said once, when it starts');
+  // Claude is refused: the goal's next build runs on codex.
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
+  assert.deepEqual([f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['codex', 'gpt-6-luna']);
+  assert.equal(runRows(f.files).at(-1).note.includes('host-refused'), false);
+  assert.equal(f.calls.sessions.filter((call) => call.env.MC_TOOL === 'claude').length, 3);
+});
+
+test('a claude session with one tool result the host allowed, or one that wrote its entry, is not host-refused', async () => {
+  for (const [why, answer] of [
+    ['one allowed result', () => hostRefusedSession([...HOST_REFUSALS, { tool: 'Read', text: '1\tconst a = 1;', allowed: true }])],
+    ['an entry written', (f) => logsItself(f, 'mute', hostRefusedSession())],
+  ]) {
+    const f = hostRouted(goalFixture({ mute: { log: goalLog('2026-08-20T10:00Z') } }));
+    f.answer = answer(f);
+    await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+    assert.notEqual(runRows(f.files).at(-1).note, 'host-refused', why);
+    assert.equal(f.deps.capacity.read().providers.claude.refusal_until, null, why);
+    assert.equal(f.log.some((line) => /claude set aside/u.test(line)), false, why);
+  }
+});
+
+/** The live host's Claude settings (2026-11-24): unscoped Bash and Read, and its additional directories. */
+const LIVE_SETTINGS = { permissions: { allow: ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch'], additionalDirectories: ['/h/mc', '/h/.memoro', '/h/.claude/skills', '/tmp'] } };
+const HOST_ENV = { HOME: '/h', MC_WORK_ROOT: '/h/mc' };
+const trustedConfig = (...untrusted) => ({ projects: Object.fromEntries(['memoro', 'memoro-cli'].map((repo) => [`/h/mc/repos/${repo}.git`, { hasTrustDialogAccepted: !untrusted.includes(repo) }])) });
+/** A host whose `~/.claude/settings.json` and `~/.claude.json` are the mutable `host.settings` and `host.config`. */
+function hostFiles(host) {
+  return {
+    env: HOST_ENV,
+    read: (path) => (path === '/h/.claude/settings.json' ? (host.settings == null ? null : JSON.stringify(host.settings))
+      : path === '/h/.claude.json' ? JSON.stringify(host.config) : null),
+    list: (dir) => (dir === '/h/mc/repos' ? ['memoro-cli.git', 'memoro.git', 'README'] : []),
+  };
+}
+
+test('the host check reads what a headless claude launch relies on: Bash, reading ~/mc and the skills, and every repository trusted', () => {
+  const missing = (settings, config = trustedConfig()) => claudeHostMissing(hostFiles({ settings, config }));
+  assert.equal(missing(LIVE_SETTINGS), null, 'the live host\'s shape passes');
+  assert.equal(missing({ permissions: { allow: ['Bash', 'Read(~/mc/**)', 'Read(//h/.claude/skills/**)'] } }), null, 'scoped reads that cover both pass');
+  assert.equal(missing({ permissions: { allow: ['Read'] } }), '~/.claude/settings.json does not allow Bash');
+  assert.equal(missing({ permissions: { allow: ['Bash', 'Read'], deny: ['Bash'] } }), '~/.claude/settings.json does not allow Bash');
+  assert.equal(missing({ permissions: { allow: ['Bash', 'Read(~/mc/**)'] } }), '~/.claude/settings.json does not allow reading ~/mc and ~/.claude/skills');
+  assert.equal(missing({}), '~/.claude/settings.json does not allow Bash; ~/.claude/settings.json does not allow reading ~/mc and ~/.claude/skills', 'no permissions block, as on 2026-11-13');
+  assert.equal(missing(null), '~/.claude/settings.json cannot be read');
+  assert.equal(missing(LIVE_SETTINGS, trustedConfig('memoro')), '~/mc/repos/memoro.git is not trusted in ~/.claude.json');
+});
+
+test('settings without Bash, or an untrusted repository, refuse claude before launch with the line; a fixed file clears it, and the live shape refuses nothing', async () => {
+  const f = hostRouted(goalFixture({ a: {}, b: {}, c: {}, d: {}, e: {} }));
+  f.answer = endsGoal(f);
+  const host = { settings: { permissions: { allow: ['Read', 'Edit'] } }, config: trustedConfig() };
+  f.deps.claudeHost = () => claudeHostMissing(hostFiles(host));
+  const runner = createRunner({ deps: f.deps });
+  const tools = () => f.calls.sessions.map((call) => call.env.MC_TOOL);
+  const setAside = (what) => f.log.filter((line) => line.endsWith(`claude set aside — the host refuses its tools: ${what}`)).length;
+  const usable = () => f.log.filter((line) => line.endsWith('claude usable again — the host allows its tools')).length;
+
+  await runner.pass({ repo: 'memoro' });
+  await runner.pass({ repo: 'memoro' });
+  assert.deepEqual(tools(), ['codex', 'codex'], 'no claude session is spent');
+  assert.equal(setAside('~/.claude/settings.json does not allow Bash'), 1, 'said once, when it starts');
+  assert.ok(f.deps.capacity.read().providers.claude.refusal_until);
+
+  host.settings = LIVE_SETTINGS;
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(tools().at(-1), 'claude', 'the fixed file: claude launches again');
+  assert.equal(usable(), 1);
+  assert.equal(f.deps.capacity.read().providers.claude.refusal_until, null);
+
+  host.config = trustedConfig('memoro-cli');
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(tools().at(-1), 'codex');
+  assert.equal(setAside('~/mc/repos/memoro-cli.git is not trusted in ~/.claude.json'), 1);
+
+  host.config = trustedConfig();
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(tools().at(-1), 'claude');
+  assert.equal(usable(), 2);
+  assert.deepEqual(tools(), ['codex', 'codex', 'claude', 'codex', 'claude']);
+});
+
+test('a passing host check clears only the refusal it set: a claude quota refusal stays', async () => {
+  const f = hostRouted(goalFixture({ a: {}, b: {} }));
+  f.answer = endsGoal(f);
+  f.deps.claudeHost = () => claudeHostMissing(hostFiles({ settings: LIVE_SETTINGS, config: trustedConfig() }));
+  f.deps.capacity.write(applyRefusal(f.deps.capacity.read(), 'claude', '2026-08-29T13:00:00Z'));
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.equal(f.calls.sessions.at(-1).env.MC_TOOL, 'codex');
+  assert.equal(f.deps.capacity.read().providers.claude.refusal_until, '2026-08-29T13:00:00Z');
+  assert.equal(f.log.some((line) => /claude (set aside|usable again)/u.test(line)), false);
 });
 
 /** Makes `worktree`'s `git status --porcelain` answer `tree.lines`, as a fault left in it would; `tree` is mutable. */

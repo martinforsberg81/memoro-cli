@@ -56,7 +56,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -132,6 +132,7 @@ import { makeAgyUsageReader } from './agy-capacity.js';
 import { collectClaudeCapacity } from './claude-capacity.js';
 import { applyCollectedCapacity, applyCutShort, applyRefusal, CAPACITY_POLL_MS, cutShortCount, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
+import { claudeHostMissing, hostRefusedStream } from './claude-host.js';
 import { readModels } from './model-config.js';
 import { billingRoute, billingRouteNow, disabledReserve, gatewayLaunch, gatewayRefusal, heldReserve, RESERVE_RETRY_MS } from './billing-route.js';
 import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf, textDigest } from './roles.js';
@@ -550,6 +551,13 @@ export function realDeps(env = process.env) {
     alive: pidAlive,
     read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } },
     list: (path) => { try { return readdirSync(path); } catch { return []; } },
+    // What a headless Claude launch needs from the host and does not have, or null (claude-host.js).
+    claudeHost: () => claudeHostMissing({
+      env,
+      read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } },
+      list: (path) => { try { return readdirSync(path); } catch { return []; } },
+      real: (path) => { try { return realpathSync(path); } catch { return path; } },
+    }),
     // Files only, for the one caller that must not mistake a directory for an
     // item: `~/mc/intake/decisions-archive/` is an archive, not an inbox entry.
     files: (path) => {
@@ -906,6 +914,67 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     say(`${name}: the API server cannot be reached — no session starts until ${untilText(until)} (n=${n}, ${wait / 1000} s)`);
   }
 
+  /**
+   * The host refuses Claude's tools (claude-host.js; mc-run.md, "Launch
+   * settings"): the claude provider is refused for the offline backoff
+   * (`offlineBackoffMs(n)`, `n` the refusals in a row), so codex and agy keep
+   * running and no Claude session is spent. `by` is what set it: `check`, the
+   * settings read before a launch, which the next passing check clears; or
+   * `session`, a session whose every tool call was refused, which lapses. Held
+   * in memory; the refusal itself is in the capacity snapshot.
+   */
+  let hostHold = null;
+  function refuseClaudeHost(missing, by) {
+    const nowMs = deps.now().getTime();
+    if (hostHold && nowMs < hostHold.until && (hostHold.by === by || by === 'check')) {
+      if (by === 'check') hostHold.by = 'check';
+      return;
+    }
+    const n = (hostHold?.n ?? 0) + 1;
+    const until = nowMs + offlineBackoffMs(n);
+    const iso = new Date(until).toISOString();
+    observeCapacity((state) => {
+      const held = Date.parse(normaliseCapacity(state).providers.claude?.refusal_until ?? '');
+      return Number.isFinite(held) && held > until ? state : applyRefusal(state, 'claude', iso);
+    });
+    if (!hostHold) say(`claude set aside — the host refuses its tools: ${missing}`);
+    hostHold = { n, until, iso, by, missing };
+  }
+  /**
+   * Before a launch is chosen: what a headless Claude launch relies on from the
+   * host (`deps.claudeHost`, `claudeHostMissing`). A deps without one checks
+   * nothing. Missing settings refuse claude; settings that pass clear a refusal
+   * the check set, and only that one.
+   */
+  function checkClaudeHost() {
+    if (!deps.claudeHost) return;
+    let missing;
+    try { missing = deps.claudeHost(); } catch (error) { missing = `the host settings could not be read (${error?.message || error})`; }
+    if (missing) { refuseClaudeHost(missing, 'check'); return; }
+    if (hostHold?.by !== 'check') return;
+    const { iso } = hostHold;
+    hostHold = null;
+    observeCapacity((state) => (normaliseCapacity(state).providers.claude?.refusal_until === iso ? applyRefusal(state, 'claude', null) : state));
+    say('claude usable again — the host allows its tools');
+  }
+  /**
+   * Whether a finished session was refused by the host: a claude session that
+   * wrote no LOG.md entry (`spoke`) and whose every tool result is a permission
+   * refusal (`hostRefusedStream`). It writes the claude refusal; a claude
+   * session that ended any other way ends a run of them.
+   */
+  function hostRefusedEnding(name, launch, result, { spoke = false } = {}) {
+    if (providerOf(launch) !== 'claude') return false;
+    if (spoke || !hostRefusedStream(result?.stdout)) {
+      if (hostHold?.by === 'session' && deps.now().getTime() >= hostHold.until) hostHold = null;
+      return false;
+    }
+    let missing = null;
+    try { missing = deps.claudeHost?.() ?? null; } catch { missing = null; }
+    refuseClaudeHost(missing ?? `every tool call of ${name} was refused`, missing ? 'check' : 'session');
+    return true;
+  }
+
   // A refusal belongs to the reserve alone. A usable subscription of the
   // same provider still participates in the next ordinary selection.
   const reserveHolds = new Map();
@@ -955,6 +1024,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * `setAside` is a reader's walk (`readerWalk`): the `{ tool, model }` candidates it set aside, which the choice is made without.
    */
   function routeClass(cls, { avoid = null, catalog = null, passBy = [], setAside = [] } = {}) {
+    // Every launch is chosen here: the host's Claude settings are read before claude can be chosen.
+    checkClaudeHost();
     try {
       const saved = deps.catalog();
       let given = catalog ?? saved;
@@ -1884,7 +1955,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const unfinished = decisionUnfinished(ended);
       // An ending the provider caused says nothing about the item: a quota, an unreachable API, or a login the refusal of the provider named.
       // It counts for nothing and writes nothing; the item is taken again when the provider answers.
-      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
+      // A session the host refused every tool (`hostRefusedEnding`) is one of them.
+      const hostRefused = unfinished && hostRefusedEnding(name, launch, result);
+      const providerEnding = hostRefused || read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
       const reason = `decision session exited ${result.status ?? 1} without settling the item (${read.note}); log: ${out}.jsonl${result.stderr ? `; ${String(result.stderr).slice(0, 1000)}` : ''}`;
       if (unfinished && !providerEnding) {
         // The failure goes on the record read under the lock, by the runner's own lock and item seams; a record settled meanwhile gets none.
@@ -1895,7 +1968,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         if (failed.lessonError) say(`${name}: the unsettled lesson was not written — ${failed.lessonError}`);
         if (failed.item?.state === 'for-martin' && goal) goalState(goal, `goal:${currentItem.reference}`, { status: 'Martin' }, { comment: reason });
       }
-      logRun({ ...read, ts: stamp(), name, kind: 'decision', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', note: unfinished ? reason : ended?.state || 'item missing', model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing });
+      logRun({ ...read, ts: stamp(), name, kind: 'decision', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', note: hostRefused ? 'host-refused' : unfinished ? reason : ended?.state || 'item missing', model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing });
       return 'ran';
     } finally {
       remove(currentPath);
@@ -3571,6 +3644,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const spoke = entriesAfter.length > entriesBefore;
       const verdictChanged = review && (deps.read(verdictPath) ?? null) !== verdictBefore;
       const cutShort = cutShortSession({ spoke, verdictChanged, read, result });
+      // A session the host refused every tool is no answer about the goal: no entry, no step toward any count (`hostRefusedEnding`).
+      const hostRefused = hostRefusedEnding(name, launch, result, { spoke: spoke || verdictChanged });
       const ending = `${read.note}, ${seconds} s`;
       // A build or repair that declined the work answers nothing about the goal's progress (`afterDecline`).
       const declining = spoke && progressBefore && entriesAfter.slice(entriesBefore).some(declinesWork);
@@ -3579,6 +3654,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (revision && goalRelease(goal, revision)?.problems) say(`${name}: repair release changed while the session ran — its result cannot advance delivery`);
       else if (result.handedOff) { say(`${name}: handed to the merger — lane released`); }
       else if (holdAtEnd) say(`${name}: held by ${holdAtEnd.by ?? '—'} since ${holdAtEnd.at ?? '—'} when its session ended — stage and status stay, nothing is written`);
+      else if (hostRefused) say(`${name}: ${kind} refused every tool by the host — no answer about the goal, it runs again`);
       // A quota or API ending answers nothing about the goal: the next pick takes it again.
       else if (mend && !read.quota && !read.interrupted) afterMend(goal, name, { stage: goal.stage, status: goal.status });
       // A review cut short answers nothing about the goal: no review entry, no runner entry, and not the goalWithoutWord branch.
@@ -3588,8 +3664,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       else if (declining) afterDecline(goal, name, route.candidate, textBefore);
       else if (spoke && progressBefore && !read.quota && !read.interrupted) afterBuild(goal, name, progressBefore);
       else if (!spoke && read.interrupted !== 'offline') goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
-      countCutShort(launch, settings, { review, cutShort });
-      const note = spoke ? read.note : `${read.note},no-log`;
+      if (!hostRefused) countCutShort(launch, settings, { review, cutShort });
+      const note = hostRefused ? 'host-refused' : spoke ? read.note : `${read.note},no-log`;
       logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: goalVariant(kind) }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: kind === 'build' ? 'build' : '-', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       say(`${name}: ${kind} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
       return 'ran';
