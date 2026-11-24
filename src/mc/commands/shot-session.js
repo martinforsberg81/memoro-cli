@@ -3,7 +3,7 @@
  *
  *   mc shot <dev|prod> <target> --keep [shot flags]   a shot, and the page kept
  *   mc shot next [<id>] [step flags]                  one more step on that page
- *   mc shot close [<id>|--all]
+ *   mc shot close [<id>|--all] [--any-worktree]
  *   mc shot sessions
  *
  * A session that cannot foresee every step takes one per call, and each step
@@ -40,7 +40,7 @@ export const STEP_FLAGS = {
   repeatable: ['--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
   check: refuseStep,
 };
-export const CLOSE_FLAGS = { booleans: ['--all'], check: refuseClose };
+export const CLOSE_FLAGS = { booleans: ['--all', '--any-worktree'], check: refuseClose };
 export const SESSIONS_FLAGS = { check: ({ positional }) => (positional.length ? 'mc shot sessions takes nothing more' : null) };
 
 function refuseStep({ flags, positional }) {
@@ -140,7 +140,7 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
   if (!acting.ok) { stderr.write(`mc: ${acting.error}\n`); return 2; }
   const timeout = parseTimeout(flags.timeout);
   if (!timeout.ok) { stderr.write(`mc: ${timeout.error}\n`); return 2; }
-  const picked = pick(positional[0], { cwd, env, deps, sameWorktree: !flags['any-worktree'] });
+  const picked = pick(positional[0], { cwd, env, deps, anyWorktree: flags['any-worktree'] });
   if (picked.error) { stderr.write(`mc: ${picked.error}\n`); return picked.code; }
   const { session } = picked;
   if (!session.alive) return ended(session, { env, stderr, deps });
@@ -246,7 +246,7 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
   return code;
 }
 
-/** `mc shot close [<id>|--all]`. */
+/** `mc shot close [<id>|--all] [--any-worktree]`. */
 export async function close(argv, { stdout, stderr, deps = {} }) {
   const scanned = scanArgs(argv, CLOSE_FLAGS);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
@@ -259,7 +259,7 @@ export async function close(argv, { stdout, stderr, deps = {} }) {
     closing = readSessions(env, deps);
     if (!closing.length) { stdout.write('mc: no browser is kept\n'); return 0; }
   } else {
-    const picked = pick(positional[0], { cwd: deps.cwd || process.cwd(), env, deps });
+    const picked = pick(positional[0], { cwd: deps.cwd || process.cwd(), env, deps, anyWorktree: flags['any-worktree'] });
     if (picked.error) { stderr.write(`mc: ${picked.error}\n`); return picked.code; }
     closing = [picked.session];
   }
@@ -292,18 +292,31 @@ export async function sessions(argv, { stdout, stderr, deps = {} }) {
       stdout.write(`${session.id}  orphaned browser, pid ${session.pid} — the mc that kept it (pid ${session.owner_pid}) is gone; mc does not close it\n`);
       continue;
     }
-    stdout.write(`${session.id}  ${session.where} ${session.target}  ${basename(session.worktree)}  ${session.viewport}  idle ${idleMinutes(session, now)} min\n`);
+    stdout.write(`${session.id}  ${session.where} ${session.target}  ${worktreeLabel(session.worktree)}  ${session.viewport}  idle ${idleMinutes(session, now)} min\n`);
   }
   return 0;
 }
 
+function worktreeLabel(worktree) {
+  return join(basename(dirname(worktree)), basename(worktree));
+}
+
+function noLocalSession(worktree, others) {
+  const missing = `no browser is kept for this worktree (…/${worktreeLabel(worktree)})`;
+  const start = 'start one with mc shot dev … --keep';
+  if (!others.length) return `${missing} — ${start}`;
+  const named = others.map(({ id, worktree }) => `${id} (${worktreeLabel(worktree)})`).join(', ');
+  const single = others.length === 1;
+  const belongs = single ? `${named} belongs to another` : `these belong to other worktrees: ${named}`;
+  return `${missing} — ${belongs}; ${start}, or name ${single ? others[0].id : 'one'} with --any-worktree`;
+}
+
 /**
- * The session a call means: the id given; else the most recently used live
- * session of the worktree `shotWorktree` chooses here; else the only live one.
- * An id of another worktree's session is refused by a step (`sameWorktree`)
- * unless the caller said `--any-worktree`.
+ * An explicit id requires the chosen worktree unless --any-worktree is given.
+ * Without an id, standing in a memoro worktree limits selection to that tree;
+ * the shared-checkout and sole-session fallbacks are for callers elsewhere.
  */
-function pick(id, { cwd, env, deps, sameWorktree = false }) {
+function pick(id, { cwd, env, deps, anyWorktree }) {
   if (id) {
     if (!/^s\d+$/u.test(id)) return { error: `a session is s<n>, not ${id} — mc shot sessions lists them`, code: 2 };
     const session = readSessions(env, deps).find((entry) => entry.id === id);
@@ -315,11 +328,11 @@ function pick(id, { cwd, env, deps, sameWorktree = false }) {
       }
       return { error: `no session called ${id} — mc shot sessions lists them`, code: 1 };
     }
-    if (sameWorktree) {
+    if (!anyWorktree) {
       const { worktree: here } = shotWorktree({ cwd, env, deps });
       if (session.worktree !== here) {
         return {
-          error: `${id} is a browser of ${session.worktree}, and this is ${here || cwd} — a step goes to the worktree its browser belongs to; add --any-worktree to drive it from here`,
+          error: `${id} is a browser of ${session.worktree}, and this is ${here || cwd} — add --any-worktree to use it from here`,
           code: 2,
         };
       }
@@ -328,16 +341,18 @@ function pick(id, { cwd, env, deps, sameWorktree = false }) {
   }
   // A dead session of this worktree is still the one meant: it says it ended.
   const all = readSessions(env, deps);
-  const { worktree } = shotWorktree({ cwd, env, deps });
+  const { worktree, standing } = shotWorktree({ cwd, env, deps });
   const latest = (list) => [...list].sort((a, b) => String(b.last_used).localeCompare(String(a.last_used)))[0];
   const here = all.filter((session) => session.worktree === worktree);
-  const live = all.filter((session) => session.alive);
   if (here.length) return { session: latest(here.filter((session) => session.alive)) || latest(here) };
+  if (standing) return { error: noLocalSession(worktree, all), code: 2 };
+
+  const live = all.filter((session) => session.alive);
   if (all.length === 1) return { session: all[0] };
   for (const session of all.filter((entry) => !entry.alive)) sweepRecord(session, env, deps);
   if (live.length === 1) return { session: live[0] };
   if (!live.length) return { error: 'no browser is kept — mc shot <dev|prod> <target> --keep keeps one', code: 1 };
-  const named = live.map((session) => `${session.id} (${session.where} ${session.target}, ${basename(session.worktree)})`);
+  const named = live.map((session) => `${session.id} (${session.where} ${session.target}, ${worktreeLabel(session.worktree)})`);
   return { error: `${live.length} browsers are kept and none is this worktree's — name one: ${named.join(', ')}`, code: 2 };
 }
 
