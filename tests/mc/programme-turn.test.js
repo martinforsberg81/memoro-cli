@@ -269,6 +269,57 @@ test('the cut: a programme is already cut only when every part has a goal and it
   assert.deepEqual([due(old).due, due(old).reason], [false, 'its goals are already cut']);
 });
 
+// Order goal-routes, Part 2. Fault replayed: on the code before it, a dropped goal counts as cut whenever it was
+// dropped, so the revised order is "already cut" and the first assertion (`due(...).due`) is false.
+test('a revised order: a goal dropped in or before the minute the order was set ready no longer counts, and the cut makes it a new goal under a free name', () => {
+  const logOf = (name, archived = false) => `${HOME}/prog/goals/${archived ? '.archive/' : ''}${name}/LOG.md`;
+  const dropEntry = (at) => `\n\n## ${at} · claude · dropped · ready · by martin\n\nDone: dropped: the order changed\n`;
+  /** The goals the first cut makes, with `drop` (name → minute) dropped and archived, under a record set ready at `readyAt`. */
+  const revised = ({ readyAt, drop = {}, done = {} }) => {
+    const first = programmeStore();
+    cut(first);
+    const files = { [README_AT]: README_MD, [RECORD_AT]: readyAt === undefined ? RECORD : recordOf({ ready_at: readyAt }) };
+    for (const name of ['one', 'two', 'prog-documentation']) {
+      const archived = name in drop || name in done;
+      const stage = name in drop ? 'dropped' : name in done ? 'done' : null;
+      const goal = first.files[goalFile(name)];
+      files[goalFile(name, archived)] = stage ? withGoal(goal, { stage }) : goal;
+      files[logOf(name, archived)] = first.files[logOf(name)] + (name in drop ? dropEntry(drop[name]) : name in done ? `\n\n## ${done[name]} · merger · done · ready\n\nDone: landed\n` : '');
+    }
+    return programmeStore(files);
+  };
+  // Part 1's goal dropped at 10:10 on the 18th and archived; the order set ready on the 24th.
+  const s = revised({ readyAt: '2026-11-24T19:05:33Z', drop: { one: '2026-11-18T10:10Z' } });
+  const archived = Object.fromEntries(Object.entries(s.files).filter(([path]) => path.includes('/.archive/')));
+  assert.deepEqual([due(s).due, [...partsCut({ home: HOME, programme: 'prog', list: s.list, read: s.read })]], [true, [2]]);
+  assert.deepEqual(cut(s), [{ name: 'one-2', part: 1 }], 'a new goal for Part 1, named free of the archived one');
+  assert.deepEqual([goalOf(s, 'one-2').part, goalOf(s, 'one-2').stage], [1, 'build']);
+  assert.deepEqual(Object.fromEntries(Object.entries(s.files).filter(([path]) => path.includes('/.archive/'))), archived, 'the archived goal is left as it was');
+  assert.deepEqual([due(s).due, due(s).reason], [false, 'its goals are already cut']);
+
+  // The documentation goal is one of them: dropped before the order was set ready, it gets a new one.
+  const docs = revised({ readyAt: '2026-11-24T19:05:33Z', drop: { 'prog-documentation': '2026-11-20T08:00Z' } });
+  assert.equal(due(docs).due, true);
+  assert.deepEqual(cut(docs), [{ name: 'prog-documentation-2', documentation: true }]);
+
+  // A drop after the minute the order was set ready still counts: dropping a goal of an unchanged order starts nothing.
+  const after = revised({ readyAt: '2026-11-24T19:05:59Z', drop: { one: '2026-11-24T19:06Z', 'prog-documentation': '2026-11-25T08:00Z' } });
+  assert.deepEqual([due(after).due, due(after).reason, cut(after)], [false, 'its goals are already cut', []]);
+  // A drop in the same minute counts as before it.
+  const same = revised({ readyAt: '2026-11-24T19:05:00Z', drop: { one: '2026-11-24T19:05Z' } });
+  assert.deepEqual([due(same).due, cut(same)], [true, [{ name: 'one-2', part: 1 }]]);
+  // A done goal always counts, whenever it landed.
+  const landed = revised({ readyAt: '2026-11-24T19:05:33Z', done: { one: '2026-11-18T10:10Z', 'prog-documentation': '2026-11-19T10:10Z' } });
+  assert.deepEqual([due(landed).due, cut(landed)], [false, []]);
+  // A record without ready_at (every record before it) counts every dropped goal, as before.
+  const unset = revised({ drop: { one: '2026-11-18T10:10Z' } });
+  assert.deepEqual([due(unset).due, due(unset).reason, cut(unset)], [false, 'its goals are already cut', []]);
+  // A dropped goal whose log does not say when it was dropped still counts.
+  const silent = revised({ readyAt: '2026-11-24T19:05:33Z', drop: { one: '2026-11-18T10:10Z' } });
+  silent.files[logOf('one', true)] = '';
+  assert.deepEqual([due(silent).due, cut(silent)], [false, []]);
+});
+
 test('what a session on the last goal is given: the fixed text with the programme and its directory, then the order whole', () => {
   assert.equal(documentationBrief({ programme: 'prog', dir: `${HOME}/prog`, text: README_MD }), [
     'DOCUMENTATION — the last goal of programme prog',
