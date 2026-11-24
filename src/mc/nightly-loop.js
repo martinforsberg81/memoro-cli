@@ -78,7 +78,7 @@ import { recordRound, recordRoundStart } from './repo-round-log.js';
 import { fullRunLanes, runGate } from './repo-gate.js';
 import { repoStatus } from './repo-status.js';
 import { currentHolder } from './work-identity.js';
-import { awaitClaim, claimFullRun, releaseClaim } from './full-run-claim.js';
+import { addClaimGroup, awaitClaim, claimFullRun, claimHolder, releaseClaim } from './full-run-claim.js';
 
 /**
  * How a scheduled round is written in the round log.
@@ -121,12 +121,13 @@ export const RETRY_NOW = Object.freeze(['gone', 'killed']);
  * the same name, or keep the merger out under another. No signal handlers of
  * its own (`signals: false`): the runner stops it through `signal`.
  */
-export async function scheduledRound({ repoPath, root = mcHome(), env = process.env, say = () => {}, signal = null, gate = runGate, ref = null, sha = null } = {}) {
+export async function scheduledRound({ repoPath, root = mcHome(), env = process.env, say = () => {}, signal = null, gate = runGate, ref = null, sha = null, onSpawn = null } = {}) {
   const holder = currentHolder();
   const lanes = fullRunLanes(env);
   recordRoundStart({ repo: repoPath, mode: NIGHTLY_MODE, holder: holder?.name || null, prs: [] }, { root });
   const report = await gate({
     repoPath, full: true, isolated: true, holdLease: false, signals: false, lanes, signal,
+    ...(onSpawn ? { onSpawn } : {}),
     ...(ref ? { fullRef: ref, expectedSha: sha } : {}),
     // The suite's own runner reads the lanes from here (memoro's `runner.mjs`,
     // memoro-cli's `npm test`); the full run's lanes win over the runner's.
@@ -255,12 +256,16 @@ export async function fullRun(repo, {
     const taken = claimFullRun({ repo: repo.name, sha, ref, verb: 'full run', root, deploy: deploy || Boolean(ref), ...claims });
     if (taken.claimed) {
       onMeasuring?.(taken.claim);
+      // Each test batch and command gate group the run starts is recorded in
+      // its claim, which stays live while one of them does (`full-run-claim.js`).
+      const onSpawn = (pgid) => addClaimGroup(taken.claim, pgid, { root, ...claims });
       try {
-        return await measure(repo, { root, env, say, narrate, round, clock, signal, repair, repairFullRun, ref, sha, deferMainRepair });
+        return await measure(repo, { root, env, say, narrate, round, clock, signal, repair, repairFullRun, ref, sha, deferMainRepair, onSpawn });
       } finally {
         releaseClaim(taken.claim, { root, ...claims });
       }
     }
+    const holderOf = (claim) => claimHolder(claim, { root, ...claims });
     if (taken.waitFor) {
       // Another tree of this repository is being measured, in the one
       // checkout a full run has: wait for it, then measure this one.
@@ -268,9 +273,9 @@ export async function fullRun(repo, {
       const otherSha = taken.waitFor.sha?.slice(0, 7) || 'main';
       const target = sha?.slice(0, 7) || 'main';
       say(taken.waitFor.waiting
-        ? `${repo.name} — waiting for the deploy preparation of ${otherSha} (pid ${taken.waitFor.pid}) before measuring ${target}`
-        : `${repo.name} — a full run of ${otherSha} is using the full-run checkout (pid ${taken.waitFor.pid}); waiting for it before measuring ${target}`);
-      await awaitClaim(taken.waitFor, { root, ...claims, signal: handover, onWait: (ms) => say(`${repo.name} — still waiting for the ${blocker} of ${otherSha} (pid ${taken.waitFor.pid}), ${Math.round(ms / 60000)} min so far`) });
+        ? `${repo.name} — waiting for the deploy preparation of ${otherSha} (${holderOf(taken.waitFor)}) before measuring ${target}`
+        : `${repo.name} — a full run of ${otherSha} is using the full-run checkout (${holderOf(taken.waitFor)}); waiting for it before measuring ${target}`);
+      await awaitClaim(taken.waitFor, { root, ...claims, signal: handover, onWait: (ms) => say(`${repo.name} — still waiting for the ${blocker} of ${otherSha} (${holderOf(taken.waitFor)}), ${Math.round(ms / 60000)} min so far`) });
       if (handover?.aborted) {
         releaseClaim(taken.reservation, { root, ...claims });
         return dropped(repo, say);
@@ -278,8 +283,8 @@ export async function fullRun(repo, {
       continue;
     }
     const other = taken.joined;
-    say(`${repo.name} — a full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} is already being measured (pid ${other.pid}, since ${other.started}); following it, not starting a second`);
-    await awaitClaim(other, { root, ...claims, signal: handover, onWait: (ms) => say(`${repo.name} — still following the full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} (pid ${other.pid}), ${Math.round(ms / 60000)} min so far`) });
+    say(`${repo.name} — a full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} is already being measured (${holderOf(other)}, since ${other.started}); following it, not starting a second`);
+    await awaitClaim(other, { root, ...claims, signal: handover, onWait: (ms) => say(`${repo.name} — still following the full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} (${holderOf(other)}), ${Math.round(ms / 60000)} min so far`) });
     if (handover?.aborted) return dropped(repo, say);
     const last = readNightlyHistory(repo.path, { root }).runs.findLast((run) =>
       (run.ref || null) === (other.ref || null) || (other.sha && run.commit === other.sha));
@@ -460,13 +465,13 @@ function dropped(repo, say) {
 }
 
 async function measure(repo, {
-  root, env, say, narrate, round, clock, signal, repair, repairFullRun, ref, sha, deferMainRepair,
+  root, env, say, narrate, round, clock, signal, repair, repairFullRun, ref, sha, deferMainRepair, onSpawn = null,
 }) {
   const startedAt = clock();
   say(`${repo.name} — full run started`);
   let report = null;
   try {
-    report = await round({ repoPath: repo.path, root, env, say: narrate, signal, ...(ref ? { ref, sha } : {}) });
+    report = await round({ repoPath: repo.path, root, env, say: narrate, signal, ...(onSpawn ? { onSpawn } : {}), ...(ref ? { ref, sha } : {}) });
   } catch (error) {
     // What it must not do is look like a run that found no failures.
     const threw = {

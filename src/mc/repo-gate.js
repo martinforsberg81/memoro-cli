@@ -225,6 +225,10 @@ export async function runGate({
   // How a process's group is read and how a process is ended, for the processes this round left in its worktree.
   processGroupOf = realProcessGroup,
   killProcess = realKill,
+  // Told the process group of each test batch and command gate group as it starts:
+  // a full run's claim records them, so a starter that is gone still holds the
+  // claim while its suite lives (`full-run-claim.js`).
+  onSpawn = null,
 } = {}) {
   const startedAt = clock();
   const origin = monotonic();
@@ -334,7 +338,11 @@ export async function runGate({
   const ownGroups = new Set();
   // `where` names this round in the too-slow file (`recordTooSlow`): its pull requests, or the whole suite.
   const timesOf = { root, repo: lane, where: numbers.length ? numbers.map((n) => `#${n}`).join(' ') : 'full', track: progress.track, complete: progress.complete,
-    trackProcesses: progress.trackProcesses, completeProcesses: progress.completeProcesses, spawned: (pid) => { if (Number.isInteger(pid)) ownGroups.add(pid); } };
+    trackProcesses: progress.trackProcesses, completeProcesses: progress.completeProcesses, spawned: (pid) => {
+      if (!Number.isInteger(pid)) return;
+      ownGroups.add(pid);
+      try { onSpawn?.(pid); } catch { /* the claim's record is a courtesy to its readers */ }
+    } };
   // Every test the round's runs measured, all on the candidate: the ones over the
   // slow-test indicator are named in the report (`slow_tests`), never its red.
   const measuredTests = [];

@@ -33,7 +33,7 @@ import { claimLease, readLease, releaseLease } from '../repo-lease.js';
 import { installPushGuard, pushCheckLines, pushGuardState, pushVerdict } from '../push-guard.js';
 import { currentHolder } from '../work-identity.js';
 import { fullRunLanes, runGate, verdictHeadline } from '../repo-gate.js';
-import { awaitClaim, claimFullRun, releaseClaim } from '../full-run-claim.js';
+import { addClaimGroup, awaitClaim, claimFullRun, claimHolder, releaseClaim } from '../full-run-claim.js';
 import { repairFromRun, runOfReport } from '../nightly-loop.js';
 import { readNightlyHistory, recordNightlyRun } from '../nightly-history.js';
 import { slowTestLines } from '../test-times.js';
@@ -410,6 +410,7 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
   const claims = deps.claims || {};
   const repoRef = { name: repoNameOf(repoPath), path: repoPath };
   let claim = null;
+  const holderOf = (one) => claimHolder(one, { root: historyRoot, ...claims });
   if (alone) {
     for (;;) {
       const taken = claimFullRun({ repo: repoRef.name, sha: null, verb: 'mc test --full', root: historyRoot, ...claims });
@@ -418,14 +419,14 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
         const blocker = taken.waitFor.waiting ? 'deploy preparation' : 'full run';
         const otherSha = taken.waitFor.sha?.slice(0, 7) || 'main';
         stderr.write(taken.waitFor.waiting
-          ? `mc: waiting for the deploy preparation of ${otherSha} (pid ${taken.waitFor.pid})\n`
-          : `mc: a full run of ${otherSha} is using the full-run checkout (pid ${taken.waitFor.pid}) — waiting for it\n`);
-        await awaitClaim(taken.waitFor, { root: historyRoot, ...claims, onWait: (ms) => stderr.write(`mc: still waiting for the ${blocker} of ${otherSha} (pid ${taken.waitFor.pid}), ${Math.round(ms / 60000)} min so far\n`) });
+          ? `mc: waiting for the deploy preparation of ${otherSha} (${holderOf(taken.waitFor)})\n`
+          : `mc: a full run of ${otherSha} is using the full-run checkout (${holderOf(taken.waitFor)}) — waiting for it\n`);
+        await awaitClaim(taken.waitFor, { root: historyRoot, ...claims, onWait: (ms) => stderr.write(`mc: still waiting for the ${blocker} of ${otherSha} (${holderOf(taken.waitFor)}), ${Math.round(ms / 60000)} min so far\n`) });
         continue;
       }
       const other = taken.joined;
-      stderr.write(`mc: a full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} is already being measured (pid ${other.pid}, since ${other.started}) — following it, not starting a second\n`);
-      await awaitClaim(other, { root: historyRoot, ...claims, onWait: (ms) => stderr.write(`mc: still following the full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} (pid ${other.pid}), ${Math.round(ms / 60000)} min so far\n`) });
+      stderr.write(`mc: a full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} is already being measured (${holderOf(other)}, since ${other.started}) — following it, not starting a second\n`);
+      await awaitClaim(other, { root: historyRoot, ...claims, onWait: (ms) => stderr.write(`mc: still following the full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} (${holderOf(other)}), ${Math.round(ms / 60000)} min so far\n`) });
       const last = readNightlyHistory(repoPath, { root: historyRoot }).runs.at(-1);
       if (last && Date.parse(last.at) >= Date.parse(other.started) - 1000) {
         const answer = last.red === null
@@ -438,7 +439,13 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
       stderr.write('mc: the run being followed ended without a record — starting one\n');
     }
     const lanes = fullRunLanes(process.env);
-    Object.assign(round, { isolated: true, holdLease: false, lanes, env: { ...process.env, MC_TEST_LANES: String(lanes) } });
+    // Each test batch and command gate group is recorded in the claim, which
+    // stays live while one of them does (`full-run-claim.js`).
+    const held = claim;
+    Object.assign(round, {
+      isolated: true, holdLease: false, lanes, env: { ...process.env, MC_TEST_LANES: String(lanes) },
+      onSpawn: (pgid) => addClaimGroup(held, pgid, { root: historyRoot, ...claims }),
+    });
   }
   let report;
   try {
