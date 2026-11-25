@@ -22,6 +22,8 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc run --billing             plan usage and next billing for Claude and Codex\n",
     "        mc run --billing <claude|codex> <on|off>\n",
     "                                    whether that provider uses its API key once its plan is spent\n",
+    "        mc run --billing --refresh   every provider's capacity read once, then the billing line;\n",
+    "                                    no runner needed; exit 1 when every read failed\n",
     "\n",
     "The runner runs headless goal sessions: build, review and mend (merge failures or goal-less main-red requests).\n",
     "A free lane takes merge-failure and main-red mend, then decision, a repair build (after a review found the goal not OK), review, build, the programme archive and the manager's turns; legacy pre-merge blocked work waits on Martin without a diagnostic session.\n",

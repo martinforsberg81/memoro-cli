@@ -30,12 +30,13 @@ import { buildSessionCount, noProgressStreak, parseGoal, parseLog, redMergeText,
 import { seenAreas, trippedAreas } from '../../src/mc/review-verdict.js';
 import { mcCheckout, startRunner } from '../../src/mc/run-control.js';
 import { learningMarkerPath } from '../../src/mc/desk-learning.js';
-import { RESERVE_DISABLED_EXIT, RESERVE_UNAVAILABLE_EXIT } from '../../src/mc/billing-route.js';
+import { billingRoute, RESERVE_DISABLED_EXIT, RESERVE_UNAVAILABLE_EXIT } from '../../src/mc/billing-route.js';
+import { collectClaudeCapacity, makeClaudeUsageReader } from '../../src/mc/claude-capacity.js';
 import { TIDY_KIND } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import * as agyAdapter from '../../src/adapters/antigravity-cli.js';
 import { expandRoleIncludes, sharedRoleText, textDigest } from '../../src/mc/roles.js';
-import { applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/model-capacity.js';
+import { applyObservation, applyRefusal, normaliseCapacity, observeClaudeStream } from '../../src/mc/model-capacity.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { claudeHostMissing } from '../../src/mc/claude-host.js';
 
@@ -2112,6 +2113,42 @@ test('both subscriptions are read at startup, due at 15 minutes, and a failed at
   assert.equal(timer, null, 'STOP stops the independent ticker');
 });
 
+/*
+ * 2026-11-24: claude refused at 18:58:49 with its five-hour window at 101 %
+ * until 21:20 (tests/fixtures/claude/README); its usage read at 19:30 carried
+ * no five-hour window and a seven-day one at 76 %, and the refusal held anyway.
+ */
+const REJECTED_STREAM = readFileSync(new URL('../fixtures/claude/five-hour-rejected-20261124T184900Z.jsonl', import.meta.url), 'utf8');
+const REJECTED_UNTIL = '2026-11-24T21:20:00.000Z';
+
+test('a clean claude usage read in the ticker lifts the held quota refusal and the plan refusal, and runner.log says so', async () => {
+  const clock = new Date('2026-11-24T19:30:00.000Z');
+  const f = fixture({ session: okSession() });
+  f.deps.now = () => new Date(clock);
+  const seen = new Date('2026-11-24T18:59:02.000Z');
+  f.deps.capacity.write(applyRefusal(observeClaudeStream(null, REJECTED_STREAM, seen), 'claude', REJECTED_UNTIL, null, seen, 'quota'));
+  let billing = { plan: { refused_until: REJECTED_UNTIL }, credits: {} };
+  f.deps.billing = { readMode: () => 'plan', readState: () => billing, patchState: (patch) => { billing = { ...billing, plan: { ...billing.plan, ...patch.plan } }; }, readApi: () => ({ claude: false, codex: false }) };
+  const body = JSON.stringify({ seven_day: { utilization: 76, resets_at: '2026-11-27T13:00:00Z' } });
+  const collect = () => collectClaudeCapacity({
+    credentials: () => 'fixture-login',
+    fetch: async () => ({ status: 200, ok: true, headers: {}, body: new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(body)); controller.close(); } }) }),
+  });
+  f.deps.refreshClaude = makeClaudeUsageReader({ env: {}, now: f.deps.now, collect, lock: (_root, fn) => fn(), capacity: f.deps.capacity, billing: f.deps.billing });
+  f.deps.refreshCodex = async () => ({ ok: false, why: 'not in this case' });
+  f.deps.every = () => () => {};
+  const route = () => billingRoute({ provider: 'claude', capacity: f.deps.capacity.read(), state: billing, api: { claude: false }, now: clock });
+  assert.equal(route().why, `plan refused until ${REJECTED_UNTIL}; API off`, 'held before the read');
+  createRunner({ deps: f.deps }).startCapacityTicker();
+  for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  const claude = f.deps.capacity.read().providers.claude;
+  assert.equal(route().billing, 'plan');
+  assert.deepEqual([claude.refusal_until, billing.plan.refused_until], [null, null], 'both refusals are lifted');
+  assert.equal(claude.windows.five_hour, null, 'the absent five-hour window replaces the held 101 %');
+  assert.match(f.files['/w/runner/log/runner.log'], /claude capacity read — its subscription windows are noted; not read: five_hour \(absent\)$/mu);
+  assert.match(f.files['/w/runner/log/runner.log'], new RegExp(`claude usable again — its usage read shows no spent window \\(the quota refusal until ${REJECTED_UNTIL.replace(/\./gu, '\\.')} is lifted\\)$`, 'mu'));
+});
+
 test('the usage ticker proceeds while a chore waits on its helper turn', async () => {
   let clock = ROUTING_NOW.getTime();
   let releaseTurn;
@@ -4005,6 +4042,17 @@ test('a plan refusal is recorded and hands the next launch to the API reserve', 
   assert.equal(calls[1].call.bin, process.execPath, 'the next launch goes through the gateway, on the API reserve');
 });
 
+test('a session refusal records its cause: a quota as quota, a refused login as login', async () => {
+  const quota = onRefusal('plan', REFUSED_429);
+  await createRunner({ deps: quota.f.deps }).pass();
+  assert.equal(quota.f.deps.capacity.read().providers.claude.refusal_cause, 'quota');
+  assert.equal(quota.f.deps.capacity.read().providers.claude.refusal_since, quota.f.deps.now().toISOString(), 'first seen when it was read');
+  const login = onRefusal('plan', streamed(apiEndedSession('Not logged in · Please run /login', { api_error_status: null, num_turns: 1 })));
+  await createRunner({ deps: login.f.deps }).pass();
+  assert.ok(login.f.deps.capacity.read().providers.claude.refusal_until);
+  assert.equal(login.f.deps.capacity.read().providers.claude.refusal_cause, 'login');
+});
+
 test('an API credit refusal is recorded without exposing the key', async () => {
   const { f, billing, calls } = onRefusal('credits', CREDIT_LOW);
   f.deps.capacity.read = () => capacityWith({ claude: 1 });
@@ -5801,6 +5849,19 @@ test('a passing host check clears only the refusal it set: a claude quota refusa
   assert.equal(f.calls.sessions.at(-1).env.MC_TOOL, 'codex');
   assert.equal(f.deps.capacity.read().providers.claude.refusal_until, '2026-08-29T13:00:00Z');
   assert.equal(f.log.some((line) => /claude (set aside|usable again)/u.test(line)), false);
+});
+
+test('a host check refusal records the cause host, and a later quota refusal over it leaves host', async () => {
+  const f = hostRouted(goalFixture({ a: {}, b: {} }));
+  f.answer = endsGoal(f);
+  f.deps.claudeHost = () => claudeHostMissing(hostFiles({ settings: { permissions: { allow: ['Read'] } }, config: trustedConfig() }));
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  const held = f.deps.capacity.read().providers.claude;
+  assert.equal(held.refusal_cause, 'host');
+  const later = new Date(Date.parse(held.refusal_until) + 3_600_000).toISOString();
+  f.deps.capacity.write(applyRefusal(f.deps.capacity.read(), 'claude', later, null, f.deps.now(), 'quota'));
+  const after = f.deps.capacity.read().providers.claude;
+  assert.deepEqual([after.refusal_cause, after.refusal_until, after.refusal_since], ['host', held.refusal_until, held.refusal_since]);
 });
 
 /** Makes `worktree`'s `git status --porcelain` answer `tree.lines`, as a fault left in it would; `tree` is mutable. */

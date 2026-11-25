@@ -129,8 +129,8 @@ import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readB
 import { MERGE_HANDOFF_FILE, withoutSessionIdentity } from './session-role.js';
 import { refreshCodexCapacity } from './codex-capacity.js';
 import { makeAgyUsageReader } from './agy-capacity.js';
-import { collectClaudeCapacity } from './claude-capacity.js';
-import { applyCollectedCapacity, applyCutShort, applyRefusal, CAPACITY_POLL_MS, cutShortCount, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
+import { makeClaudeUsageReader } from './claude-capacity.js';
+import { applyCutShort, applyRefusal, CAPACITY_POLL_MS, cutShortCount, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
 import { claudeHostMissing, hostRefusedStream } from './claude-host.js';
 import { readModels } from './model-config.js';
@@ -171,23 +171,22 @@ const refreshDep = (provider) => `refresh${provider[0].toUpperCase()}${provider.
  * (`CAPACITY_READER`). Each makes the provider's refresh for one runner.
  */
 const CAPACITY_READERS = Object.freeze({
-  'claude-usage': (provider, env) => async () => {
-    const now = new Date();
-    const before = JSON.stringify(readCapacity({ root: runnerDir(env) }).providers[provider]);
-    const got = await collectClaudeCapacity();
-    const root = runnerDir(env);
-    // Network is over before the runner lock: patch the latest whole file
-    // so stream/refusal observations and the other provider survive.
-    const state = realLock(workRoot(env), () => {
-      const atWrite = readCapacity({ root });
-      const next = applyCollectedCapacity(atWrite, provider, got, now, before);
-      return writeCapacity(next, { root });
-    }, { name: 'claude-capacity' });
-    return { ...got, state };
-  },
+  'claude-usage': (provider, env) => makeClaudeUsageReader({ provider, env }),
   'codex-rpc': (provider, env) => () => refreshCodexCapacity({ root: runnerDir(env), lockRoot: workRoot(env) }),
   'agy-usage': (provider, env) => makeAgyUsageReader({ provider, env }),
 });
+
+/**
+ * Every provider's capacity reader for one environment, by provider: what the
+ * runner's ticker calls (`refresh<Provider>`), and what `mc run --billing
+ * --refresh` runs once. A provider whose adapter declares no reader has none.
+ */
+export function capacityReaders(env = process.env) {
+  return Object.fromEntries(billingProviders().flatMap((provider) => {
+    const reader = CAPACITY_READERS[adapterOfProvider(provider).CAPACITY_READER];
+    return reader ? [[provider, reader(provider, env)]] : [];
+  }));
+}
 
 /** The role each goal session kind runs with (`goalSession`). */
 const GOAL_ROLES = Object.freeze({ build: BUILD_ROLES.goal, repair: BUILD_ROLES.goal, review: REVIEW_ROLE, mend: MEND_ROLE });
@@ -612,10 +611,7 @@ export function realDeps(env = process.env) {
     catalog: () => readModels(env),
     capacity: { read: () => readCapacity({ root: runnerDir(env) }), write: (state) => writeCapacity(state, { root: runnerDir(env) }) },
     // One reader per provider, by the mechanism its adapter declares (`CAPACITY_READER`); a dependency named `refresh<Provider>` stands in for it.
-    ...Object.fromEntries(billingProviders().flatMap((provider) => {
-      const reader = CAPACITY_READERS[adapterOfProvider(provider).CAPACITY_READER];
-      return reader ? [[refreshDep(provider), reader(provider, env)]] : [];
-    })),
+    ...Object.fromEntries(Object.entries(capacityReaders(env)).map(([provider, reader]) => [refreshDep(provider), reader])),
     deskItems: { list: () => listDeskItems({ env }), read: id => readDeskItem(id, { env }) },
     horizon: slug => readHorizon(slug, { env }),
     // A file's modification time in milliseconds, for the curation prompt's backlog.
@@ -880,7 +876,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * records it through its own capacity observation.
    */
   function refuseProvider(read, launch, billing, model = null) {
-    return refusePlanOnRead({ read, launch, model, billing, now: deps.now(), say, write: (provider, until, refusedModel) => observeCapacity((state) => applyRefusal(state, provider, until, refusedModel)) });
+    return refusePlanOnRead({ read, launch, model, billing, now: deps.now(), say, write: (provider, until, refusedModel, cause) => observeCapacity((state) => applyRefusal(state, provider, until, refusedModel, deps.now(), cause)) });
   }
   /**
    * The API server cannot be reached (`apiInterruption` kind `offline`): no new
@@ -933,10 +929,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const n = (hostHold?.n ?? 0) + 1;
     const until = nowMs + offlineBackoffMs(n);
     const iso = new Date(until).toISOString();
-    observeCapacity((state) => {
-      const held = Date.parse(normaliseCapacity(state).providers.claude?.refusal_until ?? '');
-      return Number.isFinite(held) && held > until ? state : applyRefusal(state, 'claude', iso);
-    });
+    // Cause `host`: a later quota or login refusal does not replace it, and a clean usage read leaves it to this check.
+    observeCapacity((state) => applyRefusal(state, 'claude', iso, null, deps.now(), 'host'));
     if (!hostHold) say(`claude set aside — the host refuses its tools: ${missing}`);
     hostHold = { n, until, iso, by, missing };
   }
@@ -1077,6 +1071,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         Promise.resolve().then(refresh).then((got) => {
           if (got?.stop) { stoppedReaders.add(provider); say(`${provider} capacity not read: ${got.why} — the reader stops until the runner restarts; the last snapshot stands`); return; }
           say(got?.ok ? `${provider} capacity read — its subscription windows are noted${notRead(got.unread)}` : `${provider} capacity not read: ${got?.why || 'no answer'} — the last snapshot stands`);
+          if (got?.lifted) say(`${provider} usable again — its usage read shows no spent window (the ${got.lifted.cause} refusal until ${got.lifted.until} is lifted)`);
         }).catch((error) => say(`${provider} capacity not read: ${error?.message || error} — the last snapshot stands`)).finally(() => inFlight.delete(provider));
       }
     };

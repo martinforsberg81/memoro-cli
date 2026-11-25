@@ -58,16 +58,35 @@ export function billingRouteNow(provider, { now = new Date(), env = process.env,
   return billingRoute({ provider, capacity, state, api, now });
 }
 
-/** Compact, secret-free status for the single MC billing line. */
+/**
+ * The refusal a whole provider is held under at `now`, or null: the capacity
+ * snapshot's (`{ until, cause, since }`), else, for a provider that keeps plan
+ * state, a live `plan.refused_until` of billing-state.json, which a quota
+ * wrote (`{ until, cause: 'quota', since: null }`).
+ */
+export function providerRefusal({ provider, capacity, state, now = new Date() } = {}) {
+  const standing = providerAt(capacity, provider, now);
+  if (standing.refusal_until) return { until: standing.refusal_until, cause: standing.refusal_cause, since: standing.refusal_since };
+  if (adapterOfProvider(provider)?.PLAN_STATE != null && after(state?.plan?.refused_until, now)) return { until: state.plan.refused_until, cause: 'quota', since: null };
+  return null;
+}
+
+/**
+ * Compact, secret-free status for the single MC billing line. A provider held
+ * under a refusal says until when, why and since when:
+ * `claude 101% (refused until <instant> — quota, first seen <instant>) API`.
+ */
 export function billingStatus({ capacity, state, api, now = new Date() } = {}) {
   return billingProviders().map((provider) => {
     const standing = providerAt(capacity, provider, now);
+    const held = providerRefusal({ provider, capacity, state, now });
+    const refused = held ? ` (refused until ${held.until} — ${held.cause}${held.since ? `, first seen ${held.since}` : ''})` : '';
     const windows = Object.values(standing.windows).filter((window) => window.status === 'known');
     const used = windows.length ? `${Math.round(Math.max(...windows.map((window) => window.fraction_used)) * 100)}%` : '?';
     const freshness = standing.status === 'failed' ? ' (read failed)' : standing.status === 'stale' ? ' (stale)' : '';
     const route = billingRoute({ provider, capacity, state, api, now });
     const spent = Object.entries(standing.model_refusals).map(([model, until]) => ` (${model} refused until ${until})`).join('');
-    return `${provider} ${used}${freshness}${spent} ${route.billing === 'plan' ? 'plan' : 'API'}${api?.[provider] === false ? ' (API off)' : ''}`;
+    return `${provider} ${used}${freshness}${refused}${spent} ${route.billing === 'plan' ? 'plan' : 'API'}${api?.[provider] === false ? ' (API off)' : ''}`;
   }).join(' · ');
 }
 

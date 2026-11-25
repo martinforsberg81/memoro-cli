@@ -35,6 +35,11 @@
  *   mc run --billing <claude|codex> <on|off>
  *                          whether that provider falls over to its API key
  *                          once its plan is spent; off keeps it on the plan
+ *   mc run --billing --refresh
+ *                          every provider's capacity read once, as the
+ *                          runner's poll reads it, then the billing line;
+ *                          works with no runner running. Exit 1 when every
+ *                          read failed
  *
  * The three orders are files under `~/mc/runner/` read between two picks,
  * not signals: a runner ninety minutes into a headless session is given the
@@ -56,7 +61,7 @@ import { readCapacity } from '../model-capacity.js';
 import { LANES_REPLACED, readLaneCount, writeLaneCount } from '../lane-count.js';
 import { runnerDir } from '../paths.js';
 import { IF_WAS_RUNNING, requestUpdate, startRunner, stopRunner } from '../run-control.js';
-import { REPO_NAMES, runLoop } from '../run.js';
+import { capacityReaders, REPO_NAMES, runLoop } from '../run.js';
 import { pidAlive, readCurrents } from '../status-collect.js';
 import { scanArgs } from './flags.js';
 
@@ -126,14 +131,35 @@ function lanes(opts, deps) {
   };
 }
 
-/** Billing status for both providers, after the API switch when one was given. */
-function billing(opts, deps) {
+/**
+ * Every provider's capacity reader run once, together, as the runner's poll
+ * runs them (each reads the network outside the runner lock and writes under
+ * it; a stale answer is dropped by its baseline). One line per provider, and
+ * whether any read succeeded. `deps.readers` stands in for `capacityReaders`.
+ */
+async function refreshCapacity(deps) {
+  const readers = deps.readers || capacityReaders(deps.env || process.env);
+  const answers = await Promise.all(Object.entries(readers).map(async ([provider, read]) => {
+    try { return [provider, await read()]; } catch (error) { return [provider, { ok: false, why: error?.message || String(error) }]; }
+  }));
+  return {
+    lines: answers.map(([provider, got]) => (got?.ok ? `mc: ${provider} read — ok` : `mc: ${provider} read failed — ${got?.why || 'no answer'}`)),
+    any: answers.some(([, got]) => got?.ok),
+  };
+}
+
+/**
+ * Billing status for both providers, after the API switch when one was given,
+ * or after every provider's capacity read (`--refresh`), whose lines come first.
+ */
+async function billing(opts, deps) {
+  const refreshed = opts.refresh ? await refreshCapacity(deps) : null;
   const now = (deps.now || (() => new Date()))();
   const root = runnerDir(deps.env || process.env);
   const readState = deps.readBillingState || (() => readBillingState({ root }));
   const readApi = deps.readBillingApi || (() => readBillingApi({ root }));
   if (opts.mode !== null) return { ok: false, code: 2, lines: ['billing mode is automatic: plan through 100 %, then API reserve — mc run --billing <claude|codex> <on|off> switches the API reserve'] };
-  const lines = [];
+  const lines = refreshed ? [...refreshed.lines] : [];
   if (opts.api) {
     const written = (deps.writeBillingApi || ((provider, enabled) => writeBillingApi(provider, enabled, { root })))(opts.api.provider, opts.api.enabled);
     if (!written.ok) return { ok: false, code: 2, lines: [written.reason] };
@@ -147,7 +173,7 @@ function billing(opts, deps) {
     const next = billingRoute({ provider, capacity, state, api, now });
     lines.push(`next ${provider} session: ${next.billing === 'credits' ? 'API' : 'plan'} — ${next.why}`);
   }
-  return { ok: true, code: 0, lines };
+  return { ok: true, code: refreshed && !refreshed.any ? 1 : 0, lines };
 }
 
 /**
@@ -211,6 +237,11 @@ export function parseRunArgs(argv) {
   if (argv.includes('--billing')) {
     const at = argv.indexOf('--billing');
     const rest = [...argv.slice(0, at), ...argv.slice(at + 1)];
+    // Every provider's capacity read, then the line: it reads them all, so it names none.
+    if (rest.includes('--refresh')) {
+      if (rest.length > 1) return { error: '--refresh takes no provider — mc run --billing --refresh' };
+      return { verb: 'billing', mode: null, refresh: true };
+    }
     if (at === 0 && rest.length === 2 && ['on', 'off'].includes(rest[1])) {
       return { verb: 'billing', mode: null, api: { provider: rest[0], enabled: rest[1] === 'on' } };
     }
