@@ -83,7 +83,10 @@ instead of repeating them. Nothing here outlives the programme.>
 Repeat `### Part n — <name>` for each piece of work: code cuts one goal per
 part, and its sessions are given the part as it stands. A part waits for the
 part before it unless it holds the line `In parallel with the previous part.`
-Code checks nothing else a part says; Martin judges it. The document binds what
+The cut adds the documentation goal, which writes `docs/technical/`, so an
+order has no Documentation part (`mc programs state ready` refuses one): name
+the pages it writes under Order. Code checks nothing else a part says; Martin
+judges it. The document binds what
 the user gets, how it looks and how one sees that it works; the construction is
 the builder's ([writing a programme document](../writing-a-programme-document.md)).
 
