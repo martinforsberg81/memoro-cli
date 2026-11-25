@@ -1018,7 +1018,8 @@ never run `mc deploy`; never touch production data or credentials; write a propo
 records the pull request per repository before it queues the merge. It ends with a published pull request, or `mc repo mend
 deploy <id> repaired --reason "…"`, accepted only from a mend session for the request its prompt named (`MC_DEPLOY_MEND`),
 while it is running with no pull request recorded. A session that ends with neither is a failed attempt, and so is a
-closed or red pull request. The request is **repaired** when every recorded pull request landed, or the session said so.
+closed or red pull request; a session [cut short by its provider](mc-run.md#the-session) with no pull request and its
+row still `running` is none, and the request goes back to the queue. The request is **repaired** when every recorded pull request landed, or the session said so.
 
 **A full run that cannot start (2026-11-16).** The hourly full run has no deploy row, and a full run that
 stops at `worktree` (held by a process), `threw`, `lease`, `reservation` or `base` is mc's own fault, neither red nor said

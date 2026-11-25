@@ -819,7 +819,9 @@ only when no queued, running, published or Martin entry names the same path, no
 live `current-*.json` names it and no runner claim holds its owner; any other tree
 is kept and the keeping is said with its reason. A session without a published
 PR, a dead runner's running request, or a failed merge is an unsuccessful
-outcome. One more mend attempt follows the initial attempt on the same branch;
+outcome, except a session [cut short by its provider](mc-run.md#the-session)
+whose rows are all still `running`: that one goes back to the queue with no
+attempt spent. One more mend attempt follows the initial attempt on the same branch;
 a third waits on Martin with the latest session log, visible in
 `mc repo status`, the page's Martin queue and `mc martin get`, without a goal.
 

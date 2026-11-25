@@ -676,10 +676,12 @@ counts for that state only). After the second in the current state,
 the runner writes a Swedish failure brief with every reason and session log
 path, sets `for-martin`, sort `mechanical`, `reversible: false`, `due_at: null`,
 and keeps the goal waiting on Martin. Such an item is the runner's stop, not a
-proposal: the opening lists it only as stuck, under *Not ready*. Quota, offline,
-provider-refusing login on a plan route (agy, claude or codex) and
-[host-refused](mc-run.md#launch-settings) endings write no failure or goal
-entry and spend no attempt: the item is eligible for another pick.
+proposal: the opening lists it only as stuck, under *Not ready*. A session
+[cut short by its provider](mc-run.md#the-session) — it settled no item and
+changed neither the goal's LOG.md nor its GOAL.json, and ended on quota, on an
+interruption (`offline`, `login`, `server`, `credits`, `key`) or
+[refused by the host](mc-run.md#launch-settings) — writes no failure or goal
+entry and spends no attempt: the item is eligible for another pick.
 Admission refusals also spend no attempt. The runner's existing mechanical `Martin` settings are unchanged; the
 pass handles what they leave rather than moving their ownership into the runner.
 

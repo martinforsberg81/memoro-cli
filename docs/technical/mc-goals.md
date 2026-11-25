@@ -1021,9 +1021,12 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    `finish` catalog list (a list name kept; it is not the `build` list); merge failures alone get a mend session (`mend-session`) on the mend list. None of them uses the `build` list, and none borrows its candidates when its own list has none usable. Legacy blocked goals outside merge are reconciled to Martin, retaining prior evidence without a diagnostic launch. `MC_ROLE`,
    `MC_GOAL`, `MC_REPO`, `MC_WORKAREA` and `MC_TOOL` are set for every kind.
    If the role's file is missing on the machine, the goal is skipped.
-4. **Silent build.** An [offline](mc-run.md#the-session) or
-   [host-refused](mc-run.md#launch-settings) ending writes no runner entry and
-   does not count as a silent build. Otherwise a build session that leaves no
+4. **Silent build.** A build or repair build
+   [cut short by its provider](mc-run.md#the-session) — no LOG.md entry, and
+   ended on quota, on an interruption (`offline`, `login`, `server`, `credits`,
+   `key`) or [refused by the host](mc-run.md#launch-settings) — writes no
+   runner entry and does not count as a silent build; the goal stays as it was
+   and runs again. Otherwise a build session that leaves no
    entry gets one from the runner: tool `runner`, stage and status unchanged,
    `Comment: session ended without a log entry (exit <n>, <s> s)`.
    A worktree that could not be made gets one too. When the last three entries
@@ -1209,8 +1212,9 @@ than the runner or a build session (the desk, the decision pass, a plan, a
 review or a person) sets status `ready` from another status — the goal set
 ready after a stop. A change of stage alone, such as a review sending the goal
 back to build, does not start it again: five build sessions are five, whatever
-reviews lie between them. Sessions that end without a word, and quota, login or
-offline endings, are not counted here; the three-silent rule covers the first.
+reviews lie between them. Sessions that end without a word, and sessions
+[cut short by their provider](mc-run.md#the-session), are not counted here; the
+three-silent rule covers the first.
 A [host-refused ending](mc-run.md#launch-settings) writes no goal entry and
 does not count toward any of these stops. The three-silent rule skips the
 runner's count, no-progress and decline entries. `blocked` is for
