@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { patchBillingState, readBillingState } from './billing.js';
-import { collectedCapacity, readCapacity, writeCapacity } from './model-capacity.js';
+import { collectedCapacity, providerAt, readCapacity, writeCapacity } from './model-capacity.js';
 import { runnerDir, workRoot } from './paths.js';
 import { realLock } from './runner-lock.js';
 
@@ -128,7 +128,8 @@ const live = (value, now) => Number.isFinite(Date.parse(value || '')) && Date.pa
  * other providers survive, and a stale answer is dropped by the baseline taken
  * before the read. A read that shows no spent window lifts a held `quota` or
  * `login` refusal of claude and the plan refusal billing-state.json holds
- * (`plan.refused_until`, a quota's). Answers the collector's
+ * (`plan.refused_until`, a quota's); while a `host` refusal still holds claude
+ * it lifts them and says nothing is lifted. Answers the collector's
  * `{ ok, windows, unread }` or `{ ok: false, why }` with the `state` written
  * and `lifted`: `{ cause, until }` of the refusal it lifted, else null.
  * `capacity`, `billing`, `collect`, `lock` and `now` are injectable.
@@ -150,7 +151,8 @@ export function makeClaudeUsageReader({
       if (read.clean) {
         const plan = billing.readState()?.plan?.refused_until;
         if (plan) billing.patchState({ plan: { refused_until: null } });
-        if (!lifted && live(plan, at)) lifted = { cause: 'quota', until: plan };
+        // Claude is usable again only when no refusal still holds it: a host refusal stays with its check.
+        if (!lifted && live(plan, at) && !providerAt(written, provider, at).refusal_until) lifted = { cause: 'quota', until: plan };
       }
       return written;
     }, { name: 'claude-capacity' });

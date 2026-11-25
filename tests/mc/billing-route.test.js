@@ -83,6 +83,12 @@ test('a renewal keeps the cause\'s first instant and the later end; host is neve
   assert.deepEqual(of(applyRefusal(host, 'claude', later, null, AT, 'quota')), [earlier, 'host', CLAUDE_SEEN], 'a quota over a held host leaves host');
   assert.deepEqual(of(applyRefusal(host, 'claude', later, null, AT, 'login')), [earlier, 'host', CLAUDE_SEEN], 'a login over a held host leaves host');
   assert.deepEqual(of(applyRefusal(first, 'claude', later, null, AT, 'host')), [later, 'host', AT.toISOString()], 'a later host over a quota takes over');
+  const hostOverQuota = applyRefusal(first, 'claude', earlier, null, AT, 'host');
+  assert.deepEqual(of(hostOverQuota), [earlier, 'host', AT.toISOString()], 'an earlier host over a quota takes over too');
+  assert.deepEqual(of(applyRefusal(hostOverQuota, 'claude', null, null, AT)), [CLAUDE_UNTIL, 'quota', CLAUDE_SEEN], 'clearing the host brings the quota under it back');
+  const lapsed = providerAt(hostOverQuota, 'claude', new Date('2026-11-24T20:30:00.000Z'));
+  assert.deepEqual([lapsed.refusal_until, lapsed.refusal_cause, lapsed.refusal_since], [CLAUDE_UNTIL, 'quota', CLAUDE_SEEN], 'a host refusal that has passed leaves the quota under it in force');
+  assert.deepEqual(of(applyRefusal(applyRefusal(hostOverQuota, 'claude', later, null, AT, 'login'), 'claude', null, null, AT)), [later, 'login', AT.toISOString()], 'under a host, between quota and login the later end wins');
   const passed = new Date('2026-11-24T21:30:00.000Z');
   assert.deepEqual(of(applyRefusal(first, 'claude', later, null, passed, 'quota')), [later, 'quota', passed.toISOString()], 'over a passed refusal it is first seen now');
   assert.deepEqual(of(applyRefusal(first, 'claude', null)), [null, null, null]);

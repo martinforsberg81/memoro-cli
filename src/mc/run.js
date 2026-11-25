@@ -948,7 +948,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (hostHold?.by !== 'check') return;
     const { iso } = hostHold;
     hostHold = null;
-    observeCapacity((state) => (normaliseCapacity(state).providers.claude?.refusal_until === iso ? applyRefusal(state, 'claude', null) : state));
+    observeCapacity((state) => (normaliseCapacity(state).providers.claude?.refusal_until === iso ? applyRefusal(state, 'claude', null, null, deps.now()) : state));
     say('claude usable again — the host allows its tools');
   }
   /**

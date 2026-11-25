@@ -36,7 +36,7 @@ import { TIDY_KIND } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import * as agyAdapter from '../../src/adapters/antigravity-cli.js';
 import { expandRoleIncludes, sharedRoleText, textDigest } from '../../src/mc/roles.js';
-import { applyObservation, applyRefusal, normaliseCapacity, observeClaudeStream } from '../../src/mc/model-capacity.js';
+import { applyObservation, applyRefusal, normaliseCapacity, observeClaudeStream, providerAt } from '../../src/mc/model-capacity.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { claudeHostMissing } from '../../src/mc/claude-host.js';
 
@@ -5862,6 +5862,56 @@ test('a host check refusal records the cause host, and a later quota refusal ove
   f.deps.capacity.write(applyRefusal(f.deps.capacity.read(), 'claude', later, null, f.deps.now(), 'quota'));
   const after = f.deps.capacity.read().providers.claude;
   assert.deepEqual([after.refusal_cause, after.refusal_until, after.refusal_since], ['host', held.refusal_until, held.refusal_since]);
+});
+
+/** A held claude quota refusal ending five hours from now, and settings that refuse claude: `{ f, host, quota, runner }`. */
+function hostOverQuota() {
+  const f = hostRouted(goalFixture({ a: {}, b: {}, c: {} }));
+  f.answer = endsGoal(f);
+  const host = { settings: { permissions: { allow: ['Read'] } }, config: trustedConfig() };
+  f.deps.claudeHost = () => claudeHostMissing(hostFiles(host));
+  const seen = f.deps.now();
+  const quota = new Date(seen.getTime() + 5 * 3_600_000).toISOString();
+  f.deps.capacity.write(applyRefusal(f.deps.capacity.read(), 'claude', quota, null, seen, 'quota'));
+  return { f, host, quota, seen: seen.toISOString(), runner: createRunner({ deps: f.deps }) };
+}
+
+test('a host check refusal over a later quota refusal takes the cause host, and a clean usage read leaves claude refused by the host', async () => {
+  const { f, host, runner } = hostOverQuota();
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(f.deps.capacity.read().providers.claude.refusal_cause, 'host', 'the host refusal is recorded over the quota');
+  const at = f.deps.now();
+  // Below codex's 10 %, so the chooser's headroom does not decide the last launch.
+  const sevenDay = { fraction_used: 0.05, resets_at: new Date(at.getTime() + 3 * 86_400_000).toISOString() };
+  f.deps.refreshClaude = makeClaudeUsageReader({ env: {}, now: f.deps.now, collect: async () => ({ ok: true, windows: { five_hour: null, seven_day: sevenDay }, unread: { five_hour: 'absent' } }), lock: (_root, fn) => fn(), capacity: f.deps.capacity, billing: f.deps.billing });
+  f.deps.refreshCodex = async () => ({ ok: false, why: 'not in this case' });
+  f.deps.every = () => () => {};
+  // Claude last read twenty minutes ago, so the ticker's read is due.
+  const held = f.deps.capacity.read();
+  f.deps.capacity.write(applyObservation(held, 'claude', { windows: held.providers.claude.windows }, new Date(at.getTime() - 20 * 60_000)));
+  runner.startCapacityTicker();
+  for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.match(f.files['/w/runner/log/runner.log'], /claude capacity read — its subscription windows are noted; not read: five_hour \(absent\)$/mu);
+  const read = providerAt(f.deps.capacity.read(), 'claude', f.deps.now());
+  assert.equal(read.refusal_cause, 'host', 'the clean read leaves the host refusal');
+  assert.equal(f.log.some((line) => line.includes('claude usable again — its usage read')), false, 'claude is not said usable while the host refuses it');
+  await runner.pass({ repo: 'memoro' });
+  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_TOOL), ['codex', 'codex'], 'no claude session is spent on the host refusal');
+  host.settings = LIVE_SETTINGS;
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(f.calls.sessions.at(-1).env.MC_TOOL, 'claude', 'the read lifted the quota under it: the passing check leaves claude usable');
+  assert.equal(f.deps.capacity.read().providers.claude.refusal_until, null);
+});
+
+test('a passing host check brings back the quota refusal the host refusal was written over', async () => {
+  const { f, host, quota, seen, runner } = hostOverQuota();
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(f.deps.capacity.read().providers.claude.refusal_cause, 'host');
+  host.settings = LIVE_SETTINGS;
+  await runner.pass({ repo: 'memoro' });
+  const claude = f.deps.capacity.read().providers.claude;
+  assert.deepEqual([claude.refusal_until, claude.refusal_cause, claude.refusal_since], [quota, 'quota', seen], 'the quota refusal is back, its end and first instant whole');
+  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_TOOL), ['codex', 'codex']);
 });
 
 /** Makes `worktree`'s `git status --porcelain` answer `tree.lines`, as a fault left in it would; `tree` is mutable. */

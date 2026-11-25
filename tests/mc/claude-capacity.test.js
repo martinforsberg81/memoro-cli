@@ -245,5 +245,20 @@ test('a clean read leaves a host refusal to its check and leaves model refusals 
   const claude = held.capacity.read().providers.claude;
   assert.deepEqual([claude.refusal_until, claude.refusal_cause], [host, 'host']);
   assert.deepEqual(claude.model_refusals, { opus: REFUSED_UNTIL });
-  assert.equal(got.lifted?.cause ?? null, 'quota', 'the plan refusal in billing-state.json is still a quota\'s, and lifts');
+  assert.equal(got.lifted, null, 'claude is not usable again while the host refuses it');
+  assert.equal(held.state.plan.refused_until, null, 'the plan refusal in billing-state.json is still a quota\'s, and lifts');
+});
+
+test('a host refusal over a later quota refusal takes the cause host, and a clean read lifts only the quota under it', async () => {
+  const held = stores();
+  const host = new Date(READ_AT.getTime() + 60_000).toISOString();
+  held.capacity.write(applyRefusal(held.capacity.read(), 'claude', host, null, READ_AT, 'host'));
+  const over = held.capacity.read().providers.claude;
+  assert.deepEqual([over.refusal_until, over.refusal_cause, over.refusal_under?.until], [host, 'host', REFUSED_UNTIL]);
+  const got = await reader(held, usage({ seven_day: SEVEN_DAY }))();
+  assert.equal(got.lifted, null);
+  const claude = held.capacity.read().providers.claude;
+  assert.deepEqual([claude.refusal_until, claude.refusal_cause, claude.refusal_under], [host, 'host', null], 'claude stays refused by the host; the quota under it is lifted');
+  assert.equal(billingRoute({ provider: 'claude', capacity: held.capacity.read(), state: held.state, now: READ_AT }).why, `plan refused until ${host}`);
+  assert.equal(providerAt(applyRefusal(held.capacity.read(), 'claude', null, null, READ_AT), 'claude', READ_AT).refusal_until, null, 'the host cleared, nothing comes back');
 });
