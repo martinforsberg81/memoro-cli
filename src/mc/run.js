@@ -161,8 +161,12 @@ export const REPO_NAMES = ['memoro', 'memoro-cli'];
 const providerOf = (launch) => requireCapability(launch.id, 'BILLING_PROVIDER');
 /** The variables taken out of an unattended launch's environment: every provider API key, and the tool's own declared extras. */
 const dropEnv = (launch) => [...PROVIDER_API_ENV_NAMES, ...(declared(launch.id, 'LAUNCH_DROP_ENV') ?? [])];
-/** Whether a login interruption means this launch's plan refused it. */
-const loginRefusesPlan = (launch) => declared(launch.id, 'LOGIN_REFUSES_PLAN') === true;
+/**
+ * The interruptions a session reader names (`readSessionOutput`, run-plan.js)
+ * that are the provider's ending, not the session's: a session that produced
+ * nothing and ended on one is cut short (`providerCutShort`).
+ */
+const PROVIDER_INTERRUPTIONS = new Set(['quota', 'offline', 'login', 'server', 'credits', 'key']);
 /** The dependency name a provider's capacity refresh is injected under: `refreshClaude`, `refreshCodex`. */
 const refreshDep = (provider) => `refresh${provider[0].toUpperCase()}${provider.slice(1)}`;
 
@@ -1942,6 +1946,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
         role: roleRecord({ name: 'decision', source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
       writeJson(currentPath, current);
+      // What the goal was before the session: one that changed it produced something (`providerCutShort`).
+      const goalLogBefore = goal ? deps.read(join(goal.dir, LOG_FILE)) : null;
+      const goalFileBefore = goal ? deps.read(join(goal.dir, GOAL_FILE)) : null;
       say(`${name}: decision starting (${settings.tool} ${settings.model})`);
       const t0 = deps.now().getTime();
       const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing, runnerAdmission: true });
@@ -1971,16 +1978,21 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const ended = deps.deskItems.read(name);
       // An item the session left prepared is not a successful ending.
       const unfinished = decisionUnfinished(ended);
-      // An ending the provider caused says nothing about the item: a quota, an unreachable API, or a login the refusal of the provider named.
-      // It counts for nothing and writes nothing; the item is taken again when the provider answers.
-      // A session the host refused every tool (`hostRefusedEnding`) is one of them.
-      const hostRefused = unfinished && hostRefusedEnding(name, launch, result);
-      const providerEnding = hostRefused || read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
+      // What the session produced of its own: a settled item, an entry in the goal's LOG.md, or a change to its GOAL.json.
+      const produced = !unfinished || Boolean(goal && (deps.read(join(goal.dir, LOG_FILE)) !== goalLogBefore || deps.read(join(goal.dir, GOAL_FILE)) !== goalFileBefore));
+      // An ending the provider caused says nothing about the item (`providerCutShort`): a quota, any interruption its reader
+      // names, or a session the host refused every tool (`hostRefusedEnding`). It counts for nothing and writes nothing; the
+      // goal stays as it was and the item is taken again when the provider answers.
+      const hostRefused = hostRefusedEnding(name, launch, result, { spoke: produced });
+      const cutShort = providerCutShort({ produced, read, hostRefused });
+      const seconds = Math.round((deps.now().getTime() - t0) / 1000);
       const reason = `decision session exited ${result.status ?? 1} without settling the item (${read.note}); log: ${out}.jsonl${result.stderr ? `; ${String(result.stderr).slice(0, 1000)}` : ''}`;
       // A goal held while the session ran is the desk's: its ending says nothing about the item.
       const heldEnding = unfinished && heldNow();
       if (heldEnding) say(`${name}: ${goalName(goal)} was held while the decision session ran — no failure is counted`);
-      if (unfinished && !providerEnding && !heldEnding) {
+      else if (cutShort) goalCutShort(goal ? `goal:${currentItem.reference}` : name, 'decision', settings, `${hostRefused ? 'host-refused' : read.note}, ${seconds} s`, goal ? 'the goal' : 'the item');
+      if (cutShort !== 'host') countCutShort(launch, settings, cutShort === 'provider');
+      if (unfinished && !cutShort && !heldEnding) {
         // The failure goes on the record read under the lock, by the runner's own lock and item seams; a record settled meanwhile gets none.
         // The turn ran and was paid for: a lock that cannot be had leaves the failure uncounted, never the run row below unwritten.
         let failed = { item: null, lessonError: null };
@@ -1989,7 +2001,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         if (failed.lessonError) say(`${name}: the unsettled lesson was not written — ${failed.lessonError}`);
         if (failed.item?.state === 'for-martin' && goal) goalState(goal, `goal:${currentItem.reference}`, { status: 'Martin' }, { comment: reason });
       }
-      logRun({ ...read, ts: stamp(), name, kind: 'decision', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', note: hostRefused ? 'host-refused' : unfinished ? reason : ended?.state || 'item missing', model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing });
+      logRun({ ...read, ts: stamp(), name, kind: 'decision', exit: result.status, seconds, pr: '-', note: hostRefused ? 'host-refused' : unfinished ? reason : ended?.state || 'item missing', model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing });
       return 'ran';
     } finally {
       remove(currentPath);
@@ -2320,12 +2332,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       recordRefusal({ name, launch, route }, read, picked.billing);
       refuseProvider(read, launch, picked.billing, settings.model);
       const seconds = Math.round((deps.now().getTime() - t0) / 1000);
-      // An ending the provider caused says nothing about the area texts: a quota, an unreachable API, or a refused login counts for nothing.
-      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
-      let note = read.note;
-      if (providerEnding) {
+      // An ending the provider caused says nothing about the area texts (`providerCutShort`): a quota, any interruption its
+      // reader names, or a session the host refused every tool (`hostRefusedEnding`) counts for nothing. The turn is what a
+      // curation session produces, so none produced anything of its own.
+      const hostRefused = hostRefusedEnding(turnLabel, launch, result);
+      const cutShort = providerCutShort({ produced: false, read, hostRefused });
+      let note = hostRefused ? 'host-refused' : read.note;
+      if (cutShort) {
         // Nothing was read of the area texts: the cadence is given back.
         writeJson(curationStatePath(root), curationState({ started: before?.started ?? null, bases: before?.bases ?? {} }));
+        say(`${turnLabel}: curation cut short by ${settings.tool}:${settings.model ?? '-'} (${note}) — the cadence is given back`);
       } else if (result.status === 0 && !result.timedOut) {
         writeJson(curationStatePath(root), curationState({ started: stamp(), bases: Object.fromEntries(Object.entries(worktrees.heads).filter(([, head]) => head)) }));
         note = `${read.note},curated`;
@@ -2333,6 +2349,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         note = `curation session exited ${result.status ?? 1} (${read.note})`;
         say(`${turnLabel}: curation failed — ${note}; the next turn waits for the cadence`);
       }
+      if (cutShort !== 'host') countCutShort(launch, settings, cutShort === 'provider');
       logRun({ ...read, ts: stamp(), name: turnLabel, kind: 'manager', exit: result.status, seconds, pr: '-', note, model: settings.model, cls: 'build', tool: settings.tool, effort: settings.effort, billing: picked.billing });
       say(`${turnLabel}: manager done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
       return 'ran';
@@ -2448,7 +2465,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (slot !== 'ok') return slot === 'stop' ? 'stop' : 'skipped:update';
     let admission;
     const currentPath = paths.currentFor(repoName, lane);
-    let scratch; let marker; let out; let claimed = false; let result; let reserveRefusal;
+    let scratch; let marker; let out; let claimed = false; let result; let reserveRefusal; let cutShort = false;
     const ids = new Set(item.mainMend?.map((entry) => entry.id));
     const state = mendState(repoName);
     try {
@@ -2523,17 +2540,31 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
       refuseProvider(read, launch, picked.billing, settings.model);
-      logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
+      // A mend that published nothing and ended on its provider is back in its queue with no attempt spent (`providerCutShort`).
+      // A release return published when its PR is no longer red in the merger's line; a main-red mend when a row left `running`.
+      const produced = releaseReturn
+        ? !(deps.pendingMerges ? deps.pendingMerges(root) : []).some((job) => job.repo === 'memoro' && Number(job.pr) === Number(releaseReturn.job.pr) && job.state === 'red')
+        : readMainMends(state).some((entry) => ids.has(entry.id) && !(entry.state === 'running' && entry.owner === name && entry.session_log === `${out}.jsonl`));
+      const hostRefused = hostRefusedEnding(name, launch, result, { spoke: produced });
+      const cut = providerCutShort({ produced, read, hostRefused });
+      const seconds = Math.round((deps.now().getTime() - t0) / 1000);
+      const note = hostRefused ? 'host-refused' : read.note;
+      if (cut) {
+        cutShort = true;
+        say(`${name}: ${releaseReturn ? 'release return' : 'main-red mend'} cut short by ${settings.tool}:${settings.model ?? '-'} (${note}, ${seconds} s) — back in the queue, no attempt spent`);
+      }
+      if (cut !== 'host') countCutShort(launch, settings, cut === 'provider');
+      logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       return 'ran';
     } finally {
       try {
         // mc publish and the merger may already have advanced these rows. Never overwrite them.
-        if (claimed && releaseReturn && reserveRefusal) changeRelease(releaseReturn.release, { root, env: deps.env, lock },
+        if (claimed && releaseReturn && (reserveRefusal || cutShort)) changeRelease(releaseReturn.release, { root, env: deps.env, lock },
           (r) => ({ ...r, return_attempts: r.return_attempts - 1 }));
         if (claimed && !releaseReturn) updateMainMends(state, (entries) => {
           for (const entry of entries) {
             if (!ids.has(entry.id) || entry.state !== 'running' || entry.owner !== name || entry.session_log !== `${out}.jsonl`) continue;
-            if (reserveRefusal) returnMendToQueue(entry);
+            if (reserveRefusal || cutShort) returnMendToQueue(entry);
             else failMainMend(entry, `session ended without a published PR (exit ${result?.status ?? 'unknown'}); inspect ${entry.session_log}`);
           }
         });
@@ -2608,7 +2639,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (slot !== 'ok') return slot === 'stop' ? 'stop' : 'skipped:update';
     let admission;
     const currentPath = paths.currentFor(repoName, lane);
-    let scratch; let marker; let out; let claimed = false; let result; let reserveRefusal;
+    let scratch; let marker; let out; let claimed = false; let result; let reserveRefusal; let cutShort = false;
     const state = deployMendState();
     try {
       const picked = await billingFor(launch, route, settings.model);
@@ -2675,7 +2706,19 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
       refuseProvider(read, launch, picked.billing, settings.model);
-      logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
+      // A deploy mend that published nothing and ended on its provider is back in its queue with no attempt spent (`providerCutShort`).
+      const mine = readDeployMends(state).find((found) => found.id === request.id);
+      const produced = !mine || mine.state !== 'running' || mine.owner !== name || mine.session_log !== `${out}.jsonl` || (mine.prs || []).length > 0;
+      const hostRefused = hostRefusedEnding(name, launch, result, { spoke: produced });
+      const cut = providerCutShort({ produced, read, hostRefused });
+      const seconds = Math.round((deps.now().getTime() - t0) / 1000);
+      const note = hostRefused ? 'host-refused' : read.note;
+      if (cut) {
+        cutShort = true;
+        say(`${name}: deploy mend cut short by ${settings.tool}:${settings.model ?? '-'} (${note}, ${seconds} s) — back in the queue, no attempt spent`);
+      }
+      if (cut !== 'host') countCutShort(launch, settings, cut === 'provider');
+      logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       return 'ran';
     } finally {
       try {
@@ -2684,7 +2727,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           const entry = all.find((found) => found.id === request.id);
           if (entry?.state !== 'running' || entry.owner !== name || entry.session_log !== `${out}.jsonl`) return;
           if ((entry.prs || []).length) entry.state = 'published';
-          else if (reserveRefusal) returnMendToQueue(entry);
+          else if (reserveRefusal || cutShort) returnMendToQueue(entry);
           else failDeployMend(entry, `session ended without a published PR or repaired (exit ${result?.status ?? 'unknown'}); inspect ${entry.session_log}`);
         });
       } finally {
@@ -3145,7 +3188,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * ready` with the runner's entry, which names how the session ended
    * (`ending`: its note and seconds), and the next review runs; a second that
    * dies in the same `review` waits directly on Martin. A review cut short
-   * (`reviewCutShort`) never comes here.
+   * (`cutShortSession`) never comes here.
    */
   function afterReview(goal, name, ending) {
     const now = stateNow(goal);
@@ -3173,26 +3216,47 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * A review cut short (`cutShortSession`): no goal entry, no runner entry and no
-   * step toward the second-death rule; the goal stays as it was and the next pick
-   * takes it again. Said in runner.log only.
+   * Whether a session of any other kind was cut short by its provider: it
+   * produced nothing of its own (`produced`: for a build or repair its LOG.md
+   * entry, for a decision session its entry or a change to the goal, for a mend
+   * its published PR; a curation turn never has) and it ended on a quota, on an
+   * interruption its reader names (`PROVIDER_INTERRUPTIONS`), or as
+   * `hostRefusedEnding`. `'host'` for the host's refusal, `'provider'` for the
+   * provider's, null when it is not cut short. A non-zero exit alone is not
+   * enough: a silent crash may be about the work. Such a session is no answer
+   * about its work and spends nothing on it.
    */
-  function reviewCutShort(name, settings, ending) {
-    say(`${name}: review cut short by ${settings.tool}:${settings.model ?? '-'} (${ending}) — no answer about the goal, it runs again`);
+  function providerCutShort({ produced, read, hostRefused = false }) {
+    if (produced) return null;
+    if (hostRefused) return 'host';
+    return read.quota || PROVIDER_INTERRUPTIONS.has(read.interrupted) ? 'provider' : null;
   }
 
-  /** Reviews one `tool:model` may cut short in a row before it is set aside. */
+  /**
+   * A goal session cut short (`cutShortSession` for a review, `providerCutShort`
+   * for a build, a repair or a decision): no goal entry, no runner entry and no
+   * step toward the second-death rule or the silent-build stop; the goal stays
+   * as it was and the next pick takes it again. Said in runner.log only.
+   */
+  function goalCutShort(name, kind, settings, ending, what = 'the goal') {
+    say(`${name}: ${kind} cut short by ${settings.tool}:${settings.model ?? '-'} (${ending}) — no answer about ${what}, it runs again`);
+  }
+
+  /** Sessions one `tool:model` may cut short in a row before it is set aside. */
   const CUT_SHORT_LIMIT = 2;
   /**
-   * The count of reviews a model cut short in a row, kept beside its refusals in
-   * the capacity snapshot (`model_cut_short`), on any goals. A cut-short review
-   * adds one; the second in a row sets the model aside for `QUOTA_SLEEP_MS` as
-   * that model's refusal (`applyRefusal` with the model), so the next pick takes
-   * another candidate and a broken model cannot loop. A session of that model
-   * that was not cut short resets it; another kind cut short leaves it.
+   * The count of sessions a model cut short in a row, kept beside its refusals
+   * in the capacity snapshot (`model_cut_short`), on any goals and of any kind:
+   * reviews (`cutShortSession`) and every other session cut short by its
+   * provider (`providerCutShort`). A cut-short session adds one; the second in a
+   * row sets the model aside for `QUOTA_SLEEP_MS` as that model's refusal
+   * (`applyRefusal` with the model), so the next pick takes another candidate
+   * and a broken model cannot loop. A session of that model that was not cut
+   * short (`cutShort` false) resets it; null leaves it, as a host-refused ending
+   * does: the host check owns that refusal.
    */
-  function countCutShort(launch, settings, { review, cutShort }) {
-    if (!settings.model || (cutShort && !review)) return;
+  function countCutShort(launch, settings, cutShort) {
+    if (!settings.model || cutShort === null) return;
     const provider = providerOf(launch);
     const model = settings.model;
     let setAside = null;
@@ -3207,7 +3271,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       setAside = Number.isFinite(already) && already > until ? already : until;
       return applyRefusal(applyCutShort(state, provider, model, 0), provider, new Date(setAside).toISOString(), model, deps.now());
     });
-    if (recorded && setAside) say(`${settings.tool}:${model} set aside until ${untilText(setAside)} — two reviews cut short in a row`);
+    if (recorded && setAside) say(`${settings.tool}:${model} set aside until ${untilText(setAside)} — two sessions cut short in a row`);
   }
 
   /** After mend, a ready repair belongs to delivery again. Missing queue
@@ -3666,6 +3730,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // A session the host refused every tool is no answer about the goal: no entry, no step toward any count (`hostRefusedEnding`).
       const hostRefused = hostRefusedEnding(name, launch, result, { spoke: spoke || verdictChanged });
       const ending = `${read.note}, ${seconds} s`;
+      // A build or repair that wrote no entry and ended on its provider answers nothing about the goal (`providerCutShort`).
+      const buildCutShort = !review && !mend && providerCutShort({ produced: spoke, read }) === 'provider';
       // A build or repair that declined the work answers nothing about the goal's progress (`afterDecline`).
       const declining = spoke && progressBefore && entriesAfter.slice(entriesBefore).some(declinesWork);
       // A goal held when its session ends belongs to its hold's owner (D2): no stage, status or entry is written here.
@@ -3677,13 +3743,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // A quota or API ending answers nothing about the goal: the next pick takes it again.
       else if (mend && !read.quota && !read.interrupted) afterMend(goal, name, { stage: goal.stage, status: goal.status });
       // A review cut short answers nothing about the goal: no review entry, no runner entry, and not the goalWithoutWord branch.
-      else if (review && cutShort) reviewCutShort(name, settings, ending);
+      else if (review && cutShort) goalCutShort(name, kind, settings, ending);
       // An offline ending answers nothing about the goal, even after the review wrote something.
       else if (review && read.interrupted !== 'offline') afterReview(goal, name, ending);
+      // A build cut short by its provider: no runner entry, no step toward the silent-build stop.
+      else if (buildCutShort) goalCutShort(name, kind, settings, ending);
       else if (declining) afterDecline(goal, name, route.candidate, textBefore);
       else if (spoke && progressBefore && !read.quota && !read.interrupted) afterBuild(goal, name, progressBefore);
       else if (!spoke && read.interrupted !== 'offline') goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
-      if (!hostRefused) countCutShort(launch, settings, { review, cutShort });
+      // A goal mend cut short leaves the count as it was; every other session cut short adds to it, and one that was not resets it.
+      if (!hostRefused) countCutShort(launch, settings, review ? cutShort : mend ? (cutShort ? null : false) : buildCutShort);
       const note = hostRefused ? 'host-refused' : spoke ? read.note : `${read.note},no-log`;
       logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: goalVariant(kind) }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: kind === 'build' ? 'build' : '-', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       say(`${name}: ${kind} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
