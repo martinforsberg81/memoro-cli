@@ -89,17 +89,22 @@ export const BILLING_PROVIDERS = Object.freeze(apiProviders());
 /**
  * Whether each provider may fall over to its API key once its plan is spent:
  * `{ claude, codex }`, true unless `billing.json`'s `api` says `false` — the
- * behaviour before the switch existed. Never throws.
+ * behaviour before the switch existed — and `'first'` when it says so (on, and
+ * runner sessions take the key before the plan is spent). Never throws.
  */
 export function readBillingApi({ root = runnerDir() } = {}) {
   const api = readJson(billingPath(root))?.api;
-  return Object.fromEntries(BILLING_PROVIDERS.map((provider) => [provider, api?.[provider] !== false]));
+  return Object.fromEntries(BILLING_PROVIDERS.map((provider) => [provider, api?.[provider] === 'first' ? 'first' : api?.[provider] !== false]));
 }
 
-/** Turn one provider's API fallback on or off; the mode and the other provider are kept. */
+/**
+ * Turn one provider's API fallback on (`true`), off (`false`) or first
+ * (`'first'`: runner sessions use the key while the plan has room); the mode
+ * and the other provider are kept.
+ */
 export function writeBillingApi(provider, enabled, { root = runnerDir() } = {}) {
   if (!BILLING_PROVIDERS.includes(provider)) return { ok: false, reason: `API is switched per provider — ${BILLING_PROVIDERS.join(' or ')}, not ${JSON.stringify(provider)}` };
-  if (typeof enabled !== 'boolean') return { ok: false, reason: 'API is on or off' };
+  if (typeof enabled !== 'boolean' && enabled !== 'first') return { ok: false, reason: 'API is on, off or first' };
   const raw = readJson(billingPath(root)) || {};
   const api = { ...readBillingApi({ root }), [provider]: enabled };
   writeJsonAtomic(billingPath(root), { ...raw, api }, { mode: 0o600 });

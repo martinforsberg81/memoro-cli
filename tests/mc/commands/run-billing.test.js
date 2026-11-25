@@ -88,6 +88,11 @@ test('billing switches one provider\'s API off and on, and says what the next se
   const on = await mc.billing('codex', 'on');
   assert.equal(on.out[1], 'billing claude ? plan · codex 100% API · agy ? plan');
   assert.deepEqual(parseRunArgs(['--billing', 'claude', 'off']), { verb: 'billing', mode: null, api: { provider: 'claude', enabled: false } });
+  const first = await mc.billing('claude', 'first');
+  assert.equal(first.code, 0);
+  assert.equal(first.out[0], 'claude API first for runner sessions — applies from the next session; a running one keeps its billing');
+  assert.equal(first.out[2], 'next claude session: API — API first');
+  assert.deepEqual(parseRunArgs(['--billing', 'claude', 'first']), { verb: 'billing', mode: null, api: { provider: 'claude', enabled: 'first' } });
   const wrong = await mc.billing('gemini', 'off');
   assert.equal(wrong.code, 2);
   assert.match(wrong.err[0], /claude or codex/u);

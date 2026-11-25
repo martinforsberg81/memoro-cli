@@ -32,9 +32,11 @@
  *   mc run --billing      plan usage and next billing for Claude and Codex
  *                          (`mc run billing` is the same). Billing is chosen
  *                          automatically at each new session.
- *   mc run --billing <claude|codex> <on|off>
+ *   mc run --billing <claude|codex> <on|off|first>
  *                          whether that provider falls over to its API key
- *                          once its plan is spent; off keeps it on the plan
+ *                          once its plan is spent; off keeps it on the plan;
+ *                          first puts runner sessions on the key while the
+ *                          plan still has room
  *   mc run --billing --refresh
  *                          every provider's capacity read once, as the
  *                          runner's poll reads it, then the billing line;
@@ -158,19 +160,19 @@ async function billing(opts, deps) {
   const root = runnerDir(deps.env || process.env);
   const readState = deps.readBillingState || (() => readBillingState({ root }));
   const readApi = deps.readBillingApi || (() => readBillingApi({ root }));
-  if (opts.mode !== null) return { ok: false, code: 2, lines: ['billing mode is automatic: plan through 100 %, then API reserve — mc run --billing <claude|codex> <on|off> switches the API reserve'] };
+  if (opts.mode !== null) return { ok: false, code: 2, lines: ['billing mode is automatic: plan through 100 %, then API reserve — mc run --billing <claude|codex> <on|off|first> switches the API reserve'] };
   const lines = refreshed ? [...refreshed.lines] : [];
   if (opts.api) {
     const written = (deps.writeBillingApi || ((provider, enabled) => writeBillingApi(provider, enabled, { root })))(opts.api.provider, opts.api.enabled);
     if (!written.ok) return { ok: false, code: 2, lines: [written.reason] };
-    lines.push(`${opts.api.provider} API ${opts.api.enabled ? 'on' : 'off'} — applies from the next session; a running one keeps its billing`);
+    lines.push(`${opts.api.provider} API ${opts.api.enabled === 'first' ? 'first for runner sessions' : opts.api.enabled ? 'on' : 'off'} — applies from the next session; a running one keeps its billing`);
   }
   const capacity = (deps.readCapacity || (() => readCapacity({ root })))();
   const state = readState();
   const api = readApi();
   lines.push(`billing ${billingStatus({ capacity, state, api, now })}`);
   for (const provider of billingProviders()) {
-    const next = billingRoute({ provider, capacity, state, api, now });
+    const next = billingRoute({ provider, capacity, state, api, now, runner: true });
     lines.push(`next ${provider} session: ${next.billing === 'credits' ? 'API' : 'plan'} — ${next.why}`);
   }
   return { ok: true, code: refreshed && !refreshed.any ? 1 : 0, lines };
@@ -242,12 +244,12 @@ export function parseRunArgs(argv) {
       if (rest.length > 1) return { error: '--refresh takes no provider — mc run --billing --refresh' };
       return { verb: 'billing', mode: null, refresh: true };
     }
-    if (at === 0 && rest.length === 2 && ['on', 'off'].includes(rest[1])) {
-      return { verb: 'billing', mode: null, api: { provider: rest[0], enabled: rest[1] === 'on' } };
+    if (at === 0 && rest.length === 2 && ['on', 'off', 'first'].includes(rest[1])) {
+      return { verb: 'billing', mode: null, api: { provider: rest[0], enabled: rest[1] === 'first' ? 'first' : rest[1] === 'on' } };
     }
     const mode = rest.length === 1 && !String(rest[0]).startsWith('-') && at === 0 ? rest[0] : null;
     if (rest.length > 1 || (rest.length === 1 && mode === null)) {
-      return { error: '--billing is one order on its own: mc run --billing [<claude|codex> <on|off>]' };
+      return { error: '--billing is one order on its own: mc run --billing [<claude|codex> <on|off|first>]' };
     }
     return { verb: 'billing', mode };
   }

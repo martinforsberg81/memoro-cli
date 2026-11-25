@@ -1660,11 +1660,17 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /** The billing of a launch: the route's when it sent the class to the API reserve, otherwise the plan's until a window is full or the plan has refused. */
   async function billingFor(launch, route, model = null) {
     const provider = providerOf(launch);
-    const picked = route?.billing === 'credits' ? { billing: 'credits', why: route.why } : billingRoute({
-      provider, model, capacity: capacity.read(), state: deps.billing?.readState?.(), api: deps.billing?.readApi?.(), now: deps.now(),
-    });
+    const api = deps.billing?.readApi?.();
+    const read = { provider, model, capacity: capacity.read(), state: deps.billing?.readState?.(), api, now: deps.now(), runner: true };
+    const picked = route?.billing === 'credits' ? { billing: 'credits', why: route.why } : billingRoute(read);
     const hold = picked.billing === 'credits' ? blockedReserve(provider) : null;
-    return hold ? { billing: 'unavailable', why: hold } : picked;
+    if (!hold) return picked;
+    // API first is a preference: a held key sends the session back to a plan that still has room.
+    if (api?.[provider] === 'first' && route?.billing !== 'credits') {
+      const plan = billingRoute({ ...read, api: { ...api, [provider]: true } });
+      if (plan.billing === 'plan') return { billing: 'plan', why: `API first, but ${hold}` };
+    }
+    return { billing: 'unavailable', why: hold };
   }
 
   /**
@@ -1699,7 +1705,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } catch (error) {
       say(`${name}: the refusal was not recorded (${error.message})`);
     }
-    const next = billingRoute({ provider: providerOf(launch), capacity: capacity.read(), state: deps.billing.readState?.(), api: deps.billing.readApi?.(), now: deps.now() });
+    const next = billingRoute({ provider: providerOf(launch), capacity: capacity.read(), state: deps.billing.readState?.(), api: deps.billing.readApi?.(), now: deps.now(), runner: true });
     return next.billing === billing ? null : { from: billing, to: next.billing };
   }
 

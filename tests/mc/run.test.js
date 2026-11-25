@@ -5308,6 +5308,20 @@ test('a locked API reserve spends no build or review retry and reopens only afte
   }
 });
 
+test('API first launches a runner session on the key while the plan has room, and a held key sends it back to the plan', async () => {
+  const f = reserveFixture(goalFixture({ checking: {} }), { build: [CLAUDE_RESERVE] }, { claude: 'first', codex: false });
+  f.deps.capacity.write(capacityWith({ claude: 0.2, codex: 1 }));
+  f.answer = () => LOCKED_RESERVE;
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass()).ran, 0);
+  assert.equal(f.calls.sessions.length, 1);
+  assert.ok(f.calls.sessions[0].args.includes('--runner-admission'), 'the plan has room, and the launch went to the key');
+  f.answer = () => ({ status: 0, stdout: '', stderr: '' });
+  await runner.pass();
+  assert.equal(f.calls.sessions.length, 2, 'the held key does not make the work wait');
+  assert.equal(f.calls.sessions[1].args.includes('--runner-admission'), false, 'it runs on the plan');
+});
+
 test('a plan pick that rereads as credits cannot launch a held API reserve', async () => {
   const f = reserveFixture(goalFixture({ resume: {} }), { build: [CLAUDE_RESERVE] });
   f.answer = () => LOCKED_RESERVE;
