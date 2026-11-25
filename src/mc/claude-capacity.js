@@ -4,6 +4,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { patchBillingState, readBillingState } from './billing.js';
+import { collectedCapacity, providerAt, readCapacity, writeCapacity } from './model-capacity.js';
+import { runnerDir, workRoot } from './paths.js';
+import { realLock } from './runner-lock.js';
+
 export const CLAUDE_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 // Leave the installed Keychain lookup's 5 s bound inside the 20 s total.
 export const CLAUDE_TIMEOUT_MS = 15_000;
@@ -112,4 +117,45 @@ export async function collectClaudeCapacity({ credentials = readClaudeCredential
   } catch (error) {
     return { ok: false, why: error?.message === 'timeout' || controller.signal.aborted ? 'Claude subscription request timed out' : 'Claude subscription request unavailable' };
   } finally { if (timer) clearTimer(timer); }
+}
+
+const live = (value, now) => Number.isFinite(Date.parse(value || '')) && Date.parse(value) > now.getTime();
+
+/**
+ * The reader `run.js` registers for the `claude-usage` mechanism. The network
+ * read is over before the runner lock; under it the latest whole capacity file
+ * is patched (`collectedCapacity`), so stream and refusal observations and the
+ * other providers survive, and a stale answer is dropped by the baseline taken
+ * before the read. A read that shows no spent window lifts a held `quota` or
+ * `login` refusal of claude and the plan refusal billing-state.json holds
+ * (`plan.refused_until`, a quota's); while a `host` refusal still holds claude
+ * it lifts them and says nothing is lifted. Answers the collector's
+ * `{ ok, windows, unread }` or `{ ok: false, why }` with the `state` written
+ * and `lifted`: `{ cause, until }` of the refusal it lifted, else null.
+ * `capacity`, `billing`, `collect`, `lock` and `now` are injectable.
+ */
+export function makeClaudeUsageReader({
+  provider = 'claude', env = process.env, now = () => new Date(), collect = () => collectClaudeCapacity(), lock = realLock,
+  capacity = { read: () => readCapacity({ root: runnerDir(env) }), write: (state) => writeCapacity(state, { root: runnerDir(env) }) },
+  billing = { readState: () => readBillingState({ root: runnerDir(env) }), patchState: (patch) => patchBillingState(patch, { root: runnerDir(env) }) },
+} = {}) {
+  return async () => {
+    const at = now();
+    const before = JSON.stringify(capacity.read().providers[provider]);
+    const got = await collect();
+    let lifted = null;
+    const state = lock(workRoot(env), () => {
+      const read = collectedCapacity(capacity.read(), provider, got, at, before);
+      lifted = read.lifted;
+      const written = capacity.write(read.state) ?? read.state;
+      if (read.clean) {
+        const plan = billing.readState()?.plan?.refused_until;
+        if (plan) billing.patchState({ plan: { refused_until: null } });
+        // Claude is usable again only when no refusal still holds it: a host refusal stays with its check.
+        if (!lifted && live(plan, at) && !providerAt(written, provider, at).refusal_until) lifted = { cause: 'quota', until: plan };
+      }
+      return written;
+    }, { name: 'claude-capacity' });
+    return { ...got, state, lifted };
+  };
 }

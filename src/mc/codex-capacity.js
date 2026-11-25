@@ -32,7 +32,7 @@
 import { spawn as spawnChild } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 
-import { applyCollectedCapacity, applyRefusal, readCapacity, writeCapacity } from './model-capacity.js';
+import { applyRefusal, collectedCapacity, readCapacity, writeCapacity } from './model-capacity.js';
 import { runnerDir, workRoot } from './paths.js';
 import { refusalInstant } from './plan-refusal.js';
 import { codexLoginRefused } from './run-plan.js';
@@ -207,17 +207,20 @@ export function collectCodexCapacity({ spawn = spawnChild, bin = 'codex', timeou
  * Collect once and persist the result: a valid read replaces the codex snapshot,
  * a failed one keeps it and records why. A read the revoked login refused also
  * refuses codex for `QUOTA_SLEEP_MS` from `now`, renewed by each such read, as a
- * login refusal read from a session is (`refusePlanOnRead`). Returns
- * `{ ok, why, state }`.
+ * login refusal read from a session is (`refusePlanOnRead`), cause `login`. A
+ * successful read that shows no spent window lifts a held `quota` or `login`
+ * refusal (`collectedCapacity`). Returns `{ ok, why, state, lifted }`, `lifted`
+ * the `{ cause, until }` of the refusal it lifted, else null.
  */
 export async function refreshCodexCapacity({ root = runnerDir(), lockRoot = workRoot(), now = new Date(), lock = realLock, ...options } = {}) {
   const before = JSON.stringify(readCapacity({ root }).providers.codex);
   const answer = await collectCodexCapacity(options);
   // The runner's lock lives on the work root, not the runner directory.
+  let lifted = null;
   const written = lock(lockRoot, () => {
-    const state = readCapacity({ root });
-    const next = applyCollectedCapacity(state, 'codex', answer, now, before);
-    return writeCapacity(answer.login ? applyRefusal(next, 'codex', refusalInstant(null, now).toISOString()) : next, { root });
+    const read = collectedCapacity(readCapacity({ root }), 'codex', answer, now, before);
+    lifted = read.lifted;
+    return writeCapacity(answer.login ? applyRefusal(read.state, 'codex', refusalInstant(null, now).toISOString(), null, now, 'login') : read.state, { root });
   }, { name: 'codex-capacity' });
-  return { ok: answer.ok, why: answer.why ?? null, state: written };
+  return { ok: answer.ok, why: answer.why ?? null, state: written, lifted };
 }

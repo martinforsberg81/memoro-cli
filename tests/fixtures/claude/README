@@ -1,0 +1,14 @@
+claude fixtures: recorded, not synthesised.
+
+five-hour-rejected-20261124T184900Z.jsonl is the last three lines of the
+`claude -p --output-format stream-json` stream of a build of
+provider-endings/a-session-the-host-refused-is-no-answer-and-claude-s-lau on
+2026-11-24 (runner log
+goal-provider-endings-a-session-the-host-refused-is-no-answer-and-claude-s-lau-20261124T184900Z.jsonl,
+lines 372-374), copied unchanged: the `rate_limit_event` with
+`status: "rejected"`, `five_hour.utilization` 1.01 and reset 1795555200
+(2026-11-24T21:20:00Z), the synthetic "You've hit your 5-hour limit" message
+and the 429 `result`. It is the refusal that outlived its window on
+2026-11-24; it reads as a quota with that reset, and the windows it carries are
+what a clean usage read is then measured against
+(tests/mc/claude-capacity.test.js, tests/mc/run.test.js).

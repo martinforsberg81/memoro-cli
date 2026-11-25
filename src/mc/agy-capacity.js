@@ -15,7 +15,8 @@
  *   - a window at or over the plan limit without a printed reset is a refusal
  *     (`refusal_until` = the read's time + `QUOTA_SLEEP_MS`, as `refuseProvider`
  *     does for a refusal that names no reset), renewed by each read while it
- *     stays full;
+ *     stays full (cause `quota`), and a read that shows no spent window lifts
+ *     it (`collectedCapacity`);
  *   - output that does not parse is a failed read: the last valid snapshot is
  *     kept and marked failed, and the reader stops for the life of the runner
  *     (a `/usage` agy took as a prompt would otherwise cost a turn every poll).
@@ -29,7 +30,7 @@ import { execFile } from 'node:child_process';
 
 import { declared, resolveLaunch } from '../adapters/index.js';
 import { PLAN_LIMIT_UTILIZATION } from './model-choice.js';
-import { applyCollectedCapacity, applyRefusal, readCapacity, writeCapacity } from './model-capacity.js';
+import { applyRefusal, collectedCapacity, readCapacity, writeCapacity } from './model-capacity.js';
 import { runnerDir, workRoot } from './paths.js';
 import { realLock } from './runner-lock.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
@@ -141,11 +142,13 @@ export function makeAgyUsageReader({ provider, env = process.env, now = () => ne
     const got = await collect({ env, now: at, ...options });
     if (got.unparsed) stopped = true;
     const root = runnerDir(env);
+    let lifted = null;
     const state = lock(workRoot(env), () => {
-      let next = applyCollectedCapacity(readCapacity({ root }), provider, got, at, before);
-      if (got.ok && got.full) next = applyRefusal(next, provider, new Date(at.getTime() + QUOTA_SLEEP_MS).toISOString());
+      const read = collectedCapacity(readCapacity({ root }), provider, got, at, before);
+      lifted = read.lifted;
+      const next = got.ok && got.full ? applyRefusal(read.state, provider, new Date(at.getTime() + QUOTA_SLEEP_MS).toISOString(), null, at, 'quota') : read.state;
       return writeCapacity(next, { root });
     }, { name: 'agy-capacity' });
-    return { ...got, stop: got.unparsed === true, state };
+    return { ...got, stop: got.unparsed === true, state, lifted };
   };
 }

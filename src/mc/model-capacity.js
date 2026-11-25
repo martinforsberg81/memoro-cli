@@ -9,7 +9,10 @@
  * Per provider it holds the last valid observation — when it was taken, the
  * windows (the fraction of the plan used, and the instant the window resets),
  * the models the provider lists where that is known, a refusal instant (the
- * provider's) and per-model refusal instants (`model_refusals`, additive: a file
+ * provider's) with its cause and the instant it was first seen
+ * (`refusal_cause`, `refusal_since`: additive, a refusal without a cause reads
+ * as `quota`; under a `host` refusal, the `quota` or `login` one it was written
+ * over, `refusal_under`, additive the same way), and per-model refusal instants (`model_refusals`, additive: a file
  * without it reads as none, an older mc ignores it), beside them the reviews each
  * model cut short in a row (`model_cut_short`, additive the same way) —
  * and, beside it, the last failure. A failure never erases the snapshot before
@@ -41,6 +44,16 @@ export const WINDOWS = Object.freeze(Object.fromEntries(PROVIDERS.map((provider)
 export const STALE_MS = 3 * 60 * 60 * 1000;
 /** How often the runner reads each provider's capacity, both collectors alike. */
 export const CAPACITY_POLL_MS = 15 * 60 * 1000;
+/**
+ * What refused a whole provider: `quota` (a session's quota, or a read that
+ * found the plan full), `login` (a login the plan cannot get past, read from a
+ * session or a capacity read) or `host` (the host refuses the tool's settings,
+ * run.js `refuseClaudeHost`). A clean capacity read lifts the first two; the
+ * host check owns the third.
+ */
+export const REFUSAL_CAUSES = Object.freeze(['quota', 'login', 'host']);
+/** The causes a capacity read that shows no spent window lifts. */
+export const LIFTED_BY_READ = Object.freeze(['quota', 'login']);
 
 export function capacityPath(root = runnerDir()) {
   return join(root, CAPACITY_FILE);
@@ -93,15 +106,32 @@ function cutShortCounts(value) {
   return Object.fromEntries(Object.entries(value).filter(([id, count]) => id && Number.isInteger(count) && count > 0));
 }
 
+/**
+ * The `quota` or `login` refusal a `host` refusal was written over
+ * (`{ until, cause, since }`), or null: it comes back when the host refusal is
+ * cleared or passes, and a clean read lifts it.
+ */
+function refusalUnder(value) {
+  const until = iso(value?.until);
+  if (!until) return null;
+  return { until, cause: LIFTED_BY_READ.includes(value?.cause) ? value.cause : 'quota', since: iso(value?.since) };
+}
+
 /** One provider as the file holds it, every bad field null or empty. Windows are null until something was observed. */
 function normaliseProvider(raw, provider) {
   const observed = iso(raw?.observed_at);
   const windows = Object.fromEntries(WINDOWS[provider].map((name) => [name, observed ? window(raw?.windows?.[name]) : null]));
+  const refused = iso(raw?.refusal_until);
+  const cause = refused ? (REFUSAL_CAUSES.includes(raw?.refusal_cause) ? raw.refusal_cause : 'quota') : null;
   return {
     observed_at: observed,
     windows,
     models: observed && Array.isArray(raw?.models) ? raw.models.map(model).filter(Boolean) : null,
-    refusal_until: iso(raw?.refusal_until),
+    refusal_until: refused,
+    // A refusal written before causes were recorded is a quota's: that is all that wrote one then.
+    refusal_cause: cause,
+    refusal_since: refused ? iso(raw?.refusal_since) : null,
+    refusal_under: cause === 'host' ? refusalUnder(raw?.refusal_under) : null,
     model_refusals: modelRefusals(raw?.model_refusals),
     model_cut_short: cutShortCounts(raw?.model_cut_short),
     failure: failure(raw?.failure),
@@ -149,38 +179,106 @@ export function applyFailure(state, provider, { why }, now = new Date()) {
 }
 
 /**
- * Claude's windows of a successful read. A window the read did not validate
- * (null) keeps the one the snapshot holds, as observeClaudeStream keeps a window
+ * Claude's windows of a successful usage read. A window the body does not carry
+ * (`unread` 'absent') is absent and replaces the held one. A window the body
+ * carries but that did not validate (any other word, or a read that names no
+ * word) keeps the one the snapshot holds, as observeClaudeStream keeps a window
  * a stream does not carry; its own reset still governs it (windowsAt).
  */
-function streamWindowsOf(provider, held, read) {
-  return Object.fromEntries(WINDOWS[provider].map((name) => [name, read?.[name] ?? held[name]]));
+function streamWindowsOf(provider, held, read, unread) {
+  return Object.fromEntries(WINDOWS[provider].map((name) => [name, read?.[name] ?? (unread?.[name] === 'absent' ? null : held[name])]));
+}
+
+/** The windows of a provider that read as spent at `now`: known, at or above 100 %. */
+function spentWindows(state, provider, now) {
+  return Object.values(windowsAt(state, provider, now)).filter((seen) => seen.status === 'known' && seen.fraction_used >= 1);
 }
 
 /**
- * Apply one completed collector read to the latest state. A concurrent
- * provider-local observation wins over an older in-flight success; a failure
- * records its attempt while keeping the last valid snapshot. The caller holds
- * the short runner lock around this synchronous read-patch-write only.
+ * One completed collector read applied to the latest state, and what it says
+ * about the provider's refusal: `{ state, clean, lifted }`. A concurrent
+ * provider-local observation wins over an older in-flight success (the read is
+ * dropped: not clean); a failure records its attempt while keeping the last
+ * valid snapshot. A success is `clean` when the observation it leaves shows no
+ * known window at or above 100 % and the reader saw no full limit
+ * (`answer.full`); a clean read lifts a live `quota` or `login` refusal of the
+ * provider, and `lifted` is `{ cause, until }` of the one it lifted. A `host`
+ * refusal and the model refusals are left alone. The caller holds the short
+ * runner lock around this synchronous read-patch-write only.
  */
-export function applyCollectedCapacity(state, provider, answer, now = new Date(), baseline = null) {
+export function collectedCapacity(state, provider, answer, now = new Date(), baseline = null) {
   const current = normaliseCapacity(state);
   const changed = baseline !== null && JSON.stringify(current.providers[provider]) !== baseline;
-  if (answer?.ok && changed) return current;
-  if (answer?.ok) return applyObservation(current, provider, {
-    windows: adapterOfProvider(provider)?.PLAN_STATE != null ? streamWindowsOf(provider, current.providers[provider].windows, answer.windows) : answer.windows,
+  if (answer?.ok && changed) return { state: current, clean: false, lifted: null };
+  if (!answer?.ok) return { state: applyFailure(current, provider, { why: answer?.why || 'subscription read failed' }, now), clean: false, lifted: null };
+  const observed = applyObservation(current, provider, {
+    windows: adapterOfProvider(provider)?.PLAN_STATE != null ? streamWindowsOf(provider, current.providers[provider].windows, answer.windows, answer.unread) : answer.windows,
     models: answer.models ?? null,
   }, now);
-  return applyFailure(current, provider, { why: answer?.why || 'subscription read failed' }, now);
+  const clean = answer.full !== true && spentWindows(observed, provider, now).length === 0;
+  const held = standingRefusal(observed.providers[provider], now);
+  if (!clean || !held) return { state: observed, clean, lifted: null };
+  // A host refusal stays with its check; a quota or login one held under it is lifted, and the provider is still refused.
+  if (held.cause === 'host') return { state: held.under ? withProvider(observed, provider, { refusal_under: null }) : observed, clean, lifted: null };
+  return { state: applyRefusal(observed, provider, null, null, now), clean, lifted: { cause: held.cause, until: held.until } };
 }
 
 /**
- * The instant a provider refused until, or null to clear it. With a `model`, the
- * refusal is that model's alone (`model_refusals`): the provider's other models
- * stay eligible. A passed instant of another model is dropped on the way.
+ * The provider refusal in force at `now`, `{ until, cause, since, under }`, or
+ * null: the recorded one while it is live, else the one held under a host
+ * refusal that has passed. `under` is the quota or login refusal still live
+ * under a live host refusal, else null.
  */
-export function applyRefusal(state, provider, until, model = null, now = new Date()) {
-  if (!model) return withProvider(state, provider, { refusal_until: iso(until) });
+function standingRefusal(current, now) {
+  const under = current.refusal_under && after(current.refusal_under.until, now) ? current.refusal_under : null;
+  if (after(current.refusal_until, now)) return { until: current.refusal_until, cause: current.refusal_cause, since: current.refusal_since, under };
+  return under ? { ...under, under: null } : null;
+}
+
+/** The later-end rule between two quota or login refusals (`{ until, cause, since }`): the same cause keeps its first instant, else the later end wins. */
+function laterRefusal(held, fresh) {
+  if (!held) return fresh;
+  const later = Date.parse(fresh.until) > Date.parse(held.until);
+  if (fresh.cause === held.cause) return { until: later ? fresh.until : held.until, cause: held.cause, since: held.since ?? fresh.since };
+  return later ? fresh : held;
+}
+
+const recorded = (refusal, under = null) => ({ refusal_until: refusal?.until ?? null, refusal_cause: refusal?.cause ?? null, refusal_since: refusal?.since ?? null, refusal_under: under });
+
+/** The state `collectedCapacity` leaves. */
+export function applyCollectedCapacity(state, provider, answer, now = new Date(), baseline = null) {
+  return collectedCapacity(state, provider, answer, now, baseline).state;
+}
+
+/**
+ * The instant a provider refused until, or null to clear it, and its `cause`
+ * (REFUSAL_CAUSES; anything else is `quota`). With a `model`, the refusal is
+ * that model's alone (`model_refusals`): the provider's other models stay
+ * eligible, and a passed instant of another model is dropped on the way.
+ *
+ * Over a provider refusal in force at `now` (standingRefusal): the same cause
+ * renewed keeps the instant first seen and takes the later end. A `host`
+ * refusal is never replaced by a `quota` or `login` one: that one is held
+ * under it (`refusal_under`, by the same rule between the two). A `host`
+ * refusal over a `quota` or `login` one takes over with its own end, and holds
+ * that one under it, so the host check's clear brings it back and a clean read
+ * can lift it. Between `quota` and `login` the later end wins, with its cause,
+ * first seen `now`. A refusal over none is first seen `now`. Clearing (`until`
+ * null) brings back a refusal held under the one cleared while that is live.
+ */
+export function applyRefusal(state, provider, until, model = null, now = new Date(), cause = 'quota') {
+  if (!model) {
+    const end = iso(until);
+    const held = standingRefusal(normaliseCapacity(state).providers[provider], now);
+    if (!end) return withProvider(state, provider, recorded(held?.under ?? null));
+    const kind = REFUSAL_CAUSES.includes(cause) ? cause : 'quota';
+    const fresh = { until: end, cause: kind, since: now.toISOString() };
+    if (!held) return withProvider(state, provider, recorded(fresh));
+    if (kind === 'host' && held.cause === 'host') return withProvider(state, provider, recorded(laterRefusal(held, fresh), held.under));
+    if (held.cause === 'host') return withProvider(state, provider, recorded(held, laterRefusal(held.under, fresh)));
+    if (kind === 'host') return withProvider(state, provider, recorded(fresh, { until: held.until, cause: held.cause, since: held.since }));
+    return withProvider(state, provider, recorded(laterRefusal(held, fresh)));
+  }
   const held = normaliseCapacity(state).providers[provider].model_refusals;
   const live = Object.fromEntries(Object.entries(held).filter(([id, at]) => id !== model && after(at, now)));
   return withProvider(state, provider, { model_refusals: iso(until) ? { ...live, [model]: iso(until) } : live });
@@ -241,12 +339,14 @@ export function windowsAt(state, provider, now = new Date()) {
  * A provider's standing at `now`: `failed` (the last try failed; the snapshot
  * is kept and says so), `unobserved`, `stale` (the snapshot is older than
  * STALE_MS) or `observed`. Also its windows as `windowsAt` reads them, its
- * models, and its refusal while that has not passed.
+ * models, and its refusal, with its cause and first instant seen, while that
+ * has not passed.
  */
 export function providerAt(state, provider, now = new Date()) {
   const current = normaliseCapacity(state).providers[provider];
   const stale = current.observed_at !== null && now.getTime() - Date.parse(current.observed_at) > STALE_MS;
   const status = current.failure ? 'failed' : current.observed_at === null ? 'unobserved' : stale ? 'stale' : 'observed';
+  const refusal = standingRefusal(current, now);
   return {
     status,
     observed_at: current.observed_at,
@@ -254,7 +354,9 @@ export function providerAt(state, provider, now = new Date()) {
     failure: current.failure,
     windows: windowsAt(state, provider, now),
     models: current.models,
-    refusal_until: after(current.refusal_until, now) ? current.refusal_until : null,
+    refusal_until: refusal?.until ?? null,
+    refusal_cause: refusal?.cause ?? null,
+    refusal_since: refusal?.since ?? null,
     model_refusals: Object.fromEntries(Object.entries(current.model_refusals).filter(([, until]) => after(until, now))),
   };
 }
