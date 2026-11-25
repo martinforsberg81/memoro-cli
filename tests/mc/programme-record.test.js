@@ -15,7 +15,9 @@ import { listingText, programmesListing, recordWriter, run as programs } from '.
 import { readProgrammes } from '../../src/mc/page-collect.js';
 import { changePhases, newRecord, normalized, readRecord, recordedProgrammes, recordPage, recordPageTemplate, RECORD_FILE, setRecordState, validateRecord, writeRecord } from '../../src/mc/programme-record.js';
 import { lockPath, realLock } from '../../src/mc/runner-lock.js';
-import { goalJson } from './_helpers/goal-file.js';
+import { goalJson, withGoal } from './_helpers/goal-file.js';
+import { listDirsOf, readTextOrNull } from '../../src/mc/goals.js';
+import { cutParts, partsOrder } from '../../src/mc/programme-turn.js';
 import { runRepairDraft } from '../../src/mc/repair-draft.js';
 import { renderCliSections } from '../../src/mc/helper-cli-collect.js';
 import { judgeRepair } from '../../src/mc/repair-session.js';
@@ -274,6 +276,47 @@ describe('mc programs create and state', () => {
       assert.doesNotMatch(res.out, /alpha\/(finished|free)\b/u);
       const back = await call(['state', 'alpha', 'draft'], { ...a.env, MC_ROLE: 'martin' });
       assert.doesNotMatch(back.out, /released|still held/u, 'draft releases nothing');
+    } finally { a.done(); }
+  });
+
+  // Order cut-and-goal-names, Part 1. Fault replayed: on the code before it, ready again moves ready_at to 09:00, past
+  // the drop, so the assertion on ready_at fails and the cut makes `one-2` for the goal the desk dropped on purpose.
+  it('sets a ready order ready again with its ready_at kept and a second line; its dependencies are rewritten, a goal dropped since stays dropped, and draft then ready cuts its part again', async () => {
+    const a = area();
+    try {
+      await call(['create', 'alpha', '--end', 'e'], a.env);
+      const dir = join(a.home, 'alpha');
+      const readme = '# alpha\n\nRepositories: memoro-cli.\n\n## Parts\n\n### Part 1 — One\n\n### Part 2 — Two\n';
+      writeFileSync(join(dir, 'README.md'), readme);
+      const martin = { ...a.env, MC_ROLE: 'martin' };
+      const at = (iso) => ({ now: new Date(iso) });
+      const write = (path, text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); };
+      const cut = () => cutParts({ programme: 'alpha', home: a.home, list: listDirsOf, read: readTextOrNull, write,
+        repositories: () => ({ repos: [{ repo: 'memoro-cli' }] }), now: new Date('2026-11-24T19:06:00Z') });
+
+      const first = await call(['state', 'alpha', 'ready'], martin, at('2026-11-24T19:05:33Z'));
+      assert.equal(first.code, 0, first.err);
+      assert.equal(first.out, 'mc: alpha · state ready\n', 'from draft the line stays as it is');
+      assert.deepEqual(cut().map(({ name }) => name), ['one', 'two', 'alpha-documentation']);
+      // The desk drops Part 1's goal on purpose; the record no longer states the order the parts give.
+      const one = join(dir, 'goals', 'one');
+      writeFileSync(join(one, 'GOAL.json'), withGoal(readFileSync(join(one, 'GOAL.json'), 'utf8'), { stage: 'dropped' }));
+      writeFileSync(join(one, 'LOG.md'), `${readFileSync(join(one, 'LOG.md'), 'utf8')}\n\n## 2026-11-25T08:00Z · claude · dropped · ready · by martin\n\nDone: dropped: not wanted\n`);
+      writeFileSync(join(dir, RECORD_FILE), JSON.stringify({ ...recordOf(a.home, 'alpha'), phases: { order: 'stated', after: { 2: [1] } } }));
+
+      const again = await call(['state', 'alpha', 'ready'], martin, at('2026-11-25T09:00:00Z'));
+      assert.equal(again.code, 0, again.err);
+      assert.equal(again.out, 'mc: alpha · state ready\n  already ready since 2026-11-24T19:05:33Z — its dependencies are rewritten; a dropped goal stays dropped (set it draft, then ready, to cut its part again)\n');
+      assert.equal(recordOf(a.home, 'alpha').ready_at, '2026-11-24T19:05:33Z', 'ready again keeps when it was set ready');
+      assert.deepEqual(recordOf(a.home, 'alpha').phases.after, partsOrder(readme).after, 'its dependencies are rewritten');
+      assert.deepEqual(cut(), [], 'the dropped goal stays dropped');
+
+      // Draft, then ready: a later ready_at, no second line, and the part whose goal was dropped before it is cut again.
+      assert.equal((await call(['state', 'alpha', 'draft'], martin, at('2026-11-25T09:10:00Z'))).code, 0);
+      const ready = await call(['state', 'alpha', 'ready'], martin, at('2026-11-25T09:20:00Z'));
+      assert.equal(ready.out, 'mc: alpha · state ready\n');
+      assert.equal(recordOf(a.home, 'alpha').ready_at, '2026-11-25T09:20:00Z');
+      assert.deepEqual(cut(), [{ name: 'one-2', part: 1 }]);
     } finally { a.done(); }
   });
 

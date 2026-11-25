@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { itemDirectory } from '../../src/mc/desk-items.js';
 import { goalSession, parseGoal, parseLog, phaseOpen, programmeOrder, programsGoals } from '../../src/mc/goals.js';
 import { cutParts, cutProblems, cuttable, documentationBrief, goalSlug, goalsNamingNoPart, partBrief, partOfOrder, partsCut, partsNamed, programmeDue, readTurnState, recordTurnFailure, documentParts, partsOrder, turnName, turnStatePath } from '../../src/mc/programme-turn.js';
+import { setRecordState } from '../../src/mc/programme-record.js';
 import { goalJson, withGoal } from './_helpers/goal-file.js';
 
 /**
@@ -318,6 +319,35 @@ test('a revised order: a goal dropped in or before the minute the order was set 
   const silent = revised({ readyAt: '2026-11-24T19:05:33Z', drop: { one: '2026-11-18T10:10Z' } });
   silent.files[logOf('one', true)] = '';
   assert.deepEqual([due(silent).due, cut(silent)], [false, []]);
+});
+
+// Order cut-and-goal-names, Part 1. Fault replayed: on the code before it, ready again moves ready_at past the drop, so
+// the first assertion on ready_at fails and the cut makes `one-2` for the part whose goal the desk dropped on purpose.
+test('an order set ready again keeps ready_at, gets its dependencies rewritten and is cut nothing new; set draft then ready, its dropped part is cut again', () => {
+  const s = programmeStore({ [RECORD_AT]: recordOf({ state: 'draft', phases: { order: 'stated' } }) });
+  const record = () => JSON.parse(s.files[RECORD_AT]);
+  /** `mc programs state prog <state>` as the verb writes the record: ready states the order the parts give. */
+  const setState = (state, at) => setRecordState(`${HOME}/prog`, state, { root: ROOT, lock: s.lock, read: s.read, write: s.write, now: new Date(at),
+    ...(state === 'ready' ? { after: partsOrder(s.files[README_AT]).after } : {}) });
+  assert.equal(setState('ready', '2026-11-24T19:05:33.250Z').ok, true);
+  assert.deepEqual(cut(s), [{ name: 'one', part: 1 }, { name: 'two', part: 2 }, { name: 'prog-documentation', documentation: true }]);
+  // The desk drops Part 1's goal on purpose, and the record no longer states the order the parts give.
+  s.files[goalFile('one')] = withGoal(s.files[goalFile('one')], { stage: 'dropped' });
+  s.files[`${HOME}/prog/goals/one/LOG.md`] += '\n\n## 2026-11-25T08:00Z · claude · dropped · ready · by martin\n\nDone: dropped: not wanted\n';
+  s.files[RECORD_AT] = JSON.stringify({ ...record(), phases: { order: 'stated', after: { 2: [1] } } });
+
+  const again = setState('ready', '2026-11-25T09:00:00Z');
+  assert.deepEqual([again.ok, again.changed], [true, true]);
+  assert.equal(record().ready_at, '2026-11-24T19:05:33Z', 'ready again keeps when it was set ready');
+  assert.deepEqual(record().phases.after, partsOrder(README_MD).after, 'its dependencies are rewritten');
+  assert.deepEqual([due(s).due, due(s).reason, cut(s)], [false, 'its goals are already cut', []], 'the dropped goal stays dropped');
+
+  // Draft, then ready: a later ready_at, and the part whose goal was dropped before it is cut again.
+  assert.equal(setState('draft', '2026-11-25T09:10:00Z').record.ready_at, '2026-11-24T19:05:33Z');
+  setState('ready', '2026-11-25T09:20:00Z');
+  assert.equal(record().ready_at, '2026-11-25T09:20:00Z');
+  assert.equal(due(s).due, true);
+  assert.deepEqual(cut(s), [{ name: 'one-2', part: 1 }]);
 });
 
 test('what a session on the last goal is given: the fixed text with the programme and its directory, then the order whole', () => {
