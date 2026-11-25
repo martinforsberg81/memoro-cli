@@ -32,6 +32,9 @@ its check, and each worktree's state.
   `mc goal criterion remove [<p>/<g>] <n> --reason "…"` takes criterion `n`
   out, the later ones move up one number, and the removed text, check, met state
   and reason are logged; a goal session cannot, but interactive Martin or unattended decision may.
+  `mc goal document remove <p>/<g> <n> --reason "…"` takes document entry `n`
+  out the same way, the later ones move up one number, and its label, path and
+  the reason are logged; the same roles may, and a goal session cannot.
 
 - **Entries.** A session writes to its goal with `mc goal log --done "…"
   --comment "…" --next "…" [--stage …] [--status …]`; `MC_GOAL` names the
