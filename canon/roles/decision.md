@@ -88,7 +88,7 @@ again. Decide them so:
   against the last `Next` and the heads, and may be set ready with a note.
 - Amend the goal with the verbs (`mc goal set`, `item add|set|remove`,
   `obligation set`, `criterion set`, `criterion add`, `criterion remove`,
-  `document add`), replacing the numbered item that was wrong and leaving the
+  `document add`, `document remove`), replacing the numbered item that was wrong and leaving the
   rest; record the finding and the new text in LOG.md; then `mc goal ready`. The
   goal continues in its stage.
 - If the amendment would change a text Martin holds, it is a brief for Martin:
