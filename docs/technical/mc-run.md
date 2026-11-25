@@ -1139,9 +1139,11 @@ Otherwise nothing is cut. What the desk must do, a horizon that is missing or
 not open and a state file that is unreadable are each said once in
 `runner.log` while they last; a programme that simply is not due is silent.
 
-**A dropped goal.** `mc programs state <programme> ready` writes the instant
-it was set ready into the record, `ready_at` (second precision), each time;
-`draft` and `done` keep it ([mc-plan.md](mc-plan.md)). Every goal of the
+**A dropped goal.** `mc programs state <programme> ready` on a record that is
+not `ready` writes the instant it was set ready into the record, `ready_at`
+(second precision); a record that already reads `ready` keeps its `ready_at`
+(none stays none), and `draft` and `done` keep it too
+([mc-plan.md](mc-plan.md#programme-state-and-advisory-reading)). Every goal of the
 programme, live or archived and of every stage, counts toward the cut, but
 one: a `dropped` goal whose drop (the first entry of the run of `dropped`
 entries that ends its LOG.md, minute precision) falls in or before the minute
@@ -1153,7 +1155,18 @@ after its old goals were dropped gets a new goal for each such part, and a
 new documentation goal when its old one was dropped. A goal dropped after the
 minute the order was set ready still counts, so dropping a goal of an
 unchanged order never starts replacement work by itself: the desk sets the
-order `draft` and `ready` again to commission its part. A `done` goal always
+order `draft` and then `ready` to commission its part. Setting an order that
+is already `ready` ready again cuts nothing new: its `ready_at` stays, its
+dependencies are written again from its parts and the desk's holds are
+released as from draft, and a goal dropped since stays dropped. The verb says
+so on a second line (exit 0; `since —` for a record with no `ready_at`):
+
+```
+mc: <programme> · state ready
+  already ready since <ready_at> — its dependencies are rewritten; a dropped goal stays dropped (set it draft, then ready, to cut its part again)
+```
+
+A `done` goal always
 counts, a drop whose log does not say when counts, and a record without
 `ready_at` (every record set ready before 2026-11-24) counts every goal.
 
@@ -1171,7 +1184,9 @@ writes this as the record's `phases.after`, keyed by part number, in the write
 that sets the state. Where the record does not state what the document now
 gives (an order set ready before, or a part or line changed since), the runner
 cuts nothing and says `<programme>: its record does not state the order its
-parts give — the desk sets it ready again`. An order that was ready before the
+parts give — the desk sets it ready again`; setting a ready order ready again
+rewrites the dependencies and cuts nothing a drop left behind (*A dropped
+goal*), so the notice is safe to follow. An order that was ready before the
 cut became code finishes the goals it has in their old form; a part of it that
 has no goal is cut once the desk has set it ready again.
 
@@ -1179,9 +1194,19 @@ has no goal is cut once the desk has set it ready again.
 directory with its goal file and its log, through the functions every goal is
 written with (`renderGoal`, `appendLog`). The directory is named from the
 part's heading: lower-case letters, digits and hyphens, `part-<n>` when the
-heading leaves nothing, and a number added while the name is taken by a goal
-of the programme, live or archived, or by a live goal of another programme
-(a goal's branch `goal/<goal>` is one per repository). The goal file is version
+heading leaves nothing, and a number added (`documentation-2`, `fix-2`;
+`goalSlug`) while the name is one a goal has used. A goal's branch
+`goal/<goal>` is one per repository, so a name used once has had that branch:
+the used names (`usedGoalNames`, `goals.js`) are the live goals of every
+programme, the archived goals of every programme (`<programme>/goals/.archive/`)
+and the goals, live and archived, of every archived programme
+(`~/mc/archive/programs/<programme>/goals/`, found beside the programmes
+home), an archived name counting both as it stands and with its archive time
+suffix (`-YYYYMMDDTHHMM`) taken off. `mc goal new` refuses the same names
+([mc-goals.md](mc-goals.md#the-verbs)). They are read from the programme
+directories alone: GitHub is not asked, and the push guard still refuses a
+branch made outside mc. Names of goals that exist, and their branches, are
+never changed. The goal file is version
 2, in `build · ready`, with `part` and `phase` the part's number, the title
 the heading's name, the repositories of the README's `Repositories:` line, a
 `documents` entry labelled `Part <n>` whose path is the programme's
@@ -1203,6 +1228,24 @@ it (`cutFromOrder`, `goal-parts.js`): it starts and goes to review with no
 criterion, its build session reports no goal defect, and its review writes
 the one `part` line. A build on a part writes no `docs/technical/` page; this
 goal does.
+
+**No Documentation part.** Since the cut adds the documentation goal itself,
+an order has no part of its own for it: the pages it writes are named under
+Order, as input to that goal. `mc programs state <programme> ready` refuses an
+order with a part whose name is `Documentation` alone, or followed by a colon
+or a dash (` — `, ` – `, ` - `) and more words (`Part 4 — Documentation`,
+`Part 4 — Documentation: the deploy pages`; letter case and a final full stop
+read leniently; `isDocumentationPart`, `programme-turn.js`), one line per such
+part, and writes nothing (exit 1, record unchanged):
+`mc: <programme>: Part <n> is named Documentation — the cut adds the
+documentation goal itself; name its pages under Order and remove the part`.
+`Documentation` followed by a plain word (`Documentation search`) names a
+product feature and is not refused. The refusal applies where `state ready`
+reads the parts: not to a repair-owned order, which its own verbs release, nor
+to an old-form programme. An order already ready is not changed, and the cut
+reads no part names. A part that, rather than the documentation goal, takes on
+a `docs/technical/` page is a question of the advisory reading
+(`canon/roles/programme-review.md`, question 8), not a refusal.
 
 **What a session is given.** A goal that is a part holds no copy of it. Every
 session on it (build, repair, review and mend) is given the part as

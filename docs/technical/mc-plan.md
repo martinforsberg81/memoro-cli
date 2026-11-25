@@ -45,7 +45,7 @@ and `legacy` remain readable on old records but are not written:
 | `area` | optional: `<repo>/<id>`, an area a repository declares; allowed only with `horizon` `null` |
 | `end` | one non-empty sentence saying when the programme is done |
 | `state` | `draft`, `ready`, `done` or `Martin` with a repair scope stop |
-| `ready_at` | optional: an ISO instant in UTC to the second, when the order was last set ready; `mc programs state <p> ready` writes it each time, `draft` and `done` keep it. A goal dropped in or before its minute no longer counts toward the cut ([mc-run.md](mc-run.md#the-cut-of-a-ready-order)) |
+| `ready_at` | optional: an ISO instant in UTC to the second, when the order was last set ready from another state; `mc programs state <p> ready` writes it on a record that is not `ready`, and a record already `ready`, `draft` and `done` keep it. A goal dropped in or before its minute no longer counts toward the cut ([mc-run.md](mc-run.md#the-cut-of-a-ready-order)) |
 | `created` | an ISO instant in UTC to the second |
 | `created_by` | `person`, `martin`, `repair` or the historical `manager` |
 | `phases` | optional: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}`; `mc programs state <p> ready` writes it from the order's parts, keyed by part number |
@@ -185,7 +185,15 @@ write of the file (`programme-file`, [mc-hooks.md](mc-hooks.md)).
 `mc programs state <programme> draft|ready` is available only to interactive Martin:
 exactly `MC_ROLE=martin` and `MC_HEADLESS` not `1`. Every other caller exits 2
 before effects. For ordinary desk orders it sets `draft` or `ready` without
-condition on the document, directory or any reading. For repair orders see
+condition on the directory or any reading, and on the document but for one:
+`ready` refuses an order with a part named Documentation (exit 1, record
+unchanged), since the cut adds the documentation goal itself (*No
+Documentation part* in [mc-run.md](mc-run.md#the-cut-of-a-ready-order)).
+`ready` on a record that already reads `ready` keeps its `ready_at`, writes the
+dependencies again and releases the holds below, and adds the line `already
+ready since <ready_at> — …`: a goal dropped since stays dropped, and `draft`
+then `ready` is what cuts its part again ([mc-run.md](mc-run.md#the-cut-of-a-ready-order),
+*A dropped goal*). For repair orders see
 [release](#repair-drafts) and [desk takeover](#repair-scope-stops-and-dispositions).
 Setting `ready` also releases the holds the desk placed
 (`by: martin`, not a creation hold) on the programme's unfinished goals, each with the log
