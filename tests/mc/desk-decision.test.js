@@ -176,6 +176,7 @@ const PROVIDER_ENDINGS = [
   ['quota', apiEnded("You've hit your 5-hour limit · resets 3pm (UTC)", { api_error_status: 429 }), '(quota)'],
   ['login', apiEnded('Not logged in · Please run /login', { api_error_status: null }), '(interrupted)'],
   ['offline', apiEnded("API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)", { api_error: 'connection_failed', api_error_status: null, num_turns: 1 }), '(offline)'],
+  ['server', apiEnded('API Error: 500 Internal server error.', { api_error_status: 500 }), '(interrupted)'],
 ];
 const ends = (f, output) => { f.deps.session = async call => { f.calls.push(call); return output; }; };
 const logOf = f => join(f.root, 'programs/alpha/goals/first/LOG.md');
@@ -227,13 +228,10 @@ test('a decision ending on an offline reading writes nothing to a prepared goal 
   assert.equal(runRows(f).length, 2);
 });
 
-test('an unsettled ending read as a server error counts once, in the state the item had', async t => {
-  const f = fixture(t), item = f.add('alpha/first'), r = f.runner();
-  ends(f, apiEnded('API Error: 500 Internal server error.', { api_error_status: 500 }));
-  await r.pass();
-  assert.equal(f.state(item).state, 'prepared');
-  assert.deepEqual(f.state(item).decision_failures.map(x => [x.state, /\(interrupted\)/u.test(x.reason)]), [['prepared', true]]);
-});
+// Retired with provider-recovery Part 2 (2026-11-25): 'an unsettled ending read as a server error counts once, in the
+// state the item had' held that a server interruption counted a decision failure. A server interruption is now the
+// provider's ending and counts nothing (the `server` row of PROVIDER_ENDINGS above); that an ordinary unsettled ending
+// counts once, in the item's state, the same row and the two-ending limit test below still hold.
 
 test('the two-ending limit counts the failures of the item\'s current state: a failure recorded in another state does not spend the attempt of a prepared item', async t => {
   const f = fixture(t), item = f.add('alpha/first', { decision_failures: [{ at: '2026-11-14T10:05:00Z', reason: 'an earlier session exited', state: 'for-martin' }] }), r = f.runner(), brief = join(itemDirectory(item, f.env), 'brief.md');

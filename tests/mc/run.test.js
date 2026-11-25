@@ -5631,7 +5631,7 @@ test('a review cut short by its provider writes nothing and runs again; its mode
       assert.match(runRows(f.files).at(-1).note, new RegExp(`^${note},no-log$`, 'u'), why);
       if (turns) assert.equal(runRows(f.files).at(-1).turns, turns, why);
     }
-    assert.ok(f.log.some((line) => line.endsWith(`${first.tool}:${first.model} set aside until 2026-08-29T10:35:00Z — two reviews cut short in a row`)), why);
+    assert.ok(f.log.some((line) => line.endsWith(`${first.tool}:${first.model} set aside until 2026-08-29T10:35:00Z — two sessions cut short in a row`)), why);
     assert.equal((await next()).ran, 1, why);
     assert.deepEqual([f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], [second.tool, second.model], `${why}: the third review is another model's`);
     assert.equal(f.calls.sessions.filter((call) => call.env.MC_MODEL === first.model).length, 2, `${why}: the set-aside model is not launched a third time`);
@@ -5716,6 +5716,56 @@ test('a claude session whose every tool the host refused is host-refused: no ent
   assert.deepEqual([f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['codex', 'gpt-6-luna']);
   assert.equal(runRows(f.files).at(-1).note.includes('host-refused'), false);
   assert.equal(f.calls.sessions.filter((call) => call.env.MC_TOOL === 'claude').length, 3);
+  assert.equal(f.log.some((line) => / set aside until /u.test(line)), false, 'host-refused builds set no model aside');
+  assert.deepEqual(f.deps.capacity.read().providers.claude.model_cut_short ?? {}, {}, 'and leave the cut-short count alone');
+});
+
+/** Codex's revoked login of 2026-11-22, as its stream and stderr have it: a `login` interruption. */
+const CODEX_LOGIN = () => {
+  const recorded = (name) => readFileSync(new URL(`../fixtures/codex/revoked-login-20261122T101009Z.${name}`, import.meta.url), 'utf8');
+  return { status: 1, stdout: recorded('jsonl'), stderr: recorded('json.err'), timedOut: false };
+};
+/** A Claude stream the API ended with a 500: none of quota, login or offline, so the reader names it `server`. */
+const SERVER_500 = streamed(apiEndedSession('API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}', { api_error_status: 500 }));
+const OPUS_BUILD = { tool: 'claude', model: 'opus', effort: 'high' };
+const LUNA_BUILD = { tool: 'codex', model: 'gpt-6-luna', effort: 'high' };
+/** The provider endings that cut a build short: the first candidate's ending (`claude`, or codex's login), with the list it heads. */
+const BUILD_CUT_SHORT = [
+  { why: 'a quota', list: [OPUS_BUILD, LUNA_BUILD], claude: REFUSED_429 },
+  { why: 'a codex login refusal', list: [LUNA_BUILD, OPUS_BUILD], claude: REFUSED_429 },
+  { why: 'a claude server interruption', list: [OPUS_BUILD, LUNA_BUILD], claude: SERVER_500 },
+];
+
+test('a build cut short by its provider writes no entry and is no step toward the silent-build stop; two of one model in a row set it aside', async () => {
+  for (const { why, list, claude } of BUILD_CUT_SHORT) {
+    const [first, second] = list;
+    const f = hostRouted(goalFixture({ mute: { log: goalLog('2026-08-20T10:00Z') } }));
+    f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), build: list });
+    let clock = ROUTING_NOW.getTime();
+    f.deps.now = () => new Date(clock);
+    // Every build writes nothing: claude's ends on the case's ending, codex's on its revoked login.
+    f.answer = (call) => (call.env.MC_TOOL === 'codex' ? CODEX_LOGIN() : claude(call));
+    const runner = createRunner({ deps: f.deps });
+    const logBefore = f.files[`${GOALS}/mute/LOG.md`];
+    for (const round of [1, 2, 3]) {
+      // The provider answers again before the next pick: its own refusal is lifted, a model set aside is not.
+      if (round > 1) {
+        clock += 5 * 60_000;
+        f.deps.capacity.write(applyRefusal(applyRefusal(f.deps.capacity.read(), 'claude', null), 'codex', null));
+      }
+      assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, `${why}: build ${round}`);
+      const model = round < 3 ? first : second;
+      assert.deepEqual([f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], [model.tool, model.model], `${why}: build ${round} is ${model.model}'s`);
+      assert.equal(where(f, 'mute'), 'build · ready', `${why}: build ${round}`);
+      assert.equal(f.files[`${GOALS}/mute/LOG.md`], logBefore, `${why}: build ${round} leaves no runner entry`);
+      const note = runRows(f.files).at(-1).note.replace(/,no-log$/u, '');
+      assert.equal(f.log.filter((line) => line.endsWith(`goal:prog/mute: build cut short by ${model.tool}:${model.model} (${note}, 0 s) — no answer about the goal, it runs again`)).length,
+        round < 3 ? round : 1, `${why}: build ${round} says it was cut short`);
+    }
+    assert.equal(f.log.filter((line) => line.endsWith(`${first.tool}:${first.model} set aside until 2026-08-29T10:35:00Z — two sessions cut short in a row`)).length, 1, `${why}: the second sets ${first.model} aside`);
+    assert.equal(f.calls.sessions.length, 3, why);
+    assert.equal(buildSessionCount(parseLog(f.files[`${GOALS}/mute/LOG.md`])), buildSessionCount(parseLog(logBefore)), `${why}: the build count is unchanged`);
+  }
 });
 
 test('a claude session with one tool result the host allowed, or one that wrote its entry, is not host-refused', async () => {
@@ -6282,6 +6332,19 @@ test('a goal held between the pick and the spawn starts no decision session and 
   assert.equal((await f.runner().pass()).ran, 1);
   assert.equal(f.state(item).state, 'for-martin');
   assert.equal(status(), 'Martin');
+});
+
+test('a decision session ended by a server interruption leaves the goal as it was and counts no decision failure', async (t) => {
+  const { f, item, dir, status } = lastAttempt(t);
+  const lines = [];
+  f.deps.log = (line) => lines.push(line);
+  const before = { log: readFileSync(join(dir, 'LOG.md'), 'utf8'), goal: readFileSync(join(dir, 'GOAL.json'), 'utf8') };
+  f.deps.session = async (call) => SERVER_500(call);
+  assert.equal((await f.runner().pass()).ran, 1);
+  assert.deepEqual([f.state(item).state, f.state(item).decision_failures.length], ['prepared', 1], 'no decision failure is recorded');
+  assert.equal(status(), 'ready', 'one failure from the limit, and still no Martin status');
+  assert.deepEqual({ log: readFileSync(join(dir, 'LOG.md'), 'utf8'), goal: readFileSync(join(dir, 'GOAL.json'), 'utf8') }, before, 'the goal is as it was');
+  assert.equal(lines.filter((line) => /goal:alpha\/first: decision cut short by claude:[^ ]+ \(interrupted, 0 s\) — no answer about the goal, it runs again$/u.test(line)).length, 1, lines.join('\n'));
 });
 
 test('multiple legacy blocked goals reconcile without duplicate diagnostic launches across lanes', async () => {
@@ -6910,6 +6973,52 @@ test('a queued deploy repair is offered at the main-red mend\'s rank and launche
   const added = f.calls.git.filter((call) => call[1] === 'worktree' && call[2] === 'add');
   assert.deepEqual(added.map((call) => call[0]).sort(), ['/home/memoro', '/home/memoro-cli']);
   assert.ok(added.every((call) => call.includes(pick.branch)), 'both trees are on the repair branch');
+});
+
+/** The endings that cut a goal-less mend short when it published nothing, each with the note its line carries. */
+const MEND_CUT_SHORT = [
+  { why: 'a quota', answer: REFUSED_429, note: 'quota' },
+  { why: 'an offline ending', answer: UNREACHABLE, note: 'offline' },
+  { why: 'a login refusal', answer: streamed(apiEndedSession('Not logged in · Please run /login', { api_error_status: null, num_turns: 1 })), note: 'interrupted' },
+  { why: 'a server interruption', answer: SERVER_500, note: 'interrupted' },
+  { why: 'a host refusal', answer: hostRefusedSession(), note: 'host-refused' },
+];
+
+test('a main-red mend and a deploy mend cut short by their provider are back in their queues with no attempt spent', async () => {
+  for (const { why, answer, note } of MEND_CUT_SHORT) {
+    const main = mainRedFixture(), deploy = deployMendFixture();
+    for (const [f, entries, kind] of [[main, main.mainEntries, 'main-red mend'], [deploy, deploy.entries, 'deploy mend']]) {
+      f.answer = answer;
+      assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1, `${why}: ${kind}`);
+      assert.equal(f.calls.sessions.length, 1, `${why}: ${kind}`);
+      assert.ok(entries().length > 0);
+      for (const entry of entries()) assert.deepEqual([entry.state, entry.failures ?? 0, entry.owner], ['queued', 0, undefined], `${why}: ${kind}`);
+      assert.equal(f.log.filter((line) => new RegExp(`: ${kind} cut short by claude:opus \\(${note}[^)]*, 0 s\\) — back in the queue, no attempt spent$`, 'u').test(line)).length, 1, `${why}: ${kind}\n${f.log.join('\n')}`);
+    }
+  }
+});
+
+test('a release return cut short on quota keeps its return attempts', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-run-release-return-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const f = goalFixture({}, { root });
+  const cut = 'c'.repeat(40);
+  const branch = releaseBranch(cut);
+  const at = f.deps.now().toISOString();
+  // The release record is the real file `changeRelease` reads and writes under the deploys lock.
+  writeRelease(root, { branch, cut: { sha: cut, at }, row: { sha: cut, started: at }, head: cut, state: 'green', merge_back: 15830, return_attempts: 1 });
+  const read = f.deps.read;
+  f.deps.read = (path) => (path === releasePath(root) ? readFileSync(path, 'utf8') : read(path));
+  f.deps.pendingMerges = () => [{ repo: 'memoro', pr: 15830, state: 'red', since: at, reason: 'conflict with main' }];
+  f.dirs.add(join(root, 'runner', 'work', branch.replace('/', '-'), 'memoro'));
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(runner.nextWork()?.name, 'merge-mend:memoro#15830');
+  let during = null;
+  f.answer = (call) => { during = readRelease(root).return_attempts; return REFUSED_429(call); };
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, f.log.join('\n'));
+  assert.equal(during, 2, 'the session ran on a claimed attempt');
+  assert.equal(readRelease(root).return_attempts, 1, 'the attempt is given back');
+  assert.equal(f.log.filter((line) => line.endsWith('merge-mend:memoro#15830: release return cut short by claude:opus (quota, 0 s) — back in the queue, no attempt spent')).length, 1, f.log.join('\n'));
 });
 
 test('two attempts that publish nothing put a deploy repair on Martin, and no third session starts', async () => {
@@ -7890,6 +7999,24 @@ test('curation turn: a failed turn waits for the cadence and opens no item; a pr
   await createRunner({ deps: empty.f.deps }).pass({ repo: 'memoro' });
   assert.match(managerRows(empty.f)[0].note, /,curated$/u);
   assert.deepEqual([...empty.f.dirs].filter((dir) => /^\/w\/runner\/work\/manager-curation\/[^/]+\/[^/]+$/u.test(dir)), []);
+});
+
+test('curation turn: a turn the host refused, or a server interruption ended, gives the cadence back as it was', async () => {
+  for (const { why, answer, note } of [{ why: 'a host refusal', answer: hostRefusedSession(), note: 'host-refused' }, { why: 'a server interruption', answer: SERVER_500, note: 'interrupted' }]) {
+    const { f, items } = managerFixture();
+    const prior = curationSeed('2026-11-13T09:00:00Z', { memoro: 'previous' });
+    f.files[CURATION_STATE] = prior;
+    f.answer = answer;
+    const runner = createRunner({ deps: f.deps });
+    assert.equal(runner.nextWork().name, 'manager', `${why}: the turn is due`);
+    await runner.pass({ repo: 'memoro' });
+    assert.equal(managerSessions(f).length, 1, why);
+    assert.deepEqual(JSON.parse(f.files[CURATION_STATE]), JSON.parse(prior), `${why}: the curation state is what it was before`);
+    assert.equal(f.log.filter((line) => new RegExp(`manager:curation: curation cut short by claude:[^ ]+ \\(${note}[^)]*\\) — the cadence is given back$`, 'u').test(line)).length, 1, `${why}\n${f.log.join('\n')}`);
+    assert.equal(f.log.some((line) => /curation failed/u.test(line)), false, why);
+    assert.deepEqual(items(), [], why);
+    assert.equal(runner.nextWork().name, 'manager', `${why}: still due`);
+  }
 });
 
 test('curation turn: an unreadable state starts no turn and is said once; the turn holds one claim and runs one session', async () => {
