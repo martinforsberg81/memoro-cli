@@ -353,7 +353,8 @@ write its records before the final stage command.
 
 When the runner counts a build ending without a log entry, it writes one;
 three such ends in succession set the goal Martin; the stage stays build.
-Offline and host-refused endings write no runner entry and do not count.
+A build or repair build cut short by its provider (*Cut-short sessions* below)
+and a host-refused ending write no runner entry and do not count.
 A normal build end with more work leaves it build · ready for the next
 session. See [goal recovery](mc-goals.md#what-a-build-session-does) for
 build stops and declines.
@@ -374,17 +375,50 @@ other way clears it and resets `n` only when it started after the hold was set.
 A session that started before the hold ends without clearing it, and the runner
 says so in one line. Sessions already running are otherwise untouched.
 
-**Cut-short reviews.** A [cut-short review](mc-goals.md#what-a-review-session-does)
-leaves the goal alone. The runner says
-`goal:<programme>/<goal>: review cut short by <tool>:<model> (<note>, <seconds> s) — no answer about the goal, it runs again`
-in `runner.log`. Two cut-short reviews in a row for the same `tool:model`,
+**Cut-short sessions.** A session cut short is no answer about its work and
+spends nothing on it. A review is cut short by its own rule
+([`cutShortSession`](mc-goals.md#what-a-review-session-does)). Every other
+kind is cut short by one rule (`providerCutShort`): the session produced
+nothing of its own, and it ended on quota, on an interruption its reader names
+(`offline`, `login`, `server`, `credits`, `key`), or as a
+[host-refused ending](#launch-settings). What it produces is, for a build or
+repair build, a LOG.md entry; for a decision session, a settled item, an entry
+or a change to the goal's GOAL.json; for a main-red mend, a row it moved out
+of `running`; for a deploy mend, a recorded pull request or its row moved out
+of `running`; for a release return, a merge job no longer red; a curation turn
+never counts as producing. A non-zero exit alone is not enough: a silent crash
+may be about the work, and the three-silent-builds stop stays its guard.
+
+- A build or repair build cut short writes no runner entry and is no step
+  toward the silent-build stop.
+- A decision session cut short counts no decision failure; the goal and the
+  item stay as they were (*Decision lane*).
+- A curation turn cut short gives the cadence back (*The manager's turns*).
+- A main-red mend, a deploy mend or a release return cut short goes back to
+  its queue with no attempt spent, as a reserve refusal does.
+
+`runner.log` says, with the reader's note (`host-refused` for a host
+refusal):
+
+```
+goal:<programme>/<goal>: <review|build|repair|decision> cut short by <tool>:<model> (<note>, <seconds> s) — no answer about the goal, it runs again
+<name>: <main-red mend|deploy mend|release return> cut short by <tool>:<model> (<note>, <seconds> s) — back in the queue, no attempt spent
+<turn>: curation cut short by <tool>:<model> (<note>) — the cadence is given back
+```
+
+A decision on an item without a goal is named by its item id and says
+`no answer about the item`.
+
+Two sessions cut short in a row for the same `tool:model`, of any kind and
 across any goals, set aside just that model for the 30-minute quota sleep
-(`QUOTA_SLEEP_MS`), preserving a longer model refusal. The runner logs
-`<tool>:<model> set aside until <time> — two reviews cut short in a row`.
+(`QUOTA_SLEEP_MS`), preserving a longer model refusal, so a broken model
+cannot loop. The runner logs
+`<tool>:<model> set aside until <time> — two sessions cut short in a row`.
 The streak is stored as `model_cut_short` beside the model refusals in
-`model-capacity.json`. Setting the model aside or a goal session on it that
-is not cut short resets the streak; a cut-short non-review or a host-refused
-ending leaves it alone. Plan quota and login refusals still apply separately.
+`model-capacity.json`. Setting the model aside or a session on it that is not
+cut short resets the streak; a host-refused ending and a cut-short goal mend
+(a merge failure's) leave it alone: the host check owns that refusal. Plan
+quota and login refusals still apply separately.
 
 ### Launch settings
 
@@ -397,12 +431,15 @@ An unscoped deny of either tool fails the check. Every `*.git` under
 `~/mc/repos` (or the configured repository directory) must be trusted at its real path
 in `projects` with `hasTrustDialogAccepted: true`.
 
-A failed check writes a Claude provider refusal in the capacity snapshot,
-not a machine-wide offline hold: other providers can still take the work.
+A failed check writes a Claude provider refusal with the cause `host` in the
+capacity snapshot (*Provider refusals and what lifts them*), not a
+machine-wide offline hold: other providers can still take the work.
 It uses the offline backoff duration (one minute, doubling up to fifteen
 minutes). `runner.log` says `claude set aside — the host refuses its tools: <cause>`
 when the hold starts. A passing check clears the refusal it set, not a
-separate refusal, and says `claude usable again — the host allows its tools`.
+separate refusal, and says `claude usable again — the host allows its tools`;
+a quota or login refusal the host refusal was written over comes back if it
+is still live. A capacity read never lifts a `host` refusal.
 The check does not edit the files or set an API-reserve hold.
 
 Independently, a Claude goal session that wrote no LOG.md entry and, for
@@ -503,6 +540,19 @@ also runs the interactive entrance `mc martin` and the server's
 ([mc-interactive-sessions.md](mc-interactive-sessions.md#a-tool-that-lives-in-the-terminal-agy)).
 The retired `mc helper` desk is not one of them.
 
+**Finding Codex.** The Codex launch takes the first usable candidate of
+`which -a codex`, in that order (`resolveRealCodexBinary`, `src/lib/codex.js`).
+Two paths are mc's old wrapper paths, `~/.local/bin/codex` and
+`~/.local/bin/codex-memoro`. A candidate at one of them is chosen only when it
+is npm's official CLI: its real path ends in
+`node_modules/@openai/codex/bin/codex.js` (what `npm install -g @openai/codex`
+links there with a user prefix) and its content is neither an mc shim nor an
+mc launcher (`isManagedCodexShim`, `isManagedCodexLauncher`). Anything else at
+those paths is skipped, so mc never recurses through its own wrapper. A
+candidate anywhere else on `PATH` (Homebrew, a native binary,
+`/usr/local/bin/codex`) is chosen as it is. With no usable candidate the Codex
+launch is missing and says `could not locate the codex binary`.
+
 ## What the runner writes
 
 - **`runner.json`** stays one, naming the runner, its code and arguments.
@@ -563,9 +613,26 @@ This applies to every current MC session path: build, review, repair, mend,
 helper, and interactive sessions. An interactive `mc martin` still lets
 Martin choose the tool and model; billing follows that choice. A repair build or
 mend session runs on its own catalog list (finish, mend; `finish` is the list's name, kept), never the
-`build` list, and is billed as any other session. `mc run --billing` shows both providers' next routes, and names an agy model
-that refused and its reset (*Quota scope*). The MC page shows
-one billing line.
+`build` list, and is billed as any other session. `mc run --billing` shows both providers' next routes, names an agy model
+that refused and its reset (*Quota scope*), and gives each refused provider
+its refusal in brackets: until when, its cause and when it was first seen
+(*Provider refusals and what lifts them*), as in
+`claude 101% (refused until 2026-11-24T21:20:00.000Z — quota, first seen 2026-11-24T18:59:02.000Z) API · codex 41% plan`.
+A refusal known only from Claude's `plan.refused_until` has no `first seen`.
+Only the refusal in force is printed, not one held under a host refusal. The
+MC page shows one billing line.
+
+`mc run --billing --refresh` runs every provider's capacity reader once,
+together, as the runner's poll does: each reads the network outside the
+runner lock and writes under it, and an answer whose provider changed in the
+file meanwhile is dropped by the baseline taken before the read. It works
+with or without a runner. It prints one line per provider,
+`mc: <provider> read — ok` or `mc: <provider> read failed — <why>` (a reader
+that throws is a failed read), then the usual billing line, which shows any
+refusal the reads lifted. It exits 0, or 1 when every read failed. It writes
+nothing to `runner.log`. `--refresh` goes only with `--billing` alone:
+`mc run --billing --refresh codex on` is refused with
+`mc: --refresh takes no provider — mc run --billing --refresh`, exit 2.
 
 The API reserve is switched per provider:
 `mc run --billing <claude|codex> <on|off>`. Off, a spent plan stays the plan —
@@ -636,6 +703,41 @@ API key. The lane-wide `quotaPause` (the learning pass) runs for a plan-scoped q
 the refused model and its reset (`agy 57% (gemini-4-argon-high refused until
 2026-11-22T17:27:21.000Z) plan …`), and `billingRoute` for another model of the
 provider still reads *plan available*.
+
+**Provider refusals and what lifts them.** A provider-wide refusal in
+`model-capacity.json` carries its cause and the instant it was first seen
+beside its end (`refusal_until`, `refusal_cause`, `refusal_since`, additive):
+
+- `quota` — a session's quota, or a capacity read that found the plan full
+  (agy's full window without a reset).
+- `login` — a login the plan cannot get past (`LOGIN_REFUSES_PLAN`), read from
+  a session or from a Codex capacity read refused at login.
+- `host` — the [Claude host check](#launch-settings).
+
+A refusal in a file without a cause reads as `quota`, and so does a live
+Claude `plan.refused_until` in `billing-state.json` with no capacity refusal
+beside it. A renewal of the same cause keeps the first instant seen and takes
+the later end. Between `quota` and `login` the later end wins, with its cause,
+first seen at that write. A `host` refusal is never replaced by a `quota` or
+`login` one: that one is held under it (`refusal_under`, kept only under a
+`host` refusal), by the same later-end rule. A `host` refusal written over a
+`quota` or `login` one takes over with its own end and holds that one under
+it. When the host check clears its refusal, or the refusal passes, a live
+refusal under it is the one in force again.
+
+A capacity read of the provider that succeeds and leaves no known window at
+or above 100 % (and, for agy, reads no full limit) is clean. A clean read lifts
+a `quota` or `login` refusal and, for Claude, also clears
+`plan.refused_until`. The runner's poll then says in `runner.log`
+`<provider> usable again — its usage read shows no spent window (the <cause> refusal until <instant> is lifted)`.
+A read that still shows a full window keeps the refusal, and so does a failed
+read or one dropped by its baseline. A `host` refusal is left to its check: a
+clean read lifts only the refusal held under it, and the provider stays
+refused, with no "usable again" line. Model refusals (agy's per-model quota,
+the cut-short set-aside) are not judged by a plan-wide read and stay until
+their instant. A refusal is lifted at the next poll (`CAPACITY_POLL_MS`) or
+by `mc run --billing --refresh` (*Billing*); there is no check before each
+launch.
 
 The gateway wrapper opens only the fixed `mc-anthropic-api-key` (Anthropic) or
 `mc-openai-api-key` (OpenAI) record from MC Vault. The provider key stays in the
@@ -842,16 +944,21 @@ never zero.
   `send` refuses any other method. It is bounded to 20 s and 1 MiB. Credits are
   not read: they are not subscription headroom. If the failed Codex read's
   JSON-RPC error or app-server stderr matches the same login refusal as a
-  session, the failure also sets Codex's provider refusal for the quota sleep.
+  session, the failure also sets Codex's provider refusal (cause `login`) for
+  the quota sleep; a later clean read lifts it (*Provider refusals and what
+  lifts them*).
   Claude makes only a GET to the fixed `https://api.anthropic.com/api/oauth/usage` origin using the installed
   Claude Code login (Keychain service on macOS, otherwise its standard
   credentials file); redirects are denied. It parses subscription
   `five_hour`/`seven_day` usage only, never overage credits. Each Claude window
   is validated on its own, by the same rules (finite `utilization` from 0 to
   100, a strict `resets_at` instant). A read counts when one window validates;
-  a window that does not keeps the last valid observation and is named in the
-  runner log by window and one of four words, `absent`, `not an object`,
-  `utilization` or `resets_at`, never by a value. A response with no valid
+  a window that does not is named in the runner log by window and one of four
+  words, `absent`, `not an object`, `utilization` or `resets_at`, never by a
+  value. A window the response does not carry (`absent`) is no longer held: it
+  replaces the last observation, so it cannot keep a refusal standing. A window
+  the response carries but that does not validate keeps the last valid
+  observation, under its own reset. A response with no valid
   window is a failure, and its log line names both windows and their words.
   Neither provider's credentials or raw response is logged/persisted. Each collector is bounded
   to 20 s and 1 MiB. Failures retain the last valid snapshot and record attempt
@@ -1292,7 +1399,8 @@ one, and then only when the origin/main of a repository that declares areas has
 moved past the commit the last successful curation read; the first turn is due
 at once. Inside the 24 hours a tick reads no git. `runner/manager-turn/curation.json`
 holds `{ started, bases }`: `started` is written when a turn starts (so a failed
-turn waits the 24 hours too) and restored when a provider ending stopped it, and
+turn waits the 24 hours too) and restored when its provider cut it short
+(*Cut-short sessions*), and
 `bases` is each repository's origin/main commit at the setup of the last turn
 that succeeded. A state file that cannot be read starts no turn; it is said once
 and the desk sync reports it.
@@ -1330,7 +1438,9 @@ file; no goal files or proposal are written.
 The [merge contract](mc-merge.md) defines request deduplication, acceptance,
 publication and the two attempts (a third waits on Martin), without a goal.
 The runner records sessions ending without publication and recovers a dead
-runner's running request. Its settlement pass restores missing published queue
+runner's running request; a session cut short by its provider before it
+produced anything goes back to the queue with no attempt spent (*Cut-short
+sessions*). Its settlement pass restores missing published queue
 handoffs, recognizes merged/closed PRs and retries safe finished (landed or dropped) worktree cleanup.
 Martin requests show on the page, in `mc repo status` and `mc martin get`.
 A person, `martin` or `decision` answers one with `mc repo mend <repo> <id>
@@ -1376,7 +1486,8 @@ A technical deploy stop ([`mc-deploy.md`](mc-deploy.md), *A stop that is repaire
 `runner/deploy-mend.json`, offered at the main-red mend's rank by `deployMendWork` (an idle lane notices it on the control
 poll through `deployMendTicket`). `runDeployMend` is `runMainMend`'s machinery for both repositories: worktrees of memoro-cli
 and memoro on `mend/deploy-<digest>` from each `origin/main`, the session in memoro-cli's, `MC_ROLE=mend-session`,
-`MC_DEPLOY_MEND=<id>`, on the mend list. Two attempts; a dead runner's `running` request is a failed attempt. `settleDeployMends`
+`MC_DEPLOY_MEND=<id>`, on the mend list. Two attempts; a dead runner's `running` request is a failed attempt, and a session
+cut short by its provider with no PR and its row still `running` is none (*Cut-short sessions*). `settleDeployMends`
 (every `SETTLE_EVERY_MS`, with `settleMainMends`) restores a published handoff, reads each landed pull request's merge commit,
 marks the request repaired, and runs the **one retry** in the runner's own process through `run` of `commands/deploy.js`
 (holder `runner for …`, `retry: true`, no `MC_HEADLESS`), only when the runner's code (`runner.json` `commit`) and the pick
@@ -1415,7 +1526,9 @@ as `mc decision [<id>]`; nesting it inside a session is refused.
 The shared daily desk ceiling is rechecked before launch; unset means no
 ceiling. One unfinished ending retries once; a second in the item's current
 state makes a non-reversible mechanical brief that waits on Martin instead
-of looping. Quota, offline, provider-refusing login and host-refused
-endings do not count. A
+of looping. A decision session cut short by its provider (*Cut-short
+sessions*: quota, offline, login, server, credits, key, or the host
+refusing it) that settled no item and changed nothing of the goal does not
+count. A
 for-martin brief is never lane work, and no clock carries one out. See [mc-martin.md](mc-martin.md#unattended-decision-pass)
 for item state, failure evidence, authority and the fixed Swedish brief shape.

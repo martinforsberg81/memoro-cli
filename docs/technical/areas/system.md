@@ -51,7 +51,7 @@ On main now:
 - A review that finds a goal not OK returns it to build for a repair build, up
   to two automatic repairs for the current brief; a further failed verdict
   holds delivery for an automatic desk decision ([goal stages](../mc-goals.md)).
-- The [runner](../mc-run.md#the-session) distinguishes a provider refusal from a review verdict. A review cut short without a new verdict can run again without counting as a death.
+- The [runner](../mc-run.md#the-session) distinguishes a provider refusal from a review verdict. A review cut short without a new verdict can run again without counting as a death, and any other session cut short by its provider before it produced anything spends no attempt, failure or stop count.
 - [Gate receipts](../mc-gate-evidence.md#resuming-on-unchanged-content) can carry eligible passes forward after an interruption on unchanged inputs. A run with a caller-supplied code loader is [diagnostic](../mc-gate-evidence.md#diagnostic-runs-with-caller-supplied-loaders): it neither reuses passes nor supplies landing evidence.
 - The runner's archive turn and `mc programs archive <programme>` share one
   writer, which records the retained trees in a versioned receipt before the
