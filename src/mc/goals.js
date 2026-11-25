@@ -14,11 +14,11 @@
  * model.
  */
 import { readdirSync, readFileSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
 import { samePr } from './merge-queue.js';
-import { programsHome } from './paths.js';
+import { ARCHIVE_HOME, PROGRAMS_HOME, programsHome } from './paths.js';
 import { CRITERION_KEYS_V2, criteriaCount, plain, prose, text, unknownKeys, unmetCriteria, validateCriteria, validateDocuments } from './criteria.js';
 import { NAME_RE } from './plan-schema.js';
 import { changePhases, readRecord } from './programme-record.js';
@@ -1081,6 +1081,36 @@ export function addPr({ dir, repo, pr, entry, read = readTextOrNull, write = wri
 /** The archive directory of one programme's goals: `<home>/<programme>/goals/.archive`. */
 export function archiveDirIn(home, programme) {
   return join(home, programme, GOALS_DIR, ARCHIVE_DIR);
+}
+
+/** The time suffix `mc goal archive` gives an archived goal's directory when its name is taken there: `-YYYYMMDDTHHMM`. */
+const ARCHIVE_STAMP_RE = /-\d{8}T\d{4}$/u;
+
+/**
+ * The names no new goal may take, since a goal's branch `goal/<goal>` is one per repository and a name used once has
+ * had that branch: the live goals of every programme under `home` (`~/mc/programs/`), the archived goals of every
+ * programme (`<programme>/goals/.archive/`), and the goals, live and archived, of every archived programme
+ * (`~/mc/archive/programs/`, beside `home`). An archived name counts both as it stands and with its archive time
+ * suffix taken off. Returns a Map from each name to the first goal found with it, `{ programme, where }`, `where`
+ * being `live`, `archived` or `in an archived programme`. The cut and `mc goal new` read the same set.
+ */
+export function usedGoalNames({ home, list }) {
+  const used = new Map();
+  const add = (programme, where, names, stamped) => {
+    for (const name of names) {
+      if (name.startsWith('.')) continue;
+      for (const one of stamped ? [name, name.replace(ARCHIVE_STAMP_RE, '')] : [name]) if (!used.has(one)) used.set(one, { programme, where });
+    }
+  };
+  const programmes = list(home);
+  for (const programme of programmes) add(programme, 'live', list(join(home, programme, GOALS_DIR)), false);
+  for (const programme of programmes) add(programme, 'archived', list(archiveDirIn(home, programme)), true);
+  const shelf = join(dirname(home), ARCHIVE_HOME, PROGRAMS_HOME);
+  for (const programme of list(shelf)) {
+    add(programme, 'in an archived programme', list(join(shelf, programme, GOALS_DIR)), true);
+    add(programme, 'in an archived programme', list(archiveDirIn(shelf, programme)), true);
+  }
+  return used;
 }
 
 /**

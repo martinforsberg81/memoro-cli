@@ -228,6 +228,21 @@ test('the cut: one goal per part with none and one more, last, for the documenta
   assert.throws(() => cut(store({})), /README\.md is missing/u);
 });
 
+// Order cut-and-goal-names, Part 2. Fault replayed: on the code before it the cut read only the live goals of every
+// programme and its own archived ones, and named these parts `documentation` and `fix`.
+test('the cut names a part free of every goal that has used the name: another programme\'s archived goal and an archived programme\'s goals, with the archive time suffix off', () => {
+  const home = '/w/programs';
+  const readme = `${home}/prog/README.md`;
+  const s = store({
+    [readme]: '# prog\n\nRepositories: memoro.\n\n## Parts\n\n### Part 1 — Documentation\n\n### Part 2 — Fix\n',
+    [`${home}/other/goals/.archive/documentation/LOG.md`]: '',
+    '/w/archive/programs/old/goals/.archive/fix-20261124T2104/LOG.md': '',
+  });
+  const made = cutParts({ programme: 'prog', home, list: s.list, read: s.read, write: s.write, repositories, now: new Date('2026-11-25T06:00:00.000Z') });
+  assert.deepEqual(made, [{ name: 'documentation-2', part: 1 }, { name: 'fix-2', part: 2 }, { name: 'prog-documentation', documentation: true }]);
+  assert.deepEqual(parseLog(s.files[`${home}/prog/goals/fix-2/LOG.md`]).map((one) => one.done), ['cut from Part 2 of README.md'], 'the cut writes its entry as before');
+});
+
 test('the cut of a three-part order makes four goals, and the fourth starts only when the three are done', () => {
   // The record as `mc programs state prog ready` writes it: Part 3 runs in parallel with Part 2, and the last goal waits for both.
   const s = store({ [README_AT]: THREE, [RECORD_AT]: recordOf({ phases: { order: 'stated', after: partsOrder(THREE).after } }) });

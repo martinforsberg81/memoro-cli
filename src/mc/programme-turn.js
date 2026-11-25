@@ -15,7 +15,7 @@
 import { join, resolve } from 'node:path';
 import { deskItemId } from './desk-items.js';
 import { cutFromOrder } from './goal-parts.js';
-import { appendLog, ARCHIVE_DIR, GOAL_FILE, GOALS_DIR, LOG_FILE, logStamp, parseGoal, parseLog, renderGoal } from './goals.js';
+import { appendLog, ARCHIVE_DIR, GOAL_FILE, GOALS_DIR, LOG_FILE, logStamp, parseGoal, parseLog, renderGoal, usedGoalNames } from './goals.js';
 import { NAME_RE } from './plan-schema.js';
 import { readRecord } from './programme-record.js';
 import { repairReleaseState } from './repair-release.js';
@@ -393,9 +393,9 @@ export function goalSlug(title, number, taken = new Set()) {
  * `Part <n>`, no criterion and no other text — and LOG.md with the runner's first entry. Then, where the programme has
  * none that counts, live or archived, one more goal, last: `<programme>-documentation`, titled Documentation, marked
  * `documentation` in place of `part`, in the phase after the highest part; one that is live is moved to that phase
- * when a part has been added since. A name is unique among the
- * programme's goals, live and archived, and among the live goals of every other programme, since a goal's branch
- * `goal/<goal>` is one per repository. Returns the goals made as `[{ name, part }]`, the last one as
+ * when a part has been added since. A name is one no goal has used (`usedGoalNames`: the live and archived goals of
+ * every programme and the goals of every archived programme), since a goal's branch `goal/<goal>` is one per
+ * repository; a used name gets a number (`goalSlug`). Returns the goals made as `[{ name, part }]`, the last one as
  * `{ name, documentation: true }`; throws when the cut cannot be made. `text` is the document the parts are read
  * from when it is not README.md as it stands: the released snapshot of a repair order, whose goals still point at
  * README.md. A programme whose every part is named and none of whose goals was cut from the order is of the old form
@@ -409,11 +409,7 @@ export function cutParts({ programme, home, list, read, write, repositories, now
   if (found.error) throw new Error(found.error);
   const goals = countedGoals({ home, programme, list, read });
   const named = new Set(goals.flatMap((one) => [...one.named]));
-  const live = (one) => list(join(home, one, GOALS_DIR)).filter((name) => !name.startsWith('.'));
-  const taken = new Set([
-    ...list(home).flatMap(live),
-    ...list(join(dir, GOALS_DIR, ARCHIVE_DIR)).flatMap((name) => [name, name.replace(/-\d{8}T\d{4}$/u, '')]),
-  ]);
+  const taken = new Set(usedGoalNames({ home, list }).keys());
   const made = [];
   const make = (name, fields, done) => {
     taken.add(name);

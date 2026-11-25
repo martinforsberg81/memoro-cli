@@ -358,6 +358,32 @@ test('mc goal new refuses a programme with no directory, a goal that exists, a r
 
 });
 
+// Order cut-and-goal-names, Part 2. Fault replayed: on the code before it each of the four cases below made the goal
+// (exit 0, GOAL.json written), since `mc goal new` looked only at its own programme's live goals.
+const SHELF = '/work/archive/programs';
+const usedLine = (programme, where) => `mc: plain is already a goal of ${programme} (${where}) — its branch goal/plain is taken; choose another name\n`;
+for (const [kind, files, expected] of [
+  ['a live goal of another programme', { [`${HOME}/other/goals/plain/GOAL.json`]: GOAL_TEXT }, usedLine('other', 'live')],
+  ['an archived goal of its own programme', { [`${HOME}/mc/goals/.archive/plain/LOG.md`]: '' }, usedLine('mc', 'archived')],
+  ['an archived goal of another programme, by its name with the archive time suffix off', { [`${HOME}/other/goals/.archive/plain-20261101T1200/LOG.md`]: '' }, usedLine('other', 'archived')],
+  ['a goal of an archived programme', { [`${SHELF}/old/goals/.archive/plain/LOG.md`]: '' }, usedLine('old', 'in an archived programme')],
+]) {
+  test(`mc goal new refuses a name used by ${kind}, makes nothing and fetches nothing`, async () => {
+    const f = fixture({ files });
+    assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--title', 'T'], f.deps), 1);
+    assert.equal(f.err(), expected);
+    assert.equal(f.store[`${DIR}/GOAL.json`], undefined, 'nothing is made');
+    assert.deepEqual(f.calls, [], 'nothing is fetched');
+  });
+}
+
+test('mc goal new makes a name no goal has used as before, beside goals of other and archived programmes, and changes none of them', async () => {
+  const free = fixture({ files: { [`${HOME}/other/goals/plain/GOAL.json`]: GOAL_TEXT, [`${SHELF}/old/goals/plain/LOG.md`]: '' } });
+  assert.equal(await run(['new', 'mc/fresh', '--repo', 'memoro', '--title', 'T'], free.deps), 0, free.err());
+  assert.equal(parseGoal(free.store[`${HOME}/mc/goals/fresh/GOAL.json`]).title, 'T');
+  assert.equal(free.store[`${HOME}/other/goals/plain/GOAL.json`], GOAL_TEXT, 'the goal that has the name is left as it is');
+});
+
 test('mc goal new refuses without a title, a repository or a class, and a name that is not programme/goal', async () => {
   const f = fixture();
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', ], f.deps), 2);

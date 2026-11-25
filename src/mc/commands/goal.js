@@ -83,7 +83,7 @@ import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
 import { readGoalDeskItem } from '../desk-items.js';
-import { addPr, backward, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readDecisionClaim, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, goalReferences, inStage, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, partProgramme, phaseOpen, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { addPr, backward, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readDecisionClaim, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, goalReferences, inStage, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, partProgramme, phaseOpen, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, usedGoalNames, waitsOnPerson } from '../goals.js';
 import { addItem, cutFromOrder, ITEM_PARTS, ITEM_WORDS, moveGate, partsLacks, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { buildWaitsForMain } from '../main-repair.js';
@@ -295,8 +295,9 @@ const CREATION_HOLD_REASON = 'draft being written by its author';
 
 /**
  * `mc goal new <programme>/<goal>` — makes a goal. The programme must be a
- * directory under the programmes home, the goal must not exist, and every
- * repository named must be one mc knows. Each repository is fetched first, so
+ * directory under the programmes home, the goal must not exist, its name must be
+ * one no goal has used (`usedGoalNames`: its branch `goal/<goal>` would be that
+ * goal's), and every repository named must be one mc knows. Each repository is fetched first, so
  * a fetch that fails leaves nothing behind; then GOAL.json — a skeleton with
  * the title and no criterion, which the runner starts no session on, in phase
  * `--phase` (1 by default; at most one past the programme's last) — and
@@ -352,8 +353,12 @@ function newGoal(args, flags, ctx) {
     stderr.write(`mc: ${programme} has no record — a goal here is made at the desk\n`); return 1;
   }
   const dir = goalDirIn(home, programme, goal);
-  if (ctx.list(join(home, programme, GOALS_DIR)).includes(goal) || (repair && ctx.exists(join(programmeDir, GOALS_DIR, '.archive', goal)))) {
+  if (ctx.list(join(home, programme, GOALS_DIR)).includes(goal)) {
     stderr.write(`mc: ${programme}/${goal} exists — ${dir}\n`); return 1;
+  }
+  const used = usedGoalNames({ home, list: ctx.list }).get(goal);
+  if (used) {
+    stderr.write(`mc: ${goal} is already a goal of ${used.programme} (${used.where}) — its branch goal/${goal} is taken; choose another name\n`); return 1;
   }
   const holed = phaseHole(phase, programme, null, ctx);
   if (holed) { stderr.write(`mc: ${holed}\n`); return 2; }
