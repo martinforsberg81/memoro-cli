@@ -14,6 +14,7 @@
  *   mc goal obligation set <programme>/<goal> <area> --stand touched|untouched --text "…" [--standard "<repo>/<path>#<section>"]   the area's obligation, replaced when there is one, logged
  *   mc goal obligation remove <programme>/<goal> <area> --reason "…"   the obligation taken out, logged
  *   mc goal document add <programme>/<goal> --label "…" --path "…"   a document the goal sends its reader to
+ *   mc goal document remove <programme>/<goal> <n> --reason "…"   document <n> taken out, the later ones moved up one number, logged with its label, path and the reason; not by a goal session
  *   mc goal criterion add <programme>/<goal> --criterion "…" --check "…" [--evidence "…"]   a success criterion, not met
  *   mc goal criterion set [<programme>/<goal>] <n> [--criterion "…"] [--check "…"] [--evidence "…"]   criterion <n> rewritten, unmet, logged with the old and new text; not by a goal session (build, review, finish, mend)
  *   mc goal criterion remove [<programme>/<goal>] <n> --reason "…"   criterion <n> taken out, the later ones moved up one number, logged with its text and the reason; not by a goal session
@@ -118,6 +119,7 @@ const VERB_FLAGS = {
   phase: [],
   set: ['--text'],
   'document add': ['--label', '--path'],
+  'document remove': ['--reason'],
   'item add': ['--text', ...ITEM_FLAGS],
   'item set': ['--text', ...ITEM_FLAGS],
   'item remove': ['--reason'],
@@ -256,6 +258,7 @@ export async function run(argv, deps = {}) {
   if (verb === 'obligation set') return setObligationVerb(rest, flags, ctx);
   if (verb === 'obligation remove') return removeObligationVerb(rest, flags, ctx);
   if (verb === 'document add') return addDocument(rest, flags, ctx);
+  if (verb === 'document remove') return removeDocument(rest, flags, ctx);
   if (verb === 'criterion add') return addCriterion(rest, flags, ctx);
   if (verb === 'criterion set') return setCriterion(rest, flags, ctx);
   if (verb === 'criterion remove') return removeCriterion(rest, flags, ctx);
@@ -461,7 +464,7 @@ function logEntry(args, fields, ctx) {
   const refused = reset ? null : refusedMove({ from: goal.stage, to: fields.stage, status: fields.status, env });
   if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
   if (fields.stage === 'done' && goal.stage !== 'done' && env.MC_ROLE === 'martin') {
-    const unfinished = deskDoneRefusal(goal, target, fields.evidence ?? null, ctx);
+    const unfinished = deskDoneRefusal(goal, target, fields.evidence ?? null, ctx, fields.via ?? 'done');
     if (unfinished) { stderr.write(`mc: ${target.name}: ${unfinished.text}\n`); return unfinished.code; }
   }
   if (env.MC_ROLE === 'decision' && goal.stage === 'review' && goal.status === 'Martin'
@@ -1047,6 +1050,34 @@ function addDocument(args, flags, ctx) {
     (goal) => `document ${goal.documents.length} added`);
 }
 
+/**
+ * `mc goal document remove <programme>/<goal> <n> --reason "…"` — document entry `n` taken out, the later ones moved
+ * up one number. Logged with its label, path and the reason; the stage and status kept. Allowed as `criterion
+ * remove` is: a goal session (build, review, mend) is refused with the refusal that verb prints. Every refusal exits 2
+ * and writes nothing: no reason or a blank one, and an `n` that is not an entry.
+ */
+function removeDocument(args, flags, ctx) {
+  const { stderr, env } = ctx;
+  if (args.length !== 2) { stderr.write(usage()); return 2; }
+  const role = writerRole(env);
+  const session = goalSessionRemoval(env, 'a document', 'the brief');
+  if (session) { stderr.write(`mc: ${session}\n`); return 2; }
+  if (flags.reason === null || !flags.reason.trim()) { stderr.write('mc: document remove needs --reason "…" with text in it — why the entry is wrong\n'); return 2; }
+  const reason = oneLine(flags.reason.trim());
+  const [named, number] = args;
+  const n = /^\d+$/u.test(number) ? Number(number) : NaN;
+  let removed = null;
+  return changeGoal(named, ctx, (goal) => {
+    if (!Number.isInteger(n) || n < 1 || n > goal.documents.length) return { problems: [`${named} has no document ${number} — mc goal show ${named} lists them`], code: 2, prefix: false };
+    removed = goal.documents[n - 1];
+    return { ...goal, documents: goal.documents.filter((_, i) => i !== n - 1) };
+  }, () => `document ${n} removed (${removed.label})`, (goal, target) => {
+    const comment = `document ${n} removed — ${removed.label}: ${removed.path} (${reason})`;
+    const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role, done: null, comment, next: null, stage: goal.stage, status: goal.status };
+    appendEntry({ dir: target.dir, entry, read: ctx.read, write: ctx.write });
+  });
+}
+
 /** `mc goal criterion add <programme>/<goal> --criterion "…" --check "…"` — a criterion appended, not met. */
 function addCriterion(args, flags, ctx) {
   const { stderr, env } = ctx;
@@ -1235,7 +1266,8 @@ function removeCriterion(args, flags, ctx) {
   const { stderr, env } = ctx;
   if (args.length < 1 || args.length > 2) { stderr.write(usage()); return 2; }
   const role = writerRole(env);
-  if (goalSessionWord(env) && !['martin', 'decision'].includes(role)) { stderr.write(`mc: a ${role} session does not remove a criterion — acceptance is written by Martin or a person\n`); return 2; }
+  const session = goalSessionRemoval(env, 'a criterion', 'acceptance');
+  if (session) { stderr.write(`mc: ${session}\n`); return 2; }
   if (flags.reason === null || !flags.reason.trim()) { stderr.write('mc: criterion remove needs --reason "…" with text in it — why the criterion is obsolete\n'); return 2; }
   const reason = oneLine(flags.reason.trim());
   const [named, number] = args.length === 2 ? args : [undefined, args[0]];
@@ -1253,6 +1285,15 @@ function removeCriterion(args, flags, ctx) {
     appendEntry({ dir: target.dir, entry, read: ctx.read, write: ctx.write });
     removeCriterionItem(target.dir, n, { read: ctx.read, write: ctx.write });
   });
+}
+
+/**
+ * The refusal `criterion remove` and `document remove` give a goal session (build, review, mend), or null for the desk,
+ * the decision pass and a person: `a <role> session does not remove <what> — <whose> is written by Martin or a person`.
+ */
+function goalSessionRemoval(env, what, whose) {
+  const role = writerRole(env);
+  return goalSessionWord(env) && !['martin', 'decision'].includes(role) ? `a ${role} session does not remove ${what} — ${whose} is written by Martin or a person` : null;
 }
 
 /**
@@ -2186,15 +2227,21 @@ export function refusedMove({ from, to = null, status = null, env }) {
  * recorded); a goal cut from an order has none of its own and needs `evidence`, what was checked and where it is
  * recorded; a goal without either is refused. A goal with an open pull request lands through the merger: its
  * registered `prs` not merged or closed, and `gh pr list --head goal/<goal>` in each of its repositories. When GitHub
- * cannot say, nothing is changed. Asked in that order, so GitHub is read only for a goal whose truth holds.
+ * cannot say, nothing is changed. Asked in that order, so GitHub is read only for a goal whose truth holds. `via` is
+ * the verb that set done (`done`, `stage` or `log`): only `mc goal done` takes `--evidence`, so the refusal for a goal
+ * cut from an order on `stage` or `log` names that verb.
  */
-function deskDoneRefusal(goal, target, evidence, ctx) {
+function deskDoneRefusal(goal, target, evidence, ctx, via) {
   const criteria = goal.success_criteria ?? [];
   if (criteria.length) {
     const unmet = unmetCriteria(goal);
     if (unmet.length) return { code: 2, text: `${unmet.length === 1 ? `criterion ${unmet[0]} is` : `criteria ${unmet.join(', ')} are`} not met — done needs every criterion met` };
   } else if (cutFromOrder(goal)) {
-    if (evidence === null || !evidence.trim()) return { code: 2, text: 'it was cut from an order and has no criteria — done needs --evidence "…"' };
+    if (evidence === null || !evidence.trim()) {
+      return { code: 2, text: via === 'done'
+        ? 'it was cut from an order and has no criteria — done needs --evidence "…"'
+        : `it was cut from an order and has no criteria — use mc goal done ${target.name} --evidence "…"` };
+    }
   } else return { code: 2, text: 'it has no criterion — done needs every criterion met' };
   const unread = (reason) => ({ code: 1, text: `its pull requests could not be read (${reason}) — nothing was changed` });
   const said = (answer) => `${answer.stderr ?? ''}`.trim().split('\n').at(-1) || 'gh failed';

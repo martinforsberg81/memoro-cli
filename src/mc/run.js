@@ -118,7 +118,7 @@ import { archiveProgramme } from './archive-programme.js';
 import { AREAS_HOME, FALLBACK_AREAS, keyProposalsDir, pageAreaOf } from './area-proposals.js';
 import { runDocsMerge } from './docs-merge.js';
 import { releaseWorkArea } from './work-area.js';
-import { cutParts, orderBrief, orderText, partLeftWords, partOfOrder, programmeDirs, programmeDue, readTurnState, recordTurnFailure, turnName } from './programme-turn.js';
+import { cutParts, orderBrief, orderText, partBrief, partLeftWords, partOfOrder, programmeDirs, programmeDue, readTurnState, recordTurnFailure, turnName } from './programme-turn.js';
 import { runLearningPass } from './desk-learning.js';
 import { reconcileLessons } from './desk-lessons.js';
 import { reconcileAreaLearning } from './learning-publication.js';
@@ -3440,15 +3440,17 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * The digest of a goal's own text, what a decline holds for (`declinedModels`): a part's section of its order, the
-   * order whole for the documentation goal, else the goal's text as `mc goal show` renders it with every criterion
+   * The digest of a goal's own text, what a decline holds for (`declinedModels`): for a part, the brief its session
+   * reads (`partBrief`: the part and the order's shared sections), so an edit under `## Decided` is a new text; the
+   * order whole for the documentation goal; else the goal's text as `mc goal show` renders it with every criterion
    * unmet and without evidence, so meeting one is no change of text. Null when it cannot be read.
    */
   function goalTextDigest(goal, release) {
     if (cutFromOrder(goal)) {
       const text = release?.snapshot ? release.snapshot.text : orderText({ home: programsHome(deps.env), programme: goal.programme, read: deps.read });
       if (goal.documentation === true) return textDigest(text ?? null);
-      return textDigest(text === null || text === undefined ? null : partOfOrder(text, goal.part)?.section ?? null);
+      const part = text === null || text === undefined ? null : partOfOrder(text, goal.part);
+      return textDigest(part ? partBrief(part) : null);
     }
     if (!goal.title) return null;
     const criteria = (goal.success_criteria ?? []).map(({ criterion, check }) => ({ criterion, check, met: false }));

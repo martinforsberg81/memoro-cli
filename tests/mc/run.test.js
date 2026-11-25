@@ -7696,6 +7696,27 @@ test('a session on a goal that is a part is given the part byte for byte as READ
   assert.deepEqual(goalsNow(f).map(([name]) => name), ['one', 'prog-documentation', 'two'], 'an edited part gets no second goal');
 });
 
+test('a model that declined a goal cut from an order is passed by while the order is unchanged, and is eligible again after a line is added under ## Decided', async () => {
+  const readme = README_MD.replace('## Order\n', '## Decided\n\n- One comes first.\n\n## Order\n');
+  const f = programmeFixture({ record: READY, readme });
+  f.deps.catalog = () => ({ ...structuredClone(TEST_CATALOG), providerPriority: 'claude',
+    build: [TEST_CATALOG.build[0], { tool: 'codex', model: 'gpt-6-luna', effort: 'high' }],
+  });
+  const pass = async (answer) => { f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.9 })); f.answer = answer; return createRunner({ deps: f.deps }).pass({ repo: 'memoro' }); };
+  const launched = () => { const { env } = f.calls.sessions.at(-1); return `${env.MC_TOOL}:${env.MC_MODEL}`; };
+  const log = `${GOALS}/one/LOG.md`;
+  const entry = (call, body) => { f.files[log] = `${f.files[log] ?? ''}\n## 2026-08-29T10:00Z · ${call.env.MC_TOOL} ${call.env.MC_MODEL} · build · ready\n\n${body}\n`; return okSession()(call); };
+  const declinesPart = (call) => entry(call, 'Comment: declined: the part needs more than I can hold');
+  const buildsPart = (call) => entry(call, `Done: arbete\nNext: next ${f.calls.sessions.length}`);
+  assert.equal((await pass(declinesPart)).name, 'goal:prog/one');
+  assert.equal(launched(), 'claude:opus');
+  assert.equal((await pass(buildsPart)).name, 'goal:prog/one');
+  assert.equal(launched(), 'codex:gpt-6-luna', 'passed by while the order is unchanged');
+  f.files[README_AT] = readme.replace('- One comes first.\n', '- One comes first.\n- One keeps the old wording.\n');
+  assert.equal((await pass(buildsPart)).name, 'goal:prog/one');
+  assert.equal(launched(), 'claude:opus', 'a line under ## Decided is a new text for the declined model');
+});
+
 test('a goal whose part has left the order starts no session, said once, and is not dropped; restored, it starts; a landed goal\'s edited part is not cut again', async () => {
   const f = programmeFixture({ record: READY });
   const runner = createRunner({ deps: f.deps });

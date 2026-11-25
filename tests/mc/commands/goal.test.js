@@ -2030,6 +2030,46 @@ test('mc goal criterion remove by interactive Martin removes the criterion and l
   assert.ok(f.store[`${DIR}/LOG.md`].endsWith('## 2026-11-01T20:00Z · claude opus · build · ready · by martin\n\nComment: criterion 1 removed — "first", check "a test", was met; reason: superseded\n'), f.store[`${DIR}/LOG.md`]);
 });
 
+const DOCS = [{ label: 'Plan', path: '/p/plan.md' }, { label: 'Old design', path: '/p/old.md' }, { label: 'Notes', path: '/p/notes.md' }];
+const threeDocuments = () => seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'build', status: 'ready', documents: DOCS }) });
+
+test('mc goal document remove takes document 2 out, the third moves up to 2, and logs its label, path and reason with stage and status kept', async () => {
+  const f = fixture({ files: threeDocuments() });
+  assert.equal(await run(['document', 'remove', 'mc/plain', '2', '--reason', 'the redesign replaced it'], f.deps), 0, f.err());
+  assert.equal(f.out(), 'mc: mc/plain · document 2 removed (Old design)\n');
+  assert.deepEqual(parseGoal(f.store[`${DIR}/GOAL.json`]).documents, [DOCS[0], DOCS[2]]);
+  assert.equal(stateOf(f), 'build · ready');
+  assert.ok(f.store[`${DIR}/LOG.md`].endsWith('## 2026-11-01T20:00Z · person · build · ready\n\nComment: document 2 removed — Old design: /p/old.md (the redesign replaced it)\n'), f.store[`${DIR}/LOG.md`]);
+});
+
+test('mc goal document remove refuses a missing or blank reason, an n that is not an entry and a goal session, exits 2 and writes nothing', async () => {
+  const absent = (n) => `mc: mc/plain has no document ${n} — mc goal show mc/plain lists them\n`;
+  const refusals = [
+    [{}, ['document', 'remove', 'mc/plain', '2'], 'mc: document remove needs --reason "…" with text in it — why the entry is wrong\n'],
+    [{}, ['document', 'remove', 'mc/plain', '2', '--reason', '  '], 'mc: document remove needs --reason "…" with text in it — why the entry is wrong\n'],
+    [{}, ['document', 'remove', 'mc/plain', '4', '--reason', 'r'], absent(4)],
+    [{}, ['document', 'remove', 'mc/plain', '0', '--reason', 'r'], absent(0)],
+    [{}, ['document', 'remove', 'mc/plain', 'x', '--reason', 'r'], absent('x')],
+    [BUILD, ['document', 'remove', 'mc/plain', '2', '--reason', 'r'], 'mc: a build session does not remove a document — the brief is written by Martin or a person\n'],
+    [REVIEW, ['document', 'remove', 'mc/plain', '2', '--reason', 'r'], 'mc: a review session does not remove a document — the brief is written by Martin or a person\n'],
+  ];
+  for (const [env, argv, said] of refusals) {
+    const f = fixture({ files: threeDocuments(), env });
+    const before = f.store[`${DIR}/GOAL.json`];
+    assert.equal(await run(argv, f.deps), 2, argv.join(' '));
+    assert.equal(f.err(), said, argv.join(' '));
+    assert.equal(f.store[`${DIR}/GOAL.json`], before, `${argv.join(' ')}: GOAL.json byte-identical`);
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, `${argv.join(' ')}: no entry`);
+  }
+});
+
+test('mc goal document remove by interactive Martin removes the entry and logs it with the role', async () => {
+  const f = fixture({ files: threeDocuments(), env: DESK });
+  assert.equal(await run(['document', 'remove', 'mc/plain', '1', '--reason', 'superseded'], f.deps), 0, f.err());
+  assert.deepEqual(parseGoal(f.store[`${DIR}/GOAL.json`]).documents, [DOCS[1], DOCS[2]]);
+  assert.ok(f.store[`${DIR}/LOG.md`].endsWith('## 2026-11-01T20:00Z · claude opus · build · ready · by martin\n\nComment: document 1 removed — Plan: /p/plan.md (superseded)\n'), f.store[`${DIR}/LOG.md`]);
+});
+
 /** `git cat-file -e origin/main:<path>` answers for `ON_MAIN` only; any other path gets git's own "does not exist in"; `gitFails` makes every answer a git failure. */
 const ON_MAIN = ['tests/mc/present.test.js'];
 const onMain = (gitFails = false) => (cwd, args) => {
@@ -2403,7 +2443,7 @@ test('mc goal list <programme> lists that programme alone, and says when it has 
 
 test('usage names the five verbs, and mc goal --help prints it', async () => {
   const text = usage();
-  for (const verb of ['mc goal new', 'mc goal set', 'mc goal document add', 'mc goal criterion add', 'mc goal criterion met', 'mc goal criterion unmet', 'mc goal criterion set', 'mc goal convert', 'mc goal phase', 'mc goal log', 'mc goal stage', 'mc goal blocked\\|ready', 'mc goal done', 'mc goal drop', 'mc goal show', 'mc goal list']) {
+  for (const verb of ['mc goal new', 'mc goal set', 'mc goal document add', 'mc goal document remove', 'mc goal criterion add', 'mc goal criterion met', 'mc goal criterion unmet', 'mc goal criterion set', 'mc goal convert', 'mc goal phase', 'mc goal log', 'mc goal stage', 'mc goal blocked\\|ready', 'mc goal done', 'mc goal drop', 'mc goal show', 'mc goal list']) {
     assert.match(text, new RegExp(verb, 'u'));
   }
   const printed = [];
@@ -3861,9 +3901,16 @@ test('interactive Martin sets done on a goal with nothing to land: every criteri
     assert.equal(bare.store[`${DIR}/LOG.md`], PART_LOG, `${argv.join(' ')}: nothing written`);
     assert.equal(bare.gh.length, 0, 'GitHub is not asked for a goal whose truth does not hold');
   }
+  // `mc goal done` keeps its refusal; `stage done` and `log --stage done` take no --evidence and name the verb that does.
   const refusedCut = desk(partFiles({}, { stage: 'review' }));
   await run(['done'], refusedCut.deps);
   assert.equal(refusedCut.err(), 'mc: mc/plain: it was cut from an order and has no criteria — done needs --evidence "…"\n');
+  for (const argv of [['stage', 'mc/plain', 'done'], ['log', 'mc/plain', '--done', 'released', '--stage', 'done']]) {
+    const other = desk(partFiles({}, { stage: 'review' }));
+    assert.equal(await run(argv, other.deps), 2, argv.join(' '));
+    assert.equal(other.err(), 'mc: mc/plain: it was cut from an order and has no criteria — use mc goal done mc/plain --evidence "…"\n', argv.join(' '));
+    assert.equal(other.store[`${DIR}/LOG.md`], PART_LOG, `${argv.join(' ')}: nothing written`);
+  }
 
   // An unmet criterion refuses, naming it; nothing is written and GitHub is not asked.
   const unmet = desk(seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'review', success_criteria: [MET[0], { criterion: 'it lasts', check: 'b test', met: false }] }) }));
