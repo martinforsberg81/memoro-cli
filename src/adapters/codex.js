@@ -19,6 +19,8 @@ import { randomBytes } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import {
+  isManagedCodexLauncher,
+  isManagedCodexShim,
   resolveWorkspaceRoot,
   resolveRealCodexBinary,
 } from '../lib/codex.js';
@@ -168,8 +170,8 @@ export function detect() {
 //
 // Parity with claude-code's `launchSpec()`. The wrap-mode launcher spawns
 // `bin` in the PTY; for codex we resolve the REAL codex binary (skipping
-// the `~/.local/bin/codex` shim + `codex-memoro` launcher) so we don't
-// recurse through mc's own wrapper. When the real binary can't be found,
+// the `~/.local/bin/codex` shim + `codex-memoro` launcher, unless the path is
+// npm's official CLI) so we don't recurse through mc's own wrapper. When the real binary can't be found,
 // `bin` is null — the launcher fails high with the install hint rather
 // than spawning nothing (soft-degrade is NOT silent here, per §5).
 //
@@ -411,14 +413,6 @@ async function removeManagedCodexScript(path, predicate) {
   if (!predicate(body)) return false;
   await rm(path, { force: true });
   return true;
-}
-
-function isManagedCodexLauncher(body) {
-  return /\bmemoro-cli\b/.test(body) && /\bcodex\s+run\b/.test(body) && /--real-codex\b/.test(body);
-}
-
-function isManagedCodexShim(body, launcherPath) {
-  return body.includes('codex-memoro') || body.includes(launcherPath);
 }
 
 // ─────────────────────────────────────────────────────────────

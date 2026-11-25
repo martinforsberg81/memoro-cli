@@ -1,6 +1,6 @@
 import { open, readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join, dirname, basename } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { join, dirname, basename, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { run as runGit } from './git-process.js';
@@ -24,22 +24,57 @@ export function guessRepoHint(cwd = process.cwd()) {
   return basename(resolveWorkspaceRoot(cwd));
 }
 
+// npm's official Codex CLI: what `npm install -g @openai/codex` links into
+// its bin directory, which with a user prefix is `~/.local/bin/codex`.
+const OFFICIAL_CODEX_ENTRY = 'node_modules/@openai/codex/bin/codex.js';
+
+export function isManagedCodexLauncher(body) {
+  return /\bmemoro-cli\b/.test(body) && /\bcodex\s+run\b/.test(body) && /--real-codex\b/.test(body);
+}
+
+export function isManagedCodexShim(body, launcherPath) {
+  return body.includes('codex-memoro') || body.includes(launcherPath);
+}
+
+function whichAllCodex() {
+  return execFileSync('which', ['-a', 'codex'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+}
+
+// A candidate at one of mc's old wrapper paths is chosen only when it is npm's
+// official CLI: its real path ends in the package's bin entry and its content
+// is not an mc shim or launcher. Anything else there is skipped, so mc never
+// recurses through its own wrapper.
+function isOfficialCodexAt(path, launcherPath) {
+  let real;
+  let body;
+  try {
+    real = realpathSync(path);
+    body = readFileSync(real, 'utf8');
+  } catch {
+    return false;
+  }
+  if (!real.split(sep).join('/').endsWith(`/${OFFICIAL_CODEX_ENTRY}`)) return false;
+  return !isManagedCodexShim(body, launcherPath) && !isManagedCodexLauncher(body);
+}
+
 export function resolveRealCodexBinary({
+  home = homedir(),
   wrapperPaths = [
-    join(homedir(), '.local', 'bin', 'codex'),
-    join(homedir(), '.local', 'bin', 'codex-memoro'),
+    join(home, '.local', 'bin', 'codex'),
+    join(home, '.local', 'bin', 'codex-memoro'),
   ],
+  launcherPath = join(home, '.local', 'bin', 'codex-memoro'),
+  which = whichAllCodex,
 } = {}) {
   try {
-    const out = execFileSync('which', ['-a', 'codex'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const paths = out
+    const paths = String(which() || '')
       .split('\n')
       .map(s => s.trim())
       .filter(Boolean);
-    const chosen = paths.find(p => !wrapperPaths.includes(p));
+    const chosen = paths.find(p => !wrapperPaths.includes(p) || isOfficialCodexAt(p, launcherPath));
     return chosen || null;
   } catch {
     return null;
