@@ -402,9 +402,11 @@ function stateVerb({ positional }, { env, stdout, stderr, lock, now = new Date()
     // A part of an order waits for the part before it unless it says it runs in parallel with it: ready writes the
     // record's dependencies from that in the same write. A repair-owned order is released by its own verbs and is not read here,
     // and a programme whose goals were written in the old form keeps the dependencies stated for its phases.
-    // A goal dropped before now no longer counts once the order is set ready (`countedGoals`): it is left out here too.
+    // A goal dropped before the order's ready_at no longer counts (`countedGoals`): it is left out here too. From draft
+    // that instant is now; a record that already reads ready keeps the one it has (`setRecordState`).
+    const againReady = targetState === 'ready' && found?.state === 'ready' && !found.repair?.desk;
     const written = targetState === 'ready'
-      ? countedGoals({ home, programme: name, list: listDirsOf, read: readTextOrNull, readyAt: at.toISOString() })
+      ? countedGoals({ home, programme: name, list: listDirsOf, read: readTextOrNull, readyAt: againReady ? found.ready_at ?? null : at.toISOString() })
       : goalParts({ home, programme: name, list: listDirsOf, read: readTextOrNull });
     const oldForm = written.some(({ named }) => named.size > 0) && !written.some(({ goal }) => cutFromOrder(goal));
     const readsParts = targetState === 'ready' && found && !found.repair && !oldForm;
@@ -424,6 +426,7 @@ function stateVerb({ positional }, { env, stdout, stderr, lock, now = new Date()
       return 1;
     }
     stdout.write(`mc: ${name} · state ${targetState}\n`);
+    if (againReady) stdout.write(`  already ready since ${outcome.record.ready_at ?? '—'} — its dependencies are rewritten; a dropped goal stays dropped (set it draft, then ready, to cut its part again)\n`);
     if (targetState === 'ready') {
       const { released, kept } = releaseDeskHolds(dir, { env, now: at });
       for (const goal of released) stdout.write(`  ${name}/${goal.name} released (held since ${goal.hold.at ?? '—'}: ${goal.hold.reason ?? '—'})\n`);

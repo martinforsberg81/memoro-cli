@@ -345,9 +345,10 @@ export function changePhases(dir, change, options = {}) {
  * The change to a record's `state`: draft, ready or done.
  * Validated and written whole and atomically (`write`), every other key as it was, in its place;
  * a record already in that state is not written again. An invalid record or none is never touched.
- * Setting it ready writes `ready_at`, the instant (`options.now`, to the second) the order was set ready, each time it
- * is set ready; draft and done keep it. The cut reads it: a goal dropped in or before its minute no longer counts as
- * cut (`countedGoals`, programme-turn.js).
+ * Setting it ready from another state writes `ready_at`, the instant (`options.now`, to the second) the order was set
+ * ready; a record that already reads ready keeps its `ready_at` (none stays none), and draft and done keep it too. The
+ * cut reads it: a goal dropped in or before its minute no longer counts as cut (`countedGoals`, programme-turn.js), so
+ * ready again re-cuts nothing a drop since left behind, and draft then ready is what commissions a re-cut.
  * `options.after` is the order the parts of the document give (`partsOrder`, programme-turn.js): given, the same
  * write states the record's phases with it, so the state and the dependencies are one write.
  * Returns `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
@@ -356,7 +357,8 @@ export function setRecordState(dir, state, options = {}) {
   return changeProgrammeRecord(dir, (record) => {
     const refusal = repairDraftRefusal(record, basename(dir));
     if (refusal) return { problems: [refusal] };
-    return normalized({ ...record, state, ...(state === 'ready' ? { ready_at: instant(options.now ?? new Date()) } : {}),
+    const setReady = state === 'ready' && record.state !== 'ready';
+    return normalized({ ...record, state, ...(setReady ? { ready_at: instant(options.now ?? new Date()) } : {}),
       ...(options.after ? { phases: { order: PHASES_ORDER, after: options.after } } : {}) });
   }, options, 'programme-state');
 }
