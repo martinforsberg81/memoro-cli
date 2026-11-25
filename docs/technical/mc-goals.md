@@ -493,6 +493,15 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 
 - **`new <p>/<g> --repo <r>[,<r>] --title "…" [--phase <n>] [--stage draft] [--structure 1|2]`** — makes a
   goal, refused unless its flags are valid and its names are new.
+  A goal of its own programme that is live is `mc: <p>/<g> exists — <dir>`
+  (exit 1). Any other name a goal has used is refused too, since its branch
+  `goal/<g>` has been that goal's: the same set the cut reads (`usedGoalNames`;
+  the live and archived goals of every programme and every goal of an archived
+  programme, an archived name also without its `-YYYYMMDDTHHMM` suffix;
+  [mc-run.md](mc-run.md#the-cut-of-a-ready-order)), with
+  `mc: <g> is already a goal of <programme> (<where>) — its branch goal/<g> is
+  taken; choose another name` (exit 1), where `<where>` is `live`, `archived`
+  or `in an archived programme`.
   The learning role is refused every mutation (exit 2); it uses `mc learning` for dispositions.
   Before fetching or writing, a draft programme record refuses (exit 1):
   `mc: <programme> is draft — mc programs show <programme>`.
@@ -545,6 +554,17 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   them.
 - **`document add <p>/<g> --label "…" --path "…"`** — appends a document;
   build, review and mend sessions cannot change the brief.
+- **`document remove <p>/<g> <n> --reason "…"`** — takes document entry `<n>`
+  (1-based) out and moves the later ones up one number, printing
+  `mc: <p>/<g> · document <n> removed (<label>)` and logging
+  `document <n> removed — <label>: <path> (<reason>)`; stage and status stay.
+  It is allowed as `criterion remove` is: a build, review or mend session is
+  refused with `mc: a <role> session does not remove a document — the brief is
+  written by Martin or a person`; interactive Martin, decision and a person
+  may. Every refusal exits 2 and writes nothing: a missing or blank reason
+  (`mc: document remove needs --reason "…" with text in it — why the entry is
+  wrong`) and an `<n>` that is not an entry (`mc: <p>/<g> has no document <n>
+  — mc goal show <p>/<g> lists them`). No verb changes an entry in place.
 - **`criterion add <p>/<g> --criterion "…" --check "…" [--evidence "…"]`** — appends a criterion,
   not met. `--criterion` and `--check` are required: a criterion without a check is refused. `--evidence` is a version 2 goal's.
   Build, review and mend sessions cannot add acceptance criteria;
@@ -609,7 +629,11 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   met`. A goal cut from an order has no criteria of its own and needs
   `--evidence "<what was checked and where it is recorded>"`, written to
   LOG.md as `Done: evidence: <text>`: `mc: <p>/<g>: it was cut from an order
-  and has no criteria — done needs --evidence "…"`. A goal with neither is
+  and has no criteria — done needs --evidence "…"`. Only `done` takes
+  `--evidence`, so interactive Martin's `stage <p>/<g> done` and `log <p>/<g>
+  --stage done` on such a goal are refused with the verb that does:
+  `mc: <p>/<g>: it was cut from an order and has no criteria — use mc goal
+  done <p>/<g> --evidence "…"` (exit 2). A goal with neither is
   refused (`it has no criterion — done needs every criterion met`). A goal with
   an open pull request lands through the merger: each registered `prs` entry
   is read with `gh pr view` (open counts, merged and closed do not) and each
@@ -1133,8 +1157,11 @@ toward the three-in-a-row or five-session build stops below. A goal left in
 entry `<tool>:<model> declined the work — the next build goes to another model`
 with `Goal text: <digest>`. Future builds of this goal pass by models whose
 declines match its current text. An amendment makes them eligible; marking
-a criterion met does not. The digest is of the part's section for a cut
-goal, the whole order for Documentation, and the goal's own text otherwise.
+a criterion met does not. For a goal cut from an order the digest is of the
+brief its session reads (`partBrief`: the part's section and the order's
+shared sections outside its parts), so an edit under `## Decided` or any other
+shared section is a new text; it is of the whole order for Documentation, and
+of the goal's own text otherwise.
 Other goals are unaffected.
 
 If every candidate on the applicable list (`build` or `finish` for a repair
@@ -1646,7 +1673,9 @@ land. A goal without `part` keeps every rule on this page.
   describe what the programme built. `mc goal show` prints its fixed text,
   `DOCUMENTATION — the last goal of programme <programme>`, and then the
   order whole. A build session on a part writes no `docs/technical/` page;
-  this goal writes them, so that they describe what now runs.
+  this goal writes them, so that they describe what now runs. An order has
+  no part named Documentation: `mc programs state ready` refuses one
+  (*No Documentation part* in [mc-run.md](mc-run.md#the-cut-of-a-ready-order)).
 
 ## Drafts
 
