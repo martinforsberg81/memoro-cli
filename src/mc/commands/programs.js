@@ -50,7 +50,7 @@ import { beginRepairReview, repairReviewCall } from '../repair-review.js';
 import { isDesk, releaseRepair, repairReleaseState } from '../repair-release.js';
 import { setDeskRepairState } from '../repair-reconcile.js';
 import { disposeRepair, REPAIR_DISPOSITIONS, stopRepair } from '../repair-stop.js';
-import { countedGoals, goalParts, partsOrder } from '../programme-turn.js';
+import { countedGoals, goalParts, isDocumentationPart, partName, partSections, partsOrder } from '../programme-turn.js';
 import { cutFromOrder } from '../goal-parts.js';
 
 export function usage() {
@@ -407,7 +407,15 @@ function stateVerb({ positional }, { env, stdout, stderr, lock, now = new Date()
       ? countedGoals({ home, programme: name, list: listDirsOf, read: readTextOrNull, readyAt: at.toISOString() })
       : goalParts({ home, programme: name, list: listDirsOf, read: readTextOrNull });
     const oldForm = written.some(({ named }) => named.size > 0) && !written.some(({ goal }) => cutFromOrder(goal));
-    const given = targetState === 'ready' && found && !found.repair && !oldForm ? partsOrder(readTextOrNull(join(dir, 'README.md')) ?? '') : null;
+    const readsParts = targetState === 'ready' && found && !found.repair && !oldForm;
+    const order = readsParts ? readTextOrNull(join(dir, 'README.md')) ?? '' : '';
+    // The cut adds the documentation goal itself (`cutParts`): a part named Documentation would be a second one.
+    const documentationParts = readsParts ? partSections(order).filter(([, section]) => isDocumentationPart(partName(section))) : [];
+    if (documentationParts.length) {
+      for (const [number] of documentationParts) stderr.write(`mc: ${name}: Part ${number} is named Documentation — the cut adds the documentation goal itself; name its pages under Order and remove the part\n`);
+      return 1;
+    }
+    const given = readsParts ? partsOrder(order) : null;
     const outcome = found?.repair?.desk
       ? setDeskRepairState(dir, targetState, env, { lock })
       : setRecordState(dir, targetState, { root: workRoot(env), lock, now: at, ...(given ? { after: given.after } : {}) });

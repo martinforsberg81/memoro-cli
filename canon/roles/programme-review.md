@@ -42,6 +42,9 @@ Answer these questions, in order, with the evidence you read:
    missing evidence as a pass.
 7. Does the document contradict itself or what runs, and is there a moment
    in its Order where the system is worse than before?
+8. Does any part, rather than the documentation goal, take on writing a page
+   in `docs/technical/`? Name the part and the page; the narrowest fix moves
+   the page to Order, as input to the documentation goal the cut adds.
 
 Write only PROGRAMME-REVIEW.md. For a desk reading it goes beside the
 programme; for a repair reading it goes to the separate output path in

@@ -112,6 +112,15 @@ export function partName(section) {
   return /^### Part [1-9]\d*\s+—\s+(\S.*)$/u.exec(String(section ?? '').split(/\r?\n/u)[0])?.[1].trim() ?? '';
 }
 
+/**
+ * Whether a part's name makes it the order's documentation: `Documentation` alone, or followed by a colon or a dash
+ * (` — `, ` – `, ` - `) and more words. `Documentation` followed by a plain word (`Documentation search`) names a
+ * product feature and is not such a part. Letter case and a final full stop are read leniently.
+ */
+export function isDocumentationPart(name) {
+  return /^documentation\s*(?:\.|:.*|\s[—–-](?:\s.*)?)?$/iu.test(String(name ?? '').trim());
+}
+
 /** The one line that lets a part start beside the part before it; whitespace around it, letter case and the final full stop are read leniently. */
 const PARALLEL_LINE = /^\s*in parallel with the previous part\.?\s*$/iu;
 

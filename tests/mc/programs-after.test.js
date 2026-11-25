@@ -273,3 +273,38 @@ describe('an order gives what its parts wait for', () => {
     } finally { a.done(); }
   });
 });
+
+// Order cut-and-goal-names, Part 3: the cut adds the documentation goal itself, so ready refuses an order with a part
+// named Documentation and writes nothing.
+describe('mc programs state ready refuses an order with a Documentation part', () => {
+  const DRAFT = { ...STATED, version: 2, state: 'draft' };
+  const desk = (a) => ({ ...a.env, MC_ROLE: 'martin' });
+  const order = (...names) => `# prog\n\nRepositories: memoro-cli.\n\n## Parts\n\n${names.map((name, at) => `### Part ${at + 1} — ${name}\n\nCloses: ${at}.\n`).join('\n')}\n## Order\n\nIn turn.\n`;
+
+  for (const last of ['Documentation', 'Documentation: the deploy pages']) {
+    it(`refuses "### Part 4 — ${last}" with the line, exit 1, and the record still reads draft`, async () => {
+      // Fault protected: the cut makes this part a goal and adds a documentation goal beside it, one of which has nothing to do.
+      const a = area(DRAFT);
+      try {
+        writeFileSync(join(a.home, 'prog', 'README.md'), order('A', 'B', 'C', last));
+        const before = snapshot(a.root);
+        const result = await call(['state', 'prog', 'ready'], desk(a));
+        assert.deepEqual([result.code, result.out, result.err], [1, '', 'mc: prog: Part 4 is named Documentation — the cut adds the documentation goal itself; name its pages under Order and remove the part\n']);
+        assert.equal(recordOf(a.home).state, 'draft');
+        assert.deepEqual(snapshot(a.root), before, 'the refusal writes nothing');
+      } finally { a.done(); }
+    });
+  }
+
+  it('sets ready a part named Documentation search (a product feature) and an order with no such part', async () => {
+    for (const names of [['A', 'B', 'C', 'Documentation search'], ['A', 'B']]) {
+      const a = area(DRAFT);
+      try {
+        writeFileSync(join(a.home, 'prog', 'README.md'), order(...names));
+        const result = await call(['state', 'prog', 'ready'], desk(a));
+        assert.deepEqual([result.code, result.err], [0, ''], names.join(', '));
+        assert.equal(recordOf(a.home).state, 'ready');
+      } finally { a.done(); }
+    }
+  });
+});
