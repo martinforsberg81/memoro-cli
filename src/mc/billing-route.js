@@ -28,10 +28,12 @@ const after = (value, now) => Number.isFinite(Date.parse(value || '')) && Date.p
 /**
  * `api` is `readBillingApi`'s switch per API provider: a provider switched off
  * stays on its plan when the plan is spent, and the session meets the plan's
- * own refusal instead of the API key. Absent, both are on. `model` names the
+ * own refusal instead of the API key. Absent, both are on. `'first'` is on,
+ * and a `runner` launch also takes the API key while the plan has room, unless
+ * billing-state.json marks the credit unusable. `model` names the
  * model the launch will run: a refusal of that model alone spends the plan for it.
  */
-export function billingRoute({ provider, model = null, capacity, state, api, now = new Date() } = {}) {
+export function billingRoute({ provider, model = null, capacity, state, api, now = new Date(), runner = false } = {}) {
   if (!billingProviders().includes(provider)) throw new Error(`unknown billing provider: ${provider} declares no BILLING_PROVIDER`);
   const standing = providerAt(capacity, provider, now);
   // A model's refusal spends the plan for that model only; another model of the provider still has it.
@@ -41,6 +43,13 @@ export function billingRoute({ provider, model = null, capacity, state, api, now
   if (spent && api?.[provider] === false) return { billing: 'plan', why: `${spent}; API off` };
   if (spent && !apiProviders().includes(provider)) return { billing: 'plan', why: `${spent}; no API route` };
   if (spent) return { billing: 'credits', why: spent };
+  // API first: a runner session spends the API key while the plan still has room,
+  // and goes back to the plan while the credit is marked unusable.
+  if (runner && api?.[provider] === 'first' && apiProviders().includes(provider)) {
+    const unusable = after(state?.credits?.unusable_until, now) ? state.credits.unusable_until : null;
+    if (!unusable) return { billing: 'credits', why: 'API first' };
+    return { billing: 'plan', why: `API first, but the API is unusable until ${unusable}${state.credits.why ? ` (${state.credits.why})` : ''}` };
+  }
   const windows = Object.values(standing.windows);
   const unknown = windows.some((window) => window.status !== 'known');
   const why = standing.status === 'failed' ? 'last usage read failed; subscription availability unknown'
@@ -86,7 +95,7 @@ export function billingStatus({ capacity, state, api, now = new Date() } = {}) {
     const freshness = standing.status === 'failed' ? ' (read failed)' : standing.status === 'stale' ? ' (stale)' : '';
     const route = billingRoute({ provider, capacity, state, api, now });
     const spent = Object.entries(standing.model_refusals).map(([model, until]) => ` (${model} refused until ${until})`).join('');
-    return `${provider} ${used}${freshness}${refused}${spent} ${route.billing === 'plan' ? 'plan' : 'API'}${api?.[provider] === false ? ' (API off)' : ''}`;
+    return `${provider} ${used}${freshness}${refused}${spent} ${route.billing === 'plan' ? 'plan' : 'API'}${api?.[provider] === false ? ' (API off)' : api?.[provider] === 'first' ? ' (API first for runner sessions)' : ''}`;
   }).join(' · ');
 }
 

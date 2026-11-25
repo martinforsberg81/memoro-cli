@@ -93,3 +93,15 @@ test('a renewal keeps the cause\'s first instant and the later end; host is neve
   assert.deepEqual(of(applyRefusal(first, 'claude', later, null, passed, 'quota')), [later, 'quota', passed.toISOString()], 'over a passed refusal it is first seen now');
   assert.deepEqual(of(applyRefusal(first, 'claude', null)), [null, null, null]);
 });
+
+test('API first puts a runner session on the key while the plan has room, and back on the plan while the credit is unusable', () => {
+  const capacity = claudeAt(0.3);
+  const api = { claude: 'first', codex: false };
+  assert.deepEqual(billingRoute({ provider: 'claude', capacity, api, now: AT, runner: true }), { billing: 'credits', why: 'API first' });
+  assert.equal(billingRoute({ provider: 'claude', capacity, api, now: AT }).billing, 'plan', 'an interactive session keeps plan first');
+  assert.equal(billingRoute({ provider: 'codex', capacity, api: { codex: 'first' }, now: AT, runner: true }).billing, 'credits');
+  const state = { credits: { unusable_until: CLAUDE_UNTIL, why: 'credit balance too low' } };
+  assert.deepEqual(billingRoute({ provider: 'claude', capacity, state, api, now: AT, runner: true }),
+    { billing: 'plan', why: `API first, but the API is unusable until ${CLAUDE_UNTIL} (credit balance too low)` });
+  assert.match(billingStatus({ capacity, api, now: AT }), /^claude 30% plan \(API first for runner sessions\)/u);
+});

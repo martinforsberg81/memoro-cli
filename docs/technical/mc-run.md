@@ -18,7 +18,7 @@ mc run start [same flags]
 mc run stop [--force]
 mc run --update [--force]
 mc run lanes [<n>]
-mc run --billing [<claude|codex> <on|off>]
+mc run --billing [<claude|codex> <on|off|first>]
 ```
 
 With no flags it keeps picking. `--once` runs one runnable lane session and
@@ -641,6 +641,17 @@ catalog-routed goal routed to the reserve waits instead of starting. The wrapper
 the switch again before it opens the key, so a launch decided before the switch
 was turned off never reaches the API. A running session keeps its billing.
 Absent, both are on.
+
+`mc run --billing <claude|codex> first` turns the reserve on and puts every
+runner-launched session of that provider (goals, decisions, mend, scheduled
+turns) on its API key while the plan still has room, so a credit can be spent
+before the plan is (Martin, 2026-11-25). The class chooser still picks by plan
+headroom; only the billing of the chosen launch changes. Interactive sessions
+keep plan first. While `billing-state.json` marks the credit unusable (balance
+spent, key rejected, workspace limit) or the reserve is held unavailable, the
+runner session goes back to the plan instead of waiting. `on` or `off` ends
+it. `mc run --billing` names the setting as `(API first for runner sessions)`
+and its `next <provider> session` lines read as a runner launch.
 
 ### API admission before the model starts
 
