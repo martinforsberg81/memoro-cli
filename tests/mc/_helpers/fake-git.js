@@ -23,7 +23,7 @@
  * production merge round is where those are measured (decided 2026-11-01).
  */
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { useGitRunner } from '../../../src/mc/git.js';
@@ -81,7 +81,13 @@ export class FakeGit {
       worktrees: [...repo.worktrees].map(([path, state]) => [path, { head: state.head, index: [...state.index] }]),
       symbolicRefs: [...repo.symbolicRefs], remotes: [...repo.remotes], config: [...repo.config], fetchHead: repo.fetchHead, serial: repo.serial,
     }));
-    writeFileSync(file, JSON.stringify({ repos, now: this.now }));
+    // Every process under one MC_FAKE_GIT_STATE writes this file on exit while
+    // a sibling (another test file under the same `node --test`) may be
+    // reading it as it starts: write beside it and rename, so a reader sees
+    // the whole of one snapshot or the whole of another, never half of one.
+    const partial = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    writeFileSync(partial, JSON.stringify({ repos, now: this.now }));
+    renameSync(partial, file);
     return file;
   }
 
@@ -120,7 +126,7 @@ export class FakeGit {
 
   /** Run `spawnChild(env)` with the model shared: snapshot before, reload after. */
   inChild(env, spawnChild) {
-    const file = join(this.scratch(), `fake-git-${process.pid}-${this.now}.json`);
+    const file = join(this.scratch(), `fake-git-${process.pid}-${this.now}-${randomBytes(6).toString('hex')}.json`);
     this.snapshot(file);
     const result = spawnChild(FakeGit.childEnv(env, file));
     this.reload(file);
