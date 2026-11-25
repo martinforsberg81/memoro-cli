@@ -38,7 +38,10 @@ On main now:
   acts next when available. A build that has more in-scope work records a
   bounded continuation instead of presenting the goal as ready for review
   ([goal verbs](../mc-goals.md#the-verbs)).
-- Setting a revised order ready after dropping old goals allows those parts, including a dropped Documentation goal, to be cut again. A drop after the recorded ready minute does not by itself start replacement work ([the cut of a ready order](../mc-run.md#the-cut-of-a-ready-order)).
+- Setting a revised order ready from draft after dropping old goals allows those parts, including a dropped Documentation goal, to be cut again. A drop after the recorded ready minute does not by itself start replacement work, and setting an order that is already ready ready again keeps its ready time and cuts nothing new ([the cut of a ready order](../mc-run.md#the-cut-of-a-ready-order)).
+- A cut goal never takes a name a goal has used in any programme, live or archived, and an order holds no Documentation part of its own: the cut adds that goal, and setting such an order ready is refused ([the cut of a ready order](../mc-run.md#the-cut-of-a-ready-order)).
+- [`mc run --billing <provider> first`](../mc-run.md) puts every runner-launched session of that provider on its API key while the plan still has room; interactive sessions keep plan first, and an unusable credit sends the session back to the plan.
+- After a landing on the default branch, the merger [fast-forwards a clean source-linked installation](../mc-merge.md#the-installation-pull) of that repository on the machine; a failed pull never undoes the landing and is reported for a pull by hand.
 - [`mc ask`](../mc-jev.md#the-context-sent) can still send a goal's documents after its worktree is released. It reads the goal branch, then `origin/main`, and says which supplied each document without creating another checkout.
 - The [learning pass](../mc-martin.md#lessons-and-the-learning-pass) can
   publish an evidenced factual correction to one area page. It does not
