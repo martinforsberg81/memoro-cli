@@ -26,15 +26,15 @@ The work is split between the two repositories, and they meet in one place:
 mc shot <dev|prod> <target> [--el <css> | --shell base|immersive|window] [--full]
         [--viewport <name|WxH[@dpr]>] [--theme light|dark] [--locale <code>]
         [--safe-area <t,r,b,l>|0] [--wait-for <css>] [--scroll <css>[@end|@top|@<px>]|@end]
-        [--measure <css>|@<name>] [--click <css>]… [--context-click <css>]…
+        [--measure <css>|@<name>] [--click <css>]… [--context-click <css>]… [--hover <css>]…
         [--long-press <css>[@ms]]… [--fill <css>=<text>]… [--eval <js>|--eval-file <path>]…
         [--upload <css>=<file>]… [--press <key>]… [--timeout <s>]
         [--account <name>] [--onboarding]
         [--me] [--here] [--main] [--keep] [--out <file.png>] [--open] [--json]
         [--allow-unsettled]
 mc shot dev <target> --set <dir> --state <name> [capture flags]
-mc shot next [<id>] [step flags]
-mc shot close [<id>|--all]
+mc shot next [<id>] [--any-worktree] [step flags]
+mc shot close [<id>|--all] [--any-worktree]
 mc shot sessions
 mc shot <dev|prod> --list
 mc shot login prod [--paste]
@@ -58,9 +58,26 @@ mc shot logout prod
   locale (/sv)`), exit 2.
 - **`--viewport`** is a name from `viewports`, or `WxH[@dpr]`, which becomes
   `{ width, height, dpr, mobile }` with dpr 2 unless you give one and `mobile`
-  true below 600 px wide. Without it the viewport is `default_viewport`.
+  true below 600 px wide. Without it the viewport is `default_viewport`. A
+  phone viewport is the page's size only: there is no on-screen keyboard, so a
+  picture never shows the space a keyboard would take.
+- **`--locale`** on a signed-in target sets the page's language (memoro's
+  script calls the page's `setLocale`). Server-rendered text follows the
+  account's language, which is set on the fixture account itself; `mc shot`
+  does not change it.
 - **`--el` and `--shell`** both choose what is pictured, so they are refused
-  together. `--full` takes the whole scrolled page.
+  together. `--full` takes the whole scrolled page. An `--el` element cut off
+  by a scrolling ancestor is still saved, and the shot warns:
+  `mc: warning — --el .day-list is cut by a scrolling ancestor (.month-pane):
+  1240 px of 1900 px visible — take viewport shots at scroll stops instead`.
+  The element is scrolled into view first, as the capture does. The named
+  ancestor is the one that hides most of the element; when both directions are
+  cut the sizes read `<w> × <h>`, and an element with nothing visible says
+  `0 px`. A box whose containing block lies outside the scrollport (a fixed or
+  absolutely positioned box, or one in the top layer) is not counted as cut,
+  and the document's own scrolling is not a scrollport. Content inside a
+  scrollport is pictured as viewport shots at named scroll stops (`--scroll
+  <css>@top`, `@<px>`, `@end`), not as one `--el`.
 - **`--me`** works only on `prod`. **`--here`** works only on `dev`, and gives a
   server for the worktree you stand in, as `mc test dev --here` does.
   **`--main`** works only on `dev`: the shared checkout's server, from any
@@ -165,24 +182,46 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
   `{ here, ref: { ref, kind, worktree, commit, behind_origin_main, result }, diff }`.
   The captures use this worktree's script and declaration. Refused with
   `--out`; production and `--keep` are also incompatible.
+
+  Each side is judged as a single shot is, by the same code (`assessCapture`
+  in [`src/mc/commands/shot.js`](../../src/mc/commands/shot.js), which
+  `answer()` uses too), and its lines are a single shot's prefixed by the
+  side's label: `here:`, and `main:` or `<worktree>:` for the reference. A
+  side that failed, did not load, or ran a script that predates `wait-for`
+  prints `mc: <label>: <the single shot's message>` on stderr. A side that did
+  not load prints `the page did not load — <reason>`, and its requested PNG is
+  removed. A gate that did not hold prints its access verdict. Both sides are
+  always reported: the side that worked keeps its path line and its access
+  line, and a failed side prints no path. There is no diff and no "the same"
+  line unless both sides were pictured; with `--json` a failed side's
+  `result` is `{ ok: false, error, code?, errors? }` and `diff` is empty. The
+  compare exits 1 when either side would have exited 1 alone.
 - `--click <selector>`, repeatable: the capture script presses each selector in
   order, after the page and its window are open and in the order of the acting flags,
-  `--scroll` and `--el`. The request carries them as `click`. A result that does
+  `--scroll` and `--el`. The request carries them as `click`. A selector is
+  CSS or a locator such as `text=<words>`, which takes the first match; a
+  word that occurs twice on the page is narrowed with CSS
+  (`button:has-text("Rename")`). A result that does
   not answer `acted` with one entry per action is refused (exit 1, no path); an
   older script's `clicked` array with one entry per click is also accepted for
   an all-click request. With `--compare`, both sides are pressed and either
   side's refusal refuses the pair.
-- `--context-click <css>` (right-click), `--long-press <css>[@ms]` (press and
+- `--context-click <css>` (right-click), `--hover <css>` (move the pointer
+  over it, to show what appears on hover), `--long-press <css>[@ms]` (press and
   hold, 600 ms unless said) and `--fill <css>=<text>` (type into it), all
-  repeatable. They join `--click` in one list, and the four act in the order
-  they are given. `--fill` splits at its first `=`, so a selector holds none.
+  repeatable. They join `--click` in one list, and they act in the order
+  they are given. A click, a context click, a hover, a long press and a key
+  (`--press`) are each followed by a 400 ms pause, so the menu or control they
+  open is open in the picture and for the next step. Nothing moves the pointer
+  between the steps of a kept browser: what a hover showed stays shown until
+  another step moves it. `--fill` splits at its first `=`, so a selector holds none.
   The text is read from the command line like any flag's value: type no secret
   into it. A result that does not answer `acted` with one entry per action is
   refused (exit 1, no path). `clicked` is not an answer for mixed action kinds.
 - `--eval <js>` (run it in the page; its value comes back as an `eval` line),
   `--upload <css>=<file>` (choose the file in that file input) and `--press
   <key>` (a Playwright key name — `Enter`, `Escape`, `Meta+K` — pressed on the
-  page, no selector), all repeatable, join the same list: the seven act in the
+  page, no selector), all repeatable, join the same list: the eight act in the
   order they are given. `--eval-file <path>` is `--eval` with the file's text,
   read by mc (refused when unreadable), so a long probe needs no shell
   quoting; it keeps its place in the order. `--upload` splits at its first
@@ -215,6 +254,7 @@ scrubbed:
 ```
 error  <kind>  <text>[ ×<count>]
 eval <n>  <json>
+eval <n>  a function — it was returned, not called; write (async () => { … })() to run it
 eval <n>  threw: <error>
 failed  step <n> (<kind> <selector|key>): <error>
   here: <what is visible instead>
@@ -227,7 +267,12 @@ mc: warning — …
   most 20 lines, then `error  … <n> more — --json has them all`.
 - **`eval`**: one line per entry of `evaluated`, `<n>` counting the `--eval`s
   from 1; the value as JSON on one line, cut at 4000 characters with `…
-  (<bytes> bytes; --json has it whole)`.
+  (<bytes> bytes; --json has it whole)`. An eval whose value is itself a
+  function was returned and never called: `--eval '() => document.title'`
+  returns a function, `--eval '(() => document.title)()'` calls it. Its line
+  is the `a function — …` one above, in place of the JSON, and the shot does
+  not fail for it. A function inside a returned object is shown as the string
+  `"[function]"`, as is an eval that returns that string.
 - **`failed`**: the step that failed, counted from 1 over the acting flags,
   then `here:` when the script names what was visible instead. The picture is
   still taken and printed first — it is the page as it stood when the step
@@ -240,9 +285,11 @@ a flag mc refuses. A `not-loaded` result prints `mc: the page did not load —
 <reason>`; mc removes only the requested output, never a path supplied by the
 result. For other `ok: false` results, mc prints `mc: <error>` on stderr
 and then the result's `error` lines, so a page that crashed before the picture
-still says why. With `--compare`, each side's `error`, `eval` and `failed`
-lines come after the diff, each prefixed with its side (`here: ` or `<ref>: `),
-so lines 1 and 2 stay the two files; a failed step on either side exits 1.
+still says why. With `--compare`, each side's access, `error`, `eval` and
+`failed` lines come after the diff, each prefixed with its side (`here: ` or
+`<ref>: `), so the first lines stay the files; a side exits as a single shot
+would, and either side's 1 is the compare's (§ *Measuring a layout*,
+`--compare`).
 
 ## A kept browser
 
@@ -259,11 +306,12 @@ browser can be kept, and stepped one call at a time:
 
 ```
 mc shot <dev|prod> <target> --keep [shot flags]
-mc shot next [<id>] [--click …]… [--context-click …]… [--long-press …]… [--fill …]…
-        [--eval …|--eval-file …]… [--upload …]… [--press …]… [--wait-for <css>]
-        [--scroll …] [--measure …] [--el <css>|--shell …] [--full] [--timeout <s>]
+mc shot next [<id>] [--any-worktree] [--click …]… [--context-click …]… [--hover …]…
+        [--long-press …]… [--fill …]… [--eval …|--eval-file …]… [--upload …]…
+        [--press …]… [--wait-for <css>] [--scroll …] [--measure …]
+        [--el <css>|--shell …] [--full] [--timeout <s>]
         [--goto <path|target>|--reload] [--no-shot] [--out <file.png>] [--json] [--open]
-mc shot close [<id>|--all]
+mc shot close [<id>|--all] [--any-worktree]
 mc shot sessions
 ```
 
@@ -283,12 +331,30 @@ mc shot next --click 'text=New entry' --eval 'document.activeElement.name'
   one (`spawnDetached` in [`src/mc/shot.js`](../../src/mc/shot.js)), its stderr
   to the session's log, and the request directory goes once the first line is
   read. A first answer of `ok: false` ends the process and keeps nothing.
-- **`next`** is one step on that page. Without an id it is the most recently
-  used session of the worktree `shotWorktree` chooses where you stand, else the
-  only one; with several elsewhere it refuses and names them. An explicit id of
-  a session whose worktree is not the one you stand in is refused with exit 2,
-  naming both worktrees, unless `--any-worktree` says to drive it from here.
-  Its answer prints
+- **Which browser.** `next` and `close` without an id never act on another
+  worktree's browser when you stand in a memoro worktree (a git worktree with
+  `.mc/shot.json`; `shotWorktree` marks it `standing`). There they take the
+  most recently used live session of that worktree, else its most recent dead
+  one, which then says it has ended. When that worktree keeps none, they exit 2,
+  send nothing, and list the sessions kept elsewhere, live or dead, by id and
+  worktree:
+
+  ```
+  mc: no browser is kept for this worktree (…/exceptions-end/memoro) — s3 (study-hub/memoro) belongs to another; start one with mc shot dev … --keep, or name s3 with --any-worktree
+  ```
+
+  With several elsewhere the same line says `these belong to other worktrees:
+  s3 (…), s4 (…)` and `name one with --any-worktree`; with none anywhere it
+  ends at the `--keep` advice. A caller anywhere else (memoro-cli, `~/mc`)
+  takes the shared checkout's latest session, else the only kept session,
+  else the only live one; with several live and none of the shared checkout's,
+  it exits 2 and names them, and with none it exits 1. An explicit id of
+  a session whose worktree is not the one you stand in is refused by `next` and
+  `close` alike with exit 2 (`<id> is a browser of <path>, and this is <path> —
+  add --any-worktree to use it from here`), unless `--any-worktree` says to
+  use it from here. `--any-worktree` without an id changes nothing: an id-less
+  call stays in its worktree.
+- **`next`** is one step on that page. Its answer prints
   exactly as a shot's — path, URL, measure, access, `error`, `eval`, `failed`
   and warning lines, the same exit codes — so a session reads every step the
   same way; every error since the previous step comes back with it. `--goto`
@@ -299,10 +365,17 @@ mc shot next --click 'text=New entry' --eval 'document.activeElement.name'
   `--out`, a default name carries milliseconds and four random hex digits, so
   two shots in one second do not overwrite each other. **A failed
   step leaves the page where it stood**: the next call continues from there.
+  **A kept browser keeps the viewport it was started with**: `next` takes no
+  `--viewport` (exit 2), so another size is another browser, started with
+  `--keep`.
 - **`close`** asks the session to close, waits up to 5 s for its process to
-  leave, else ends its process group, and removes its files. **`sessions`**
-  prints one line per live session — `<id>  <where> <target>  <worktree
-  basename>  <viewport>  idle <n> min` — and removes the files of dead ones.
+  leave, else ends its process group, and removes its files. `close --all`
+  ends every kept browser, whichever worktree it belongs to. **`sessions`**
+  prints one line per live session — `<id>  <where> <target>
+  <parent>/<basename>  <viewport>  idle <n> min`, for example `s3  dev
+  /app/hub  study-hub/memoro  desktop  idle 4 min`, the worktree named by its
+  parent directory and its own, since every memoro goal's worktree is called
+  `memoro` — and removes the files of dead ones.
 - **At most four** are live. A fifth `--keep` closes the longest idle one first
   and says so on stderr. The id is `s<n>`, the lowest number no record holds. A
   `--keep` takes it before it deletes or launches anything: `<id>.json` is
@@ -494,14 +567,21 @@ target with any other sign-in and in `open` or `session` mode. The script then
 skips the sign-in and the locale and theme injection (it imports nothing into
 the page), loads the page's own URL and waits for `load`,
 `document.readyState === "complete"`, the fonts and the target's `settled`
-(else `body`). A page that answers 400 or more is the failure
+(else `body`). A public target is ready when it is hydrated, and the page
+itself says so: memoro's landing pages set `data-hydrated` on `<html>` once
+their first translation has applied and `lang` is written (`markHydrated` in
+`public/js/i18n.js`, called once by `public/js/landing/index.js`), and
+`.mc/shot.json` declares `settled: "html[data-hydrated]"` for `/sv`, `/en` and
+`/da`. A `settled` the page met is the picture's moment; only a `settled` of
+`body`, which says nothing about the page, or one not met within the wait
+(a warning) is followed by a 300 ms pause. A page that answers 400 or more is the failure
 `{ ok: false, code: "public-page", error: "<path> answered <status>" }`, never
 a picture.
 
 Capture mode also sends `click` and `actions`. `actions` is every acting flag in
 the order given, one object each: `{ kind, selector }`, with `text` on a `fill`
-and `ms` on a `long-press`; `kind` is `click`, `context-click`, `long-press` or
-`fill`. `click` is the same selectors when every action is a plain click, and
+and `ms` on a `long-press`; `kind` is `click`, `context-click`, `hover`,
+`long-press` or `fill`. `click` is the same selectors when every action is a plain click, and
 `null` when one is not. A result answers `acted`, one entry per action,
 whatever their kinds. An older script may answer `clicked`, one entry per click,
 for an all-click request. If it answers neither `acted`, `clicked` nor `failed`,
@@ -515,7 +595,9 @@ Three more kinds: `{ kind: "eval", script }`, `{ kind: "upload", selector, file 
 action may take, or `null` for the script's own 10 s. A capture result may
 carry `errors` (`[{ kind, text, count? }]`, `kind` one of `page`, `console`,
 `request`, `server`, `dialog`), `evaluated` (`[{ value }]` or `[{ error }]`,
-one per eval action, in order) and `failed` (`{ step, kind, selector?, key?,
+one per eval action, in order; a `value` that is itself a function is the typed
+value `{ "$type": "function" }`, a function nested in it the string
+`"[function]"`) and `failed` (`{ step, kind, selector?, key?,
 error, here? }`, `step` counted from 1). A result with `failed` is not asked for
 a full `acted`: the steps after the failed one were not done, and the `failed`
 line says so. An eval whose `evaluated` entry has `error` keeps its `eval <n>
