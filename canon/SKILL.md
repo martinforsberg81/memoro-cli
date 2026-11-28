@@ -23,6 +23,10 @@ Paths below are relative to this skill's directory. Do not preload the tree.
   the conversation (a markdown image does not render there). A picture or evidence
   outside `~/mc/programs` is first placed in its programme's `designs/` or
   `evidence/`. Code is referred to as `file:line`, as before.
+- Every image a session makes (a design sketch, a painting, an illustration,
+  a reference) is generated with `mc image`, never by calling Codex, an image
+  API or another tool directly (Martin, 2026-11-28). `mc image --help` gives
+  its options.
 - The total set by `mc run lanes <n>` belongs to Martin. Preserve it unless
   he explicitly asks to change that total. A blocked goal, disk pressure,
   quota shortage, slow tests or a runner restart does not authorize changing
